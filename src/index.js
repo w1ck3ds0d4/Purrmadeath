@@ -1,5 +1,7 @@
 import * as PIXI from 'pixi.js';
 import {
+    BUILDING_TYPES,
+    ENEMY_BLOCKED_REPATH_INTERVAL_FRAMES,
     ENEMY_CONTACT_COOLDOWN_FRAMES,
     ENEMY_CONTACT_DAMAGE,
     ENEMY_DESPAWN_DISTANCE_TILES,
@@ -13,6 +15,7 @@ import {
     ENEMY_PATH_GRID_RADIUS,
     ENEMY_PATH_MAX_STEPS,
     ENEMY_RADIUS,
+    ENEMY_REPATH_JITTER_FRAMES,
     ENEMY_REPATH_INTERVAL_FRAMES,
     ENEMY_SIZE,
     ENEMY_SPEED,
@@ -27,6 +30,7 @@ import {
     TILE_SIZE,
     WEAPONS
 } from './config/constants.js';
+import { createBuildingSystem } from './systems/buildingSystem.js';
 import { createWorldSystem } from './systems/worldSystem.js';
 
 async function init() {
@@ -44,10 +48,12 @@ async function init() {
 
     const tileLayer = new PIXI.Container();
     const resourceLayer = new PIXI.Container();
+    const buildingLayer = new PIXI.Container();
     const enemyLayer = new PIXI.Container();
     const projectileLayer = new PIXI.Container();
     world.addChild(tileLayer);
     world.addChild(resourceLayer);
+    world.addChild(buildingLayer);
     world.addChild(enemyLayer);
     world.addChild(projectileLayer);
 
@@ -86,6 +92,7 @@ async function init() {
     let debugOverlayEnabled = false;
     let smoothedFps = 60;
     let isPaused = false;
+    let buildingSystem = null;
     const worldSystem = createWorldSystem({
         tileLayer,
         resourceLayer,
@@ -175,7 +182,7 @@ async function init() {
     }
 
     function isTileWalkable(tileX, tileY) {
-        return worldSystem.isTileWalkable(tileX, tileY);
+        return worldSystem.isTileWalkable(tileX, tileY) && !(buildingSystem?.isTileBlocked(tileX, tileY) ?? false);
     }
 
     function estimatePathCost(ax, ay, bx, by) {
@@ -367,10 +374,11 @@ async function init() {
             isDead: false,
             path: [],
             pathIndex: 0,
-            repathTimer: 0,
+            repathTimer: Math.floor(Math.random() * (ENEMY_REPATH_INTERVAL_FRAMES + 1)),
             contactCooldownFrames: 0,
             knockbackVX: 0,
             knockbackVY: 0,
+            wallTargetTile: null,
             healthBg: spriteData.healthBg,
             healthFill: spriteData.healthFill
         };
@@ -535,6 +543,46 @@ async function init() {
         }
     }
 
+    function findPathToNearestWall(enemyTileX, enemyTileY) {
+        const walls = buildingSystem.getWalls();
+        if (walls.length === 0) {
+            return { path: [], targetTile: null };
+        }
+
+        // Prioritize nearby wall structures first to reduce fallback pathing cost.
+        const rankedWalls = walls
+            .map((wall) => ({
+                wall,
+                score: Math.abs(wall.tileX - enemyTileX) + Math.abs(wall.tileY - enemyTileY)
+            }))
+            .sort((a, b) => a.score - b.score);
+
+        const maxWallsToProbe = Math.min(10, rankedWalls.length);
+        for (let wi = 0; wi < maxWallsToProbe; wi++) {
+            const wall = rankedWalls[wi].wall;
+            for (const tile of wall.tiles) {
+                const candidates = [
+                    { x: tile.x + 1, y: tile.y },
+                    { x: tile.x - 1, y: tile.y },
+                    { x: tile.x, y: tile.y + 1 },
+                    { x: tile.x, y: tile.y - 1 }
+                ];
+
+                for (const candidate of candidates) {
+                    if (!isTileWalkable(candidate.x, candidate.y)) {
+                        continue;
+                    }
+                    const path = findPathAStar(enemyTileX, enemyTileY, candidate.x, candidate.y);
+                    if (path.length > 0) {
+                        return { path, targetTile: candidate };
+                    }
+                }
+            }
+        }
+
+        return { path: [], targetTile: null };
+    }
+
     function updateEnemies(deltaMoveScale) {
         const playerCenterX = playerWorldX + TILE_SIZE / 2;
         const playerCenterY = playerWorldY + TILE_SIZE / 2;
@@ -583,9 +631,27 @@ async function init() {
             if (enemy.repathTimer <= 0 || enemy.pathIndex >= enemy.path.length) {
                 framePathRequests += 1;
                 if (framePathBudget > 0) {
-                    enemy.path = findPathAStar(enemyTileX, enemyTileY, playerTileX, playerTileY);
+                    const jitter = Math.floor(Math.random() * (ENEMY_REPATH_JITTER_FRAMES + 1));
+                    // Primary target is player; if unreachable, fallback to cached wall target.
+                    let resolvedPath = findPathAStar(enemyTileX, enemyTileY, playerTileX, playerTileY);
+                    if (resolvedPath.length > 0) {
+                        enemy.wallTargetTile = null;
+                        enemy.repathTimer = ENEMY_REPATH_INTERVAL_FRAMES + jitter;
+                    } else {
+                        if (enemy.wallTargetTile && isTileWalkable(enemy.wallTargetTile.x, enemy.wallTargetTile.y)) {
+                            resolvedPath = findPathAStar(enemyTileX, enemyTileY, enemy.wallTargetTile.x, enemy.wallTargetTile.y);
+                        }
+                        if (resolvedPath.length === 0) {
+                            const wallPathResult = findPathToNearestWall(enemyTileX, enemyTileY);
+                            resolvedPath = wallPathResult.path;
+                            enemy.wallTargetTile = wallPathResult.targetTile;
+                        }
+                        enemy.repathTimer = resolvedPath.length > 0
+                            ? ENEMY_REPATH_INTERVAL_FRAMES + jitter
+                            : ENEMY_BLOCKED_REPATH_INTERVAL_FRAMES + jitter;
+                    }
+                    enemy.path = resolvedPath;
                     enemy.pathIndex = 0;
-                    enemy.repathTimer = ENEMY_REPATH_INTERVAL_FRAMES;
                     framePathBudget -= 1;
                     framePathExecuted += 1;
                 } else {
@@ -674,11 +740,28 @@ async function init() {
         style: {
             fill: '#ffffff',
             fontFamily: 'monospace',
-            fontSize: 18
+            fontSize: 16
         }
     });
-    hudText.position.set(16, 66);
+    hudText.position.set(16, 10);
     app.stage.addChild(hudText);
+    const topBarBackground = new PIXI.Graphics();
+    app.stage.addChildAt(topBarBackground, app.stage.getChildIndex(hudText));
+
+    const buildMenuText = new PIXI.Text({
+        text: '',
+        style: {
+            fill: '#f0e4c2',
+            fontFamily: 'monospace',
+            fontSize: 14
+        }
+    });
+    buildMenuText.position.set(28, 72);
+    buildMenuText.visible = false;
+    app.stage.addChild(buildMenuText);
+    const buildMenuBackground = new PIXI.Graphics();
+    buildMenuBackground.visible = false;
+    app.stage.addChildAt(buildMenuBackground, app.stage.getChildIndex(buildMenuText));
 
     const healthBarBackground = new PIXI.Graphics();
     const healthBarFill = new PIXI.Graphics();
@@ -690,9 +773,18 @@ async function init() {
             fontSize: 14
         }
     });
+    const weaponText = new PIXI.Text({
+        text: '',
+        style: {
+            fill: '#ffffff',
+            fontFamily: 'monospace',
+            fontSize: 14
+        }
+    });
     app.stage.addChild(healthBarBackground);
     app.stage.addChild(healthBarFill);
     app.stage.addChild(healthText);
+    app.stage.addChild(weaponText);
 
     const deathText = new PIXI.Text({
         text: 'You Died\nPress R to restart',
@@ -735,14 +827,53 @@ async function init() {
     app.stage.addChild(debugText);
 
     function updateHud() {
-        hudText.text = `Weapon: ${playerCombat.weapon}\nKills: ${combatStats.enemiesKilled}\nGold: ${inventory.gold}\nWood: ${inventory.wood}\nStone: ${inventory.stone}\nIron: ${inventory.iron}`;
+        const buildUi = buildingSystem?.getUiState();
+        const buildMode = buildUi?.buildMode ? 'ON' : 'OFF';
+        const buildType = buildUi?.selectedLabel ?? 'None';
+        hudText.text = `Wood: ${inventory.wood}   Stone: ${inventory.stone}   Iron: ${inventory.iron}   Gold: ${inventory.gold}   Kills: ${combatStats.enemiesKilled}   Build: ${buildMode} (${buildType})`;
+        topBarBackground.clear();
+        topBarBackground.rect(0, 0, window.innerWidth, 40);
+        topBarBackground.fill(0x111111);
+        topBarBackground.alpha = 0.85;
+        updateBuildMenu();
+        updateHealthHud();
+    }
+
+    function formatCost(cost) {
+        return `W:${cost.wood ?? 0} S:${cost.stone ?? 0} I:${cost.iron ?? 0} G:${cost.gold ?? 0}`;
+    }
+
+    function updateBuildMenu() {
+        if (!buildingSystem) {
+            buildMenuText.visible = false;
+            return;
+        }
+        const buildUi = buildingSystem.getUiState();
+        if (!buildUi.buildMode) {
+            buildMenuBackground.visible = false;
+            buildMenuText.visible = false;
+            return;
+        }
+
+        const lines = ['Build Menu (Tab/Mouse Wheel)', 'Left Click: Place'];
+        for (const entry of buildingSystem.getMenuEntries()) {
+            lines.push(`${entry.selected ? '> ' : '  '}${entry.label} [${formatCost(entry.cost)}]`);
+        }
+        buildMenuText.text = lines.join('\n');
+        buildMenuBackground.clear();
+        buildMenuBackground.rect(12, 56, 360, 18 + lines.length * 20);
+        buildMenuBackground.fill(0x141414);
+        buildMenuBackground.alpha = 0.9;
+        buildMenuBackground.stroke({ width: 1, color: 0x333333 });
+        buildMenuBackground.visible = true;
+        buildMenuText.visible = true;
     }
 
     function updateHealthHud() {
-        const barX = 16;
-        const barY = 16;
-        const barWidth = 240;
+        const barWidth = 260;
         const barHeight = 18;
+        const barX = Math.floor((window.innerWidth - barWidth) / 2);
+        const barY = window.innerHeight - 34;
         const ratio = Math.max(0, Math.min(1, playerState.hp / playerState.maxHp));
 
         healthBarBackground.clear();
@@ -756,6 +887,8 @@ async function init() {
 
         healthText.text = `HP: ${Math.max(0, Math.ceil(playerState.hp))}/${playerState.maxHp}`;
         healthText.position.set(barX + 8, barY + 1);
+        weaponText.text = `Weapon: ${playerCombat.weapon}`;
+        weaponText.position.set(barX + barWidth + 14, barY + 1);
     }
 
     function logDebug(message) {
@@ -771,13 +904,15 @@ async function init() {
             return;
         }
         const worldStats = worldSystem.getStats();
+        const buildingStats = buildingSystem?.getStats() ?? { buildingCount: 0 };
 
         const lines = [
-            'DEV CONSOLE (F4 or `)',
+            'DEV CONSOLE (F4 or ç)',
             `FPS: ${smoothedFps.toFixed(1)} | Frame: ${frameMs.toFixed(2)} ms`,
             `Player HP: ${Math.ceil(playerState.hp)}/${playerState.maxHp} | Weapon: ${playerCombat.weapon}`,
             `Enemies: ${enemies.length}/${ENEMY_MAX_COUNT}`,
             `Bullets: ${projectiles.length}/${MAX_BULLETS}`,
+            `Buildings: ${buildingStats.buildingCount}`,
             `Path req/exe/def: ${framePathRequests}/${framePathExecuted}/${framePathDeferred}`,
             `Path budget/frame: ${ENEMY_MAX_REPATHS_PER_FRAME}`,
             `Tiles cached: ${worldStats.tilesCached}`,
@@ -971,9 +1106,21 @@ async function init() {
 
     const keys = {};
     let harvestRequested = false;
+    let placeRequested = false;
     let leftMouseDown = false;
     let mouseScreenX = window.innerWidth / 2;
     let mouseScreenY = window.innerHeight / 2;
+    buildingSystem = createBuildingSystem({
+        buildingLayer,
+        getWorldPosition: () => ({ x: world.position.x, y: world.position.y }),
+        getMouseScreenPosition: () => ({ x: mouseScreenX, y: mouseScreenY }),
+        isTileWalkableBase: (tileX, tileY) => worldSystem.isTileWalkable(tileX, tileY),
+        getPlayerCenter: () => ({ x: playerWorldX + TILE_SIZE / 2, y: playerWorldY + TILE_SIZE / 2 }),
+        getEnemies: () => enemies,
+        inventory,
+        buildingTypes: BUILDING_TYPES,
+        onLog: (message) => logDebug(message)
+    });
 
     updateHud();
     updateHealthHud();
@@ -982,18 +1129,32 @@ async function init() {
     window.addEventListener('keydown', (e) => {
         const key = e.key.toLowerCase();
         keys[key] = true;
+        // Global gameplay keybinds are handled in this block.
         if (key === 'escape') {
             isPaused = !isPaused;
             pauseText.visible = isPaused;
+            placeRequested = false;
             logDebug(`Game ${isPaused ? 'paused' : 'resumed'}`);
             e.preventDefault();
             return;
         }
-        if (key === 'f4' || key === 'ç') {
+        // Dev console keybind is F4 or c-cedilla (ç).
+        if (key === 'f4' || key === '\u00e7') {
             debugOverlayEnabled = !debugOverlayEnabled;
             debugText.visible = debugOverlayEnabled;
             worldSystem.refreshVisibleTileGridlines();
             logDebug(`Debug console ${debugOverlayEnabled ? 'enabled' : 'disabled'}`);
+        }
+        if (key === 'b') {
+            // Build mode toggle keybind.
+            const enabled = buildingSystem.toggleBuildMode();
+            updateHud();
+            logDebug(`Build mode ${enabled ? 'enabled' : 'disabled'}`);
+        }
+        if (key === 'tab' && buildingSystem.getUiState().buildMode) {
+            e.preventDefault();
+            buildingSystem.cycleSelectedBuilding(1);
+            updateHud();
         }
         if (key === 'e') {
             harvestRequested = true;
@@ -1043,6 +1204,15 @@ async function init() {
         mouseScreenY = e.clientY;
     });
 
+    app.canvas.addEventListener('wheel', (e) => {
+        if (!buildingSystem.getUiState().buildMode) {
+            return;
+        }
+        e.preventDefault();
+        buildingSystem.cycleSelectedBuilding(e.deltaY > 0 ? 1 : -1);
+        updateHud();
+    }, { passive: false });
+
     app.canvas.addEventListener('mousedown', (e) => {
         mouseScreenX = e.clientX;
         mouseScreenY = e.clientY;
@@ -1052,6 +1222,8 @@ async function init() {
         }
         if (e.button === 0) {
             leftMouseDown = true;
+            // LMB is used for both attack and building placement, depending on mode.
+            placeRequested = true;
         }
     });
 
@@ -1093,6 +1265,7 @@ async function init() {
         } else {
             swordSwingSprite.visible = false;
         }
+        buildingSystem.updatePlacementGhost();
 
         if (isPaused) {
             updateDebugOverlay(frameMs);
@@ -1131,7 +1304,7 @@ async function init() {
         const tileX = Math.floor(centerX / TILE_SIZE);
         const tileY = Math.floor(centerY / TILE_SIZE);
 
-        if (!playerState.isDead && !worldSystem.isTileWater(tileX, tileY)) {
+        if (!playerState.isDead && isTileWalkable(tileX, tileY)) {
             playerWorldX = newWorldX;
             playerWorldY = newWorldY;
         }
@@ -1150,8 +1323,20 @@ async function init() {
         world.position.x = window.innerWidth / 2 - playerWorldX - 16;
         world.position.y = window.innerHeight / 2 - playerWorldY - 16;
 
-        if (!playerState.isDead && (keys.attack || leftMouseDown) && playerCombat.cooldownFrames <= 0) {
+        const buildUi = buildingSystem.getUiState();
+        if (!playerState.isDead && buildUi.buildMode && placeRequested) {
+            const placed = buildingSystem.tryPlaceSelectedAtMouse();
+            if (placed) {
+                updateHud();
+            }
+            placeRequested = false;
+        }
+
+        if (!playerState.isDead && !buildUi.buildMode && (keys.attack || leftMouseDown) && playerCombat.cooldownFrames <= 0) {
             performAttack(playerWorldX + TILE_SIZE / 2, playerWorldY + TILE_SIZE / 2);
+        }
+        if (!buildUi.buildMode) {
+            placeRequested = false;
         }
 
         if (!playerState.isDead && harvestRequested) {
@@ -1197,6 +1382,7 @@ async function init() {
         deathText.position.set(window.innerWidth / 2, window.innerHeight / 2);
         pauseText.position.set(window.innerWidth / 2, window.innerHeight / 2);
         updateVisibleWorld();
+        updateHud();
     });
 
     console.log('Purrmadeath initialized');
