@@ -98,6 +98,15 @@ export const BUILDING_TYPES = {
         label: 'Lumber Mill',
         footprint: { w: 2, h: 2 },
         color: 0x8b5a2b,
+        // Producer tuning:
+        // - `cycleFrames` controls how often output is generated.
+        // - `outputPerCycle` controls per-cycle output quantity.
+        // - `storageCap` controls max buffered output before collection.
+        role: 'producer',
+        outputResource: 'wood',
+        outputPerCycle: 1,
+        cycleFrames: 180,
+        storageCap: 50,
         cost: {
             wood: 20,
             stone: 10,
