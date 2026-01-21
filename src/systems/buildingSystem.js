@@ -6,6 +6,7 @@ export function createBuildingSystem({
     getWorldPosition,
     getMouseScreenPosition,
     isTileWalkableBase,
+    isTileWaterBase,
     getPlayerCenter,
     getEnemies,
     inventory,
@@ -15,7 +16,11 @@ export function createBuildingSystem({
     // Runtime building state.
     const buildings = [];
     const producers = [];
+    const houses = [];
+    const warehouses = [];
     const occupiedTiles = new Set();
+    const movementBlockedTiles = new Set();
+    const projectileBlockedTiles = new Set();
     const occupiedTileToBuildingId = new Map();
     const buildingById = new Map();
     const buildingTypeIds = Object.keys(buildingTypes);
@@ -104,7 +109,12 @@ export function createBuildingSystem({
             if (occupiedTiles.has(key)) {
                 return { ok: false, reason: 'Tile occupied' };
             }
-            if (!isTileWalkableBase(tile.x, tile.y)) {
+            const isWaterTile = isTileWaterBase(tile.x, tile.y);
+            if (type.placeOnWater) {
+                if (!isWaterTile) {
+                    return { ok: false, reason: 'Must be placed on water' };
+                }
+            } else if (!isTileWalkableBase(tile.x, tile.y)) {
                 return { ok: false, reason: 'Blocked terrain' };
             }
         }
@@ -128,11 +138,30 @@ export function createBuildingSystem({
     }
 
     function createBuildingSprite(type) {
-        const sprite = new PIXI.Graphics();
-        sprite.rect(2, 2, type.footprint.w * TILE_SIZE - 4, type.footprint.h * TILE_SIZE - 4);
-        sprite.fill(type.color);
-        sprite.stroke({ width: 1, color: 0x1c1208 });
-        return sprite;
+        const container = new PIXI.Container();
+        const body = new PIXI.Graphics();
+        body.rect(2, 2, type.footprint.w * TILE_SIZE - 4, type.footprint.h * TILE_SIZE - 4);
+        body.fill(type.color);
+        body.stroke({ width: 1, color: 0x1c1208 });
+        container.addChild(body);
+
+        // Producer buildings render local buffered output above the structure.
+        let outputText = null;
+        if (type.role === 'producer') {
+            outputText = new PIXI.Text({
+                text: '',
+                style: {
+                    fill: '#f7f7f7',
+                    fontFamily: 'monospace',
+                    fontSize: 11
+                }
+            });
+            outputText.anchor.set(0.5);
+            outputText.position.set((type.footprint.w * TILE_SIZE) / 2, -8);
+            container.addChild(outputText);
+        }
+
+        return { container, outputText };
     }
 
     function tryPlaceSelectedAtMouse() {
@@ -153,9 +182,9 @@ export function createBuildingSystem({
             occupiedTiles.add(keyFromTile(tile.x, tile.y));
         }
 
-        const sprite = createBuildingSprite(type);
-        sprite.position.set(tileX * TILE_SIZE, tileY * TILE_SIZE);
-        buildingLayer.addChild(sprite);
+        const spriteData = createBuildingSprite(type);
+        spriteData.container.position.set(tileX * TILE_SIZE, tileY * TILE_SIZE);
+        buildingLayer.addChild(spriteData.container);
 
         const id = nextBuildingId++;
         const building = {
@@ -167,7 +196,8 @@ export function createBuildingSystem({
             unbreakable: type.unbreakable ?? false,
             tileX,
             tileY,
-            sprite,
+            sprite: spriteData.container,
+            outputText: spriteData.outputText,
             tiles: check.tiles,
             footprintW: type.footprint.w,
             footprintH: type.footprint.h,
@@ -182,11 +212,68 @@ export function createBuildingSystem({
         buildingById.set(id, building);
         if (building.role === 'producer') {
             producers.push(building);
+        } else if (building.role === 'house') {
+            houses.push(building);
+        } else if (building.role === 'warehouse') {
+            warehouses.push(building);
         }
         for (const tile of check.tiles) {
-            occupiedTileToBuildingId.set(keyFromTile(tile.x, tile.y), id);
+            const key = keyFromTile(tile.x, tile.y);
+            occupiedTileToBuildingId.set(key, id);
+            if (type.blocksMovement !== false) {
+                movementBlockedTiles.add(key);
+            }
+            if (type.blocksProjectiles !== false) {
+                projectileBlockedTiles.add(key);
+            }
         }
         onLog?.(`${type.label} placed`);
+        return true;
+    }
+
+    function removeFromRoleList(building) {
+        const removeById = (list) => {
+            const idx = list.findIndex((item) => item.id === building.id);
+            if (idx >= 0) {
+                list.splice(idx, 1);
+            }
+        };
+        if (building.role === 'producer') {
+            removeById(producers);
+        } else if (building.role === 'house') {
+            removeById(houses);
+        } else if (building.role === 'warehouse') {
+            removeById(warehouses);
+        }
+    }
+
+    // Delete the currently selected placed building (select with LMB first).
+    function removeSelectedPlacedBuilding() {
+        if (!selectedPlacedBuildingId) {
+            return false;
+        }
+        const building = buildingById.get(selectedPlacedBuildingId);
+        if (!building) {
+            selectedPlacedBuildingId = null;
+            return false;
+        }
+
+        building.sprite.destroy();
+        buildingById.delete(building.id);
+        removeFromRoleList(building);
+        const idx = buildings.findIndex((item) => item.id === building.id);
+        if (idx >= 0) {
+            buildings.splice(idx, 1);
+        }
+        for (const tile of building.tiles) {
+            const key = keyFromTile(tile.x, tile.y);
+            occupiedTiles.delete(key);
+            occupiedTileToBuildingId.delete(key);
+            movementBlockedTiles.delete(key);
+            projectileBlockedTiles.delete(key);
+        }
+        onLog?.(`${buildingTypes[building.type]?.label ?? 'Building'} removed`);
+        selectedPlacedBuildingId = null;
         return true;
     }
 
@@ -237,6 +324,9 @@ export function createBuildingSystem({
                 producedUnitsWindow += producer.outputPerCycle;
                 producer.cycleTimerFrames += producer.cycleFrames;
             }
+            if (producer.outputText) {
+                producer.outputText.text = `${producer.outputResource}: ${producer.storedOutput}/${producer.storageCap}`;
+            }
         }
 
         producedFramesWindow += deltaFrames;
@@ -281,11 +371,27 @@ export function createBuildingSystem({
 
         const amount = best.storedOutput;
         best.storedOutput = 0;
+        if (best.outputText) {
+            best.outputText.text = `${best.outputResource}: 0/${best.storageCap}`;
+        }
         return { resourceType: best.outputResource, amount };
     }
 
     function isTileBlocked(tileX, tileY) {
-        return occupiedTiles.has(keyFromTile(tileX, tileY));
+        return movementBlockedTiles.has(keyFromTile(tileX, tileY));
+    }
+
+    function hasBridgeAt(tileX, tileY) {
+        const buildingId = occupiedTileToBuildingId.get(keyFromTile(tileX, tileY));
+        if (!buildingId) {
+            return false;
+        }
+        const building = buildingById.get(buildingId);
+        return building?.role === 'bridge';
+    }
+
+    function isProjectileBlocked(tileX, tileY) {
+        return projectileBlockedTiles.has(keyFromTile(tileX, tileY));
     }
 
     function getUiState() {
@@ -318,15 +424,68 @@ export function createBuildingSystem({
         return buildings.filter((building) => building.role === 'wall');
     }
 
+    function getProducers() {
+        return producers;
+    }
+
+    function getHouses() {
+        return houses;
+    }
+
+    function getWarehouses() {
+        return warehouses;
+    }
+
+    // Used by civilian logistics so workers can haul resources to warehouses.
+    function takeProducerOutput(producerId, amount = 1) {
+        const producer = buildingById.get(producerId);
+        if (!producer || producer.role !== 'producer' || !producer.outputResource || producer.storedOutput <= 0) {
+            return null;
+        }
+        const takenAmount = Math.min(amount, producer.storedOutput);
+        producer.storedOutput -= takenAmount;
+        return {
+            resourceType: producer.outputResource,
+            amount: takenAmount
+        };
+    }
+
+    // Reset all buildings/runtime state for full game restarts.
+    function reset() {
+        for (const building of buildings) {
+            building.sprite.destroy();
+        }
+        buildings.length = 0;
+        producers.length = 0;
+        houses.length = 0;
+        warehouses.length = 0;
+        occupiedTiles.clear();
+        movementBlockedTiles.clear();
+        projectileBlockedTiles.clear();
+        occupiedTileToBuildingId.clear();
+        buildingById.clear();
+        selectedPlacedBuildingId = null;
+        ghost.clear();
+        ghost.visible = false;
+    }
+
     return {
         toggleBuildMode,
         cycleSelectedBuilding,
         updatePlacementGhost,
         tryPlaceSelectedAtMouse,
         isTileBlocked,
+        isProjectileBlocked,
+        hasBridgeAt,
         getUiState,
         getMenuEntries,
         getWalls,
+        getProducers,
+        getHouses,
+        getWarehouses,
+        takeProducerOutput,
+        removeSelectedPlacedBuilding,
+        reset,
         selectBuildingAtMouse,
         updateProduction,
         collectNearestOutput,

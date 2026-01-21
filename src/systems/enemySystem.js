@@ -1,5 +1,6 @@
 import * as PIXI from 'pixi.js';
 import {
+    CIVILIAN_RADIUS,
     ENEMY_BLOCKED_REPATH_INTERVAL_FRAMES,
     ENEMY_CONTACT_COOLDOWN_FRAMES,
     ENEMY_CONTACT_DAMAGE,
@@ -37,7 +38,9 @@ export function createEnemySystem({
     setPlayerWorldPosition,
     canMovePlayerTo,
     onPlayerContactDamage,
-    getWalls
+    getWalls,
+    getCivilianTargets = () => [],
+    onCivilianContactDamage = () => false
 }) {
     const enemies = enemyList;
     let enemySpawnTimer = 0;
@@ -290,64 +293,86 @@ export function createEnemySystem({
     function resolveEnemyCollisions() {
         const minDistance = ENEMY_RADIUS * 2;
         const minDistanceSq = minDistance * minDistance;
-        const highDensity = enemies.length >= 90;
-        const pairBudget = highDensity ? 16000 : Infinity;
-        let pairChecks = 0;
-        for (let i = 0; i < enemies.length; i++) {
-            for (let j = i + 1; j < enemies.length; j++) {
-                pairChecks += 1;
-                if (pairChecks > pairBudget) {
-                    return;
+        const cellSize = minDistance;
+        const separationPasses = 2;
+
+        for (let pass = 0; pass < separationPasses; pass++) {
+            const grid = new Map();
+            // Spatial hash reduces broad-phase collision checks from O(n^2) to local buckets.
+            for (let i = 0; i < enemies.length; i++) {
+                const enemy = enemies[i];
+                const cx = Math.floor((enemy.x + ENEMY_RADIUS) / cellSize);
+                const cy = Math.floor((enemy.y + ENEMY_RADIUS) / cellSize);
+                const key = `${cx},${cy}`;
+                if (!grid.has(key)) {
+                    grid.set(key, []);
                 }
-                // Under heavy swarms, stagger half the pairs per frame to reduce spikes.
-                if (highDensity && ((i + j + frameIndex) % 2 !== 0)) {
-                    continue;
-                }
-                const a = enemies[i];
-                const b = enemies[j];
-                const ax = a.x + ENEMY_RADIUS;
-                const ay = a.y + ENEMY_RADIUS;
-                const bx = b.x + ENEMY_RADIUS;
-                const by = b.y + ENEMY_RADIUS;
-                let dx = bx - ax;
-                let dy = by - ay;
-                let distSq = dx * dx + dy * dy;
-                if (distSq >= minDistanceSq) {
-                    continue;
-                }
-                if (distSq < 0.0001) {
-                    const angle = (a.id * 0.37 + b.id * 0.73) % (Math.PI * 2);
-                    dx = Math.cos(angle);
-                    dy = Math.sin(angle);
-                    distSq = 1;
-                }
-                const dist = Math.sqrt(distSq);
-                const overlap = minDistance - dist;
-                const nx = dx / dist;
-                const ny = dy / dist;
-                const halfPushX = nx * overlap * 0.5;
-                const halfPushY = ny * overlap * 0.5;
-                const newAX = a.x - halfPushX;
-                const newAY = a.y - halfPushY;
-                const newBX = b.x + halfPushX;
-                const newBY = b.y + halfPushY;
-                const aTileX = Math.floor((newAX + ENEMY_RADIUS) / TILE_SIZE);
-                const aTileY = Math.floor((newAY + ENEMY_RADIUS) / TILE_SIZE);
-                const bTileX = Math.floor((newBX + ENEMY_RADIUS) / TILE_SIZE);
-                const bTileY = Math.floor((newBY + ENEMY_RADIUS) / TILE_SIZE);
-                const canMoveA = isTileWalkable(aTileX, aTileY);
-                const canMoveB = isTileWalkable(bTileX, bTileY);
-                if (canMoveA && canMoveB) {
-                    a.x = newAX;
-                    a.y = newAY;
-                    b.x = newBX;
-                    b.y = newBY;
-                } else if (canMoveA) {
-                    a.x -= nx * overlap;
-                    a.y -= ny * overlap;
-                } else if (canMoveB) {
-                    b.x += nx * overlap;
-                    b.y += ny * overlap;
+                grid.get(key).push(i);
+            }
+
+            for (let i = 0; i < enemies.length; i++) {
+                const base = enemies[i];
+                const bxCell = Math.floor((base.x + ENEMY_RADIUS) / cellSize);
+                const byCell = Math.floor((base.y + ENEMY_RADIUS) / cellSize);
+                for (let oy = -1; oy <= 1; oy++) {
+                    for (let ox = -1; ox <= 1; ox++) {
+                        const neighborKey = `${bxCell + ox},${byCell + oy}`;
+                        const bucket = grid.get(neighborKey);
+                        if (!bucket) {
+                            continue;
+                        }
+                        for (const j of bucket) {
+                            if (j <= i) {
+                                continue;
+                            }
+                            const a = enemies[i];
+                            const b = enemies[j];
+                            const ax = a.x + ENEMY_RADIUS;
+                            const ay = a.y + ENEMY_RADIUS;
+                            const bx = b.x + ENEMY_RADIUS;
+                            const by = b.y + ENEMY_RADIUS;
+                            let dx = bx - ax;
+                            let dy = by - ay;
+                            let distSq = dx * dx + dy * dy;
+                            if (distSq >= minDistanceSq) {
+                                continue;
+                            }
+                            if (distSq < 0.0001) {
+                                const angle = (a.id * 0.37 + b.id * 0.73) % (Math.PI * 2);
+                                dx = Math.cos(angle);
+                                dy = Math.sin(angle);
+                                distSq = 1;
+                            }
+                            const dist = Math.sqrt(distSq);
+                            const overlap = minDistance - dist;
+                            const nx = dx / dist;
+                            const ny = dy / dist;
+                            const halfPushX = nx * overlap * 0.6;
+                            const halfPushY = ny * overlap * 0.6;
+                            const newAX = a.x - halfPushX;
+                            const newAY = a.y - halfPushY;
+                            const newBX = b.x + halfPushX;
+                            const newBY = b.y + halfPushY;
+                            const aTileX = Math.floor((newAX + ENEMY_RADIUS) / TILE_SIZE);
+                            const aTileY = Math.floor((newAY + ENEMY_RADIUS) / TILE_SIZE);
+                            const bTileX = Math.floor((newBX + ENEMY_RADIUS) / TILE_SIZE);
+                            const bTileY = Math.floor((newBY + ENEMY_RADIUS) / TILE_SIZE);
+                            const canMoveA = isTileWalkable(aTileX, aTileY);
+                            const canMoveB = isTileWalkable(bTileX, bTileY);
+                            if (canMoveA && canMoveB) {
+                                a.x = newAX;
+                                a.y = newAY;
+                                b.x = newBX;
+                                b.y = newBY;
+                            } else if (canMoveA) {
+                                a.x -= nx * overlap;
+                                a.y -= ny * overlap;
+                            } else if (canMoveB) {
+                                b.x += nx * overlap;
+                                b.y += ny * overlap;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -399,7 +424,7 @@ export function createEnemySystem({
         }
     }
 
-    function findPathToNearestWall(enemyTileX, enemyTileY) {
+    function findPathToNearestWall(enemyTileX, enemyTileY, enemyId = 0) {
         const walls = getWalls();
         if (walls.length === 0) {
             return { path: [], targetTile: null };
@@ -413,8 +438,9 @@ export function createEnemySystem({
 
         // Lower probe count keeps fallback wall targeting cheaper under swarms.
         const maxWallsToProbe = Math.min(4, rankedWalls.length);
+        const wallOffset = Math.abs(enemyId) % Math.max(1, maxWallsToProbe);
         for (let wi = 0; wi < maxWallsToProbe; wi++) {
-            const wall = rankedWalls[wi].wall;
+            const wall = rankedWalls[(wi + wallOffset) % maxWallsToProbe].wall;
             for (const tile of wall.tiles) {
                 const candidates = [
                     { x: tile.x + 1, y: tile.y },
@@ -422,7 +448,9 @@ export function createEnemySystem({
                     { x: tile.x, y: tile.y + 1 },
                     { x: tile.x, y: tile.y - 1 }
                 ];
-                for (const candidate of candidates) {
+                const candidateOffset = Math.abs(enemyId + tile.x * 31 + tile.y * 17) % candidates.length;
+                for (let ci = 0; ci < candidates.length; ci++) {
+                    const candidate = candidates[(ci + candidateOffset) % candidates.length];
                     if (!isTileWalkable(candidate.x, candidate.y)) {
                         continue;
                     }
@@ -452,6 +480,7 @@ export function createEnemySystem({
         frameIndex += 1;
         const playerCenter = getPlayerCenter();
         const playerTile = getPlayerTile();
+        const civilians = getCivilianTargets();
         const playerTileNeighbors = [
             { x: playerTile.x + 1, y: playerTile.y },
             { x: playerTile.x - 1, y: playerTile.y },
@@ -471,6 +500,38 @@ export function createEnemySystem({
             const enemyCenterY = enemy.y + ENEMY_SIZE / 2;
             const enemyTileX = Math.floor(enemyCenterX / TILE_SIZE);
             const enemyTileY = Math.floor(enemyCenterY / TILE_SIZE);
+            let targetTileX = playerTile.x;
+            let targetTileY = playerTile.y;
+
+            // Civilians are valid aggro targets; enemies pick the closest target by tile distance.
+            if (civilians.length > 0) {
+                let bestCivilian = null;
+                let bestDistSq = Infinity;
+                for (const civilian of civilians) {
+                    if (civilian.isDead) {
+                        continue;
+                    }
+                    const civilianTileX = Math.floor(civilian.x / TILE_SIZE);
+                    const civilianTileY = Math.floor(civilian.y / TILE_SIZE);
+                    const cdx = enemyTileX - civilianTileX;
+                    const cdy = enemyTileY - civilianTileY;
+                    const cDistSq = cdx * cdx + cdy * cdy;
+                    if (cDistSq < bestDistSq) {
+                        bestDistSq = cDistSq;
+                        bestCivilian = civilian;
+                    }
+                }
+
+                if (bestCivilian) {
+                    const pdx = enemyTileX - playerTile.x;
+                    const pdy = enemyTileY - playerTile.y;
+                    const playerDistSq = pdx * pdx + pdy * pdy;
+                    if (bestDistSq < playerDistSq) {
+                        targetTileX = Math.floor(bestCivilian.x / TILE_SIZE);
+                        targetTileY = Math.floor(bestCivilian.y / TILE_SIZE);
+                    }
+                }
+            }
             const dxPlayerTiles = enemyTileX - playerTile.x;
             const dyPlayerTiles = enemyTileY - playerTile.y;
             if (dxPlayerTiles * dxPlayerTiles + dyPlayerTiles * dyPlayerTiles > ENEMY_DESPAWN_DISTANCE_TILES * ENEMY_DESPAWN_DISTANCE_TILES) {
@@ -504,8 +565,8 @@ export function createEnemySystem({
                 if (framePathBudget > 0) {
                     const jitter = Math.floor(Math.random() * (ENEMY_REPATH_JITTER_FRAMES + 1));
                     let resolvedPath = [];
-                    if (!playerDirectlyEnclosed) {
-                        resolvedPath = findPathAStar(enemyTileX, enemyTileY, playerTile.x, playerTile.y);
+                    if (!playerDirectlyEnclosed || targetTileX !== playerTile.x || targetTileY !== playerTile.y) {
+                        resolvedPath = findPathAStar(enemyTileX, enemyTileY, targetTileX, targetTileY);
                     }
                     if (resolvedPath.length > 0) {
                         enemy.wallTargetTile = null;
@@ -515,7 +576,7 @@ export function createEnemySystem({
                             resolvedPath = findPathAStar(enemyTileX, enemyTileY, enemy.wallTargetTile.x, enemy.wallTargetTile.y);
                         }
                         if (resolvedPath.length === 0) {
-                            const wallPathResult = findPathToNearestWall(enemyTileX, enemyTileY);
+                            const wallPathResult = findPathToNearestWall(enemyTileX, enemyTileY, enemy.id);
                             resolvedPath = wallPathResult.path;
                             enemy.wallTargetTile = wallPathResult.targetTile;
                         }
@@ -572,6 +633,22 @@ export function createEnemySystem({
             if (collisionDistSq < collisionDistance * collisionDistance && enemy.contactCooldownFrames <= 0) {
                 enemy.contactCooldownFrames = ENEMY_CONTACT_COOLDOWN_FRAMES;
                 onPlayerContactDamage(ENEMY_CONTACT_DAMAGE, 'enemy_contact');
+            }
+
+            if (enemy.contactCooldownFrames <= 0 && civilians.length > 0) {
+                for (const civilian of civilians) {
+                    if (civilian.isDead) {
+                        continue;
+                    }
+                    const dxCivilian = (enemy.x + ENEMY_RADIUS) - civilian.x;
+                    const dyCivilian = (enemy.y + ENEMY_RADIUS) - civilian.y;
+                    const hitDistance = ENEMY_RADIUS + CIVILIAN_RADIUS;
+                    if (dxCivilian * dxCivilian + dyCivilian * dyCivilian < hitDistance * hitDistance) {
+                        enemy.contactCooldownFrames = ENEMY_CONTACT_COOLDOWN_FRAMES;
+                        onCivilianContactDamage(civilian.id, ENEMY_CONTACT_DAMAGE, 'enemy_contact');
+                        break;
+                    }
+                }
             }
         }
 

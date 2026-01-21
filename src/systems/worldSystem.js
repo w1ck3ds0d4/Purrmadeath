@@ -433,12 +433,30 @@ export function createWorldSystem({ tileLayer, resourceLayer, getDebugOverlayEna
         };
     }
 
+    // Full map reset used on game restart after player death.
+    function reset() {
+        for (const [, tile] of tileCache) {
+            tile.destroy();
+        }
+        for (const [, node] of resourceNodeCache) {
+            node.destroy();
+        }
+        tileCache.clear();
+        tileTypeCache.clear();
+        waterFeatureCache.clear();
+        resourceTileTypeCache.clear();
+        resourceBiomeCache.clear();
+        harvestedResourceTiles.clear();
+        resourceNodeCache.clear();
+    }
+
     return {
         isTileWater,
         isTileWalkable: (tileX, tileY) => !isTileWater(tileX, tileY),
         refreshVisibleTileGridlines,
         updateTiles,
         tryHarvestNearest,
-        getStats
+        getStats,
+        reset
     };
 }

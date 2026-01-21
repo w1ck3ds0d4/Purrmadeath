@@ -89,6 +89,15 @@ export const RESOURCE_BIOMES = {
 
 export const PLAYER_SPEED = 200;
 
+// Civilian logistics tuning:
+// - Houses spawn one civilian every `HOUSE_SPAWN_INTERVAL_FRAMES`.
+// - Each house contributes `HOUSE_CIVILIAN_CAP_BONUS` to total civilian cap.
+export const CIVILIAN_RADIUS = 8;
+export const CIVILIAN_SPEED = 70;
+export const CIVILIAN_MAX_HP = 30;
+export const HOUSE_SPAWN_INTERVAL_FRAMES = 60 * 180; // 3 minutes at 60fps frame units.
+export const HOUSE_CIVILIAN_CAP_BONUS = 3;
+
 // Building blueprints:
 // - Add new buildable structures here.
 // - Change `cost` to tune required resources.
@@ -110,6 +119,81 @@ export const BUILDING_TYPES = {
         cost: {
             wood: 20,
             stone: 10,
+            iron: 0,
+            gold: 0
+        }
+    },
+    stoneQuarry: {
+        label: 'Stone Quarry',
+        footprint: { w: 2, h: 2 },
+        color: 0x6d6d6d,
+        role: 'producer',
+        outputResource: 'stone',
+        outputPerCycle: 1,
+        cycleFrames: 220,
+        storageCap: 45,
+        cost: {
+            wood: 12,
+            stone: 8,
+            iron: 0,
+            gold: 0
+        }
+    },
+    ironMine: {
+        label: 'Iron Mine',
+        footprint: { w: 2, h: 2 },
+        color: 0xbfc6cd,
+        role: 'producer',
+        outputResource: 'iron',
+        outputPerCycle: 1,
+        cycleFrames: 280,
+        storageCap: 35,
+        cost: {
+            wood: 10,
+            stone: 14,
+            iron: 4,
+            gold: 0
+        }
+    },
+    houseLvl1: {
+        label: 'House Lvl1',
+        footprint: { w: 2, h: 2 },
+        color: 0x9a7a4f,
+        role: 'house',
+        cost: {
+            wood: 15,
+            stone: 5,
+            iron: 0,
+            gold: 0
+        }
+    },
+    warehouse: {
+        label: 'Warehouse',
+        footprint: { w: 3, h: 3 },
+        color: 0x8c7658,
+        role: 'warehouse',
+        cost: {
+            wood: 25,
+            stone: 20,
+            iron: 5,
+            gold: 0
+        }
+    },
+    bridge: {
+        label: 'Bridge',
+        footprint: { w: 1, h: 1 },
+        color: 0xb38b5d,
+        role: 'bridge',
+        // Bridge rules:
+        // - `placeOnWater` means this blueprint can only be placed on water tiles.
+        // - `blocksMovement: false` makes the bridge tile traversable.
+        // - `blocksProjectiles: false` lets bullets/arrows pass through.
+        placeOnWater: true,
+        blocksMovement: false,
+        blocksProjectiles: false,
+        cost: {
+            wood: 2,
+            stone: 1,
             iron: 0,
             gold: 0
         }

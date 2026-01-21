@@ -26,11 +26,11 @@ import {
     PLAYER_COLLISION_RADIUS,
     PLAYER_INVULN_FRAMES,
     PLAYER_MAX_HP,
-    PLAYER_SPEED,
     TILE_SIZE,
     WEAPONS
 } from './config/constants.js';
 import { createBuildingSystem } from './systems/buildingSystem.js';
+import { createCivilianSystem } from './systems/civilianSystem.js';
 import { createEnemySystem } from './systems/enemySystem.js';
 import { createPlayerSystem } from './systems/playerSystem.js';
 import { createWorldSystem } from './systems/worldSystem.js';
@@ -51,11 +51,13 @@ async function init() {
     const tileLayer = new PIXI.Container();
     const resourceLayer = new PIXI.Container();
     const buildingLayer = new PIXI.Container();
+    const civilianLayer = new PIXI.Container();
     const enemyLayer = new PIXI.Container();
     const projectileLayer = new PIXI.Container();
     world.addChild(tileLayer);
     world.addChild(resourceLayer);
     world.addChild(buildingLayer);
+    world.addChild(civilianLayer);
     world.addChild(enemyLayer);
     world.addChild(projectileLayer);
 
@@ -86,13 +88,16 @@ async function init() {
     let enemySpawnTimer = 0;
     let enemyIdCounter = 0;
     let uiRefreshTimer = 0;
+    let gameTimeSeconds = 0;
     const debugLogs = [];
     // Browser-side crash records are persisted in localStorage for post-mortem checks.
     const crashLogs = [];
     let debugOverlayEnabled = false;
     let smoothedFps = 60;
     let isPaused = false;
+    let enemiesDisabled = false;
     let buildingSystem = null;
+    let civilianSystem = null;
     let enemySystem = null;
     // World streaming/resource system; owns terrain cache and node spawning.
     const worldSystem = createWorldSystem({
@@ -112,7 +117,9 @@ async function init() {
 
     // Shared walkability rule used by player/enemies/projectiles.
     function isTileWalkable(tileX, tileY) {
-        return worldSystem.isTileWalkable(tileX, tileY) && !(buildingSystem?.isTileBlocked(tileX, tileY) ?? false);
+        const hasBridge = buildingSystem?.hasBridgeAt(tileX, tileY) ?? false;
+        const terrainWalkable = worldSystem.isTileWalkable(tileX, tileY) || hasBridge;
+        return terrainWalkable && !(buildingSystem?.isTileBlocked(tileX, tileY) ?? false);
     }
     // Enemy runtime logic is managed in `systems/enemySystem.js`.
     function findSafeSpawnPosition() {
@@ -130,6 +137,15 @@ async function init() {
     });
     hudText.position.set(16, 10);
     app.stage.addChild(hudText);
+    const clockText = new PIXI.Text({
+        text: '',
+        style: {
+            fill: '#ffffff',
+            fontFamily: 'monospace',
+            fontSize: 16
+        }
+    });
+    app.stage.addChild(clockText);
     const topBarBackground = new PIXI.Graphics();
     app.stage.addChildAt(topBarBackground, app.stage.getChildIndex(hudText));
 
@@ -216,13 +232,28 @@ async function init() {
         const buildUi = buildingSystem?.getUiState();
         const buildMode = buildUi?.buildMode ? 'ON' : 'OFF';
         const buildType = buildUi?.selectedLabel ?? 'None';
-        hudText.text = `Wood: ${inventory.wood}   Stone: ${inventory.stone}   Iron: ${inventory.iron}   Gold: ${inventory.gold}   Kills: ${combatStats.enemiesKilled}   Build: ${buildMode} (${buildType})`;
+        const civStats = civilianSystem?.getStats() ?? { civilianCount: 0, civilianCap: 0 };
+        hudText.text = `Wood: ${inventory.wood}   Stone: ${inventory.stone}   Iron: ${inventory.iron}   Gold: ${inventory.gold}   Kills: ${combatStats.enemiesKilled}   Civilians: ${civStats.civilianCount}/${civStats.civilianCap}   Build: ${buildMode} (${buildType})`;
         topBarBackground.clear();
         topBarBackground.rect(0, 0, window.innerWidth, 40);
         topBarBackground.fill(0x111111);
         topBarBackground.alpha = 0.85;
+        updateClockHud();
         updateBuildMenu();
         updateHealthHud();
+    }
+
+    function formatGameClock(totalSeconds) {
+        const seconds = Math.max(0, Math.floor(totalSeconds));
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = seconds % 60;
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
+
+    function updateClockHud() {
+        clockText.text = `Time ${formatGameClock(gameTimeSeconds)}`;
+        clockText.position.set(window.innerWidth - 150, 10);
     }
 
     function formatCost(cost) {
@@ -243,7 +274,7 @@ async function init() {
 
         const lines = [];
         if (buildUi.buildMode) {
-            lines.push('Build Menu (Tab/Mouse Wheel)', 'Left Click: Place');
+            lines.push('Build Menu', 'Tab/Wheel: Select | LClick: Place | Del/X: Remove');
             for (const entry of buildingSystem.getMenuEntries()) {
                 lines.push(`${entry.selected ? '> ' : '  '}${entry.label} [${formatCost(entry.cost)}]`);
             }
@@ -259,10 +290,16 @@ async function init() {
             }
         }
         buildMenuText.text = lines.join('\n');
+        const panelPadding = 12;
+        const panelX = 12;
+        const panelY = 52;
+        const panelWidth = Math.min(440, Math.max(280, Math.ceil(buildMenuText.width + panelPadding * 2)));
+        const panelHeight = Math.max(46, Math.ceil(buildMenuText.height + panelPadding * 2));
+        buildMenuText.position.set(panelX + panelPadding, panelY + panelPadding);
         buildMenuBackground.clear();
-        buildMenuBackground.rect(12, 56, 360, 18 + lines.length * 20);
+        buildMenuBackground.rect(panelX, panelY, panelWidth, panelHeight);
         buildMenuBackground.fill(0x141414);
-        buildMenuBackground.alpha = 0.9;
+        buildMenuBackground.alpha = 0.84;
         buildMenuBackground.stroke({ width: 1, color: 0x333333 });
         buildMenuBackground.visible = true;
         buildMenuText.visible = true;
@@ -287,7 +324,12 @@ async function init() {
         healthText.text = `HP: ${Math.max(0, Math.ceil(playerState.hp))}/${playerState.maxHp}`;
         healthText.position.set(barX + 8, barY + 1);
         weaponText.text = `Weapon: ${playerCombat.weapon}`;
-        weaponText.position.set(barX + barWidth + 14, barY + 1);
+        let weaponX = barX + barWidth + 14;
+        const maxWeaponX = window.innerWidth - weaponText.width - 16;
+        if (weaponX > maxWeaponX) {
+            weaponX = Math.max(16, maxWeaponX);
+        }
+        weaponText.position.set(weaponX, barY + 1);
     }
 
     function logDebug(message) {
@@ -304,15 +346,19 @@ async function init() {
         }
         const worldStats = worldSystem.getStats();
         const buildingStats = buildingSystem?.getStats() ?? { buildingCount: 0 };
+        const civilianStats = civilianSystem?.getStats() ?? { civilianCount: 0, civilianCap: 0, civiliansKilled: 0 };
         const pathStats = enemySystem?.getPathStats() ?? { requests: 0, executed: 0, deferred: 0, budget: ENEMY_MAX_REPATHS_PER_FRAME };
 
         const lines = [
-            'DEV CONSOLE (F4 or ç) | Export crashes: F8',
+            'DEV CONSOLE (F4 or ç)',
+            'Shortcuts: F8 export crashes | H +100 resources | K enemy toggle',
             `FPS: ${smoothedFps.toFixed(1)} | Frame: ${frameMs.toFixed(2)} ms`,
             `Player HP: ${Math.ceil(playerState.hp)}/${playerState.maxHp} | Weapon: ${playerCombat.weapon}`,
             `Enemies: ${enemies.length}/${ENEMY_MAX_COUNT}`,
+            `Enemies disabled: ${enemiesDisabled ? 'YES' : 'NO'} (Toggle: K while dev console open)`,
             `Bullets: ${projectiles.length}/${MAX_BULLETS}`,
             `Buildings: ${buildingStats.buildingCount} | Producers: ${buildingStats.producerCount ?? 0}`,
+            `Civilians: ${civilianStats.civilianCount}/${civilianStats.civilianCap} | Lost: ${civilianStats.civiliansKilled}`,
             `Producer output: ${(buildingStats.producedPerSecond ?? 0).toFixed(2)}/s`,
             `Crash logs stored: ${crashLogs.length}`,
             `Path req/exe/def: ${pathStats.requests}/${pathStats.executed}/${pathStats.deferred}`,
@@ -330,6 +376,8 @@ async function init() {
         }
 
         debugText.text = lines.join('\n');
+        // Right-align by content width so text never renders off-screen.
+        debugText.position.set(Math.max(16, window.innerWidth - debugText.width - 16), 52);
     }
 
     function removeProjectileAt(index) {
@@ -343,6 +391,47 @@ async function init() {
         for (let i = projectiles.length - 1; i >= 0; i--) {
             removeProjectileAt(i);
         }
+    }
+
+    // Full run reset: player, world, buildings, civilians, enemies, and resources.
+    function resetRunState() {
+        playerState.hp = playerState.maxHp;
+        playerState.invulnFrames = 0;
+        playerState.isDead = false;
+        playerCombat.weapon = 'sword';
+        playerCombat.cooldownFrames = 0;
+        combatStats.enemiesKilled = 0;
+        inventory.wood = 0;
+        inventory.stone = 0;
+        inventory.iron = 0;
+        inventory.gold = 0;
+        gameTimeSeconds = 0;
+
+        deathText.visible = false;
+        const respawn = findSafeSpawnPosition();
+        playerWorldX = respawn.x;
+        playerWorldY = respawn.y;
+        playerSystem.setWorldPosition(playerWorldX, playerWorldY);
+
+        worldSystem.reset();
+        buildingSystem.reset();
+        civilianSystem.reset();
+        resetCombatEntities();
+
+        for (let i = floatingTexts.length - 1; i >= 0; i--) {
+            floatingTexts[i].sprite.destroy();
+            floatingTexts.splice(i, 1);
+        }
+
+        harvestRequested = false;
+        placeRequested = false;
+        inspectRequested = false;
+        deleteBuildingRequested = false;
+        keys.attack = false;
+
+        updateVisibleWorld();
+        updateHud();
+        updateHealthHud();
     }
 
     function applyDamage(target, amount, source) {
@@ -471,7 +560,8 @@ async function init() {
             const bulletCenterY = bullet.y + 4;
             const bulletTileX = Math.floor(bulletCenterX / TILE_SIZE);
             const bulletTileY = Math.floor(bulletCenterY / TILE_SIZE);
-            if (!isTileWalkable(bulletTileX, bulletTileY)) {
+            // Projectiles pass over water; only solid buildings can block them.
+            if (buildingSystem.isProjectileBlocked(bulletTileX, bulletTileY)) {
                 removeProjectileAt(i);
                 continue;
             }
@@ -523,6 +613,7 @@ async function init() {
     let harvestRequested = false;
     let placeRequested = false;
     let inspectRequested = false;
+    let deleteBuildingRequested = false;
     let leftMouseDown = false;
     let mouseScreenX = window.innerWidth / 2;
     let mouseScreenY = window.innerHeight / 2;
@@ -532,6 +623,7 @@ async function init() {
         getWorldPosition: () => ({ x: world.position.x, y: world.position.y }),
         getMouseScreenPosition: () => ({ x: mouseScreenX, y: mouseScreenY }),
         isTileWalkableBase: (tileX, tileY) => worldSystem.isTileWalkable(tileX, tileY),
+        isTileWaterBase: (tileX, tileY) => worldSystem.isTileWater(tileX, tileY),
         getPlayerCenter: () => playerSystem.getCenter(),
         getEnemies: () => enemySystem?.getEnemies() ?? enemies,
         inventory,
@@ -624,7 +716,23 @@ async function init() {
             return isTileWalkable(tileX, tileY);
         },
         onPlayerContactDamage: (amount, source) => applyDamage(playerState, amount, source),
-        getWalls: () => buildingSystem.getWalls()
+        getWalls: () => buildingSystem.getWalls(),
+        getCivilianTargets: () => civilianSystem?.getTargets() ?? [],
+        onCivilianContactDamage: (civilianId, amount, source) => civilianSystem?.applyDamage(civilianId, amount, source)
+    });
+
+    // Civilian logistics system: workers haul producer output into global warehouse stock.
+    civilianSystem = createCivilianSystem({
+        civilianLayer,
+        buildingSystem,
+        isTileWalkable,
+        onDepositResource: (resourceType, amount) => {
+            if (inventory[resourceType] !== undefined) {
+                inventory[resourceType] += amount;
+                updateHud();
+            }
+        },
+        onLog: (message) => logDebug(message)
     });
 
     updateHud();
@@ -650,9 +758,24 @@ async function init() {
             worldSystem.refreshVisibleTileGridlines();
             logDebug(`Debug console ${debugOverlayEnabled ? 'enabled' : 'disabled'}`);
         }
+        if ((key === 'k') && debugOverlayEnabled) {
+            enemiesDisabled = !enemiesDisabled;
+            if (enemiesDisabled) {
+                enemySystem.resetEnemies();
+            }
+            logDebug(`Enemies ${enemiesDisabled ? 'disabled' : 'enabled'} (dev toggle)`);
+        }
         if (key === 'f8') {
             downloadCrashLogs();
             logDebug('Crash logs exported');
+        }
+        if ((key === 'h') && debugOverlayEnabled) {
+            inventory.wood += 100;
+            inventory.stone += 100;
+            inventory.iron += 100;
+            inventory.gold += 100;
+            updateHud();
+            logDebug('Dev resources added (+100 each)');
         }
         if (key === 'b') {
             // Build mode toggle keybind.
@@ -668,6 +791,9 @@ async function init() {
         if (key === 'e') {
             harvestRequested = true;
         }
+        if (key === 'delete' || key === 'backspace' || key === 'x') {
+            deleteBuildingRequested = true;
+        }
         if (key === '1') {
             playerCombat.weapon = 'sword';
             updateHud();
@@ -679,19 +805,7 @@ async function init() {
             keys.attack = true;
         }
         if (key === 'r' && playerState.isDead) {
-            playerState.hp = playerState.maxHp;
-            playerState.invulnFrames = 0;
-            playerState.isDead = false;
-            combatStats.enemiesKilled = 0;
-            inventory.gold = 0;
-            deathText.visible = false;
-            const respawn = findSafeSpawnPosition();
-            playerWorldX = respawn.x;
-            playerWorldY = respawn.y;
-            playerSystem.setWorldPosition(playerWorldX, playerWorldY);
-            resetCombatEntities();
-            updateHud();
-            updateHealthHud();
+            resetRunState();
             logDebug('Player restarted');
         }
     });
@@ -759,14 +873,18 @@ async function init() {
             return;
         }
 
+        gameTimeSeconds += (delta.deltaMS / 1000);
+
+        const deltaMoveScale = delta.deltaTime / 60;
         buildingSystem.updateProduction(delta.deltaTime);
+        civilianSystem.update(delta.deltaTime, deltaMoveScale);
         uiRefreshTimer -= delta.deltaTime;
         if (uiRefreshTimer <= 0) {
             updateBuildMenu();
+            updateClockHud();
             uiRefreshTimer = 12;
         }
 
-        const deltaMoveScale = delta.deltaTime / 60;
         playerSystem.tickCombatTimers(delta.deltaTime);
         playerSystem.updateMovement(keys, deltaMoveScale, (nextX, nextY) => {
             const tileX = Math.floor((nextX + TILE_SIZE / 2) / TILE_SIZE);
@@ -781,10 +899,12 @@ async function init() {
         world.position.y = window.innerHeight / 2 - playerWorldY - 16;
 
         updateVisibleWorld();
-        if (!playerState.isDead) {
+        if (!playerState.isDead && !enemiesDisabled) {
             enemySystem.spawnTick();
         }
-        enemySystem.update(deltaMoveScale);
+        if (!enemiesDisabled) {
+            enemySystem.update(deltaMoveScale);
+        }
         updateProjectiles(deltaMoveScale);
 
         // Re-apply camera in case enemy collision resolution pushed the player.
@@ -796,6 +916,13 @@ async function init() {
             buildingSystem.selectBuildingAtMouse();
             updateHud();
             inspectRequested = false;
+        }
+        if (deleteBuildingRequested) {
+            const removed = buildingSystem.removeSelectedPlacedBuilding();
+            if (removed) {
+                updateHud();
+            }
+            deleteBuildingRequested = false;
         }
         if (!playerState.isDead && buildUi.buildMode && placeRequested) {
             const placed = buildingSystem.tryPlaceSelectedAtMouse();
@@ -853,7 +980,7 @@ async function init() {
     window.addEventListener('resize', () => {
         app.renderer.resize(window.innerWidth, window.innerHeight);
         playerSystem.handleResize(window.innerWidth, window.innerHeight);
-        debugText.position.set(window.innerWidth - 360, 52);
+        debugText.position.set(Math.max(16, window.innerWidth - debugText.width - 16), 52);
         deathText.position.set(window.innerWidth / 2, window.innerHeight / 2);
         pauseText.position.set(window.innerWidth / 2, window.innerHeight / 2);
         updateVisibleWorld();
