@@ -47,6 +47,59 @@ export const GOLD_PER_ENEMY_KILL = 5;
 export const MAX_TOWER_PROJECTILES = 180;
 export const MAX_ENEMY_PROJECTILES = 220;
 
+// Performance profiles:
+// - `quality` keeps maximum gameplay fidelity.
+// - `stress` trades some far-entity update frequency for better FPS under swarms.
+export const PERFORMANCE_PROFILES = {
+    quality: {
+        enemyNearTiles: 20,
+        enemyMidTiles: 40,
+        enemyMidStride: 2,
+        enemyFarStride: 3,
+        enemyCollisionHighDensityThreshold: 120,
+        enemyCollisionHighDensityStride: 2,
+        towerUpdateStride: 1,
+        enemyRangedUpdateStride: 1,
+        civilianUpdateStride: 1,
+        budgetsMs: {
+            buildings: 1.8,
+            civilians: 2.6,
+            enemies: 7.5,
+            towerCombat: 1.6,
+            enemyRanged: 1.6,
+            projectiles: 2.3,
+            ui: 1.6
+        }
+    },
+    stress: {
+        enemyNearTiles: 18,
+        enemyMidTiles: 34,
+        enemyMidStride: 3,
+        enemyFarStride: 5,
+        enemyCollisionHighDensityThreshold: 80,
+        enemyCollisionHighDensityStride: 3,
+        towerUpdateStride: 2,
+        enemyRangedUpdateStride: 2,
+        civilianUpdateStride: 2,
+        budgetsMs: {
+            buildings: 1.4,
+            civilians: 2.0,
+            enemies: 6.0,
+            towerCombat: 1.0,
+            enemyRanged: 1.0,
+            projectiles: 1.8,
+            ui: 1.0
+        }
+    }
+};
+
+export const PERFORMANCE_GOVERNOR = {
+    autoEnabledByDefault: true,
+    downgradeOverBudgetFrames: 90,
+    recoverStableFrames: 240,
+    recoverMinFps: 58
+};
+
 export const WEAPONS = {
     sword: {
         damage: 25,

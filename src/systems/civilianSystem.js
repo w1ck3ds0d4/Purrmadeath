@@ -28,6 +28,11 @@ export function createCivilianSystem({
     const CIVILIAN_SEPARATION_PASSES = 3;
     const CIVILIAN_STUCK_FRAMES_THRESHOLD = 40;
     const CIVILIAN_STUCK_PROGRESS_EPSILON_SQ = 0.09;
+    const CIVILIAN_DYNAMIC_AVOID_RADIUS = CIVILIAN_RADIUS * 2.5;
+    const CIVILIAN_DYNAMIC_AVOID_WEIGHT = 1.15;
+    const CIVILIAN_CARRY_AMOUNT = 5;
+    const CIVILIAN_PATROL_RECHECK_FRAMES = 45;
+    const CIVILIAN_STUCK_RECOVERY_COOLDOWN_FRAMES = 75;
     const CIVILIAN_ASSIGNMENTS_PER_FRAME = 10;
     const CIVILIAN_TARGET_REFRESH_FRAMES = 24;
     const CIVILIAN_TARGET_GRID_SIZE = TILE_SIZE * 10;
@@ -242,7 +247,6 @@ export function createCivilianSystem({
 
     function findUnstuckPointForCivilian(originCenter) {
         const searchOffsets = [
-            { x: 0, y: 0 },
             { x: 1, y: 0 },
             { x: -1, y: 0 },
             { x: 0, y: 1 },
@@ -272,6 +276,25 @@ export function createCivilianSystem({
             const centerY = ty * TILE_SIZE + TILE_SIZE * 0.5;
             if (isCivilianSpawnPositionClear(centerX, centerY)) {
                 return { x: centerX, y: centerY };
+            }
+        }
+        // Wider fallback to avoid teleports looping between the same nearby spots.
+        for (let radius = 3; radius <= 5; radius++) {
+            for (let dy = -radius; dy <= radius; dy++) {
+                for (let dx = -radius; dx <= radius; dx++) {
+                    if (Math.abs(dx) !== radius && Math.abs(dy) !== radius) {
+                        continue;
+                    }
+                    const tx = tileX + dx;
+                    const ty = tileY + dy;
+                    if (!isTileWalkable(tx, ty)) {
+                        continue;
+                    }
+                    return {
+                        x: tx * TILE_SIZE + TILE_SIZE * 0.5,
+                        y: ty * TILE_SIZE + TILE_SIZE * 0.5
+                    };
+                }
             }
         }
         return originCenter;
@@ -355,7 +378,13 @@ export function createCivilianSystem({
             targetWarehouseId: null,
             targetX: center.x,
             targetY: center.y,
+            finalTargetX: center.x,
+            finalTargetY: center.y,
+            hasTravelWaypoint: false,
+            routeSalt: 0,
             stuckFrames: 0,
+            stuckRecoveryCooldownFrames: 0,
+            patrolRecheckFrames: 0,
             sprite
         };
         sprite.position.set(civilian.x, civilian.y);
@@ -409,6 +438,52 @@ export function createCivilianSystem({
         return best;
     }
 
+    function buildProducerLoadMap() {
+        const loadByProducerId = new Map();
+        for (const civilian of civilians) {
+            if (civilian.isDead || !civilian.targetProducerId) {
+                continue;
+            }
+            if (civilian.state !== 'toProducer' && civilian.state !== 'queueProducer') {
+                continue;
+            }
+            loadByProducerId.set(
+                civilian.targetProducerId,
+                (loadByProducerId.get(civilian.targetProducerId) ?? 0) + 1
+            );
+        }
+        return loadByProducerId;
+    }
+
+    function getProducerQueueCapacity(producer) {
+        const perimeterCount = getPerimeterTiles(producer, 1).length;
+        return Math.max(1, Math.min(4, Math.floor(perimeterCount / 3) || 2));
+    }
+
+    function getProducerQueuePoint(civilian, producer, queueIndex) {
+        const fromX = civilian.x + CIVILIAN_RADIUS;
+        const fromY = civilian.y + CIVILIAN_RADIUS;
+        const approach = findBestApproachPoint(producer, fromX, fromY, civilian.id + queueIndex * 29);
+        const producerCenter = getBuildingCenter(producer);
+        const dx = approach.x - producerCenter.x;
+        const dy = approach.y - producerCenter.y;
+        const mag = Math.hypot(dx, dy);
+        if (mag < 0.001) {
+            return approach;
+        }
+        const distanceOut = TILE_SIZE * (1 + queueIndex * 0.8);
+        const queuePoint = {
+            x: approach.x + (dx / mag) * distanceOut,
+            y: approach.y + (dy / mag) * distanceOut
+        };
+        const tileX = Math.floor(queuePoint.x / TILE_SIZE);
+        const tileY = Math.floor(queuePoint.y / TILE_SIZE);
+        if (!isTileWalkable(tileX, tileY)) {
+            return approach;
+        }
+        return queuePoint;
+    }
+
     function findNearestWarehouse(civilian) {
         perfStats.warehouseQueries += 1;
         const fromX = civilian.x + CIVILIAN_RADIUS;
@@ -432,25 +507,173 @@ export function createCivilianSystem({
         return best;
     }
 
-    function assignTransportJob(civilian) {
-        const producer = findNearestProducerWithOutput(civilian);
-        const warehouse = findNearestWarehouse(civilian);
-        if (!producer || !warehouse) {
+    // Travel diversity:
+    // - Adds a lightweight detour waypoint so civilians do not all pick identical straight lines.
+    // - If detour tile is blocked, falls back to direct movement.
+    function setCivilianTravelTarget(civilian, finalX, finalY, preferDetour = true) {
+        civilian.finalTargetX = finalX;
+        civilian.finalTargetY = finalY;
+        civilian.hasTravelWaypoint = false;
+
+        const fromX = civilian.x + CIVILIAN_RADIUS;
+        const fromY = civilian.y + CIVILIAN_RADIUS;
+        const dx = finalX - fromX;
+        const dy = finalY - fromY;
+        const dist = Math.hypot(dx, dy);
+        if (!preferDetour || dist < TILE_SIZE * 3) {
+            civilian.targetX = finalX;
+            civilian.targetY = finalY;
+            return;
+        }
+
+        const nx = dx / dist;
+        const ny = dy / dist;
+        const basePerpX = -ny;
+        const basePerpY = nx;
+        civilian.routeSalt += 1;
+        const sign = ((civilian.id + civilian.routeSalt) % 2 === 0) ? 1 : -1;
+        const offsetScale = TILE_SIZE * (1.15 + ((civilian.id + civilian.routeSalt) % 3) * 0.28);
+        const midpointX = fromX + dx * 0.52;
+        const midpointY = fromY + dy * 0.52;
+
+        const candidateOffsets = [
+            sign * offsetScale,
+            -sign * offsetScale,
+            sign * offsetScale * 0.6,
+            -sign * offsetScale * 0.6
+        ];
+        for (const offset of candidateOffsets) {
+            const waypointX = midpointX + basePerpX * offset;
+            const waypointY = midpointY + basePerpY * offset;
+            const tileX = Math.floor(waypointX / TILE_SIZE);
+            const tileY = Math.floor(waypointY / TILE_SIZE);
+            if (!isTileWalkable(tileX, tileY)) {
+                continue;
+            }
+            civilian.targetX = waypointX;
+            civilian.targetY = waypointY;
+            civilian.hasTravelWaypoint = true;
+            return;
+        }
+
+        civilian.targetX = finalX;
+        civilian.targetY = finalY;
+    }
+
+    function findIdleAnchorBuilding(civilian) {
+        if (civilian.homeHouseId !== null) {
+            const home = buildingSystem.getHouses().find((house) => house.id === civilian.homeHouseId);
+            if (home) {
+                return home;
+            }
+        }
+        const warehouses = buildingSystem.getWarehouses();
+        if (warehouses.length > 0) {
+            return warehouses[0];
+        }
+        const producers = buildingSystem.getProducers();
+        if (producers.length > 0) {
+            return producers[0];
+        }
+        return null;
+    }
+
+    function assignIdlePatrol(civilian) {
+        const anchor = findIdleAnchorBuilding(civilian);
+        if (!anchor) {
             civilian.state = 'idle';
-            civilian.targetProducerId = null;
-            civilian.targetWarehouseId = null;
-            civilian.cargoAmount = 0;
-            civilian.cargoResource = null;
             return;
         }
         const fromX = civilian.x + CIVILIAN_RADIUS;
         const fromY = civilian.y + CIVILIAN_RADIUS;
-        const producerCenter = findBestApproachPoint(producer, fromX, fromY, civilian.id);
-        civilian.state = 'toProducer';
-        civilian.targetProducerId = producer.id;
+        const patrolPoint = findBestApproachPoint(anchor, fromX, fromY, civilian.id + (updateFrameIndex * 13));
+        civilian.state = 'idlePatrol';
+        setCivilianTravelTarget(civilian, patrolPoint.x, patrolPoint.y, true);
+        civilian.patrolRecheckFrames = CIVILIAN_PATROL_RECHECK_FRAMES;
+    }
+
+    function assignTransportJob(civilian) {
+        const warehouse = findNearestWarehouse(civilian);
+        if (!warehouse) {
+            civilian.state = 'idlePatrol';
+            civilian.targetProducerId = null;
+            civilian.targetWarehouseId = null;
+            civilian.cargoAmount = 0;
+            civilian.cargoResource = null;
+            assignIdlePatrol(civilian);
+            return false;
+        }
+
+        const fromX = civilian.x + CIVILIAN_RADIUS;
+        const fromY = civilian.y + CIVILIAN_RADIUS;
+        let producers = queryNearbyGridEntries(producerGrid, fromX, fromY);
+        if (producers.length === 0) {
+            producers = buildingSystem.getProducers();
+        }
+        const rankedProducers = [];
+        for (const producer of producers) {
+            if (producer.storedOutput <= 0 || !producer.outputResource) {
+                continue;
+            }
+            const approach = findBestApproachPoint(producer, fromX, fromY, civilian.id);
+            const dx = approach.x - fromX;
+            const dy = approach.y - fromY;
+            const dist = Math.hypot(dx, dy);
+            const score = producer.storedOutput * 1000 - dist;
+            rankedProducers.push({ producer, score });
+        }
+        rankedProducers.sort((a, b) => b.score - a.score);
+        if (rankedProducers.length === 0) {
+            civilian.state = 'idlePatrol';
+            civilian.targetProducerId = null;
+            civilian.targetWarehouseId = null;
+            civilian.cargoAmount = 0;
+            civilian.cargoResource = null;
+            assignIdlePatrol(civilian);
+            return false;
+        }
+
+        const producerLoadMap = buildProducerLoadMap();
+        let selectedProducer = null;
+        let fallbackQueueProducer = null;
+        let fallbackQueueLoad = Infinity;
+        for (const entry of rankedProducers) {
+            const producer = entry.producer;
+            const currentLoad = producerLoadMap.get(producer.id) ?? 0;
+            const capacity = getProducerQueueCapacity(producer);
+            if (currentLoad < capacity) {
+                selectedProducer = producer;
+                producerLoadMap.set(producer.id, currentLoad + 1);
+                break;
+            }
+            if (currentLoad < fallbackQueueLoad) {
+                fallbackQueueProducer = producer;
+                fallbackQueueLoad = currentLoad;
+            }
+        }
+        if (!selectedProducer && !fallbackQueueProducer) {
+            civilian.state = 'idlePatrol';
+            assignIdlePatrol(civilian);
+            return false;
+        }
+
+        if (selectedProducer) {
+            const producerCenter = findBestApproachPoint(selectedProducer, fromX, fromY, civilian.id);
+            civilian.state = 'toProducer';
+            civilian.targetProducerId = selectedProducer.id;
+            civilian.targetWarehouseId = warehouse.id;
+            setCivilianTravelTarget(civilian, producerCenter.x, producerCenter.y, true);
+            civilian.patrolRecheckFrames = CIVILIAN_PATROL_RECHECK_FRAMES;
+            return true;
+        }
+
+        const queuePoint = getProducerQueuePoint(civilian, fallbackQueueProducer, fallbackQueueLoad);
+        civilian.state = 'queueProducer';
+        civilian.targetProducerId = fallbackQueueProducer.id;
         civilian.targetWarehouseId = warehouse.id;
-        civilian.targetX = producerCenter.x;
-        civilian.targetY = producerCenter.y;
+        setCivilianTravelTarget(civilian, queuePoint.x, queuePoint.y, false);
+        civilian.patrolRecheckFrames = Math.max(15, CIVILIAN_PATROL_RECHECK_FRAMES / 2);
+        return true;
     }
 
     function moveCivilianTowardTarget(civilian, deltaMoveScale) {
@@ -463,14 +686,47 @@ export function createCivilianSystem({
             return true;
         }
         const step = CIVILIAN_SPEED * deltaMoveScale;
-        const moveX = dist > 0 ? (dx / dist) * step : 0;
-        const moveY = dist > 0 ? (dy / dist) * step : 0;
+        let dirX = dist > 0 ? (dx / dist) : 0;
+        let dirY = dist > 0 ? (dy / dist) : 0;
+
+        // Dynamic steering around nearby civilians reduces same-lane pileups.
+        let avoidX = 0;
+        let avoidY = 0;
+        const avoidRadiusSq = CIVILIAN_DYNAMIC_AVOID_RADIUS * CIVILIAN_DYNAMIC_AVOID_RADIUS;
+        for (const other of civilians) {
+            if (other.id === civilian.id || other.isDead) {
+                continue;
+            }
+            const ox = (other.x + CIVILIAN_RADIUS) - centerX;
+            const oy = (other.y + CIVILIAN_RADIUS) - centerY;
+            const odSq = ox * ox + oy * oy;
+            if (odSq <= 0.0001 || odSq > avoidRadiusSq) {
+                continue;
+            }
+            const forwardDot = ox * dirX + oy * dirY;
+            if (forwardDot < -2) {
+                continue;
+            }
+            const od = Math.sqrt(odSq);
+            const strength = (CIVILIAN_DYNAMIC_AVOID_RADIUS - od) / CIVILIAN_DYNAMIC_AVOID_RADIUS;
+            avoidX -= (ox / od) * strength;
+            avoidY -= (oy / od) * strength;
+        }
+        dirX += avoidX * CIVILIAN_DYNAMIC_AVOID_WEIGHT;
+        dirY += avoidY * CIVILIAN_DYNAMIC_AVOID_WEIGHT;
+        const dirMag = Math.hypot(dirX, dirY);
+        if (dirMag > 0.001) {
+            dirX /= dirMag;
+            dirY /= dirMag;
+        }
+        const moveX = dirX * step;
+        const moveY = dirY * step;
 
         const candidateX = civilian.x + moveX;
         const candidateY = civilian.y + moveY;
         const centerTileX = Math.floor((candidateX + CIVILIAN_RADIUS) / TILE_SIZE);
         const centerTileY = Math.floor((candidateY + CIVILIAN_RADIUS) / TILE_SIZE);
-        if (isTileWalkable(centerTileX, centerTileY)) {
+        if (isTileWalkable(centerTileX, centerTileY) && isCivilianStepClear(civilian, candidateX, candidateY)) {
             civilian.x = candidateX;
             civilian.y = candidateY;
             civilian.sprite.position.set(civilian.x, civilian.y);
@@ -480,9 +736,15 @@ export function createCivilianSystem({
         // Fallback axis checks reduce jitter when a direct diagonal step is blocked.
         const axisXTile = Math.floor((civilian.x + moveX + CIVILIAN_RADIUS) / TILE_SIZE);
         const axisYTile = Math.floor((civilian.y + moveY + CIVILIAN_RADIUS) / TILE_SIZE);
-        if (isTileWalkable(axisXTile, Math.floor((civilian.y + CIVILIAN_RADIUS) / TILE_SIZE))) {
+        if (
+            isTileWalkable(axisXTile, Math.floor((civilian.y + CIVILIAN_RADIUS) / TILE_SIZE)) &&
+            isCivilianStepClear(civilian, civilian.x + moveX, civilian.y)
+        ) {
             civilian.x += moveX;
-        } else if (isTileWalkable(Math.floor((civilian.x + CIVILIAN_RADIUS) / TILE_SIZE), axisYTile)) {
+        } else if (
+            isTileWalkable(Math.floor((civilian.x + CIVILIAN_RADIUS) / TILE_SIZE), axisYTile) &&
+            isCivilianStepClear(civilian, civilian.x, civilian.y + moveY)
+        ) {
             civilian.y += moveY;
         } else {
             // Local obstacle avoidance: try short detours that still move toward target.
@@ -505,7 +767,7 @@ export function createCivilianSystem({
                 const ty = civilian.y + stepY;
                 const tTileX = Math.floor((tx + CIVILIAN_RADIUS) / TILE_SIZE);
                 const tTileY = Math.floor((ty + CIVILIAN_RADIUS) / TILE_SIZE);
-                if (!isTileWalkable(tTileX, tTileY)) {
+                if (!isTileWalkable(tTileX, tTileY) || !isCivilianStepClear(civilian, tx, ty)) {
                     continue;
                 }
                 const tdx = civilian.targetX - (tx + CIVILIAN_RADIUS);
@@ -525,6 +787,24 @@ export function createCivilianSystem({
         return false;
     }
 
+    function isCivilianStepClear(civilian, candidateX, candidateY) {
+        const candidateCenterX = candidateX + CIVILIAN_RADIUS;
+        const candidateCenterY = candidateY + CIVILIAN_RADIUS;
+        const minDistance = Math.max(6, CIVILIAN_RADIUS * 2 - 3);
+        const minDistanceSq = minDistance * minDistance;
+        for (const other of civilians) {
+            if (other.id === civilian.id || other.isDead) {
+                continue;
+            }
+            const dx = (other.x + CIVILIAN_RADIUS) - candidateCenterX;
+            const dy = (other.y + CIVILIAN_RADIUS) - candidateCenterY;
+            if (dx * dx + dy * dy < minDistanceSq) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     function processCivilianState(civilian, deltaMoveScale, assignmentBudget) {
         if (civilian.state === 'idle') {
             if (assignmentBudget.remaining <= 0) {
@@ -534,6 +814,48 @@ export function createCivilianSystem({
             assignmentBudget.remaining -= 1;
             perfStats.assignmentCalls += 1;
             assignTransportJob(civilian);
+            return;
+        }
+
+        if (civilian.state === 'idlePatrol') {
+            civilian.patrolRecheckFrames -= 1;
+            if (civilian.patrolRecheckFrames <= 0 && assignmentBudget.remaining > 0) {
+                assignmentBudget.remaining -= 1;
+                perfStats.assignmentCalls += 1;
+                const assigned = assignTransportJob(civilian);
+                if (assigned) {
+                    return;
+                }
+                civilian.patrolRecheckFrames = CIVILIAN_PATROL_RECHECK_FRAMES;
+            } else if (civilian.patrolRecheckFrames <= 0) {
+                perfStats.assignmentSkippedByBudget += 1;
+                civilian.patrolRecheckFrames = 8;
+            }
+
+            const arrivedPatrol = moveCivilianTowardTarget(civilian, deltaMoveScale);
+            if (arrivedPatrol) {
+                assignIdlePatrol(civilian);
+            }
+            return;
+        }
+
+        if (civilian.state === 'queueProducer') {
+            civilian.patrolRecheckFrames -= 1;
+            if (civilian.patrolRecheckFrames <= 0) {
+                if (assignmentBudget.remaining > 0) {
+                    assignmentBudget.remaining -= 1;
+                    perfStats.assignmentCalls += 1;
+                    assignTransportJob(civilian);
+                } else {
+                    perfStats.assignmentSkippedByBudget += 1;
+                }
+                civilian.patrolRecheckFrames = Math.max(15, CIVILIAN_PATROL_RECHECK_FRAMES / 2);
+            }
+            const arrivedQueue = moveCivilianTowardTarget(civilian, deltaMoveScale);
+            if (arrivedQueue) {
+                civilian.targetX = civilian.finalTargetX;
+                civilian.targetY = civilian.finalTargetY;
+            }
             return;
         }
 
@@ -548,7 +870,13 @@ export function createCivilianSystem({
             } else {
                 civilian.stuckFrames = 0;
             }
-            if (civilian.stuckFrames >= CIVILIAN_STUCK_FRAMES_THRESHOLD) {
+            if (civilian.stuckRecoveryCooldownFrames > 0) {
+                civilian.stuckRecoveryCooldownFrames -= 1;
+            }
+            if (
+                civilian.stuckFrames >= CIVILIAN_STUCK_FRAMES_THRESHOLD &&
+                civilian.stuckRecoveryCooldownFrames <= 0
+            ) {
                 const center = {
                     x: civilian.x + CIVILIAN_RADIUS,
                     y: civilian.y + CIVILIAN_RADIUS
@@ -558,32 +886,49 @@ export function createCivilianSystem({
                 civilian.y = unstuckCenter.y - CIVILIAN_RADIUS;
                 civilian.sprite.position.set(civilian.x, civilian.y);
                 civilian.stuckFrames = 0;
+                civilian.stuckRecoveryCooldownFrames = CIVILIAN_STUCK_RECOVERY_COOLDOWN_FRAMES;
+                // Force a patrol reset to break repeated stuck/unstuck loops.
+                assignIdlePatrol(civilian);
             }
             return;
         }
+        if (civilian.hasTravelWaypoint) {
+            civilian.hasTravelWaypoint = false;
+            civilian.targetX = civilian.finalTargetX;
+            civilian.targetY = civilian.finalTargetY;
+            return;
+        }
         civilian.stuckFrames = 0;
+        civilian.stuckRecoveryCooldownFrames = 0;
 
         if (civilian.state === 'toProducer') {
-            const taken = buildingSystem.takeProducerOutput(civilian.targetProducerId, 1);
+            const producer = buildingSystem.getProducers().find((item) => item.id === civilian.targetProducerId);
+            if (!producer || producer.storedOutput <= 0) {
+                civilian.state = 'idlePatrol';
+                assignIdlePatrol(civilian);
+                return;
+            }
+            const taken = buildingSystem.takeProducerOutput(civilian.targetProducerId, CIVILIAN_CARRY_AMOUNT, false);
             if (!taken) {
-                civilian.state = 'idle';
+                civilian.state = 'idlePatrol';
+                assignIdlePatrol(civilian);
                 return;
             }
             civilian.cargoResource = taken.resourceType;
             civilian.cargoAmount = taken.amount;
             const warehouse = buildingSystem.getWarehouses().find((item) => item.id === civilian.targetWarehouseId);
             if (!warehouse) {
-                civilian.state = 'idle';
+                civilian.state = 'idlePatrol';
                 civilian.cargoAmount = 0;
                 civilian.cargoResource = null;
+                assignIdlePatrol(civilian);
                 return;
             }
             const fromX = civilian.x + CIVILIAN_RADIUS;
             const fromY = civilian.y + CIVILIAN_RADIUS;
             const warehouseCenter = findBestApproachPoint(warehouse, fromX, fromY, civilian.id);
             civilian.state = 'toWarehouse';
-            civilian.targetX = warehouseCenter.x;
-            civilian.targetY = warehouseCenter.y;
+            setCivilianTravelTarget(civilian, warehouseCenter.x, warehouseCenter.y, true);
             return;
         }
 

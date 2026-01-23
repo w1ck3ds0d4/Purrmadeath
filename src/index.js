@@ -25,6 +25,8 @@ import {
     MAX_ENEMY_PROJECTILES,
     MAX_BULLETS,
     MAX_TOWER_PROJECTILES,
+    PERFORMANCE_GOVERNOR,
+    PERFORMANCE_PROFILES,
     PLAYER_COLLISION_RADIUS,
     PLAYER_INVULN_FRAMES,
     PLAYER_MAX_HP,
@@ -96,7 +98,26 @@ async function init() {
     const projectiles = [];
     const towerProjectiles = [];
     const enemyProjectiles = [];
-    const civilianFireCooldowns = new Map();
+    const projectileObjectPool = [];
+    const projectileSpritePools = {
+        player: [],
+        tower: [],
+        enemy: []
+    };
+    const floatingTextPool = [];
+    const floatingTextEntryPool = [];
+    const queryBufferA = [];
+    const queryBufferB = [];
+    const projectileSnapshot = {
+        playerCenter: { x: 0, y: 0 },
+        civilians: []
+    };
+    const benchmarkState = {
+        active: false,
+        elapsedMs: 0,
+        frameCount: 0,
+        frameMsAccum: 0
+    };
     let enemySpawnTimer = 0;
     let enemyIdCounter = 0;
     let uiRefreshTimer = 0;
@@ -109,6 +130,43 @@ async function init() {
     let smoothedFps = 60;
     let isPaused = false;
     let enemiesDisabled = false;
+    let simFrameIndex = 0;
+    let activePerfProfileKey = 'quality';
+    let activePerfProfile = PERFORMANCE_PROFILES[activePerfProfileKey];
+    let autoPerfGovernorEnabled = PERFORMANCE_GOVERNOR.autoEnabledByDefault;
+    let overBudgetFrameStreak = 0;
+    let stableFrameStreak = 0;
+    const systemPerfMs = {
+        buildings: 0,
+        civilians: 0,
+        enemies: 0,
+        towerCombat: 0,
+        enemyRanged: 0,
+        projectiles: 0,
+        ui: 0
+    };
+    const systemDeferred = {
+        civilianSkippedFrames: 0,
+        towerSkippedFrames: 0,
+        enemyRangedSkippedFrames: 0
+    };
+    const systemOverBudget = {
+        buildings: 0,
+        civilians: 0,
+        enemies: 0,
+        towerCombat: 0,
+        enemyRanged: 0,
+        projectiles: 0,
+        ui: 0
+    };
+    const enemySpatialIndex = {
+        cellSize: TILE_SIZE * 8,
+        grid: new Map()
+    };
+    const civilianSpatialIndex = {
+        cellSize: TILE_SIZE * 8,
+        grid: new Map()
+    };
     let buildingSystem = null;
     let civilianSystem = null;
     let enemySystem = null;
@@ -273,6 +331,74 @@ async function init() {
         return `W:${cost.wood ?? 0} S:${cost.stone ?? 0} I:${cost.iron ?? 0} G:${cost.gold ?? 0}`;
     }
 
+    function clearSpatialIndex(index) {
+        index.grid.clear();
+    }
+
+    function addToSpatialIndex(index, x, y, entity) {
+        const cx = Math.floor(x / index.cellSize);
+        const cy = Math.floor(y / index.cellSize);
+        const key = `${cx},${cy}`;
+        if (!index.grid.has(key)) {
+            index.grid.set(key, []);
+        }
+        index.grid.get(key).push(entity);
+    }
+
+    function querySpatialIndex(index, x, y, radius) {
+        const results = [];
+        const minCellX = Math.floor((x - radius) / index.cellSize);
+        const maxCellX = Math.floor((x + radius) / index.cellSize);
+        const minCellY = Math.floor((y - radius) / index.cellSize);
+        const maxCellY = Math.floor((y + radius) / index.cellSize);
+        for (let cy = minCellY; cy <= maxCellY; cy++) {
+            for (let cx = minCellX; cx <= maxCellX; cx++) {
+                const bucket = index.grid.get(`${cx},${cy}`);
+                if (!bucket) {
+                    continue;
+                }
+                results.push(...bucket);
+            }
+        }
+        return results;
+    }
+
+    function querySpatialIndexInto(index, x, y, radius, out) {
+        out.length = 0;
+        const minCellX = Math.floor((x - radius) / index.cellSize);
+        const maxCellX = Math.floor((x + radius) / index.cellSize);
+        const minCellY = Math.floor((y - radius) / index.cellSize);
+        const maxCellY = Math.floor((y + radius) / index.cellSize);
+        for (let cy = minCellY; cy <= maxCellY; cy++) {
+            for (let cx = minCellX; cx <= maxCellX; cx++) {
+                const bucket = index.grid.get(`${cx},${cy}`);
+                if (!bucket) {
+                    continue;
+                }
+                out.push(...bucket);
+            }
+        }
+        return out;
+    }
+
+    function rebuildRuntimeSpatialIndexes(civilianTargets = null) {
+        clearSpatialIndex(enemySpatialIndex);
+        clearSpatialIndex(civilianSpatialIndex);
+        for (const enemy of enemies) {
+            if (enemy.isDead) {
+                continue;
+            }
+            addToSpatialIndex(enemySpatialIndex, enemy.x + ENEMY_RADIUS, enemy.y + ENEMY_RADIUS, enemy);
+        }
+        const civilians = civilianTargets ?? (civilianSystem?.getTargets() ?? []);
+        for (const civilian of civilians) {
+            if (civilian.isDead) {
+                continue;
+            }
+            addToSpatialIndex(civilianSpatialIndex, civilian.x, civilian.y, civilian);
+        }
+    }
+
     function updateBuildMenu() {
         if (!buildingSystem) {
             buildMenuText.visible = false;
@@ -367,6 +493,60 @@ async function init() {
         }
     }
 
+    function updatePerformanceGovernor(frameOverBudget) {
+        if (!autoPerfGovernorEnabled) {
+            return;
+        }
+        if (frameOverBudget) {
+            overBudgetFrameStreak += 1;
+            stableFrameStreak = 0;
+        } else {
+            stableFrameStreak += 1;
+            overBudgetFrameStreak = 0;
+        }
+
+        if (
+            activePerfProfileKey === 'quality' &&
+            overBudgetFrameStreak >= PERFORMANCE_GOVERNOR.downgradeOverBudgetFrames
+        ) {
+            activePerfProfileKey = 'stress';
+            activePerfProfile = PERFORMANCE_PROFILES[activePerfProfileKey];
+            overBudgetFrameStreak = 0;
+            stableFrameStreak = 0;
+            logDebug('Auto governor switched to stress profile');
+            return;
+        }
+
+        if (
+            activePerfProfileKey === 'stress' &&
+            stableFrameStreak >= PERFORMANCE_GOVERNOR.recoverStableFrames &&
+            smoothedFps >= PERFORMANCE_GOVERNOR.recoverMinFps
+        ) {
+            activePerfProfileKey = 'quality';
+            activePerfProfile = PERFORMANCE_PROFILES[activePerfProfileKey];
+            overBudgetFrameStreak = 0;
+            stableFrameStreak = 0;
+            logDebug('Auto governor restored quality profile');
+        }
+    }
+
+    function startStressBenchmark() {
+        benchmarkState.active = true;
+        benchmarkState.elapsedMs = 0;
+        benchmarkState.frameCount = 0;
+        benchmarkState.frameMsAccum = 0;
+        activePerfProfileKey = 'stress';
+        activePerfProfile = PERFORMANCE_PROFILES[activePerfProfileKey];
+        overBudgetFrameStreak = 0;
+        stableFrameStreak = 0;
+        benchmarkState.active = false;
+        benchmarkState.elapsedMs = 0;
+        benchmarkState.frameCount = 0;
+        benchmarkState.frameMsAccum = 0;
+        const spawned = enemySystem.spawnBurst(200);
+        logDebug(`Benchmark started (spawned ${spawned} enemies)`);
+    }
+
     function updateDebugOverlay(frameMs) {
         if (!debugOverlayEnabled) {
             return;
@@ -387,8 +567,11 @@ async function init() {
 
         const lines = [
             'DEV CONSOLE (F4 or ç)',
-            'Shortcuts: F8 export crashes | H +100 resources | K enemy toggle | J force reset',
+            'Shortcuts: F8 export crashes | H +100 resources | K enemy toggle | J force reset | L perf profile | O auto governor | M benchmark',
             `FPS: ${smoothedFps.toFixed(1)} | Frame: ${frameMs.toFixed(2)} ms`,
+            `Perf profile: ${activePerfProfileKey}`,
+            `Auto governor: ${autoPerfGovernorEnabled ? 'ON' : 'OFF'} | Streak O/S: ${overBudgetFrameStreak}/${stableFrameStreak}`,
+            `Benchmark: ${benchmarkState.active ? 'RUNNING' : 'idle'} | Frames: ${benchmarkState.frameCount}`,
             `Player HP: ${Math.ceil(playerState.hp)}/${playerState.maxHp} | Weapon: ${playerCombat.weapon}`,
             `Enemies: ${enemies.length}/${ENEMY_MAX_COUNT}`,
             `Enemies disabled: ${enemiesDisabled ? 'YES' : 'NO'} (Toggle: K while dev console open)`,
@@ -401,8 +584,12 @@ async function init() {
             `Civ queries P/W: ${civPerf.producerQueries}/${civPerf.warehouseQueries} | Civ sep: ${civPerf.civiliansResolvedCollisions} in ${civPerf.collisionPasses} pass`,
             `Producer output: ${(buildingStats.producedPerSecond ?? 0).toFixed(2)}/s`,
             `Crash logs stored: ${crashLogs.length}`,
-            `Path req/exe/def: ${pathStats.requests}/${pathStats.executed}/${pathStats.deferred}`,
+            `Path req/exe/def: ${pathStats.requests}/${pathStats.executed}/${pathStats.deferred} | Stride-skip: ${pathStats.skippedByStride ?? 0}`,
             `Path budget/frame: ${pathStats.budget}`,
+            `System ms B/C/E/T/R/P/UI: ${systemPerfMs.buildings.toFixed(2)}/${systemPerfMs.civilians.toFixed(2)}/${systemPerfMs.enemies.toFixed(2)}/${systemPerfMs.towerCombat.toFixed(2)}/${systemPerfMs.enemyRanged.toFixed(2)}/${systemPerfMs.projectiles.toFixed(2)}/${systemPerfMs.ui.toFixed(2)}`,
+            `Budgets ms B/C/E/T/R/P/UI: ${activePerfProfile.budgetsMs.buildings.toFixed(1)}/${activePerfProfile.budgetsMs.civilians.toFixed(1)}/${activePerfProfile.budgetsMs.enemies.toFixed(1)}/${activePerfProfile.budgetsMs.towerCombat.toFixed(1)}/${activePerfProfile.budgetsMs.enemyRanged.toFixed(1)}/${activePerfProfile.budgetsMs.projectiles.toFixed(1)}/${activePerfProfile.budgetsMs.ui.toFixed(1)}`,
+            `Deferred C/T/R: ${systemDeferred.civilianSkippedFrames}/${systemDeferred.towerSkippedFrames}/${systemDeferred.enemyRangedSkippedFrames}`,
+            `Over budget B/C/E/T/R/P/UI: ${systemOverBudget.buildings}/${systemOverBudget.civilians}/${systemOverBudget.enemies}/${systemOverBudget.towerCombat}/${systemOverBudget.enemyRanged}/${systemOverBudget.projectiles}/${systemOverBudget.ui}`,
             `Tiles cached: ${worldStats.tilesCached}`,
             `Resources active: ${worldStats.resourcesActive}`,
             `Water feature regions: ${worldStats.waterFeatureRegions}`
@@ -425,22 +612,24 @@ async function init() {
 
     function removeProjectileAt(index) {
         const projectile = projectiles[index];
-        projectile.sprite.destroy();
+        releaseProjectileSprite(projectile.team, projectile.sprite);
+        releaseProjectileObject(projectile);
         projectiles.splice(index, 1);
     }
 
     function resetCombatEntities() {
         enemySystem.resetEnemies();
-        civilianFireCooldowns.clear();
         for (let i = projectiles.length - 1; i >= 0; i--) {
             removeProjectileAt(i);
         }
         for (let i = towerProjectiles.length - 1; i >= 0; i--) {
-            towerProjectiles[i].sprite.destroy();
+            releaseProjectileSprite(towerProjectiles[i].team, towerProjectiles[i].sprite);
+            releaseProjectileObject(towerProjectiles[i]);
             towerProjectiles.splice(i, 1);
         }
         for (let i = enemyProjectiles.length - 1; i >= 0; i--) {
-            enemyProjectiles[i].sprite.destroy();
+            releaseProjectileSprite(enemyProjectiles[i].team, enemyProjectiles[i].sprite);
+            releaseProjectileObject(enemyProjectiles[i]);
             enemyProjectiles.splice(i, 1);
         }
     }
@@ -458,6 +647,19 @@ async function init() {
         inventory.iron = 0;
         inventory.gold = 0;
         gameTimeSeconds = 0;
+        simFrameIndex = 0;
+        systemDeferred.civilianSkippedFrames = 0;
+        systemDeferred.towerSkippedFrames = 0;
+        systemDeferred.enemyRangedSkippedFrames = 0;
+        systemOverBudget.buildings = 0;
+        systemOverBudget.civilians = 0;
+        systemOverBudget.enemies = 0;
+        systemOverBudget.towerCombat = 0;
+        systemOverBudget.enemyRanged = 0;
+        systemOverBudget.projectiles = 0;
+        systemOverBudget.ui = 0;
+        overBudgetFrameStreak = 0;
+        stableFrameStreak = 0;
 
         deathText.visible = false;
         const respawn = findSafeSpawnPosition();
@@ -471,7 +673,7 @@ async function init() {
         resetCombatEntities();
 
         for (let i = floatingTexts.length - 1; i >= 0; i--) {
-            floatingTexts[i].sprite.destroy();
+            releaseFloatingTextEntry(floatingTexts[i]);
             floatingTexts.splice(i, 1);
         }
 
@@ -651,22 +853,78 @@ async function init() {
         return sprite;
     }
 
+    function acquireProjectileSprite(team) {
+        const pool = projectileSpritePools[team];
+        if (pool && pool.length > 0) {
+            const sprite = pool.pop();
+            sprite.visible = true;
+            return sprite;
+        }
+        if (team === 'tower') {
+            return createBulletSprite(0xb08bff, 0x2f1c4f, 4);
+        }
+        if (team === 'enemy') {
+            return createBulletSprite(0xff8d8d, 0x4f1b1b, 4);
+        }
+        return createBulletSprite(0xf7e56a, 0x2a2409, 4);
+    }
+
+    function releaseProjectileSprite(team, sprite) {
+        if (!sprite) {
+            return;
+        }
+        sprite.visible = false;
+        sprite.position.set(-99999, -99999);
+        const pool = projectileSpritePools[team];
+        if (pool) {
+            pool.push(sprite);
+        } else {
+            sprite.destroy();
+        }
+    }
+
+    function acquireProjectileObject() {
+        return projectileObjectPool.pop() ?? {
+            x: 0,
+            y: 0,
+            vx: 0,
+            vy: 0,
+            ttl: 0,
+            damage: 0,
+            radius: 4,
+            team: 'player',
+            sprite: null
+        };
+    }
+
+    function releaseProjectileObject(projectile) {
+        projectile.x = 0;
+        projectile.y = 0;
+        projectile.vx = 0;
+        projectile.vy = 0;
+        projectile.ttl = 0;
+        projectile.damage = 0;
+        projectile.radius = 4;
+        projectile.team = 'player';
+        projectile.sprite = null;
+        projectileObjectPool.push(projectile);
+    }
+
     function spawnFriendlyProjectile(sourceList, maxCount, config) {
         if (sourceList.length >= maxCount) {
             return;
         }
-        const sprite = createBulletSprite(config.fillColor, config.strokeColor, config.radius ?? 4);
-        const bullet = {
-            x: config.originX - (config.radius ?? 4),
-            y: config.originY - (config.radius ?? 4),
-            vx: config.dirX * config.speed,
-            vy: config.dirY * config.speed,
-            ttl: config.lifetimeFrames,
-            damage: config.damage,
-            radius: config.radius ?? 4,
-            team: config.team,
-            sprite
-        };
+        const bullet = acquireProjectileObject();
+        const sprite = acquireProjectileSprite(config.team);
+        bullet.x = config.originX - (config.radius ?? 4);
+        bullet.y = config.originY - (config.radius ?? 4);
+        bullet.vx = config.dirX * config.speed;
+        bullet.vy = config.dirY * config.speed;
+        bullet.ttl = config.lifetimeFrames;
+        bullet.damage = config.damage;
+        bullet.radius = config.radius ?? 4;
+        bullet.team = config.team;
+        bullet.sprite = sprite;
         sprite.position.set(bullet.x, bullet.y);
         projectileLayer.addChild(sprite);
         sourceList.push(bullet);
@@ -703,7 +961,7 @@ async function init() {
         }
     }
 
-    function updateProjectileList(list, deltaMoveScale) {
+    function updateProjectileList(list, deltaMoveScale, snapshot) {
         for (let i = list.length - 1; i >= 0; i--) {
             const bullet = list[i];
             bullet.ttl -= (deltaMoveScale * 60);
@@ -712,7 +970,8 @@ async function init() {
             bullet.sprite.position.set(bullet.x, bullet.y);
 
             if (bullet.ttl <= 0) {
-                bullet.sprite.destroy();
+                releaseProjectileSprite(bullet.team, bullet.sprite);
+                releaseProjectileObject(bullet);
                 list.splice(i, 1);
                 continue;
             }
@@ -725,7 +984,8 @@ async function init() {
             if (bullet.team === 'enemy') {
                 if (buildingSystem.isProjectileBlockedForTeam(bulletTileX, bulletTileY, 'enemy')) {
                     const result = buildingSystem.applyDamageAtTile(bulletTileX, bulletTileY, bullet.damage, 'enemy_projectile');
-                    bullet.sprite.destroy();
+                    releaseProjectileSprite(bullet.team, bullet.sprite);
+                    releaseProjectileObject(bullet);
                     list.splice(i, 1);
                     if (result?.destroyed) {
                         updateHud();
@@ -733,17 +993,18 @@ async function init() {
                     continue;
                 }
 
-                const dxPlayer = playerSystem.getCenter().x - bulletCenterX;
-                const dyPlayer = playerSystem.getCenter().y - bulletCenterY;
+                const dxPlayer = snapshot.playerCenter.x - bulletCenterX;
+                const dyPlayer = snapshot.playerCenter.y - bulletCenterY;
                 const playerHitDistance = PLAYER_COLLISION_RADIUS + bullet.radius;
                 if (dxPlayer * dxPlayer + dyPlayer * dyPlayer <= playerHitDistance * playerHitDistance) {
                     applyDamage(playerState, bullet.damage, 'enemy_projectile');
-                    bullet.sprite.destroy();
+                    releaseProjectileSprite(bullet.team, bullet.sprite);
+                    releaseProjectileObject(bullet);
                     list.splice(i, 1);
                     continue;
                 }
 
-                const civilians = civilianSystem.getTargets();
+                const civilians = snapshot.civilians;
                 let hitCivilian = false;
                 for (const civilian of civilians) {
                     if (civilian.isDead) {
@@ -759,7 +1020,8 @@ async function init() {
                     }
                 }
                 if (hitCivilian) {
-                    bullet.sprite.destroy();
+                    releaseProjectileSprite(bullet.team, bullet.sprite);
+                    releaseProjectileObject(bullet);
                     list.splice(i, 1);
                 }
                 continue;
@@ -767,7 +1029,8 @@ async function init() {
 
             const blockingTeam = bullet.team === 'tower' ? 'tower' : 'friendly';
             if (buildingSystem.isProjectileBlockedForTeam(bulletTileX, bulletTileY, blockingTeam)) {
-                bullet.sprite.destroy();
+                releaseProjectileSprite(bullet.team, bullet.sprite);
+                releaseProjectileObject(bullet);
                 list.splice(i, 1);
                 continue;
             }
@@ -788,16 +1051,21 @@ async function init() {
             }
 
             if (hitEnemy) {
-                bullet.sprite.destroy();
+                releaseProjectileSprite(bullet.team, bullet.sprite);
+                releaseProjectileObject(bullet);
                 list.splice(i, 1);
             }
         }
     }
 
-    function updateProjectiles(deltaMoveScale) {
-        updateProjectileList(projectiles, deltaMoveScale);
-        updateProjectileList(towerProjectiles, deltaMoveScale);
-        updateProjectileList(enemyProjectiles, deltaMoveScale);
+    function updateProjectiles(deltaMoveScale, civilianTargetsSnapshot = null) {
+        const snapshot = {
+            playerCenter: playerSystem.getCenter(),
+            civilians: civilianTargetsSnapshot ?? civilianSystem.getTargets()
+        };
+        updateProjectileList(projectiles, deltaMoveScale, snapshot);
+        updateProjectileList(towerProjectiles, deltaMoveScale, snapshot);
+        updateProjectileList(enemyProjectiles, deltaMoveScale, snapshot);
     }
 
     function updateTowerCombat() {
@@ -816,7 +1084,8 @@ async function init() {
             let targetEnemy = null;
             let bestHp = -1;
             let bestDistSq = rangeSq;
-            for (const enemy of enemies) {
+            const candidates = querySpatialIndexInto(enemySpatialIndex, centerX, centerY, range, queryBufferA);
+            for (const enemy of candidates) {
                 if (enemy.isDead) {
                     continue;
                 }
@@ -859,75 +1128,12 @@ async function init() {
         }
     }
 
-    function updateCivilianCombat() {
-        const civilians = civilianSystem.getTargets();
-        if (civilians.length === 0) {
-            return;
-        }
-        const activeIds = new Set(civilians.filter((civilian) => !civilian.isDead).map((civilian) => civilian.id));
-        for (const [civilianId] of civilianFireCooldowns) {
-            if (!activeIds.has(civilianId)) {
-                civilianFireCooldowns.delete(civilianId);
-            }
-        }
-        const rangeSq = PROJECTILES.civilian.range * PROJECTILES.civilian.range;
-        for (const civilian of civilians) {
-            if (civilian.isDead) {
-                continue;
-            }
-            const cooldown = civilianFireCooldowns.has(civilian.id)
-                ? civilianFireCooldowns.get(civilian.id)
-                : Math.floor(Math.random() * PROJECTILES.civilian.cooldownFrames);
-            if (cooldown > 0) {
-                civilianFireCooldowns.set(civilian.id, cooldown - 1);
-                continue;
-            }
-            let targetEnemy = null;
-            let bestDistSq = rangeSq;
-            for (const enemy of enemies) {
-                if (enemy.isDead) {
-                    continue;
-                }
-                const dx = (enemy.x + ENEMY_RADIUS) - civilian.x;
-                const dy = (enemy.y + ENEMY_RADIUS) - civilian.y;
-                const distSq = dx * dx + dy * dy;
-                if (distSq <= bestDistSq) {
-                    bestDistSq = distSq;
-                    targetEnemy = enemy;
-                }
-            }
-            if (!targetEnemy) {
-                continue;
-            }
-            const dx = (targetEnemy.x + ENEMY_RADIUS) - civilian.x;
-            const dy = (targetEnemy.y + ENEMY_RADIUS) - civilian.y;
-            const mag = Math.hypot(dx, dy);
-            if (mag <= 0.001) {
-                continue;
-            }
-            spawnFriendlyProjectile(projectiles, MAX_BULLETS, {
-                originX: civilian.x,
-                originY: civilian.y,
-                dirX: dx / mag,
-                dirY: dy / mag,
-                speed: PROJECTILES.civilian.speed,
-                lifetimeFrames: PROJECTILES.civilian.lifetimeFrames,
-                damage: PROJECTILES.civilian.damage,
-                team: 'civilian',
-                fillColor: 0xffd6a6,
-                strokeColor: 0x5c4323,
-                radius: 3
-            });
-            civilianFireCooldowns.set(civilian.id, PROJECTILES.civilian.cooldownFrames);
-        }
-    }
-
     function updateEnemyRangedCombat(deltaFrames) {
         if (enemiesDisabled) {
             return;
         }
         const rangeSq = PROJECTILES.enemy.range * PROJECTILES.enemy.range;
-        const civilians = civilianSystem.getTargets();
+        const playerCenter = playerSystem.getCenter();
         for (const enemy of enemies) {
             if (enemy.isDead || !enemy.isRanged) {
                 continue;
@@ -940,12 +1146,12 @@ async function init() {
             }
             const enemyCenterX = enemy.x + ENEMY_RADIUS;
             const enemyCenterY = enemy.y + ENEMY_RADIUS;
-            const playerCenter = playerSystem.getCenter();
             let targetX = playerCenter.x;
             let targetY = playerCenter.y;
             let bestDistSq = (playerCenter.x - enemyCenterX) ** 2 + (playerCenter.y - enemyCenterY) ** 2;
 
-            for (const civilian of civilians) {
+            const civilianCandidates = querySpatialIndexInto(civilianSpatialIndex, enemyCenterX, enemyCenterY, PROJECTILES.enemy.range, queryBufferB);
+            for (const civilian of civilianCandidates) {
                 if (civilian.isDead) {
                     continue;
                 }
@@ -968,18 +1174,17 @@ async function init() {
             if (enemyProjectiles.length >= MAX_ENEMY_PROJECTILES) {
                 break;
             }
-            const sprite = createBulletSprite(0xff8d8d, 0x4f1b1b, 4);
-            const projectile = {
-                x: enemyCenterX - 4,
-                y: enemyCenterY - 4,
-                vx: (dx / mag) * PROJECTILES.enemy.speed,
-                vy: (dy / mag) * PROJECTILES.enemy.speed,
-                ttl: PROJECTILES.enemy.lifetimeFrames,
-                damage: PROJECTILES.enemy.damage,
-                radius: 4,
-                team: 'enemy',
-                sprite
-            };
+            const projectile = acquireProjectileObject();
+            const sprite = acquireProjectileSprite('enemy');
+            projectile.x = enemyCenterX - 4;
+            projectile.y = enemyCenterY - 4;
+            projectile.vx = (dx / mag) * PROJECTILES.enemy.speed;
+            projectile.vy = (dy / mag) * PROJECTILES.enemy.speed;
+            projectile.ttl = PROJECTILES.enemy.lifetimeFrames;
+            projectile.damage = PROJECTILES.enemy.damage;
+            projectile.radius = 4;
+            projectile.team = 'enemy';
+            projectile.sprite = sprite;
             sprite.position.set(projectile.x, projectile.y);
             projectileLayer.addChild(sprite);
             enemyProjectiles.push(projectile);
@@ -988,22 +1193,36 @@ async function init() {
     }
 
     function spawnHarvestFeedback(resourceType, tileX, tileY) {
-        const text = new PIXI.Text({
-            text: `+1 ${resourceType}`,
+        const text = floatingTextPool.pop() ?? new PIXI.Text({
+            text: '',
             style: {
                 fill: '#ffffff',
                 fontFamily: 'monospace',
                 fontSize: 14
             }
         });
-
+        text.text = `+1 ${resourceType}`;
+        text.alpha = 1;
         text.anchor.set(0.5);
         text.position.set(tileX * TILE_SIZE + TILE_SIZE / 2, tileY * TILE_SIZE + 6);
+        text.visible = true;
         resourceLayer.addChild(text);
-        floatingTexts.push({
-            sprite: text,
-            ttl: 75 // Frames to keep harvest text visible.
-        });
+        const entry = floatingTextEntryPool.pop() ?? { sprite: text, ttl: 0 };
+        entry.sprite = text;
+        entry.ttl = 75; // Frames to keep harvest text visible.
+        floatingTexts.push(entry);
+    }
+
+    function releaseFloatingTextEntry(entry) {
+        if (!entry || !entry.sprite) {
+            return;
+        }
+        entry.sprite.visible = false;
+        entry.sprite.position.set(-99999, -99999);
+        floatingTextPool.push(entry.sprite);
+        entry.sprite = null;
+        entry.ttl = 0;
+        floatingTextEntryPool.push(entry);
     }
 
     let playerWorldX = spawnWorldPos.x;
@@ -1180,6 +1399,22 @@ async function init() {
             updateHud();
             logDebug('Dev resources added (+100 each)');
         }
+        if ((key === 'l') && debugOverlayEnabled) {
+            activePerfProfileKey = activePerfProfileKey === 'quality' ? 'stress' : 'quality';
+            activePerfProfile = PERFORMANCE_PROFILES[activePerfProfileKey];
+            overBudgetFrameStreak = 0;
+            stableFrameStreak = 0;
+            logDebug(`Performance profile: ${activePerfProfileKey}`);
+        }
+        if ((key === 'o') && debugOverlayEnabled) {
+            autoPerfGovernorEnabled = !autoPerfGovernorEnabled;
+            overBudgetFrameStreak = 0;
+            stableFrameStreak = 0;
+            logDebug(`Auto governor ${autoPerfGovernorEnabled ? 'enabled' : 'disabled'}`);
+        }
+        if ((key === 'm') && debugOverlayEnabled) {
+            startStressBenchmark();
+        }
         if (key === 'b') {
             // Build mode toggle keybind.
             const enabled = buildingSystem.toggleBuildMode();
@@ -1276,9 +1511,11 @@ async function init() {
     let hiddenLastTickMs = 0;
 
     function runGameStep(frameMs, isBackgroundTick = false) {
+        simFrameIndex += 1;
         const clampedFrameMs = Math.max(0, Math.min(HIDDEN_MAX_STEP_MS, frameMs));
         const deltaFrames = clampedFrameMs * 0.06;
         const deltaMoveScale = clampedFrameMs / 1000;
+        let frameOverBudget = false;
 
         if (!isBackgroundTick) {
             const fps = clampedFrameMs > 0 ? 1000 / clampedFrameMs : 0;
@@ -1299,13 +1536,40 @@ async function init() {
 
         gameTimeSeconds += (clampedFrameMs / 1000);
 
+        const tBuildStart = performance.now();
         buildingSystem.updateProduction(deltaFrames);
-        civilianSystem.update(deltaFrames, deltaMoveScale);
+        systemPerfMs.buildings = performance.now() - tBuildStart;
+        if (systemPerfMs.buildings > activePerfProfile.budgetsMs.buildings) {
+            systemOverBudget.buildings += 1;
+            frameOverBudget = true;
+        }
+
+        const civilianStride = Math.max(1, activePerfProfile.civilianUpdateStride ?? 1);
+        if (simFrameIndex % civilianStride === 0) {
+            const tCivilianStart = performance.now();
+            civilianSystem.update(deltaFrames, deltaMoveScale);
+            systemPerfMs.civilians = performance.now() - tCivilianStart;
+            if (systemPerfMs.civilians > activePerfProfile.budgetsMs.civilians) {
+                systemOverBudget.civilians += 1;
+                frameOverBudget = true;
+            }
+        } else {
+            systemPerfMs.civilians = 0;
+            systemDeferred.civilianSkippedFrames += 1;
+        }
         uiRefreshTimer -= deltaFrames;
         if (uiRefreshTimer <= 0) {
+            const tUiStart = performance.now();
             updateBuildMenu();
             updateClockHud();
+            systemPerfMs.ui = performance.now() - tUiStart;
+            if (systemPerfMs.ui > activePerfProfile.budgetsMs.ui) {
+                systemOverBudget.ui += 1;
+                frameOverBudget = true;
+            }
             uiRefreshTimer = 12;
+        } else {
+            systemPerfMs.ui = 0;
         }
 
         playerSystem.tickCombatTimers(deltaFrames);
@@ -1344,12 +1608,58 @@ async function init() {
             enemySystem.spawnTick();
         }
         if (!enemiesDisabled) {
-            enemySystem.update(deltaMoveScale);
+            const tEnemyStart = performance.now();
+            enemySystem.update(deltaMoveScale, {
+                nearTiles: activePerfProfile.enemyNearTiles,
+                midTiles: activePerfProfile.enemyMidTiles,
+                midStride: activePerfProfile.enemyMidStride,
+                farStride: activePerfProfile.enemyFarStride,
+                collisionHighDensityThreshold: activePerfProfile.enemyCollisionHighDensityThreshold,
+                collisionHighDensityStride: activePerfProfile.enemyCollisionHighDensityStride
+            });
+            systemPerfMs.enemies = performance.now() - tEnemyStart;
+            if (systemPerfMs.enemies > activePerfProfile.budgetsMs.enemies) {
+                systemOverBudget.enemies += 1;
+                frameOverBudget = true;
+            }
+        } else {
+            systemPerfMs.enemies = 0;
         }
-        updateTowerCombat();
-        updateCivilianCombat();
-        updateEnemyRangedCombat(deltaFrames);
-        updateProjectiles(deltaMoveScale);
+        const civilianTargetsSnapshot = civilianSystem.getTargets();
+        rebuildRuntimeSpatialIndexes(civilianTargetsSnapshot);
+        const towerStride = Math.max(1, activePerfProfile.towerUpdateStride ?? 1);
+        if (simFrameIndex % towerStride === 0) {
+            const tTowerStart = performance.now();
+            updateTowerCombat();
+            systemPerfMs.towerCombat = performance.now() - tTowerStart;
+            if (systemPerfMs.towerCombat > activePerfProfile.budgetsMs.towerCombat) {
+                systemOverBudget.towerCombat += 1;
+                frameOverBudget = true;
+            }
+        } else {
+            systemPerfMs.towerCombat = 0;
+            systemDeferred.towerSkippedFrames += 1;
+        }
+        const enemyRangedStride = Math.max(1, activePerfProfile.enemyRangedUpdateStride ?? 1);
+        if (simFrameIndex % enemyRangedStride === 0) {
+            const tEnemyRangedStart = performance.now();
+            updateEnemyRangedCombat(deltaFrames);
+            systemPerfMs.enemyRanged = performance.now() - tEnemyRangedStart;
+            if (systemPerfMs.enemyRanged > activePerfProfile.budgetsMs.enemyRanged) {
+                systemOverBudget.enemyRanged += 1;
+                frameOverBudget = true;
+            }
+        } else {
+            systemPerfMs.enemyRanged = 0;
+            systemDeferred.enemyRangedSkippedFrames += 1;
+        }
+        const tProjStart = performance.now();
+        updateProjectiles(deltaMoveScale, civilianTargetsSnapshot);
+        systemPerfMs.projectiles = performance.now() - tProjStart;
+        if (systemPerfMs.projectiles > activePerfProfile.budgetsMs.projectiles) {
+            systemOverBudget.projectiles += 1;
+            frameOverBudget = true;
+        }
 
         // Re-apply camera in case enemy collision resolution pushed the player.
         world.position.x = window.innerWidth / 2 - playerWorldX - 16;
@@ -1411,12 +1721,27 @@ async function init() {
             entry.sprite.alpha = Math.max(0, entry.ttl / 75);
 
             if (entry.ttl <= 0) {
-                entry.sprite.destroy();
+                releaseFloatingTextEntry(entry);
                 floatingTexts.splice(i, 1);
             }
         }
 
         playerSystem.updateHitVisual();
+
+        updatePerformanceGovernor(frameOverBudget);
+        if (benchmarkState.active && !isBackgroundTick) {
+            benchmarkState.elapsedMs += clampedFrameMs;
+            benchmarkState.frameCount += 1;
+            benchmarkState.frameMsAccum += clampedFrameMs;
+            if (benchmarkState.elapsedMs >= 10000) {
+                const avgFrameMs = benchmarkState.frameCount > 0 ? benchmarkState.frameMsAccum / benchmarkState.frameCount : 0;
+                const avgFps = avgFrameMs > 0 ? 1000 / avgFrameMs : 0;
+                logDebug(
+                    `Benchmark complete: avg ${avgFps.toFixed(1)} FPS, over-budget E:${systemOverBudget.enemies} P:${systemOverBudget.projectiles}`
+                );
+                benchmarkState.active = false;
+            }
+        }
 
         saveTimerFrames -= deltaFrames;
         if (saveTimerFrames <= 0) {
