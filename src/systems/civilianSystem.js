@@ -25,7 +25,7 @@ export function createCivilianSystem({
     // - Increase `CIVILIAN_SEPARATION_PASSES` / `CIVILIAN_SEPARATION_PADDING` if overlap remains under heavy load.
     const CIVILIAN_SPAWN_FRONT_OFFSET_TILES = 2;
     const CIVILIAN_SEPARATION_PADDING = 2;
-    const CIVILIAN_SEPARATION_PASSES = 2;
+    const CIVILIAN_SEPARATION_PASSES = 3;
     const CIVILIAN_STUCK_FRAMES_THRESHOLD = 40;
     const CIVILIAN_STUCK_PROGRESS_EPSILON_SQ = 0.09;
     const CIVILIAN_ASSIGNMENTS_PER_FRAME = 10;
@@ -150,7 +150,7 @@ export function createCivilianSystem({
         return tiles.filter((tile) => isTileWalkable(tile.x, tile.y));
     }
 
-    function findBestApproachPoint(building, fromX, fromY) {
+    function findBestApproachPoint(building, fromX, fromY, laneSeed = 0) {
         const candidates = getPerimeterTiles(building, 1);
         if (candidates.length === 0) {
             const fallback = getPerimeterTiles(building, 2);
@@ -160,22 +160,22 @@ export function createCivilianSystem({
             candidates.push(...fallback);
         }
 
-        let best = candidates[0];
-        let bestDistSq = Infinity;
+        const ranked = [];
         for (const tile of candidates) {
             const cx = tile.x * TILE_SIZE + TILE_SIZE * 0.5;
             const cy = tile.y * TILE_SIZE + TILE_SIZE * 0.5;
             const dx = cx - fromX;
             const dy = cy - fromY;
             const distSq = dx * dx + dy * dy;
-            if (distSq < bestDistSq) {
-                bestDistSq = distSq;
-                best = tile;
-            }
+            ranked.push({ tile, distSq });
         }
+        ranked.sort((a, b) => a.distSq - b.distSq);
+        // Spread workers over nearby perimeter points to avoid lane clumping.
+        const laneWindow = Math.min(4, ranked.length);
+        const chosen = ranked[Math.abs(laneSeed) % laneWindow]?.tile ?? ranked[0].tile;
         return {
-            x: best.x * TILE_SIZE + TILE_SIZE * 0.5,
-            y: best.y * TILE_SIZE + TILE_SIZE * 0.5
+            x: chosen.x * TILE_SIZE + TILE_SIZE * 0.5,
+            y: chosen.y * TILE_SIZE + TILE_SIZE * 0.5
         };
     }
 
@@ -396,7 +396,7 @@ export function createCivilianSystem({
                 continue;
             }
             // Prioritize camps with more stored resources; distance only breaks ties.
-            const approach = findBestApproachPoint(producer, fromX, fromY);
+            const approach = findBestApproachPoint(producer, fromX, fromY, civilian.id);
             const dx = approach.x - fromX;
             const dy = approach.y - fromY;
             const dist = Math.hypot(dx, dy);
@@ -445,7 +445,7 @@ export function createCivilianSystem({
         }
         const fromX = civilian.x + CIVILIAN_RADIUS;
         const fromY = civilian.y + CIVILIAN_RADIUS;
-        const producerCenter = findBestApproachPoint(producer, fromX, fromY);
+        const producerCenter = findBestApproachPoint(producer, fromX, fromY, civilian.id);
         civilian.state = 'toProducer';
         civilian.targetProducerId = producer.id;
         civilian.targetWarehouseId = warehouse.id;
@@ -580,7 +580,7 @@ export function createCivilianSystem({
             }
             const fromX = civilian.x + CIVILIAN_RADIUS;
             const fromY = civilian.y + CIVILIAN_RADIUS;
-            const warehouseCenter = findBestApproachPoint(warehouse, fromX, fromY);
+            const warehouseCenter = findBestApproachPoint(warehouse, fromX, fromY, civilian.id);
             civilian.state = 'toWarehouse';
             civilian.targetX = warehouseCenter.x;
             civilian.targetY = warehouseCenter.y;
@@ -638,13 +638,7 @@ export function createCivilianSystem({
         const minDistance = CIVILIAN_RADIUS * 2 + CIVILIAN_SEPARATION_PADDING;
         const minDistanceSq = minDistance * minDistance;
         const cellSize = minDistance;
-        const maxPasses = denseMode ? 1 : CIVILIAN_SEPARATION_PASSES;
-        // In dense crowds, half-rate collision resolution protects frame time.
-        if (denseMode && (updateFrameIndex % 2) === 1) {
-            perfStats.collisionPasses = 0;
-            perfStats.civiliansResolvedCollisions = 0;
-            return;
-        }
+        const maxPasses = denseMode ? 2 : CIVILIAN_SEPARATION_PASSES;
         let separatedCount = 0;
         for (let pass = 0; pass < maxPasses; pass++) {
             const grid = new Map();
@@ -705,8 +699,8 @@ export function createCivilianSystem({
                             const nx = dx / dist;
                             const ny = dy / dist;
                             separatedCount += 1;
-                            const halfPushX = nx * overlap * 0.5;
-                            const halfPushY = ny * overlap * 0.5;
+                            const halfPushX = nx * overlap * 0.65;
+                            const halfPushY = ny * overlap * 0.65;
                             const newAX = a.x - halfPushX;
                             const newAY = a.y - halfPushY;
                             const newBX = b.x + halfPushX;
@@ -790,6 +784,55 @@ export function createCivilianSystem({
         return true;
     }
 
+    // Player-civilian collision:
+    // - Player cannot phase through civilians.
+    // - Player movement can push civilians away when there is space.
+    function resolvePlayerCollision(playerCenterX, playerCenterY, playerRadius, applyPlayerPush) {
+        const minDistance = playerRadius + CIVILIAN_RADIUS;
+        const minDistanceSq = minDistance * minDistance;
+        let collisions = 0;
+
+        for (const civilian of civilians) {
+            if (civilian.isDead) {
+                continue;
+            }
+            const cx = civilian.x + CIVILIAN_RADIUS;
+            const cy = civilian.y + CIVILIAN_RADIUS;
+            let dx = cx - playerCenterX;
+            let dy = cy - playerCenterY;
+            let distSq = dx * dx + dy * dy;
+            if (distSq >= minDistanceSq) {
+                continue;
+            }
+            if (distSq < 0.0001) {
+                const angle = (civilian.id * 0.53) % (Math.PI * 2);
+                dx = Math.cos(angle);
+                dy = Math.sin(angle);
+                distSq = 1;
+            }
+
+            collisions += 1;
+            const dist = Math.sqrt(distSq);
+            const overlap = minDistance - dist;
+            const nx = dx / dist;
+            const ny = dy / dist;
+            const pushCivilian = overlap * 0.85;
+            const targetCivilianX = civilian.x + nx * pushCivilian;
+            const targetCivilianY = civilian.y + ny * pushCivilian;
+            const civilianTileX = Math.floor((targetCivilianX + CIVILIAN_RADIUS) / TILE_SIZE);
+            const civilianTileY = Math.floor((targetCivilianY + CIVILIAN_RADIUS) / TILE_SIZE);
+            if (isTileWalkable(civilianTileX, civilianTileY)) {
+                civilian.x = targetCivilianX;
+                civilian.y = targetCivilianY;
+                civilian.sprite.position.set(civilian.x, civilian.y);
+            } else {
+                applyPlayerPush(-nx * overlap * 0.6, -ny * overlap * 0.6);
+            }
+        }
+
+        return collisions;
+    }
+
     function getStats() {
         const houseCount = buildingSystem.getHouses().length;
         return {
@@ -840,6 +883,7 @@ export function createCivilianSystem({
         update,
         getTargets,
         applyDamage,
+        resolvePlayerCollision,
         getStats,
         reset
     };

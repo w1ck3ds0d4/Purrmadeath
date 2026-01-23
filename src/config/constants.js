@@ -34,6 +34,7 @@ export const ENEMY_PATH_GRID_RADIUS = 18;
 export const ENEMY_PATH_MAX_STEPS = 900;
 export const ENEMY_MAX_REPATHS_PER_FRAME = 8;
 export const ENEMY_MAX_HP = 40;
+export const ENEMY_RANGED_SPAWN_CHANCE = 0.30;
 export const ENEMY_CONTACT_DAMAGE = 10;
 export const ENEMY_CONTACT_COOLDOWN_FRAMES = 35;
 export const ENEMY_KNOCKBACK_FRICTION = 0.92;
@@ -43,6 +44,8 @@ export const PLAYER_MAX_HP = 100;
 export const PLAYER_INVULN_FRAMES = 25;
 export const MAX_BULLETS = 70;
 export const GOLD_PER_ENEMY_KILL = 5;
+export const MAX_TOWER_PROJECTILES = 180;
+export const MAX_ENEMY_PROJECTILES = 220;
 
 export const WEAPONS = {
     sword: {
@@ -57,6 +60,33 @@ export const WEAPONS = {
         cooldownFrames: 12,
         bulletSpeed: 420,
         bulletLifetimeFrames: 90
+    }
+};
+
+// Projectile tuning:
+// - Friendly projectiles (player/tower/civilian) pass through wall tiles.
+// - Enemy projectiles collide with buildings and can damage breakable structures.
+export const PROJECTILES = {
+    tower: {
+        damage: 16,
+        speed: 300,
+        lifetimeFrames: 120,
+        cooldownFrames: 24,
+        range: 260
+    },
+    civilian: {
+        damage: 8,
+        speed: 280,
+        lifetimeFrames: 90,
+        cooldownFrames: 90,
+        range: 180
+    },
+    enemy: {
+        damage: 12,
+        speed: 240,
+        lifetimeFrames: 110,
+        cooldownFrames: 95,
+        range: 300
     }
 };
 
@@ -195,6 +225,29 @@ export const BUILDING_TYPES = {
             wood: 2,
             stone: 1,
             iron: 0,
+            gold: 0
+        }
+    },
+    combatTower: {
+        label: 'Combat Tower',
+        footprint: { w: 1, h: 1 },
+        color: 0x6a3db8,
+        role: 'tower',
+        maxHp: 900,
+        unbreakable: false,
+        // Tower combat tuning:
+        // - `towerRange` controls target acquisition radius.
+        // - `towerCooldownFrames` controls fire rate.
+        // - `towerProjectile*` controls shot behavior.
+        towerRange: PROJECTILES.tower.range,
+        towerCooldownFrames: PROJECTILES.tower.cooldownFrames,
+        towerProjectileDamage: PROJECTILES.tower.damage,
+        towerProjectileSpeed: PROJECTILES.tower.speed,
+        towerProjectileLifetimeFrames: PROJECTILES.tower.lifetimeFrames,
+        cost: {
+            wood: 6,
+            stone: 10,
+            iron: 2,
             gold: 0
         }
     },

@@ -18,6 +18,7 @@ export function createBuildingSystem({
     const producers = [];
     const houses = [];
     const warehouses = [];
+    const towers = [];
     const occupiedTiles = new Set();
     const movementBlockedTiles = new Set();
     const projectileBlockedTiles = new Set();
@@ -93,13 +94,13 @@ export function createBuildingSystem({
         return false;
     }
 
-    function canPlaceBuilding(buildingTypeId, baseTileX, baseTileY) {
+    function canPlaceBuilding(buildingTypeId, baseTileX, baseTileY, options = {}) {
         const type = buildingTypes[buildingTypeId];
         if (!type) {
             return { ok: false, reason: 'Unknown building type' };
         }
         // Resource requirement check uses blueprint cost from `BUILDING_TYPES`.
-        if (!hasRequiredResources(type.cost)) {
+        if (!options.skipCost && !hasRequiredResources(type.cost)) {
             return { ok: false, reason: 'Not enough resources' };
         }
 
@@ -119,7 +120,7 @@ export function createBuildingSystem({
             }
         }
 
-        if (collidesWithUnits(tiles)) {
+        if (!options.skipUnitCollision && collidesWithUnits(tiles)) {
             return { ok: false, reason: 'Unit collision' };
         }
 
@@ -178,6 +179,27 @@ export function createBuildingSystem({
 
         const type = buildingTypes[selectedBuildingType];
         payCost(type.cost);
+        placeBuildingByType(selectedBuildingType, tileX, tileY, { skipCost: true });
+        onLog?.(`${type.label} placed`);
+        return true;
+    }
+
+    function placeBuildingByType(buildingTypeId, tileX, tileY, options = {}) {
+        const type = buildingTypes[buildingTypeId];
+        if (!type) {
+            return null;
+        }
+        const check = canPlaceBuilding(buildingTypeId, tileX, tileY, {
+            skipCost: options.skipCost === true,
+            skipUnitCollision: options.skipUnitCollision === true
+        });
+        if (!check.ok) {
+            return null;
+        }
+        if (!options.skipCost) {
+            payCost(type.cost);
+        }
+
         for (const tile of check.tiles) {
             occupiedTiles.add(keyFromTile(tile.x, tile.y));
         }
@@ -186,14 +208,18 @@ export function createBuildingSystem({
         spriteData.container.position.set(tileX * TILE_SIZE, tileY * TILE_SIZE);
         buildingLayer.addChild(spriteData.container);
 
-        const id = nextBuildingId++;
+        const id = options.forceId ?? nextBuildingId++;
+        if (id >= nextBuildingId) {
+            nextBuildingId = id + 1;
+        }
+        const defaultHp = type.role === 'bridge' ? 0 : (type.maxHp ?? 600);
         const building = {
             id,
-            type: selectedBuildingType,
+            type: buildingTypeId,
             role: type.role ?? 'building',
-            hp: type.maxHp ?? 0,
-            maxHp: type.maxHp ?? 0,
-            unbreakable: type.unbreakable ?? false,
+            hp: options.hp ?? defaultHp,
+            maxHp: options.maxHp ?? defaultHp,
+            unbreakable: options.unbreakable ?? (type.unbreakable ?? false),
             tileX,
             tileY,
             sprite: spriteData.container,
@@ -201,12 +227,18 @@ export function createBuildingSystem({
             tiles: check.tiles,
             footprintW: type.footprint.w,
             footprintH: type.footprint.h,
-            storedOutput: 0,
+            storedOutput: options.storedOutput ?? 0,
             outputResource: type.outputResource ?? null,
             outputPerCycle: type.outputPerCycle ?? 0,
             cycleFrames: type.cycleFrames ?? 0,
-            cycleTimerFrames: type.cycleFrames ?? 0,
-            storageCap: type.storageCap ?? 0
+            cycleTimerFrames: options.cycleTimerFrames ?? (type.cycleFrames ?? 0),
+            storageCap: type.storageCap ?? 0,
+            towerRange: type.towerRange ?? 0,
+            towerCooldownFrames: type.towerCooldownFrames ?? 0,
+            towerProjectileDamage: type.towerProjectileDamage ?? 0,
+            towerProjectileSpeed: type.towerProjectileSpeed ?? 0,
+            towerProjectileLifetimeFrames: type.towerProjectileLifetimeFrames ?? 0,
+            towerCooldownRemainingFrames: options.towerCooldownRemainingFrames ?? 0
         };
         buildings.push(building);
         buildingById.set(id, building);
@@ -216,6 +248,8 @@ export function createBuildingSystem({
             houses.push(building);
         } else if (building.role === 'warehouse') {
             warehouses.push(building);
+        } else if (building.role === 'tower') {
+            towers.push(building);
         }
         for (const tile of check.tiles) {
             const key = keyFromTile(tile.x, tile.y);
@@ -227,8 +261,11 @@ export function createBuildingSystem({
                 projectileBlockedTiles.add(key);
             }
         }
-        onLog?.(`${type.label} placed`);
-        return true;
+
+        if (building.outputText) {
+            building.outputText.text = `${building.outputResource}: ${building.storedOutput}/${building.storageCap}`;
+        }
+        return building;
     }
 
     function removeFromRoleList(building) {
@@ -244,6 +281,8 @@ export function createBuildingSystem({
             removeById(houses);
         } else if (building.role === 'warehouse') {
             removeById(warehouses);
+        } else if (building.role === 'tower') {
+            removeById(towers);
         }
     }
 
@@ -307,6 +346,13 @@ export function createBuildingSystem({
     }
 
     function updateProduction(deltaFrames) {
+        if (towers.length > 0) {
+            for (const tower of towers) {
+                if (tower.towerCooldownRemainingFrames > 0) {
+                    tower.towerCooldownRemainingFrames -= deltaFrames;
+                }
+            }
+        }
         if (producers.length === 0) {
             return;
         }
@@ -394,6 +440,82 @@ export function createBuildingSystem({
         return projectileBlockedTiles.has(keyFromTile(tileX, tileY));
     }
 
+    function isProjectileBlockedForTeam(tileX, tileY, team = 'friendly') {
+        const key = keyFromTile(tileX, tileY);
+        if (!projectileBlockedTiles.has(key)) {
+            return false;
+        }
+        if (team === 'enemy') {
+            return true;
+        }
+        const buildingId = occupiedTileToBuildingId.get(key);
+        if (!buildingId) {
+            return false;
+        }
+        const building = buildingById.get(buildingId);
+        if (team === 'tower') {
+            // Tower shots pass through tower/wall tiles, but still collide with other solid buildings.
+            return building?.role !== 'tower' && building?.role !== 'wall';
+        }
+        // Friendly projectiles pass through walls so base defenders can fire outward.
+        return building?.role !== 'wall';
+    }
+
+    function getBuildingAtTile(tileX, tileY) {
+        const id = occupiedTileToBuildingId.get(keyFromTile(tileX, tileY));
+        if (!id) {
+            return null;
+        }
+        return buildingById.get(id) ?? null;
+    }
+
+    function removeBuildingById(buildingId) {
+        const building = buildingById.get(buildingId);
+        if (!building) {
+            return false;
+        }
+        building.sprite.destroy();
+        buildingById.delete(building.id);
+        removeFromRoleList(building);
+        const idx = buildings.findIndex((item) => item.id === building.id);
+        if (idx >= 0) {
+            buildings.splice(idx, 1);
+        }
+        for (const tile of building.tiles) {
+            const key = keyFromTile(tile.x, tile.y);
+            occupiedTiles.delete(key);
+            occupiedTileToBuildingId.delete(key);
+            movementBlockedTiles.delete(key);
+            projectileBlockedTiles.delete(key);
+        }
+        if (selectedPlacedBuildingId === building.id) {
+            selectedPlacedBuildingId = null;
+        }
+        return true;
+    }
+
+    function applyDamageAtTile(tileX, tileY, amount, source = 'unknown') {
+        if (amount <= 0) {
+            return null;
+        }
+        const building = getBuildingAtTile(tileX, tileY);
+        if (!building) {
+            return null;
+        }
+        if (building.unbreakable) {
+            return { hit: true, destroyed: false, ignored: true };
+        }
+        building.hp = Math.max(0, building.hp - amount);
+        if (building.hp <= 0) {
+            const removed = removeBuildingById(building.id);
+            if (removed) {
+                onLog?.(`${buildingTypes[building.type]?.label ?? 'Building'} destroyed (${source})`);
+            }
+            return { hit: true, destroyed: removed, ignored: false };
+        }
+        return { hit: true, destroyed: false, ignored: false };
+    }
+
     function getUiState() {
         const selectedPlaced = selectedPlacedBuildingId ? buildingById.get(selectedPlacedBuildingId) : null;
         return {
@@ -404,6 +526,8 @@ export function createBuildingSystem({
                 id: selectedPlaced.id,
                 label: buildingTypes[selectedPlaced.type]?.label ?? selectedPlaced.type,
                 role: selectedPlaced.role,
+                hp: selectedPlaced.hp,
+                maxHp: selectedPlaced.maxHp,
                 storedOutput: selectedPlaced.storedOutput,
                 outputResource: selectedPlaced.outputResource,
                 storageCap: selectedPlaced.storageCap
@@ -418,6 +542,61 @@ export function createBuildingSystem({
             cost: buildingTypes[id].cost,
             selected: index === selectedIndex
         }));
+    }
+
+    function getTowers() {
+        return towers;
+    }
+
+    function exportState() {
+        return {
+            nextBuildingId,
+            buildMode,
+            selectedIndex,
+            selectedBuildingType,
+            selectedPlacedBuildingId,
+            buildings: buildings.map((building) => ({
+                id: building.id,
+                type: building.type,
+                tileX: building.tileX,
+                tileY: building.tileY,
+                hp: building.hp,
+                maxHp: building.maxHp,
+                unbreakable: building.unbreakable,
+                storedOutput: building.storedOutput,
+                cycleTimerFrames: building.cycleTimerFrames,
+                towerCooldownRemainingFrames: building.towerCooldownRemainingFrames
+            }))
+        };
+    }
+
+    function importState(state) {
+        reset();
+        if (!state || !Array.isArray(state.buildings)) {
+            return;
+        }
+        for (const snapshot of state.buildings) {
+            if (!snapshot || !snapshot.type) {
+                continue;
+            }
+            placeBuildingByType(snapshot.type, snapshot.tileX, snapshot.tileY, {
+                skipCost: true,
+                skipUnitCollision: true,
+                forceId: snapshot.id,
+                hp: snapshot.hp,
+                maxHp: snapshot.maxHp,
+                unbreakable: snapshot.unbreakable,
+                storedOutput: snapshot.storedOutput,
+                cycleTimerFrames: snapshot.cycleTimerFrames,
+                towerCooldownRemainingFrames: snapshot.towerCooldownRemainingFrames
+            });
+        }
+        nextBuildingId = Math.max(nextBuildingId, state.nextBuildingId ?? nextBuildingId);
+        buildMode = Boolean(state.buildMode);
+        selectedIndex = Number.isFinite(state.selectedIndex) ? state.selectedIndex : selectedIndex;
+        selectedBuildingType = state.selectedBuildingType ?? buildingTypeIds[selectedIndex] ?? null;
+        selectedPlacedBuildingId = state.selectedPlacedBuildingId ?? null;
+        ghost.visible = buildMode;
     }
 
     function getWalls() {
@@ -459,12 +638,14 @@ export function createBuildingSystem({
         producers.length = 0;
         houses.length = 0;
         warehouses.length = 0;
+        towers.length = 0;
         occupiedTiles.clear();
         movementBlockedTiles.clear();
         projectileBlockedTiles.clear();
         occupiedTileToBuildingId.clear();
         buildingById.clear();
         selectedPlacedBuildingId = null;
+        nextBuildingId = 1;
         ghost.clear();
         ghost.visible = false;
     }
@@ -476,15 +657,21 @@ export function createBuildingSystem({
         tryPlaceSelectedAtMouse,
         isTileBlocked,
         isProjectileBlocked,
+        isProjectileBlockedForTeam,
+        getBuildingAtTile,
+        applyDamageAtTile,
         hasBridgeAt,
         getUiState,
         getMenuEntries,
         getWalls,
+        getTowers,
         getProducers,
         getHouses,
         getWarehouses,
         takeProducerOutput,
         removeSelectedPlacedBuilding,
+        exportState,
+        importState,
         reset,
         selectBuildingAtMouse,
         updateProduction,
