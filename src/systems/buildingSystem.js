@@ -184,6 +184,21 @@ export function createBuildingSystem({
         return true;
     }
 
+    function tryPlaceByTypeAtTile(buildingTypeId, tileX, tileY) {
+        if (!buildingTypeId || !buildingTypes[buildingTypeId]) {
+            return false;
+        }
+        const check = canPlaceBuilding(buildingTypeId, tileX, tileY);
+        if (!check.ok) {
+            return false;
+        }
+        const type = buildingTypes[buildingTypeId];
+        payCost(type.cost);
+        placeBuildingByType(buildingTypeId, tileX, tileY, { skipCost: true });
+        onLog?.(`${type.label} placed`);
+        return true;
+    }
+
     function placeBuildingByType(buildingTypeId, tileX, tileY, options = {}) {
         const type = buildingTypes[buildingTypeId];
         if (!type) {
@@ -314,6 +329,15 @@ export function createBuildingSystem({
         onLog?.(`${buildingTypes[building.type]?.label ?? 'Building'} removed`);
         selectedPlacedBuildingId = null;
         return true;
+    }
+
+    function removeBuildingAtTile(tileX, tileY) {
+        const building = getBuildingAtTile(tileX, tileY);
+        if (!building) {
+            return false;
+        }
+        selectedPlacedBuildingId = building.id;
+        return removeSelectedPlacedBuilding();
     }
 
     // Called from input layer (B key in index.js).
@@ -658,6 +682,7 @@ export function createBuildingSystem({
         cycleSelectedBuilding,
         updatePlacementGhost,
         tryPlaceSelectedAtMouse,
+        tryPlaceByTypeAtTile,
         isTileBlocked,
         isProjectileBlocked,
         isProjectileBlockedForTeam,
@@ -673,6 +698,7 @@ export function createBuildingSystem({
         getWarehouses,
         takeProducerOutput,
         removeSelectedPlacedBuilding,
+        removeBuildingAtTile,
         exportState,
         importState,
         reset,

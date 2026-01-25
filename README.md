@@ -62,9 +62,10 @@ npm run build
 - `Delete` or `X`: remove selected building
 - `ESC`: pause/resume
 - `F4` or `\u00e7`: toggle dev console
-- Dev sidebar sections: `C` perf, `V` cheats, `B` multiplayer, `N` logs, `G` core
-- Dev slash commands: `/core`, `/perf`, `/multiplayer`, `/logs`, `/cheats`, `/all`
-- Dev command textbox appears at the bottom of the sidebar (type `/` to start command input)
+- Dev sidebar sections: `C` perf, `V` cheats, `M` multiplayer, `N` logs, `G` core
+- Dev server metrics section: `Y` (shows server tick/sim/net load)
+- Dev slash commands: `/core`, `/perf`, `/multiplayer`, `/server`, `/logs`, `/cheats`, `/all`
+- Dev command textbox appears in the sidebar (press `Tab` or type `/` to start command input)
 - Multiplayer connect toggle in dev sidebar: `P`
 
 ## Project Structure
@@ -122,9 +123,24 @@ flowchart LR
 - Open firewall access for TCP `3001` and `8080` on the host.
 - In-game dev console (`F4` or `\u00e7`) shows multiplayer status and LAN join hint.
 - Dev console is a compact right terminal-style sidebar to avoid covering central gameplay view.
+- LAN session currently supports up to 4 simultaneous players.
 - Current 2.2.2 netcode improvements:
   - protocol versioned messages (`v1`)
   - player snapshot relevance culling
   - position quantization for lower bandwidth
   - authority-host replication for enemies/projectiles with relevance filtering
-- Buildings/resources/civilian economy are still finalized in later shared-gameplay steps.
+- 2.2.3 co-op playability in progress:
+  - follower actions (attack/build/remove/harvest) relay to host authority
+  - shared resources + building state sync from host to followers
+  - enemies target all connected players
+  - dead players cannot move and respawn after 15s
+  - if all players are down at once, the run resets for the whole session
+  - higher host entity snapshot cadence (~20 Hz) for smoother co-op combat
+  - building state sync now sends only when changed (lower bandwidth + less follower stutter)
+  - reconciliation smoothing reduces rubber-banding for small position drift
+  - dev multiplayer metrics now include snapshot interval + jitter for LAN diagnostics
+  - follower clients show immediate local action VFX for attack/build/remove requests
+  - non-player snapshots use adaptive full-vs-delta compression per client
+  - simulation now runs on fixed 60Hz steps for consistent gameplay across different render FPS
+  - dev console has a dedicated server section to inspect host tick/sim/net load
+  - server section includes a color-coded latency verdict hint (server-bound vs network-bound vs mixed)

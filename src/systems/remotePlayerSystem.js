@@ -4,7 +4,8 @@ import { PLAYER_COLLISION_RADIUS } from '../config/constants.js';
 // Renders non-local multiplayer peers from server snapshots.
 export function createRemotePlayerSystem({ layer }) {
     const peers = new Map();
-    const smoothingPerSecond = 12;
+    const smoothingPerSecond = 14;
+    const extrapolationLeadSeconds = 0.08;
 
     function createPeerSprite() {
         const sprite = new PIXI.Graphics();
@@ -17,6 +18,7 @@ export function createRemotePlayerSystem({ layer }) {
 
     function sync(snapshotPlayers, localPlayerId) {
         const activeIds = new Set();
+        const now = performance.now();
         for (const peer of snapshotPlayers) {
             if (peer.playerId === localPlayerId) {
                 continue;
@@ -31,13 +33,20 @@ export function createRemotePlayerSystem({ layer }) {
                     x: peer.x,
                     y: peer.y,
                     targetX: peer.x,
-                    targetY: peer.y
+                    targetY: peer.y,
+                    vx: 0,
+                    vy: 0,
+                    lastTargetAt: now
                 };
                 sprite.position.set(peer.x, peer.y);
                 peers.set(id, entry);
             }
+            const elapsed = Math.max(0.001, (now - entry.lastTargetAt) / 1000);
+            entry.vx = (peer.x - entry.targetX) / elapsed;
+            entry.vy = (peer.y - entry.targetY) / elapsed;
             entry.targetX = peer.x;
             entry.targetY = peer.y;
+            entry.lastTargetAt = now;
             entry.sprite.visible = true;
         }
 
@@ -53,8 +62,17 @@ export function createRemotePlayerSystem({ layer }) {
     function update(deltaMs) {
         const alpha = Math.max(0, Math.min(1, (deltaMs / 1000) * smoothingPerSecond));
         for (const entry of peers.values()) {
-            entry.x += (entry.targetX - entry.x) * alpha;
-            entry.y += (entry.targetY - entry.y) * alpha;
+            const predictedX = entry.targetX + entry.vx * extrapolationLeadSeconds;
+            const predictedY = entry.targetY + entry.vy * extrapolationLeadSeconds;
+            const dx = predictedX - entry.x;
+            const dy = predictedY - entry.y;
+            if (dx * dx + dy * dy > 6400) {
+                entry.x = entry.targetX;
+                entry.y = entry.targetY;
+            } else {
+                entry.x += dx * alpha;
+                entry.y += dy * alpha;
+            }
             entry.sprite.position.set(entry.x, entry.y);
         }
     }

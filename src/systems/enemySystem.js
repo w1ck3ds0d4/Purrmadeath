@@ -39,6 +39,7 @@ export function createEnemySystem({
     setPlayerWorldPosition,
     canMovePlayerTo,
     onPlayerContactDamage,
+    getPlayerTargets = null,
     getWalls,
     getCivilianTargets = () => [],
     onCivilianContactDamage = () => false
@@ -585,6 +586,15 @@ export function createEnemySystem({
         perfStats.skippedByStride = 0;
         const playerCenter = getPlayerCenter();
         const playerTile = getPlayerTile();
+        const playerTargets = typeof getPlayerTargets === 'function'
+            ? getPlayerTargets().filter((target) => !target.isDead)
+            : [{
+                id: 'local',
+                x: playerCenter.x,
+                y: playerCenter.y,
+                radius: getPlayerCollisionRadius(),
+                isDead: isPlayerDead()
+            }];
         const civilians = getCivilianTargets();
         const playerTileNeighbors = [
             { x: playerTile.x + 1, y: playerTile.y },
@@ -626,6 +636,28 @@ export function createEnemySystem({
             }
             let targetTileX = playerTile.x;
             let targetTileY = playerTile.y;
+            if (playerTargets.length > 0) {
+                let bestPlayer = null;
+                let bestPlayerDistSq = Infinity;
+                for (const playerTarget of playerTargets) {
+                    if (playerTarget.isDead) {
+                        continue;
+                    }
+                    const playerTileX = Math.floor(playerTarget.x / TILE_SIZE);
+                    const playerTileY = Math.floor(playerTarget.y / TILE_SIZE);
+                    const pdx = enemyTileX - playerTileX;
+                    const pdy = enemyTileY - playerTileY;
+                    const pDistSq = pdx * pdx + pdy * pdy;
+                    if (pDistSq < bestPlayerDistSq) {
+                        bestPlayerDistSq = pDistSq;
+                        bestPlayer = playerTarget;
+                    }
+                }
+                if (bestPlayer) {
+                    targetTileX = Math.floor(bestPlayer.x / TILE_SIZE);
+                    targetTileY = Math.floor(bestPlayer.y / TILE_SIZE);
+                }
+            }
 
             // Civilians are valid aggro targets; enemies pick the closest target by tile distance.
             if (civilians.length > 0) {
@@ -748,13 +780,19 @@ export function createEnemySystem({
                 enemy.contactCooldownFrames -= 1;
             }
 
-            const dxPlayer = (enemy.x + ENEMY_RADIUS) - playerCenter.x;
-            const dyPlayer = (enemy.y + ENEMY_RADIUS) - playerCenter.y;
-            const collisionDistance = ENEMY_RADIUS + getPlayerCollisionRadius();
-            const collisionDistSq = dxPlayer * dxPlayer + dyPlayer * dyPlayer;
-            if (collisionDistSq < collisionDistance * collisionDistance && enemy.contactCooldownFrames <= 0) {
-                enemy.contactCooldownFrames = ENEMY_CONTACT_COOLDOWN_FRAMES;
-                onPlayerContactDamage(ENEMY_CONTACT_DAMAGE, 'enemy_contact');
+            if (enemy.contactCooldownFrames <= 0 && playerTargets.length > 0) {
+                for (const playerTarget of playerTargets) {
+                    const playerRadius = Number.isFinite(playerTarget.radius) ? playerTarget.radius : getPlayerCollisionRadius();
+                    const dxPlayer = (enemy.x + ENEMY_RADIUS) - playerTarget.x;
+                    const dyPlayer = (enemy.y + ENEMY_RADIUS) - playerTarget.y;
+                    const collisionDistance = ENEMY_RADIUS + playerRadius;
+                    const collisionDistSq = dxPlayer * dxPlayer + dyPlayer * dyPlayer;
+                    if (collisionDistSq < collisionDistance * collisionDistance) {
+                        enemy.contactCooldownFrames = ENEMY_CONTACT_COOLDOWN_FRAMES;
+                        onPlayerContactDamage(ENEMY_CONTACT_DAMAGE, 'enemy_contact', playerTarget.id);
+                        break;
+                    }
+                }
             }
 
             if (enemy.contactCooldownFrames <= 0 && civilians.length > 0) {
