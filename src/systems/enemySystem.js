@@ -307,6 +307,8 @@ export function createEnemySystem({
             id: Number(entry.id) || enemyIdCounter++,
             x: Number(entry.x) || 0,
             y: Number(entry.y) || 0,
+            targetX: Number(entry.x) || 0,
+            targetY: Number(entry.y) || 0,
             hp: Number(entry.hp) || ENEMY_MAX_HP,
             maxHp: Number(entry.maxHp) || ENEMY_MAX_HP,
             invulnFrames: 0,
@@ -354,12 +356,11 @@ export function createEnemySystem({
                 enemy = createReplicatedEnemy(entry);
                 enemies.push(enemy);
             } else {
-                enemy.x = Number(entry.x) || enemy.x;
-                enemy.y = Number(entry.y) || enemy.y;
+                enemy.targetX = Number(entry.x) || enemy.targetX || enemy.x;
+                enemy.targetY = Number(entry.y) || enemy.targetY || enemy.y;
                 enemy.hp = Number(entry.hp) || enemy.hp;
                 enemy.maxHp = Number(entry.maxHp) || enemy.maxHp;
                 enemy.isRanged = Boolean(entry.isRanged);
-                enemy.sprite.position.set(enemy.x, enemy.y);
                 updateEnemyHealthBar(enemy);
             }
             seen.add(key);
@@ -371,6 +372,20 @@ export function createEnemySystem({
                 continue;
             }
             removeEnemyAt(i);
+        }
+    }
+
+    // Follower-side smoothing for replicated enemies to reduce snap jitter.
+    function updateReplicatedInterpolation(deltaMoveScale) {
+        const alpha = Math.max(0.08, Math.min(0.5, deltaMoveScale * 12));
+        for (const enemy of enemies) {
+            if (!Number.isFinite(enemy.targetX) || !Number.isFinite(enemy.targetY)) {
+                enemy.targetX = enemy.x;
+                enemy.targetY = enemy.y;
+            }
+            enemy.x += (enemy.targetX - enemy.x) * alpha;
+            enemy.y += (enemy.targetY - enemy.y) * alpha;
+            enemy.sprite.position.set(enemy.x, enemy.y);
         }
     }
 
@@ -554,12 +569,16 @@ export function createEnemySystem({
         return { path: [], targetTile: null };
     }
 
-    function spawnTick() {
+    function spawnTick(options = {}) {
+        const maxCount = Number.isFinite(options.maxCount) ? Math.max(0, Math.floor(options.maxCount)) : ENEMY_MAX_COUNT;
+        const spawnIntervalFrames = Number.isFinite(options.spawnIntervalFrames)
+            ? Math.max(1, Math.floor(options.spawnIntervalFrames))
+            : ENEMY_SPAWN_INTERVAL_FRAMES;
         enemySpawnTimer -= 1;
-        if (enemySpawnTimer > 0 || enemies.length >= ENEMY_MAX_COUNT) {
+        if (enemySpawnTimer > 0 || enemies.length >= maxCount) {
             return;
         }
-        enemySpawnTimer = ENEMY_SPAWN_INTERVAL_FRAMES;
+        enemySpawnTimer = spawnIntervalFrames;
         const spawnTile = tryGetOffscreenSpawnTile();
         if (spawnTile) {
             spawnEnemyAtTile(spawnTile.x, spawnTile.y);
@@ -846,6 +865,7 @@ export function createEnemySystem({
         updateEnemyHealthBar,
         exportReplicatedState,
         syncReplicatedState,
+        updateReplicatedInterpolation,
         isEnemyEntity: (entity) => entity?.__entity === 'enemy'
     };
 }

@@ -1,7 +1,7 @@
 # Purrmadeath
 
 Purrmadeath is a 2D survival/factory sandbox built with Pixi.js.
-You gather resources, build defenses, spawn logistics civilians, and survive enemy waves.
+You gather resources, build defenses, and spawn logistics civilians.
 
 Current multiplayer focus (v2.2.x) is replication infrastructure and session sync quality.
 
@@ -32,6 +32,29 @@ npm run start:lan
 
 - Game host page runs on `http://<HOST_LAN_IP>:3001`.
 - Multiplayer server runs on `ws://<HOST_LAN_IP>:8080`.
+
+Security defaults for LAN server:
+- Private-network clients only (`PRIVATE_NETWORK_ONLY=1`)
+- Message payload limit and message-rate limits enabled
+- Handshake timeout for unknown clients
+- Optional join secret with `JOIN_TOKEN`
+- Optional browser-origin allowlist with `ALLOWED_ORIGINS` (comma-separated)
+
+Example hardened launch:
+
+```bash
+$env:JOIN_TOKEN="your_secret_join_code"
+$env:ALLOWED_ORIGINS="http://192.168.4.31:3001,http://localhost:3001"
+npm run multiplayer:server
+```
+
+Then clients join with:
+
+- `http://<HOST_LAN_IP>:3001/?mp=1&mpHost=<HOST_LAN_IP>&joinToken=your_secret_join_code`
+
+Important:
+- Keep this server LAN-only unless you add TLS + proper auth.
+- Do not port-forward `8080` directly to the internet.
 
 On another device in the same LAN:
 
@@ -65,6 +88,7 @@ npm run build
 - Dev sidebar sections: `C` perf, `V` cheats, `M` multiplayer, `N` logs, `G` core
 - Dev server metrics section: `Y` (shows server tick/sim/net load)
 - Dev slash commands: `/core`, `/perf`, `/multiplayer`, `/server`, `/logs`, `/cheats`, `/all`
+- Dev slash commands: `/core`, `/perf`, `/multiplayer`, `/server`, `/logs`, `/cheats`, `/all`, `/force-reset`
 - Dev command textbox appears in the sidebar (press `Tab` or type `/` to start command input)
 - Multiplayer connect toggle in dev sidebar: `P`
 
@@ -152,6 +176,20 @@ flowchart LR
   - enemy ranged combat and damage processing include all connected players
   - civilians and house spawns are replicated to followers
   - multiplayer kill counter is attributed per player via replicated player state
+  - player position sync stabilized with follower soft correction + host authoritative pose mirroring
+  - top-right session time is host-authoritative and synced to followers
+  - follower joins now trigger full building-state sync to avoid world divergence
+  - house civilian timer labels are replicated to followers
+  - follower movement delay reduced via client pose hints in input packets (server reconciliation)
+  - follower correction tuned to reduce visible teleporting during desync recovery
+  - replicated enemies/projectiles now interpolate on followers to reduce snap jitter
+  - 2.2.4-A migration started: session clock ownership moved to dedicated server tick (host browser no longer owns runtime clock)
+  - shared multiplayer pause/restart flow (followers request, authority applies, state replicated)
+  - co-op revive interaction (use `E` near downed teammate)
+  - dynamic enemy scaling by active player count in session
+  - authority checkpoints for multiplayer session restore (per session id)
+  - local movement now uses normalized vectors to match server-side input clamping (better host/follower speed parity)
+  - hidden host tabs keep multiplayer progression closer to real time via higher fixed-step catch-up budget
 |  |- ui/
 |  |  |- debugConsoleCommands.js   # debug slash-command parsing + view map
 |  |  |- debugOverlaySections.js   # debug section line builders

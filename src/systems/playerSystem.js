@@ -116,20 +116,28 @@ export function createPlayerSystem({ stage, spawnWorldX, spawnWorldY, screenWidt
             return;
         }
         const moveDistance = PLAYER_SPEED * deltaMoveScale;
-        let nextX = worldX;
-        let nextY = worldY;
+        let moveX = 0;
+        let moveY = 0;
         if (keys.w || keys.arrowup) {
-            nextY -= moveDistance;
+            moveY -= 1;
         }
         if (keys.s || keys.arrowdown) {
-            nextY += moveDistance;
+            moveY += 1;
         }
         if (keys.a || keys.arrowleft) {
-            nextX -= moveDistance;
+            moveX -= 1;
         }
         if (keys.d || keys.arrowright) {
-            nextX += moveDistance;
+            moveX += 1;
         }
+
+        const inputMagnitude = Math.hypot(moveX, moveY);
+        if (inputMagnitude > 0.001) {
+            moveX = (moveX / inputMagnitude) * moveDistance;
+            moveY = (moveY / inputMagnitude) * moveDistance;
+        }
+        const nextX = worldX + moveX;
+        const nextY = worldY + moveY;
 
         if (canMoveToWorldPosition(nextX, nextY)) {
             worldX = nextX;
