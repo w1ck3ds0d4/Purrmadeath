@@ -384,13 +384,19 @@ export function createWorldSystem({ tileLayer, resourceLayer, getDebugOverlayEna
         const searchRadiusTiles = 2;
 
         let bestKey = null;
+        let bestTileX = 0;
+        let bestTileY = 0;
+        let bestResourceType = null;
         let bestDistanceSq = HARVEST_RANGE * HARVEST_RANGE;
 
         for (let y = centerTileY - searchRadiusTiles; y <= centerTileY + searchRadiusTiles; y++) {
             for (let x = centerTileX - searchRadiusTiles; x <= centerTileX + searchRadiusTiles; x++) {
                 const key = `${x},${y}`;
-                const resourceNode = resourceNodeCache.get(key);
-                if (!resourceNode) {
+                if (harvestedResourceTiles.has(key)) {
+                    continue;
+                }
+                const resourceType = getResourceTypeAtTile(x, y);
+                if (!resourceType) {
                     continue;
                 }
 
@@ -403,26 +409,25 @@ export function createWorldSystem({ tileLayer, resourceLayer, getDebugOverlayEna
                 if (distSq <= bestDistanceSq) {
                     bestDistanceSq = distSq;
                     bestKey = key;
+                    bestTileX = x;
+                    bestTileY = y;
+                    bestResourceType = resourceType;
                 }
             }
         }
 
-        if (!bestKey) {
+        if (!bestKey || !bestResourceType) {
             return null;
         }
 
         const node = resourceNodeCache.get(bestKey);
-        const resourceType = resourceTileTypeCache.get(bestKey);
-        if (!node || !resourceType) {
-            return null;
+        if (node) {
+            node.destroy();
+            resourceNodeCache.delete(bestKey);
         }
-
-        const [tileX, tileY] = bestKey.split(',').map(Number);
-        node.destroy();
-        resourceNodeCache.delete(bestKey);
         harvestedResourceTiles.add(bestKey);
         resourceTileTypeCache.set(bestKey, null);
-        return { resourceType, tileX, tileY };
+        return { resourceType: bestResourceType, tileX: bestTileX, tileY: bestTileY };
     }
 
     function getStats() {

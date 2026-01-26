@@ -7,7 +7,7 @@ export function createMultiplayerClient({
     onLog = () => {}
 }) {
     const PROTOCOL_VERSION = 1;
-    const INPUT_SEND_INTERVAL_MS = 33;
+    const INPUT_SEND_INTERVAL_MS = 20;
     const INPUT_KEEPALIVE_MS = 250;
     const STATS_WINDOW_MS = 1000;
     let socket = null;
@@ -55,6 +55,7 @@ export function createMultiplayerClient({
         projectiles: { player: [], tower: [], enemy: [] },
         totals: { enemies: 0, playerProjectiles: 0, towerProjectiles: 0, enemyProjectiles: 0 },
         playerStates: [],
+        civilians: [],
         sharedResources: null,
         buildingsState: null,
         buildingsRevision: 0
@@ -138,6 +139,7 @@ export function createMultiplayerClient({
                 enemyProjectiles: Number(np.totals?.enemyProjectiles) || 0
             },
             playerStates: Array.isArray(np.playerStates) ? np.playerStates : currentSnapshot.playerStates,
+            civilians: Array.isArray(np.civilians) ? np.civilians : currentSnapshot.civilians,
             sharedResources: np.sharedResources ?? currentSnapshot.sharedResources,
             buildingsState: np.buildingsState ?? currentSnapshot.buildingsState,
             buildingsRevision: Number(np.buildingsRevision) || currentSnapshot.buildingsRevision
@@ -287,6 +289,7 @@ export function createMultiplayerClient({
                             enemyProjectiles: Number(np.totals?.enemyProjectiles) || 0
                         },
                         playerStates: Array.isArray(np.playerStates) ? np.playerStates : [],
+                        civilians: Array.isArray(np.civilians) ? np.civilians : [],
                         sharedResources: np.sharedResources ?? null,
                         buildingsState: np.buildingsState ?? null,
                         buildingsRevision: Number(np.buildingsRevision) || 0
@@ -341,6 +344,7 @@ export function createMultiplayerClient({
         nonPlayerSnapshot.projectiles.tower = [];
         nonPlayerSnapshot.projectiles.enemy = [];
         nonPlayerSnapshot.playerStates = [];
+        nonPlayerSnapshot.civilians = [];
         nonPlayerSnapshot.sharedResources = null;
         nonPlayerSnapshot.buildingsState = null;
         nonPlayerSnapshot.buildingsRevision = 0;

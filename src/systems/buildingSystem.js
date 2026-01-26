@@ -594,6 +594,25 @@ export function createBuildingSystem({
         };
     }
 
+    // Multiplayer replication should not overwrite local UI selection/build-mode state.
+    function exportReplicationState() {
+        return {
+            nextBuildingId,
+            buildings: buildings.map((building) => ({
+                id: building.id,
+                type: building.type,
+                tileX: building.tileX,
+                tileY: building.tileY,
+                hp: building.hp,
+                maxHp: building.maxHp,
+                unbreakable: building.unbreakable,
+                storedOutput: building.storedOutput,
+                cycleTimerFrames: building.cycleTimerFrames,
+                towerCooldownRemainingFrames: building.towerCooldownRemainingFrames
+            }))
+        };
+    }
+
     function importState(state) {
         reset();
         if (!state || !Array.isArray(state.buildings)) {
@@ -620,6 +639,19 @@ export function createBuildingSystem({
         selectedIndex = Number.isFinite(state.selectedIndex) ? state.selectedIndex : selectedIndex;
         selectedBuildingType = state.selectedBuildingType ?? buildingTypeIds[selectedIndex] ?? null;
         selectedPlacedBuildingId = state.selectedPlacedBuildingId ?? null;
+        ghost.visible = buildMode;
+    }
+
+    function importReplicationState(state) {
+        const previousBuildMode = buildMode;
+        const previousSelectedIndex = selectedIndex;
+        const previousSelectedBuildingType = selectedBuildingType;
+        const previousSelectedPlacedBuildingId = selectedPlacedBuildingId;
+        importState(state);
+        buildMode = previousBuildMode;
+        selectedIndex = previousSelectedIndex;
+        selectedBuildingType = previousSelectedBuildingType;
+        selectedPlacedBuildingId = previousSelectedPlacedBuildingId;
         ghost.visible = buildMode;
     }
 
@@ -700,7 +732,9 @@ export function createBuildingSystem({
         removeSelectedPlacedBuilding,
         removeBuildingAtTile,
         exportState,
+        exportReplicationState,
         importState,
+        importReplicationState,
         reset,
         selectBuildingAtMouse,
         updateProduction,

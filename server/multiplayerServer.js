@@ -33,6 +33,7 @@ let nonPlayerState = {
         enemy: []
     },
     playerStates: [],
+    civilians: [],
     sharedResources: null,
     buildingsState: null,
     buildingsRevision: 0
@@ -183,6 +184,7 @@ function sanitizePlayerStates(raw) {
         const hp = Number(entry.hp);
         const maxHp = Number(entry.maxHp);
         const respawnTimer = Number(entry.respawnTimer);
+        const kills = Number(entry.kills);
         if (!Number.isFinite(playerId)) {
             continue;
         }
@@ -191,7 +193,37 @@ function sanitizePlayerStates(raw) {
             hp: Math.max(0, Number.isFinite(hp) ? hp : 0),
             maxHp: Math.max(1, Number.isFinite(maxHp) ? maxHp : 1),
             isDead: Boolean(entry.isDead),
-            respawnTimer: Math.max(0, Number.isFinite(respawnTimer) ? respawnTimer : 0)
+            respawnTimer: Math.max(0, Number.isFinite(respawnTimer) ? respawnTimer : 0),
+            kills: Math.max(0, Math.floor(Number.isFinite(kills) ? kills : 0))
+        });
+    }
+    return result;
+}
+
+function sanitizeCivilianStates(raw) {
+    if (!Array.isArray(raw)) {
+        return [];
+    }
+    const result = [];
+    for (const entry of raw) {
+        if (!entry || typeof entry !== 'object') {
+            continue;
+        }
+        const id = Number(entry.id);
+        const x = Number(entry.x);
+        const y = Number(entry.y);
+        const hp = Number(entry.hp);
+        const maxHp = Number(entry.maxHp);
+        if (!Number.isFinite(id) || !Number.isFinite(x) || !Number.isFinite(y)) {
+            continue;
+        }
+        result.push({
+            id: Math.floor(id),
+            x: quantizePosition(x),
+            y: quantizePosition(y),
+            hp: Number.isFinite(hp) ? hp : 1,
+            maxHp: Number.isFinite(maxHp) ? maxHp : 1,
+            isDead: Boolean(entry.isDead)
         });
     }
     return result;
@@ -215,6 +247,7 @@ function filterNonPlayerStateForViewer(viewer) {
             enemy: filterByDistance(nonPlayerState.projectiles.enemy)
         },
         playerStates: nonPlayerState.playerStates,
+        civilians: nonPlayerState.civilians,
         sharedResources: nonPlayerState.sharedResources,
         buildingsState: nonPlayerState.buildingsState,
         buildingsRevision: nonPlayerState.buildingsRevision,
@@ -306,6 +339,7 @@ function buildDeltaNonPlayerPayload(socket, fullPayload) {
         projectileDelta,
         totals: fullPayload.totals,
         playerStates: fullPayload.playerStates,
+        civilians: fullPayload.civilians,
         sharedResources: fullPayload.sharedResources,
         buildingsState: fullPayload.buildingsState,
         buildingsRevision: fullPayload.buildingsRevision
@@ -489,6 +523,7 @@ function handleEntitySnapshot(socket, message) {
             enemy: sanitizeProjectileEntries(payload.projectiles?.enemy)
         },
         playerStates: sanitizePlayerStates(payload.playerStates),
+        civilians: sanitizeCivilianStates(payload.civilians),
         sharedResources: sanitizeSharedResources(payload.sharedResources) ?? nonPlayerState.sharedResources,
         buildingsState: payload.buildingsState ?? nonPlayerState.buildingsState,
         buildingsRevision: Number(payload.buildingsRevision) || nonPlayerState.buildingsRevision
