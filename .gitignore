@@ -3,6 +3,8 @@ dist/
 .parcel-cache
 .DS_Store
 *.log
+tmp_video_frames
+.tmp
 # Ignore all markdown files except README
 *.md
 !README.md

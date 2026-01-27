@@ -144,8 +144,13 @@ export async function startGame() {
     let gameTimeSeconds = 0;
     let nextProjectileReplicationId = 1;
     const sharedSessionState = {
-        paused: false
+        paused: false,
+        restartVersion: 0,
+        restartVotes: 0,
+        restartEligiblePlayers: 0
     };
+    let lastAppliedRestartVersion = 0;
+    let sessionStateInitialized = false;
     let multiplayerCheckpointLoadedForSession = null;
     let multiplayerCheckpointTimerMs = 10000;
     let nextClientActionId = 1;
@@ -211,13 +216,15 @@ export async function startGame() {
     let outboundBuildingRevision = 0;
     let lastOutboundBuildingStateHash = '';
     let lastKnownRemotePlayerCount = 0;
+    let latestServerAiDirectives = null;
     // Multiplayer sync tuning knobs (host authority side).
     const ENTITY_SNAPSHOT_INTERVAL_MS = 50;
     const BUILDING_SYNC_INTERVAL_MS = 250;
     // Reconciliation tuning for local player correction against server snapshots.
-    const PLAYER_RECONCILE_HARD_SNAP_DISTANCE = TILE_SIZE * 8;
-    const PLAYER_RECONCILE_BLEND = 0.18;
-    const PLAYER_RECONCILE_MAX_STEP = TILE_SIZE * 0.35;
+    const PLAYER_RECONCILE_HARD_SNAP_DISTANCE = TILE_SIZE * 10;
+    const PLAYER_RECONCILE_DEADZONE = TILE_SIZE * 0.18;
+    const PLAYER_RECONCILE_BLEND = 0.24;
+    const PLAYER_RECONCILE_MAX_STEP = TILE_SIZE * 0.6;
     const remotePlayerSystem = createRemotePlayerSystem({ layer: remotePlayerLayer });
     const urlParams = new URLSearchParams(window.location.search);
     const multiplayerQueryEnabled = urlParams.get('multiplayer') === '1' || urlParams.get('mp') === '1';
@@ -355,6 +362,17 @@ export async function startGame() {
     pauseText.visible = false;
     pauseText.position.set(window.innerWidth / 2, window.innerHeight / 2);
     app.stage.addChild(pauseText);
+
+    function updatePauseMenuText() {
+        const multiplayerStats = multiplayerClient.getStats();
+        if (!multiplayerStats.connected) {
+            pauseText.text = 'Paused\nPress ESC to resume\nPress R to restart run';
+            return;
+        }
+        const restartVotes = Math.max(0, Number(sharedSessionState.restartVotes) || 0);
+        const restartEligible = Math.max(0, Number(sharedSessionState.restartEligiblePlayers) || 0);
+        pauseText.text = `Paused\nPress ESC to vote pause/resume\nPress R to vote restart run\nRestart vote: ${restartVotes}/${restartEligible}`;
+    }
 
     const debugText = new PIXI.Text({
         text: '',
@@ -675,6 +693,7 @@ export async function startGame() {
         const lines = [
             'DEV CONSOLE (F4 or \\u00e7)',
             `View: ${debugOverlayView.toUpperCase()}`,
+            `FPS: ${smoothedFps.toFixed(1)} | Frame: ${frameMs.toFixed(2)} ms`,
             ''
         ];
 
@@ -692,7 +711,6 @@ export async function startGame() {
         const showAll = debugOverlayView === 'all';
         if (showAll || debugOverlayView === 'core') {
             pushSection('Core', [
-                `FPS: ${smoothedFps.toFixed(1)} | Frame: ${frameMs.toFixed(2)} ms`,
                 `Player HP: ${Math.ceil(playerState.hp)}/${playerState.maxHp} | Weapon: ${playerCombat.weapon}`,
                 `Coords: ${Math.floor(playerWorldX)}, ${Math.floor(playerWorldY)} | Tile: ${Math.floor((playerWorldX + TILE_SIZE / 2) / TILE_SIZE)}, ${Math.floor((playerWorldY + TILE_SIZE / 2) / TILE_SIZE)}`,
                 `Enemies: ${enemies.length}/${ENEMY_MAX_COUNT} | Ranged: ${enemies.filter((enemy) => enemy.isRanged).length}`,
@@ -793,7 +811,7 @@ export async function startGame() {
         const bodyBudget = Math.max(0, maxLines - reservedForLogs);
         let bodyLines = lines;
         if (bodyLines.length > bodyBudget) {
-            const headKeep = Math.min(2, bodyBudget);
+            const headKeep = Math.min(3, bodyBudget);
             const tailKeep = Math.max(0, bodyBudget - headKeep - 1);
             bodyLines = bodyLines
                 .slice(0, headKeep)
@@ -869,6 +887,9 @@ export async function startGame() {
         inventory.iron = 0;
         inventory.gold = 0;
         sharedSessionState.paused = false;
+        sharedSessionState.restartVersion = 0;
+        sharedSessionState.restartVotes = 0;
+        sharedSessionState.restartEligiblePlayers = 0;
         gameTimeSeconds = 0;
         simFrameIndex = 0;
         systemDeferred.civilianSkippedFrames = 0;
@@ -937,6 +958,29 @@ export async function startGame() {
         logDebug('Force reset executed (world regenerated, save/checkpoint cache cleared)');
     }
 
+    function registerEnemyKill(attackerPlayerId = null) {
+        const multiplayerStats = multiplayerClient.getStats();
+        if (multiplayerStats.connected && multiplayerStats.isAuthority) {
+            let creditedPlayerId = Math.floor(Number(attackerPlayerId) || 0);
+            if (creditedPlayerId <= 0) {
+                creditedPlayerId = Math.floor(Number(multiplayerStats.playerId) || 0);
+            }
+            if (creditedPlayerId > 0) {
+                const runtime = ensureRuntimePlayer(creditedPlayerId);
+                runtime.kills = (runtime.kills ?? 0) + 1;
+                if (String(multiplayerStats.playerId) === String(runtime.id)) {
+                    combatStats.enemiesKilled = runtime.kills;
+                }
+            } else {
+                combatStats.enemiesKilled += 1;
+            }
+        } else {
+            combatStats.enemiesKilled += 1;
+        }
+        inventory.gold += GOLD_PER_ENEMY_KILL;
+        updateHud();
+    }
+
     function applyDamage(target, amount, source, attackerPlayerId = null) {
         if (!target || target.isDead || amount <= 0) {
             return false;
@@ -962,15 +1006,7 @@ export async function startGame() {
                 clearSavedGameState();
                 logDebug(`Player defeated by ${source}`);
             } else if (enemySystem?.isEnemyEntity(target)) {
-                const multiplayerStats = multiplayerClient.getStats();
-                if (multiplayerStats.connected && multiplayerStats.isAuthority && attackerPlayerId !== null && attackerPlayerId !== undefined) {
-                    const runtime = ensureRuntimePlayer(attackerPlayerId);
-                    runtime.kills = (runtime.kills ?? 0) + 1;
-                } else {
-                    combatStats.enemiesKilled += 1;
-                }
-                inventory.gold += GOLD_PER_ENEMY_KILL;
-                updateHud();
+                registerEnemyKill(attackerPlayerId);
             }
         }
 
@@ -1183,6 +1219,10 @@ export async function startGame() {
             const bulletTileY = Math.floor(bulletCenterY / TILE_SIZE);
 
             if (bullet.team === 'enemy') {
+                if (snapshot.serverOwnsEnemyProjectileDamage) {
+                    // Dedicated server authority resolves enemy-projectile damage in multiplayer sessions.
+                    continue;
+                }
                 if (buildingSystem.isProjectileBlockedForTeam(bulletTileX, bulletTileY, 'enemy')) {
                     const result = buildingSystem.applyDamageAtTile(bulletTileX, bulletTileY, bullet.damage, 'enemy_projectile');
                     releaseProjectileSprite(bullet.team, bullet.sprite);
@@ -1355,6 +1395,7 @@ export async function startGame() {
 
     function updateProjectiles(deltaMoveScale, civilianTargetsSnapshot = null) {
         const multiplayerStats = multiplayerClient.getStats();
+        const serverOwnsEnemyProjectileDamage = multiplayerStats.connected && multiplayerStats.isAuthority;
         let playerTargets = [];
         if (multiplayerStats.connected && multiplayerStats.isAuthority) {
             playerTargets = [...multiplayerPlayerRuntime.values()].map((runtime) => ({
@@ -1375,6 +1416,7 @@ export async function startGame() {
             }];
         }
         const snapshot = {
+            serverOwnsEnemyProjectileDamage,
             playerTargets,
             civilians: civilianTargetsSnapshot ?? civilianSystem.getTargets(),
             onPlayerHit: (playerId, amount, source) => {
@@ -1400,7 +1442,7 @@ export async function startGame() {
         updateProjectileList(enemyProjectiles, deltaMoveScale, snapshot);
     }
 
-    function updateTowerCombat() {
+    function updateTowerCombat(aiDirectives = null) {
         const towers = buildingSystem.getTowers?.() ?? [];
         if (towers.length === 0) {
             return;
@@ -1416,22 +1458,36 @@ export async function startGame() {
             let targetEnemy = null;
             let bestHp = -1;
             let bestDistSq = rangeSq;
-            const candidates = querySpatialIndexInto(enemySpatialIndex, centerX, centerY, range, queryBufferA);
-            for (const enemy of candidates) {
-                if (enemy.isDead) {
-                    continue;
+            const directedEnemyId = Number(aiDirectives?.towers?.[String(tower.id)] || 0);
+            if (directedEnemyId > 0) {
+                const directedEnemy = enemies.find((enemy) => Number(enemy.id) === directedEnemyId && !enemy.isDead);
+                if (directedEnemy) {
+                    const dx = (directedEnemy.x + ENEMY_RADIUS) - centerX;
+                    const dy = (directedEnemy.y + ENEMY_RADIUS) - centerY;
+                    const distSq = dx * dx + dy * dy;
+                    if (distSq <= rangeSq) {
+                        targetEnemy = directedEnemy;
+                    }
                 }
-                const dx = (enemy.x + ENEMY_RADIUS) - centerX;
-                const dy = (enemy.y + ENEMY_RADIUS) - centerY;
-                const distSq = dx * dx + dy * dy;
-                if (distSq > rangeSq) {
-                    continue;
-                }
-                // Target the strongest enemy first; distance breaks ties.
-                if (enemy.hp > bestHp || (enemy.hp === bestHp && distSq < bestDistSq)) {
-                    bestHp = enemy.hp;
-                    bestDistSq = distSq;
-                    targetEnemy = enemy;
+            }
+            if (!targetEnemy) {
+                querySpatialIndexInto(enemySpatialIndex, centerX, centerY, range, queryBufferA);
+                for (const enemy of queryBufferA) {
+                    if (enemy.isDead) {
+                        continue;
+                    }
+                    const dx = (enemy.x + ENEMY_RADIUS) - centerX;
+                    const dy = (enemy.y + ENEMY_RADIUS) - centerY;
+                    const distSq = dx * dx + dy * dy;
+                    if (distSq > rangeSq) {
+                        continue;
+                    }
+                    // Target the strongest enemy first; distance breaks ties.
+                    if (enemy.hp > bestHp || (enemy.hp === bestHp && distSq < bestDistSq)) {
+                        bestHp = enemy.hp;
+                        bestDistSq = distSq;
+                        targetEnemy = enemy;
+                    }
                 }
             }
             if (!targetEnemy) {
@@ -1460,7 +1516,7 @@ export async function startGame() {
         }
     }
 
-    function updateEnemyRangedCombat(deltaFrames) {
+    function updateEnemyRangedCombat(deltaFrames, aiDirectives = null) {
         if (enemiesDisabled) {
             return;
         }
@@ -1494,6 +1550,25 @@ export async function startGame() {
             let targetX = enemyCenterX;
             let targetY = enemyCenterY;
             let bestDistSq = Infinity;
+            querySpatialIndexInto(civilianSpatialIndex, enemyCenterX, enemyCenterY, PROJECTILES.enemy.range, queryBufferB);
+            const directedTarget = aiDirectives?.rangedEnemies?.[String(enemy.id)];
+            if (directedTarget?.type === 'player') {
+                const directedPlayerId = Number(directedTarget.id);
+                const directedPlayer = playerTargets.find((entry) => Number(entry.id) === directedPlayerId && !entry.isDead);
+                if (directedPlayer) {
+                    targetX = directedPlayer.x;
+                    targetY = directedPlayer.y;
+                    bestDistSq = (targetX - enemyCenterX) ** 2 + (targetY - enemyCenterY) ** 2;
+                }
+            } else if (directedTarget?.type === 'civilian') {
+                const directedCivilianId = Number(directedTarget.id);
+                const directedCivilian = queryBufferB.find((entry) => Number(entry.id) === directedCivilianId && !entry.isDead);
+                if (directedCivilian) {
+                    targetX = directedCivilian.x;
+                    targetY = directedCivilian.y;
+                    bestDistSq = (targetX - enemyCenterX) ** 2 + (targetY - enemyCenterY) ** 2;
+                }
+            }
             for (const playerTarget of playerTargets) {
                 if (playerTarget.isDead) {
                     continue;
@@ -1505,9 +1580,7 @@ export async function startGame() {
                     targetY = playerTarget.y;
                 }
             }
-
-            const civilianCandidates = querySpatialIndexInto(civilianSpatialIndex, enemyCenterX, enemyCenterY, PROJECTILES.enemy.range, queryBufferB);
-            for (const civilian of civilianCandidates) {
+            for (const civilian of queryBufferB) {
                 if (civilian.isDead) {
                     continue;
                 }
@@ -1667,12 +1740,22 @@ export async function startGame() {
             const ny = dirY / mag;
             if (action.weapon === 'sword') {
                 const localPlayerId = multiplayerClient.getStats().playerId;
-                performSwordAttack(centerX, centerY, nx, ny, {
-                    showVisual: String(actorPlayerId) === String(localPlayerId),
-                    attackerPlayerId: actorPlayerId
-                });
+                const showVisual = String(actorPlayerId) === String(localPlayerId);
+                // When server already applied sword damage, authority only replays visual to avoid double hits.
+                if (action.serverDamageApplied) {
+                    if (showVisual) {
+                        playerSystem.triggerSwordSwing(nx, ny);
+                    }
+                } else {
+                    performSwordAttack(centerX, centerY, nx, ny, {
+                        showVisual,
+                        attackerPlayerId: actorPlayerId
+                    });
+                }
             } else {
-                spawnBullet(centerX, centerY, nx, ny, actorPlayerId, 1);
+                // Dedicated server can pre-apply follower pistol hit damage; keep host replay visual-only.
+                const damageMultiplier = action.serverDamageApplied ? 0 : 1;
+                spawnBullet(centerX, centerY, nx, ny, actorPlayerId, damageMultiplier);
             }
             return { actionType: 'attack', accepted: true, reason: '' };
         }
@@ -1736,6 +1819,7 @@ export async function startGame() {
         if (action.type === 'toggle_pause') {
             sharedSessionState.paused = !sharedSessionState.paused;
             isPaused = sharedSessionState.paused;
+            updatePauseMenuText();
             pauseText.visible = isPaused;
             return { actionType: 'toggle_pause', accepted: true, reason: '' };
         }
@@ -1978,21 +2062,21 @@ export async function startGame() {
         // Global gameplay keybinds are handled in this block.
         if (key === 'escape') {
             const multiplayerStats = multiplayerClient.getStats();
-            if (multiplayerStats.connected && !multiplayerStats.isAuthority) {
+            if (multiplayerStats.connected) {
                 multiplayerClient.sendPlayerAction({ type: 'toggle_pause' });
-            } else if (multiplayerStats.connected && multiplayerStats.isAuthority) {
-                runPlayerAction({ type: 'toggle_pause' }, playerSystem.getCenter(), multiplayerStats.playerId);
+                logDebug('Pause vote toggled');
             } else {
                 isPaused = !isPaused;
+                updatePauseMenuText();
                 pauseText.visible = isPaused;
                 sharedSessionState.paused = isPaused;
+                logDebug(`Game ${isPaused ? 'paused' : 'resumed'}`);
             }
             placeRequested = false;
-            logDebug(`Game ${isPaused ? 'paused' : 'resumed'}`);
             e.preventDefault();
             return;
         }
-        // Dev console keybind is F4 or c-cedilla (\u00e7).
+        // Dev console keybind is F4 or Ç (\u00e7).
         if (key === 'f4' || key === '\u00e7') {
             debugOverlayEnabled = !debugOverlayEnabled;
             debugText.visible = debugOverlayEnabled;
@@ -2105,22 +2189,21 @@ export async function startGame() {
         }
         if (key === 'r' && (playerState.isDead || isPaused)) {
             const multiplayerStats = multiplayerClient.getStats();
-            if (multiplayerStats.connected && !multiplayerStats.isAuthority) {
+            if (multiplayerStats.connected) {
                 multiplayerClient.sendPlayerAction({ type: 'restart_session' });
-            } else if (multiplayerStats.connected && multiplayerStats.isAuthority) {
-                runPlayerAction({ type: 'restart_session' }, playerSystem.getCenter(), multiplayerStats.playerId);
+                logDebug('Restart vote toggled');
             } else {
                 isPaused = false;
                 pauseText.visible = false;
                 resetRunState();
+                logDebug('Player restarted');
             }
-            logDebug('Player restarted');
         }
         if (key === 'j' && debugOverlayEnabled) {
             const multiplayerStats = multiplayerClient.getStats();
-            if (multiplayerStats.connected && !multiplayerStats.isAuthority) {
+            if (multiplayerStats.connected) {
                 multiplayerClient.sendPlayerAction({ type: 'force_reset_session' });
-                logDebug('Force reset requested from host authority');
+                logDebug('Force reset requested from server');
             } else {
                 executeForceReset();
             }
@@ -2211,9 +2294,27 @@ export async function startGame() {
             }
             if (timeSnapshot.sessionState && typeof timeSnapshot.sessionState === 'object') {
                 sharedSessionState.paused = Boolean(timeSnapshot.sessionState.paused);
+                sharedSessionState.restartVersion = Math.max(0, Number(timeSnapshot.sessionState.restartVersion) || 0);
+                sharedSessionState.restartVotes = Math.max(0, Number(timeSnapshot.sessionState.restartVotes) || 0);
+                sharedSessionState.restartEligiblePlayers = Math.max(0, Number(timeSnapshot.sessionState.restartEligiblePlayers) || 0);
                 isPaused = sharedSessionState.paused;
+                updatePauseMenuText();
                 pauseText.visible = isPaused;
+                if (!sessionStateInitialized) {
+                    sessionStateInitialized = true;
+                    lastAppliedRestartVersion = sharedSessionState.restartVersion;
+                } else if (sharedSessionState.restartVersion > lastAppliedRestartVersion) {
+                    lastAppliedRestartVersion = sharedSessionState.restartVersion;
+                    isPaused = false;
+                    pauseText.visible = false;
+                    resetRunState();
+                    logDebug('Session restarted');
+                }
             }
+            latestServerAiDirectives = timeSnapshot.aiDirectives && typeof timeSnapshot.aiDirectives === 'object'
+                ? timeSnapshot.aiDirectives
+                : null;
+            civilianSystem.setServerAiDirectives?.(latestServerAiDirectives);
         }
         if (multiplayerStats.connected && multiplayerStats.playerId !== null) {
             syncRuntimePlayersFromSnapshot(multiplayerSnapshot);
@@ -2229,7 +2330,8 @@ export async function startGame() {
                 const localDy = localServerPlayer.y - playerWorldY;
                 const correctionDistSq = localDx * localDx + localDy * localDy;
                 const hardSnapDistanceSq = PLAYER_RECONCILE_HARD_SNAP_DISTANCE * PLAYER_RECONCILE_HARD_SNAP_DISTANCE;
-                if (correctionDistSq > 1) {
+                const deadzoneSq = PLAYER_RECONCILE_DEADZONE * PLAYER_RECONCILE_DEADZONE;
+                if (correctionDistSq > deadzoneSq) {
                     let candidateX = playerWorldX;
                     let candidateY = playerWorldY;
                     if (correctionDistSq > hardSnapDistanceSq) {
@@ -2241,8 +2343,12 @@ export async function startGame() {
                         const stepDx = candidateX - playerWorldX;
                         const stepDy = candidateY - playerWorldY;
                         const stepDist = Math.hypot(stepDx, stepDy);
-                        if (stepDist > PLAYER_RECONCILE_MAX_STEP && stepDist > 0.001) {
-                            const scale = PLAYER_RECONCILE_MAX_STEP / stepDist;
+                        const reconcileStepLimit = Math.max(
+                            PLAYER_RECONCILE_MAX_STEP,
+                            Math.max(4, Number(multiplayerStats.snapshotJitterMs) || 0) * 0.35
+                        );
+                        if (stepDist > reconcileStepLimit && stepDist > 0.001) {
+                            const scale = reconcileStepLimit / stepDist;
                             candidateX = playerWorldX + stepDx * scale;
                             candidateY = playerWorldY + stepDy * scale;
                         }
@@ -2393,6 +2499,12 @@ export async function startGame() {
             lastKnownRemotePlayerCount = 0;
             multiplayerPlayerRuntime.clear();
             pendingActionAcks.clear();
+            latestServerAiDirectives = null;
+            civilianSystem.setServerAiDirectives?.(null);
+            sharedSessionState.restartVotes = 0;
+            sharedSessionState.restartEligiblePlayers = 0;
+            lastAppliedRestartVersion = 0;
+            sessionStateInitialized = false;
         }
         enemySystem.beginFramePathBudget();
 
@@ -2427,7 +2539,10 @@ export async function startGame() {
                         houseTimers: civilianSystem.getHouseTimerReplication(),
                         sessionTimeSeconds: gameTimeSeconds,
                         sessionState: {
-                            paused: sharedSessionState.paused
+                            paused: sharedSessionState.paused,
+                            restartVersion: sharedSessionState.restartVersion,
+                            restartVotes: sharedSessionState.restartVotes,
+                            restartEligiblePlayers: sharedSessionState.restartEligiblePlayers
                         },
                         sharedResources: { ...inventory },
                         buildingsState: null,
@@ -2552,7 +2667,7 @@ export async function startGame() {
         const towerStride = Math.max(1, activePerfProfile.towerUpdateStride ?? 1);
         if (!replicatedFollower && simFrameIndex % towerStride === 0) {
             const tTowerStart = performance.now();
-            updateTowerCombat();
+            updateTowerCombat(latestServerAiDirectives);
             systemPerfMs.towerCombat = performance.now() - tTowerStart;
             if (systemPerfMs.towerCombat > activePerfProfile.budgetsMs.towerCombat) {
                 systemOverBudget.towerCombat += 1;
@@ -2565,7 +2680,7 @@ export async function startGame() {
         const enemyRangedStride = Math.max(1, activePerfProfile.enemyRangedUpdateStride ?? 1);
         if (!replicatedFollower && simFrameIndex % enemyRangedStride === 0) {
             const tEnemyRangedStart = performance.now();
-            updateEnemyRangedCombat(deltaFrames);
+            updateEnemyRangedCombat(deltaFrames, latestServerAiDirectives);
             systemPerfMs.enemyRanged = performance.now() - tEnemyRangedStart;
             if (systemPerfMs.enemyRanged > activePerfProfile.budgetsMs.enemyRanged) {
                 systemOverBudget.enemyRanged += 1;
@@ -2774,7 +2889,10 @@ export async function startGame() {
                     houseTimers: civilianSystem.getHouseTimerReplication(),
                     sessionTimeSeconds: gameTimeSeconds,
                     sessionState: {
-                        paused: sharedSessionState.paused
+                        paused: sharedSessionState.paused,
+                        restartVersion: sharedSessionState.restartVersion,
+                        restartVotes: sharedSessionState.restartVotes,
+                        restartEligiblePlayers: sharedSessionState.restartEligiblePlayers
                     },
                     sharedResources: { ...inventory },
                     buildingsState,

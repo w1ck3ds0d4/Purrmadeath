@@ -10,6 +10,7 @@ export function createMultiplayerClient({
     const PROTOCOL_VERSION = 1;
     const INPUT_SEND_INTERVAL_MS = 20;
     const INPUT_KEEPALIVE_MS = 250;
+    const MAX_SOCKET_BUFFERED_BYTES = 256 * 1024;
     const STATS_WINDOW_MS = 1000;
     let socket = null;
     let connected = false;
@@ -52,6 +53,7 @@ export function createMultiplayerClient({
     let lastSnapshotAtMs = 0;
     let snapshotIntervalMs = 0;
     let snapshotJitterMs = 0;
+    let droppedBackpressureInputs = 0;
     let nonPlayerSnapshot = {
         seq: 0,
         enemies: [],
@@ -63,6 +65,7 @@ export function createMultiplayerClient({
         sessionTimeSeconds: 0,
         sessionState: null,
         sharedResources: null,
+        aiDirectives: null,
         buildingsState: null,
         buildingsRevision: 0
     };
@@ -155,6 +158,7 @@ export function createMultiplayerClient({
             sessionTimeSeconds: Number(np.sessionTimeSeconds) || currentSnapshot.sessionTimeSeconds,
             sessionState: np.sessionState ?? currentSnapshot.sessionState,
             sharedResources: np.sharedResources ?? currentSnapshot.sharedResources,
+            aiDirectives: np.aiDirectives ?? currentSnapshot.aiDirectives,
             buildingsState: np.buildingsState ?? currentSnapshot.buildingsState,
             buildingsRevision: Number(np.buildingsRevision) || currentSnapshot.buildingsRevision
         };
@@ -166,6 +170,12 @@ export function createMultiplayerClient({
 
     function send(payload) {
         if (!isOpen()) {
+            return;
+        }
+        const bufferedBytes = Number(socket.bufferedAmount) || 0;
+        const isDroppableRealtime = payload?.type === 'input' || payload?.type === 'ping';
+        if (isDroppableRealtime && bufferedBytes > MAX_SOCKET_BUFFERED_BYTES) {
+            droppedBackpressureInputs += 1;
             return;
         }
         const encoded = JSON.stringify(payload);
@@ -286,9 +296,25 @@ export function createMultiplayerClient({
                         serverHarvestRejected: Number(message.serverPerf.serverHarvestRejected) || 0,
                         attackRejectedOrigin: Number(message.serverPerf.attackRejectedOrigin) || 0,
                         attackRejectedCooldown: Number(message.serverPerf.attackRejectedCooldown) || 0,
+                        attackRejectedNoTarget: Number(message.serverPerf.attackRejectedNoTarget) || 0,
                         forwardedAttackActions: Number(message.serverPerf.forwardedAttackActions) || 0,
                         rangeRejectedActions: Number(message.serverPerf.rangeRejectedActions) || 0,
-                        privilegedRejectedActions: Number(message.serverPerf.privilegedRejectedActions) || 0
+                        privilegedRejectedActions: Number(message.serverPerf.privilegedRejectedActions) || 0,
+                        pauseVotes: Number(message.serverPerf.pauseVotes) || 0,
+                        pauseEligiblePlayers: Number(message.serverPerf.pauseEligiblePlayers) || 0,
+                        restartVotes: Number(message.serverPerf.restartVotes) || 0,
+                        restartEligiblePlayers: Number(message.serverPerf.restartEligiblePlayers) || 0,
+                        restartsTriggered: Number(message.serverPerf.restartsTriggered) || 0,
+                        killCorrections: Number(message.serverPerf.killCorrections) || 0,
+                        goldCorrections: Number(message.serverPerf.goldCorrections) || 0,
+                        enemyProjectileDamageApplied: Number(message.serverPerf.enemyProjectileDamageApplied) || 0,
+                        enemyProjectilePlayerHits: Number(message.serverPerf.enemyProjectilePlayerHits) || 0,
+                        enemyProjectileCivilianHits: Number(message.serverPerf.enemyProjectileCivilianHits) || 0,
+                        enemyProjectileBuildingHits: Number(message.serverPerf.enemyProjectileBuildingHits) || 0,
+                        aiDirectiveMsAvg: Number(message.serverPerf.aiDirectiveMsAvg) || 0,
+                        aiTowerAssignments: Number(message.serverPerf.aiTowerAssignments) || 0,
+                        aiRangedAssignments: Number(message.serverPerf.aiRangedAssignments) || 0,
+                        aiCivilianAssignments: Number(message.serverPerf.aiCivilianAssignments) || 0
                     }
                     : null;
                 totalPlayersSeen = Number(message.totalPlayers) || players.length;
@@ -329,6 +355,7 @@ export function createMultiplayerClient({
                         sessionTimeSeconds: Number(np.sessionTimeSeconds) || 0,
                         sessionState: np.sessionState ?? null,
                         sharedResources: np.sharedResources ?? null,
+                        aiDirectives: np.aiDirectives ?? null,
                         buildingsState: np.buildingsState ?? null,
                         buildingsRevision: Number(np.buildingsRevision) || 0
                     };
@@ -394,6 +421,7 @@ export function createMultiplayerClient({
         nonPlayerSnapshot.sessionTimeSeconds = 0;
         nonPlayerSnapshot.sessionState = null;
         nonPlayerSnapshot.sharedResources = null;
+        nonPlayerSnapshot.aiDirectives = null;
         nonPlayerSnapshot.buildingsState = null;
         nonPlayerSnapshot.buildingsRevision = 0;
         pendingPeerActions.length = 0;
@@ -401,6 +429,7 @@ export function createMultiplayerClient({
         lastSnapshotAtMs = 0;
         snapshotIntervalMs = 0;
         snapshotJitterMs = 0;
+        droppedBackpressureInputs = 0;
     }
 
     function update(deltaMs) {
@@ -534,6 +563,7 @@ export function createMultiplayerClient({
             protocolVersion: PROTOCOL_VERSION,
             nonPlayerSeq: nonPlayerSnapshot.seq,
             nonPlayerTotals: nonPlayerSnapshot.totals,
+            droppedBackpressureInputs,
             serverPerf
         };
     }

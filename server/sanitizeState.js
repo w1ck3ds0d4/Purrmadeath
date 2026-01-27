@@ -156,7 +156,10 @@ function sanitizeSessionState(raw) {
         return null;
     }
     return {
-        paused: Boolean(raw.paused)
+        paused: Boolean(raw.paused),
+        restartVersion: Math.max(0, Number(raw.restartVersion) || 0),
+        restartVotes: Math.max(0, Number(raw.restartVotes) || 0),
+        restartEligiblePlayers: Math.max(0, Number(raw.restartEligiblePlayers) || 0)
     };
 }
 

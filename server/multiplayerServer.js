@@ -14,8 +14,7 @@ const {
     sanitizeSharedResources,
     sanitizePlayerStates,
     sanitizeCivilianStates,
-    sanitizeHouseTimers,
-    sanitizeSessionState
+    sanitizeHouseTimers
 } = require('./sanitizeState');
 const {
     applyResourceDelta,
@@ -33,7 +32,7 @@ const {
 
 const HOST = process.env.HOST || '0.0.0.0';
 const PORT = Number(process.env.PORT || 8080);
-const TICK_RATE = Number(process.env.TICK_RATE || 30);
+const TICK_RATE = Number(process.env.TICK_RATE || 45);
 const TICK_MS = 1000 / TICK_RATE;
 const PLAYER_SPEED = Number(process.env.PLAYER_SPEED || 200);
 const MAX_PLAYERS = Number(process.env.MAX_PLAYERS || 4);
@@ -54,6 +53,20 @@ const SERVER_ATTACK_ORIGIN_MAX_DISTANCE = Number(process.env.SERVER_ATTACK_ORIGI
 const SERVER_HARVEST_ORIGIN_MAX_DISTANCE = Number(process.env.SERVER_HARVEST_ORIGIN_MAX_DISTANCE || 140);
 const SERVER_REVIVE_ORIGIN_MAX_DISTANCE = Number(process.env.SERVER_REVIVE_ORIGIN_MAX_DISTANCE || 120);
 const SERVER_BUILD_MAX_DISTANCE = Number(process.env.SERVER_BUILD_MAX_DISTANCE || 260);
+const GOLD_PER_ENEMY_KILL = Number(process.env.GOLD_PER_ENEMY_KILL || 5);
+const SERVER_SWORD_RANGE = Number(process.env.SERVER_SWORD_RANGE || 52);
+const SERVER_SWORD_ARC_RADIANS = Number(process.env.SERVER_SWORD_ARC_RADIANS || (Math.PI * 0.95));
+const SERVER_SWORD_DAMAGE = Number(process.env.SERVER_SWORD_DAMAGE || 25);
+const SERVER_PISTOL_DAMAGE = Number(process.env.SERVER_PISTOL_DAMAGE || 20);
+const SERVER_PISTOL_RANGE = Number(process.env.SERVER_PISTOL_RANGE || 640);
+const SERVER_PISTOL_AIM_COS = Number(process.env.SERVER_PISTOL_AIM_COS || 0.95);
+const SERVER_ENEMY_RADIUS = Number(process.env.SERVER_ENEMY_RADIUS || 10);
+const SERVER_ENEMY_PROJECTILE_DAMAGE = Number(process.env.SERVER_ENEMY_PROJECTILE_DAMAGE || 12);
+const SERVER_ENEMY_PROJECTILE_RADIUS = Number(process.env.SERVER_ENEMY_PROJECTILE_RADIUS || 4);
+const SERVER_PLAYER_RADIUS = Number(process.env.SERVER_PLAYER_RADIUS || 10);
+const SERVER_CIVILIAN_RADIUS = Number(process.env.SERVER_CIVILIAN_RADIUS || 8);
+const SERVER_PLAYER_RESPAWN_SECONDS = Number(process.env.SERVER_PLAYER_RESPAWN_SECONDS || 15);
+const SERVER_TILE_SIZE = Number(process.env.SERVER_TILE_SIZE || 32);
 // Server cooldowns to bound follower attack spam.
 const SERVER_ATTACK_COOLDOWNS_MS = {
     sword: Number(process.env.SERVER_SWORD_COOLDOWN_MS || 333),
@@ -134,8 +147,9 @@ let nonPlayerState = {
     civilians: [],
     houseTimers: [],
     sessionTimeSeconds: 0,
-    sessionState: null,
+    sessionState: { paused: false, restartVersion: 0, restartVotes: 0, restartEligiblePlayers: 0 },
     sharedResources: null,
+    aiDirectives: null,
     buildingsState: null,
     buildingsRevision: 0
 };
@@ -144,6 +158,13 @@ const connectionRateByIp = new Map();
 const socketSecurityState = new WeakMap();
 const pendingBuildReservations = new Map();
 const pendingTileReservations = new Map();
+const pauseVotesByPlayerId = new Set();
+const restartVotesByPlayerId = new Set();
+const authoritativeKillsByPlayerId = new Map();
+let authoritativeNonKillGoldOffset = 0;
+let authoritativeCombatBaselineReady = false;
+const pendingServerEnemyHits = [];
+const consumedEnemyProjectileIds = new Map();
 const authoritativeResourceDelta = createResourceState();
 // Server telemetry mirrored to dev console `/server` section.
 const serverPerf = {
@@ -172,9 +193,25 @@ const serverPerf = {
     serverHarvestRejected: 0,
     attackRejectedOrigin: 0,
     attackRejectedCooldown: 0,
+    attackRejectedNoTarget: 0,
     forwardedAttackActions: 0,
     rangeRejectedActions: 0,
-    privilegedRejectedActions: 0
+    privilegedRejectedActions: 0,
+    pauseVotes: 0,
+    pauseEligiblePlayers: 0,
+    killCorrections: 0,
+    goldCorrections: 0,
+    enemyProjectileDamageApplied: 0,
+    enemyProjectilePlayerHits: 0,
+    enemyProjectileCivilianHits: 0,
+    enemyProjectileBuildingHits: 0,
+    aiDirectiveMsAvg: 0,
+    aiTowerAssignments: 0,
+    aiRangedAssignments: 0,
+    aiCivilianAssignments: 0,
+    restartVotes: 0,
+    restartEligiblePlayers: 0,
+    restartsTriggered: 0
 };
 let lastTickStartedAt = Date.now();
 let lastNetWindowAt = Date.now();
@@ -576,6 +613,11 @@ function attachConnection(socket, state) {
     if (authorityPlayerId === null) {
         authorityPlayerId = state.playerId;
     }
+    // New players start unpaused; full session pause requires unanimous vote.
+    pauseVotesByPlayerId.delete(state.playerId);
+    restartVotesByPlayerId.delete(state.playerId);
+    recomputeServerPauseState();
+    recomputeServerRestartVoteState();
     sendMessage(socket, {
         v: PROTOCOL_VERSION,
         type: 'welcome',
@@ -588,6 +630,487 @@ function attachConnection(socket, state) {
         port: PORT,
         lanAddresses: getLanAddresses()
     });
+}
+
+function getActivePlayerIds() {
+    const activePlayerIds = new Set();
+    for (const state of clients.values()) {
+        if (state?.playerId) {
+            activePlayerIds.add(state.playerId);
+        }
+    }
+    return activePlayerIds;
+}
+
+function recomputeServerPauseState() {
+    const activePlayerIds = getActivePlayerIds();
+    for (const votedPlayerId of pauseVotesByPlayerId) {
+        if (!activePlayerIds.has(votedPlayerId)) {
+            pauseVotesByPlayerId.delete(votedPlayerId);
+        }
+    }
+    const requiredVotes = Math.max(1, activePlayerIds.size);
+    let activeVotes = 0;
+    for (const playerId of activePlayerIds) {
+        if (pauseVotesByPlayerId.has(playerId)) {
+            activeVotes += 1;
+        }
+    }
+    const current = nonPlayerState.sessionState ?? {};
+    nonPlayerState.sessionState = {
+        paused: activeVotes >= requiredVotes,
+        restartVersion: Math.max(0, Number(current.restartVersion) || 0),
+        restartVotes: Math.max(0, Number(current.restartVotes) || 0),
+        restartEligiblePlayers: Math.max(0, Number(current.restartEligiblePlayers) || 0)
+    };
+}
+
+function recomputeServerRestartVoteState() {
+    const activePlayerIds = getActivePlayerIds();
+    for (const votedPlayerId of restartVotesByPlayerId) {
+        if (!activePlayerIds.has(votedPlayerId)) {
+            restartVotesByPlayerId.delete(votedPlayerId);
+        }
+    }
+    const current = nonPlayerState.sessionState ?? {};
+    nonPlayerState.sessionState = {
+        paused: Boolean(current.paused),
+        restartVersion: Math.max(0, Number(current.restartVersion) || 0),
+        restartVotes: restartVotesByPlayerId.size,
+        restartEligiblePlayers: activePlayerIds.size
+    };
+}
+
+function resetAuthoritativeCombatState() {
+    authoritativeKillsByPlayerId.clear();
+    authoritativeNonKillGoldOffset = 0;
+    authoritativeCombatBaselineReady = false;
+    pendingServerEnemyHits.length = 0;
+    consumedEnemyProjectileIds.clear();
+}
+
+function clearPendingReservations() {
+    pendingBuildReservations.clear();
+    pendingTileReservations.clear();
+}
+
+function triggerSessionRestart() {
+    pauseVotesByPlayerId.clear();
+    restartVotesByPlayerId.clear();
+    clearPendingReservations();
+    resetAuthoritativeCombatState();
+    const current = nonPlayerState.sessionState ?? {};
+    nonPlayerState.sessionState = {
+        paused: false,
+        restartVersion: Math.max(0, Number(current.restartVersion) || 0) + 1,
+        restartVotes: 0,
+        restartEligiblePlayers: getActivePlayerIds().size
+    };
+    serverPerf.restartsTriggered += 1;
+}
+
+function reconcileAuthoritativeCombatState(playerStates, sharedResources) {
+    const sanitizedStates = Array.isArray(playerStates) ? playerStates : [];
+    const nextKills = new Map();
+    for (const state of sanitizedStates) {
+        const playerId = Math.floor(Number(state?.playerId) || 0);
+        if (playerId <= 0) {
+            continue;
+        }
+        const incomingKills = Math.max(0, Math.floor(Number(state.kills) || 0));
+        const previousKills = authoritativeKillsByPlayerId.get(playerId) ?? 0;
+        const canonicalKills = Math.max(previousKills, incomingKills);
+        if (canonicalKills !== incomingKills) {
+            serverPerf.killCorrections += 1;
+        }
+        nextKills.set(playerId, canonicalKills);
+    }
+    authoritativeKillsByPlayerId.clear();
+    for (const [playerId, killCount] of nextKills) {
+        authoritativeKillsByPlayerId.set(playerId, killCount);
+    }
+
+    let totalKills = 0;
+    for (const kills of authoritativeKillsByPlayerId.values()) {
+        totalKills += kills;
+    }
+    const expectedGoldFromKills = totalKills * GOLD_PER_ENEMY_KILL;
+    if (sharedResources) {
+        const payloadGold = Math.max(0, Math.floor(Number(sharedResources.gold) || 0));
+        if (!authoritativeCombatBaselineReady) {
+            authoritativeNonKillGoldOffset = Math.max(0, payloadGold - expectedGoldFromKills);
+            authoritativeCombatBaselineReady = true;
+        } else {
+            const observedOffset = Math.max(0, payloadGold - expectedGoldFromKills);
+            if (observedOffset > authoritativeNonKillGoldOffset) {
+                authoritativeNonKillGoldOffset = observedOffset;
+            }
+        }
+        const canonicalGold = Math.max(0, expectedGoldFromKills + authoritativeNonKillGoldOffset);
+        if (sharedResources.gold !== canonicalGold) {
+            serverPerf.goldCorrections += 1;
+        }
+        sharedResources.gold = canonicalGold;
+    }
+
+    for (const state of sanitizedStates) {
+        const playerId = Math.floor(Number(state?.playerId) || 0);
+        if (playerId <= 0) {
+            continue;
+        }
+        state.kills = authoritativeKillsByPlayerId.get(playerId) ?? 0;
+    }
+}
+
+function queueServerEnemyHit(attackerPlayerId, enemyId, damage) {
+    const normalizedAttackerId = Math.floor(Number(attackerPlayerId) || 0);
+    const normalizedEnemyId = Math.floor(Number(enemyId) || 0);
+    if (normalizedAttackerId <= 0 || normalizedEnemyId <= 0) {
+        return;
+    }
+    pendingServerEnemyHits.push({
+        attackerPlayerId: normalizedAttackerId,
+        enemyId: normalizedEnemyId,
+        damage: Math.max(1, Math.floor(Number(damage) || 1))
+    });
+}
+
+function applyQueuedEnemyHitsToEnemyState(enemyEntries) {
+    if (!Array.isArray(enemyEntries) || enemyEntries.length === 0 || pendingServerEnemyHits.length === 0) {
+        pendingServerEnemyHits.length = 0;
+        return;
+    }
+    const byId = new Map();
+    for (const enemy of enemyEntries) {
+        const enemyId = Math.floor(Number(enemy?.id) || 0);
+        if (enemyId > 0) {
+            byId.set(enemyId, enemy);
+        }
+    }
+    for (const hit of pendingServerEnemyHits) {
+        const enemy = byId.get(hit.enemyId);
+        if (!enemy) {
+            continue;
+        }
+        const currentHp = Math.max(0, Number(enemy.hp) || 0);
+        if (currentHp <= 0) {
+            continue;
+        }
+        const nextHp = Math.max(0, currentHp - hit.damage);
+        enemy.hp = nextHp;
+        if (nextHp <= 0) {
+            const previousKills = authoritativeKillsByPlayerId.get(hit.attackerPlayerId) ?? 0;
+            authoritativeKillsByPlayerId.set(hit.attackerPlayerId, previousKills + 1);
+        }
+    }
+    pendingServerEnemyHits.length = 0;
+}
+
+function getBuildingIndexAtTile(state, tileX, tileY) {
+    if (!state || !Array.isArray(state.buildings)) {
+        return -1;
+    }
+    for (let i = 0; i < state.buildings.length; i++) {
+        const building = state.buildings[i];
+        if (!building) {
+            continue;
+        }
+        const rule = BUILDING_RULES[building.type] ?? { footprint: { w: 1, h: 1 } };
+        const bx = Math.floor(Number(building.tileX) || 0);
+        const by = Math.floor(Number(building.tileY) || 0);
+        const bw = Math.max(1, Math.floor(Number(rule.footprint?.w) || 1));
+        const bh = Math.max(1, Math.floor(Number(rule.footprint?.h) || 1));
+        if (tileX >= bx && tileX < (bx + bw) && tileY >= by && tileY < (by + bh)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+function applyEnemyProjectileDamageAuthority(enemyProjectiles, playerStates, civilians, buildingsState) {
+    if (!Array.isArray(enemyProjectiles) || enemyProjectiles.length === 0) {
+        return enemyProjectiles;
+    }
+    const minAliveTick = tick - 1200;
+    for (const [projectileId, hitTick] of consumedEnemyProjectileIds) {
+        if (hitTick < minAliveTick) {
+            consumedEnemyProjectileIds.delete(projectileId);
+        }
+    }
+
+    const survivors = [];
+    for (const projectile of enemyProjectiles) {
+        const projectileId = Math.floor(Number(projectile?.id) || 0);
+        if (projectileId > 0 && consumedEnemyProjectileIds.has(projectileId)) {
+            continue;
+        }
+        const centerX = Number(projectile?.x) + SERVER_ENEMY_PROJECTILE_RADIUS;
+        const centerY = Number(projectile?.y) + SERVER_ENEMY_PROJECTILE_RADIUS;
+        if (!Number.isFinite(centerX) || !Number.isFinite(centerY)) {
+            continue;
+        }
+
+        let consumed = false;
+        const tileX = Math.floor(centerX / SERVER_TILE_SIZE);
+        const tileY = Math.floor(centerY / SERVER_TILE_SIZE);
+        const buildingIndex = getBuildingIndexAtTile(buildingsState, tileX, tileY);
+        if (buildingIndex >= 0) {
+            const building = buildingsState.buildings[buildingIndex];
+            if (building && !building.unbreakable) {
+                building.hp = Math.max(0, Math.floor(Number(building.hp) || 0) - SERVER_ENEMY_PROJECTILE_DAMAGE);
+                serverPerf.enemyProjectileBuildingHits += 1;
+                if (building.hp <= 0) {
+                    buildingsState.buildings.splice(buildingIndex, 1);
+                    nonPlayerState.buildingsRevision = Math.max(0, Number(nonPlayerState.buildingsRevision) || 0) + 1;
+                }
+                consumed = true;
+            }
+        }
+
+        if (!consumed && Array.isArray(playerStates)) {
+            for (const playerState of playerStates) {
+                if (!playerState || playerState.isDead) {
+                    continue;
+                }
+                const px = Number(playerState.x);
+                const py = Number(playerState.y);
+                if (!Number.isFinite(px) || !Number.isFinite(py)) {
+                    continue;
+                }
+                const dx = px - centerX;
+                const dy = py - centerY;
+                const hitDistance = SERVER_PLAYER_RADIUS + SERVER_ENEMY_PROJECTILE_RADIUS;
+                if ((dx * dx + dy * dy) > (hitDistance * hitDistance)) {
+                    continue;
+                }
+                playerState.hp = Math.max(0, Math.floor(Number(playerState.hp) || 0) - SERVER_ENEMY_PROJECTILE_DAMAGE);
+                if (playerState.hp <= 0) {
+                    playerState.isDead = true;
+                    playerState.respawnTimer = Math.max(SERVER_PLAYER_RESPAWN_SECONDS, Number(playerState.respawnTimer) || 0);
+                }
+                serverPerf.enemyProjectilePlayerHits += 1;
+                consumed = true;
+                break;
+            }
+        }
+
+        if (!consumed && Array.isArray(civilians)) {
+            for (const civilian of civilians) {
+                if (!civilian || civilian.isDead) {
+                    continue;
+                }
+                const cx = Number(civilian.x);
+                const cy = Number(civilian.y);
+                if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
+                    continue;
+                }
+                const dx = cx - centerX;
+                const dy = cy - centerY;
+                const hitDistance = SERVER_CIVILIAN_RADIUS + SERVER_ENEMY_PROJECTILE_RADIUS;
+                if ((dx * dx + dy * dy) > (hitDistance * hitDistance)) {
+                    continue;
+                }
+                civilian.hp = Math.max(0, Math.floor(Number(civilian.hp) || 0) - SERVER_ENEMY_PROJECTILE_DAMAGE);
+                if (civilian.hp <= 0) {
+                    civilian.isDead = true;
+                }
+                serverPerf.enemyProjectileCivilianHits += 1;
+                consumed = true;
+                break;
+            }
+        }
+
+        if (consumed) {
+            serverPerf.enemyProjectileDamageApplied += 1;
+            if (projectileId > 0) {
+                consumedEnemyProjectileIds.set(projectileId, tick);
+            }
+            continue;
+        }
+        survivors.push(projectile);
+    }
+    return survivors;
+}
+
+function getBuildingFootprint(type) {
+    const rule = BUILDING_RULES[type] ?? { footprint: { w: 1, h: 1 } };
+    return {
+        w: Math.max(1, Math.floor(Number(rule.footprint?.w) || 1)),
+        h: Math.max(1, Math.floor(Number(rule.footprint?.h) || 1))
+    };
+}
+
+function getBuildingCenterFromSnapshot(building) {
+    const fp = getBuildingFootprint(building?.type);
+    const tileX = Math.floor(Number(building?.tileX) || 0);
+    const tileY = Math.floor(Number(building?.tileY) || 0);
+    return {
+        x: (tileX + fp.w * 0.5) * SERVER_TILE_SIZE,
+        y: (tileY + fp.h * 0.5) * SERVER_TILE_SIZE
+    };
+}
+
+function computeServerAiDirectives() {
+    const directives = {
+        tick,
+        towers: {},
+        rangedEnemies: {},
+        civilians: {}
+    };
+    const enemies = Array.isArray(nonPlayerState.enemies) ? nonPlayerState.enemies : [];
+    const buildings = Array.isArray(nonPlayerState.buildingsState?.buildings) ? nonPlayerState.buildingsState.buildings : [];
+    const civilians = Array.isArray(nonPlayerState.civilians) ? nonPlayerState.civilians : [];
+    const playerStates = Array.isArray(nonPlayerState.playerStates) ? nonPlayerState.playerStates : [];
+
+    const aliveEnemies = enemies.filter((enemy) => (Number(enemy?.hp) || 0) > 0);
+    const towers = buildings.filter((building) => building?.type === 'combatTower');
+    for (const tower of towers) {
+        const towerId = Math.floor(Number(tower?.id) || 0);
+        if (towerId <= 0) {
+            continue;
+        }
+        const center = getBuildingCenterFromSnapshot(tower);
+        const rangeSq = 260 * 260;
+        let bestEnemyId = null;
+        let bestHp = -1;
+        let bestDistSq = rangeSq;
+        for (const enemy of aliveEnemies) {
+            const enemyId = Math.floor(Number(enemy?.id) || 0);
+            if (enemyId <= 0) {
+                continue;
+            }
+            const dx = (Number(enemy.x) + SERVER_ENEMY_RADIUS) - center.x;
+            const dy = (Number(enemy.y) + SERVER_ENEMY_RADIUS) - center.y;
+            const distSq = dx * dx + dy * dy;
+            if (distSq > rangeSq) {
+                continue;
+            }
+            const hp = Math.max(0, Number(enemy.hp) || 0);
+            if (hp > bestHp || (hp === bestHp && distSq < bestDistSq)) {
+                bestHp = hp;
+                bestDistSq = distSq;
+                bestEnemyId = enemyId;
+            }
+        }
+        if (bestEnemyId !== null) {
+            directives.towers[String(towerId)] = bestEnemyId;
+        }
+    }
+
+    const alivePlayers = playerStates.filter((entry) => !entry?.isDead);
+    const aliveCivilians = civilians.filter((entry) => !entry?.isDead);
+    for (const enemy of aliveEnemies) {
+        if (!enemy?.isRanged) {
+            continue;
+        }
+        const enemyId = Math.floor(Number(enemy?.id) || 0);
+        if (enemyId <= 0) {
+            continue;
+        }
+        const enemyX = Number(enemy.x) + SERVER_ENEMY_RADIUS;
+        const enemyY = Number(enemy.y) + SERVER_ENEMY_RADIUS;
+        let best = null;
+        let bestDistSq = Infinity;
+        for (const player of alivePlayers) {
+            const playerId = Math.floor(Number(player?.playerId) || 0);
+            if (playerId <= 0) {
+                continue;
+            }
+            const dx = Number(player.x) - enemyX;
+            const dy = Number(player.y) - enemyY;
+            const distSq = dx * dx + dy * dy;
+            if (distSq < bestDistSq) {
+                bestDistSq = distSq;
+                best = { type: 'player', id: playerId };
+            }
+        }
+        for (const civilian of aliveCivilians) {
+            const civilianId = Math.floor(Number(civilian?.id) || 0);
+            if (civilianId <= 0) {
+                continue;
+            }
+            const dx = Number(civilian.x) - enemyX;
+            const dy = Number(civilian.y) - enemyY;
+            const distSq = dx * dx + dy * dy;
+            if (distSq < bestDistSq) {
+                bestDistSq = distSq;
+                best = { type: 'civilian', id: civilianId };
+            }
+        }
+        if (best) {
+            directives.rangedEnemies[String(enemyId)] = best;
+        }
+    }
+
+    const producers = buildings.filter((building) => {
+        if (!building) {
+            return false;
+        }
+        if (building.type !== 'lumberMill' && building.type !== 'stoneQuarry' && building.type !== 'ironMine') {
+            return false;
+        }
+        return (Number(building.storedOutput) || 0) > 0;
+    });
+    const warehouses = buildings.filter((building) => building?.type === 'warehouse');
+    if (producers.length > 0 && warehouses.length > 0) {
+        const producerLoad = new Map();
+        for (const civilian of aliveCivilians) {
+            const civilianId = Math.floor(Number(civilian?.id) || 0);
+            if (civilianId <= 0) {
+                continue;
+            }
+            const cx = Number(civilian.x) || 0;
+            const cy = Number(civilian.y) || 0;
+            let bestProducer = null;
+            let bestScore = -Infinity;
+            for (const producer of producers) {
+                const producerId = Math.floor(Number(producer?.id) || 0);
+                if (producerId <= 0) {
+                    continue;
+                }
+                const pCenter = getBuildingCenterFromSnapshot(producer);
+                const dx = pCenter.x - cx;
+                const dy = pCenter.y - cy;
+                const dist = Math.hypot(dx, dy);
+                const output = Math.max(0, Number(producer.storedOutput) || 0);
+                const load = producerLoad.get(producerId) ?? 0;
+                const score = output * 1000 - dist - load * 240;
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestProducer = producer;
+                }
+            }
+            if (!bestProducer) {
+                continue;
+            }
+            const bestProducerId = Math.floor(Number(bestProducer.id) || 0);
+            producerLoad.set(bestProducerId, (producerLoad.get(bestProducerId) ?? 0) + 1);
+            let bestWarehouseId = null;
+            let bestWarehouseDist = Infinity;
+            for (const warehouse of warehouses) {
+                const warehouseId = Math.floor(Number(warehouse?.id) || 0);
+                if (warehouseId <= 0) {
+                    continue;
+                }
+                const wCenter = getBuildingCenterFromSnapshot(warehouse);
+                const dx = wCenter.x - cx;
+                const dy = wCenter.y - cy;
+                const dist = dx * dx + dy * dy;
+                if (dist < bestWarehouseDist) {
+                    bestWarehouseDist = dist;
+                    bestWarehouseId = warehouseId;
+                }
+            }
+            if (bestWarehouseId !== null) {
+                directives.civilians[String(civilianId)] = {
+                    producerId: bestProducerId,
+                    warehouseId: bestWarehouseId
+                };
+            }
+        }
+    }
+
+    return directives;
 }
 
 function closeWithError(socket, code, reason, extra = {}) {
@@ -605,6 +1128,98 @@ function closeWithError(socket, code, reason, extra = {}) {
     }
 }
 
+function findPlausibleSwordTarget(action) {
+    if (!Array.isArray(nonPlayerState.enemies) || nonPlayerState.enemies.length === 0) {
+        return null;
+    }
+    const originX = Number(action.originX);
+    const originY = Number(action.originY);
+    const dirX = Number(action.dirX);
+    const dirY = Number(action.dirY);
+    const mag = Math.hypot(dirX, dirY);
+    if (!Number.isFinite(originX) || !Number.isFinite(originY) || mag <= 0.0001) {
+        return null;
+    }
+    const nx = dirX / mag;
+    const ny = dirY / mag;
+    const cosHalfArc = Math.cos(SERVER_SWORD_ARC_RADIANS / 2);
+    const maxDist = SERVER_SWORD_RANGE + SERVER_ENEMY_RADIUS;
+    let best = null;
+    let bestDist = Infinity;
+
+    for (const enemy of nonPlayerState.enemies) {
+        const enemyId = Math.floor(Number(enemy?.id) || 0);
+        const enemyCenterX = Number(enemy?.x) + SERVER_ENEMY_RADIUS;
+        const enemyCenterY = Number(enemy?.y) + SERVER_ENEMY_RADIUS;
+        if (enemyId <= 0 || !Number.isFinite(enemyCenterX) || !Number.isFinite(enemyCenterY)) {
+            continue;
+        }
+        const dx = enemyCenterX - originX;
+        const dy = enemyCenterY - originY;
+        const dist = Math.hypot(dx, dy);
+        if (dist > maxDist || dist <= 0.001) {
+            continue;
+        }
+        const tx = dx / dist;
+        const ty = dy / dist;
+        const dot = tx * nx + ty * ny;
+        if (dot < cosHalfArc) {
+            continue;
+        }
+        if (dist < bestDist) {
+            bestDist = dist;
+            best = {
+                enemyId
+            };
+        }
+    }
+    return best;
+}
+
+function findPlausiblePistolTarget(action) {
+    if (!Array.isArray(nonPlayerState.enemies) || nonPlayerState.enemies.length === 0) {
+        return null;
+    }
+    const originX = Number(action.originX);
+    const originY = Number(action.originY);
+    const dirX = Number(action.dirX);
+    const dirY = Number(action.dirY);
+    const mag = Math.hypot(dirX, dirY);
+    if (!Number.isFinite(originX) || !Number.isFinite(originY) || mag <= 0.0001) {
+        return null;
+    }
+    const nx = dirX / mag;
+    const ny = dirY / mag;
+    let best = null;
+    let bestDist = Infinity;
+
+    for (const enemy of nonPlayerState.enemies) {
+        const enemyId = Math.floor(Number(enemy?.id) || 0);
+        const enemyCenterX = Number(enemy?.x) + SERVER_ENEMY_RADIUS;
+        const enemyCenterY = Number(enemy?.y) + SERVER_ENEMY_RADIUS;
+        if (enemyId <= 0 || !Number.isFinite(enemyCenterX) || !Number.isFinite(enemyCenterY)) {
+            continue;
+        }
+        const dx = enemyCenterX - originX;
+        const dy = enemyCenterY - originY;
+        const dist = Math.hypot(dx, dy);
+        if (dist <= 0.001 || dist > SERVER_PISTOL_RANGE) {
+            continue;
+        }
+        const tx = dx / dist;
+        const ty = dy / dist;
+        const dot = tx * nx + ty * ny;
+        if (dot < SERVER_PISTOL_AIM_COS) {
+            continue;
+        }
+        if (dist < bestDist) {
+            bestDist = dist;
+            best = { enemyId };
+        }
+    }
+    return best;
+}
+
 function broadcastSnapshot() {
     if (clients.size === 0) {
         return;
@@ -613,6 +1228,10 @@ function broadcastSnapshot() {
     serverPerf.connectedClients = allPlayers.length;
     serverPerf.activeBuildReservations = pendingBuildReservations.size;
     serverPerf.activeTileReservations = pendingTileReservations.size;
+    serverPerf.pauseVotes = pauseVotesByPlayerId.size;
+    serverPerf.pauseEligiblePlayers = allPlayers.length;
+    serverPerf.restartVotes = restartVotesByPlayerId.size;
+    serverPerf.restartEligiblePlayers = allPlayers.length;
     for (const [socket, viewer] of clients) {
         if (socket.readyState !== socket.OPEN) {
             continue;
@@ -645,27 +1264,43 @@ function broadcastSnapshot() {
                 simMsPeak: Number(serverPerf.simMsPeak.toFixed(2)),
                 loopLagMsAvg: Number(serverPerf.loopLagMsAvg.toFixed(2)),
                 inboundKbps: Number(serverPerf.inboundKbps.toFixed(2)),
-            outboundKbps: Number(serverPerf.outboundKbps.toFixed(2)),
-            connectedClients: serverPerf.connectedClients,
-            forwardedPlayerActions: serverPerf.forwardedPlayerActions,
-            rejectedPlayerActions: serverPerf.rejectedPlayerActions,
-            reservedBuildActions: serverPerf.reservedBuildActions,
-            refundedBuildReservations: serverPerf.refundedBuildReservations,
-            activeBuildReservations: serverPerf.activeBuildReservations,
-            activeTileReservations: serverPerf.activeTileReservations,
-            duplicateOrStaleActions: serverPerf.duplicateOrStaleActions,
-            buildingStateMismatchCount: serverPerf.buildingStateMismatchCount,
-            lastServerBuildingHash: serverPerf.lastServerBuildingHash,
-            lastAuthorityBuildingHash: serverPerf.lastAuthorityBuildingHash,
-            producerSimUpdateMsAvg: Number(serverPerf.producerSimUpdateMsAvg.toFixed(3)),
-            serverHarvestApplied: serverPerf.serverHarvestApplied,
-            serverHarvestRejected: serverPerf.serverHarvestRejected,
-            attackRejectedOrigin: serverPerf.attackRejectedOrigin,
-            attackRejectedCooldown: serverPerf.attackRejectedCooldown,
-            forwardedAttackActions: serverPerf.forwardedAttackActions,
-            rangeRejectedActions: serverPerf.rangeRejectedActions,
-            privilegedRejectedActions: serverPerf.privilegedRejectedActions
-        },
+                outboundKbps: Number(serverPerf.outboundKbps.toFixed(2)),
+                connectedClients: serverPerf.connectedClients,
+                forwardedPlayerActions: serverPerf.forwardedPlayerActions,
+                rejectedPlayerActions: serverPerf.rejectedPlayerActions,
+                reservedBuildActions: serverPerf.reservedBuildActions,
+                refundedBuildReservations: serverPerf.refundedBuildReservations,
+                activeBuildReservations: serverPerf.activeBuildReservations,
+                activeTileReservations: serverPerf.activeTileReservations,
+                duplicateOrStaleActions: serverPerf.duplicateOrStaleActions,
+                buildingStateMismatchCount: serverPerf.buildingStateMismatchCount,
+                lastServerBuildingHash: serverPerf.lastServerBuildingHash,
+                lastAuthorityBuildingHash: serverPerf.lastAuthorityBuildingHash,
+                producerSimUpdateMsAvg: Number(serverPerf.producerSimUpdateMsAvg.toFixed(3)),
+                serverHarvestApplied: serverPerf.serverHarvestApplied,
+                serverHarvestRejected: serverPerf.serverHarvestRejected,
+                attackRejectedOrigin: serverPerf.attackRejectedOrigin,
+                attackRejectedCooldown: serverPerf.attackRejectedCooldown,
+                attackRejectedNoTarget: serverPerf.attackRejectedNoTarget,
+                forwardedAttackActions: serverPerf.forwardedAttackActions,
+                rangeRejectedActions: serverPerf.rangeRejectedActions,
+                privilegedRejectedActions: serverPerf.privilegedRejectedActions,
+                pauseVotes: serverPerf.pauseVotes,
+                pauseEligiblePlayers: serverPerf.pauseEligiblePlayers,
+                restartVotes: serverPerf.restartVotes,
+                restartEligiblePlayers: serverPerf.restartEligiblePlayers,
+                restartsTriggered: serverPerf.restartsTriggered,
+                killCorrections: serverPerf.killCorrections,
+                goldCorrections: serverPerf.goldCorrections,
+                enemyProjectileDamageApplied: serverPerf.enemyProjectileDamageApplied,
+                enemyProjectilePlayerHits: serverPerf.enemyProjectilePlayerHits,
+                enemyProjectileCivilianHits: serverPerf.enemyProjectileCivilianHits,
+                enemyProjectileBuildingHits: serverPerf.enemyProjectileBuildingHits,
+                aiDirectiveMsAvg: Number(serverPerf.aiDirectiveMsAvg.toFixed(3)),
+                aiTowerAssignments: serverPerf.aiTowerAssignments,
+                aiRangedAssignments: serverPerf.aiRangedAssignments,
+                aiCivilianAssignments: serverPerf.aiCivilianAssignments
+            },
             players: relevantPlayers.map((state) => ({
                 playerId: state.playerId,
                 x: quantizePosition(state.x),
@@ -686,11 +1321,13 @@ function broadcastSnapshot() {
 
 function simulateTick() {
     const tickStartedAt = Date.now();
-    const loopLagMs = Math.max(0, tickStartedAt - lastTickStartedAt - TICK_MS);
+    const elapsedTickMs = Math.max(1, tickStartedAt - lastTickStartedAt);
+    const loopLagMs = Math.max(0, elapsedTickMs - TICK_MS);
     lastTickStartedAt = tickStartedAt;
     const simStartedAt = performance.now();
     tick += 1;
-    const dt = TICK_MS / 1000;
+    // Use elapsed wall-clock time so follower movement does not slow down when the loop jitters.
+    const dt = Math.min(TICK_MS * 2, elapsedTickMs) / 1000;
     const dtFrames60 = dt * 60;
     const now = Date.now();
     serverSessionTimeSeconds += dt;
@@ -711,9 +1348,13 @@ function simulateTick() {
         pendingTileReservations.delete(tileKey);
     }
 
+    let removedAnyConnection = false;
     for (const [socket, state] of clients) {
         if (now - state.lastSeenAt > PLAYER_TIMEOUT_MS) {
             clients.delete(socket);
+            pauseVotesByPlayerId.delete(state.playerId);
+            restartVotesByPlayerId.delete(state.playerId);
+            removedAnyConnection = true;
             continue;
         }
         const playerState = Array.isArray(nonPlayerState.playerStates)
@@ -735,7 +1376,8 @@ function simulateTick() {
         if (state.playerId !== authorityPlayerId && state.hasClientPose) {
             const freshPose = (now - state.lastClientPoseAt) <= 250;
             if (freshPose) {
-                const maxStep = PLAYER_SPEED * dt * 2.5 + 4;
+                // Followers are client-predicted: allow generous pose catch-up to reduce rubber-banding.
+                const maxStep = PLAYER_SPEED * dt * 4.5 + 8;
                 const dxPose = state.clientX - state.x;
                 const dyPose = state.clientY - state.y;
                 const distPose = Math.hypot(dxPose, dyPose);
@@ -753,6 +1395,18 @@ function simulateTick() {
         state.x += state.inputX * PLAYER_SPEED * dt;
         state.y += state.inputY * PLAYER_SPEED * dt;
     }
+    if (removedAnyConnection) {
+        recomputeServerPauseState();
+        recomputeServerRestartVoteState();
+    }
+
+    const aiStartedAt = performance.now();
+    nonPlayerState.aiDirectives = computeServerAiDirectives();
+    const aiElapsedMs = performance.now() - aiStartedAt;
+    serverPerf.aiDirectiveMsAvg = serverPerf.aiDirectiveMsAvg * 0.9 + aiElapsedMs * 0.1;
+    serverPerf.aiTowerAssignments = Object.keys(nonPlayerState.aiDirectives?.towers ?? {}).length;
+    serverPerf.aiRangedAssignments = Object.keys(nonPlayerState.aiDirectives?.rangedEnemies ?? {}).length;
+    serverPerf.aiCivilianAssignments = Object.keys(nonPlayerState.aiDirectives?.civilians ?? {}).length;
 
     broadcastSnapshot();
     const simDurationMs = performance.now() - simStartedAt;
@@ -871,21 +1525,42 @@ function handleEntitySnapshot(socket, message) {
     if (!nonPlayerState.sharedResources) {
         nonPlayerState.sharedResources = createResourceState();
     }
+    const sanitizedEnemies = sanitizeEnemyEntries(payload.enemies, MAX_REPLICATED_ENEMIES, quantizePosition);
+    const sanitizedPlayerStates = sanitizePlayerStates(payload.playerStates, quantizePosition);
+    const sanitizedCivilians = sanitizeCivilianStates(payload.civilians, quantizePosition);
+    const sanitizedPlayerProjectiles = sanitizeProjectileEntries(payload.projectiles?.player, MAX_REPLICATED_PROJECTILES, quantizePosition);
+    const sanitizedTowerProjectiles = sanitizeProjectileEntries(payload.projectiles?.tower, MAX_REPLICATED_PROJECTILES, quantizePosition);
+    let sanitizedEnemyProjectiles = sanitizeProjectileEntries(payload.projectiles?.enemy, MAX_REPLICATED_PROJECTILES, quantizePosition);
+    applyQueuedEnemyHitsToEnemyState(sanitizedEnemies);
+    sanitizedEnemyProjectiles = applyEnemyProjectileDamageAuthority(
+        sanitizedEnemyProjectiles,
+        sanitizedPlayerStates,
+        sanitizedCivilians,
+        nonPlayerState.buildingsState
+    );
+    reconcileAuthoritativeCombatState(sanitizedPlayerStates, effectiveSharedResources);
     nonPlayerState = {
         seq: Math.floor(seq),
-        enemies: sanitizeEnemyEntries(payload.enemies, MAX_REPLICATED_ENEMIES, quantizePosition),
+        enemies: sanitizedEnemies,
         projectiles: {
-            player: sanitizeProjectileEntries(payload.projectiles?.player, MAX_REPLICATED_PROJECTILES, quantizePosition),
-            tower: sanitizeProjectileEntries(payload.projectiles?.tower, MAX_REPLICATED_PROJECTILES, quantizePosition),
-            enemy: sanitizeProjectileEntries(payload.projectiles?.enemy, MAX_REPLICATED_PROJECTILES, quantizePosition)
+            player: sanitizedPlayerProjectiles,
+            tower: sanitizedTowerProjectiles,
+            enemy: sanitizedEnemyProjectiles
         },
-        playerStates: sanitizePlayerStates(payload.playerStates, quantizePosition),
-        civilians: sanitizeCivilianStates(payload.civilians, quantizePosition),
+        playerStates: sanitizedPlayerStates,
+        civilians: sanitizedCivilians,
         houseTimers: sanitizeHouseTimers(payload.houseTimers),
         // Session runtime is authoritative on server tick, never on host payload.
         sessionTimeSeconds: serverSessionTimeSeconds,
-        sessionState: sanitizeSessionState(payload.sessionState) ?? nonPlayerState.sessionState,
+        // Session state is fully server-authoritative (pause + restart voting/version).
+        sessionState: {
+            paused: Boolean(nonPlayerState.sessionState?.paused),
+            restartVersion: Math.max(0, Number(nonPlayerState.sessionState?.restartVersion) || 0),
+            restartVotes: Math.max(0, Number(nonPlayerState.sessionState?.restartVotes) || 0),
+            restartEligiblePlayers: Math.max(0, Number(nonPlayerState.sessionState?.restartEligiblePlayers) || 0)
+        },
         sharedResources: effectiveSharedResources,
+        aiDirectives: nonPlayerState.aiDirectives,
         buildingsState: nonPlayerState.buildingsState,
         buildingsRevision: nonPlayerState.buildingsRevision
     };
@@ -907,6 +1582,7 @@ function handlePlayerAction(socket, message) {
     if (!actor) {
         return;
     }
+    let forwardedAction = message.action ?? null;
     const now = Date.now();
     if (now - actor.actionWindowStartedAt >= 1000) {
         actor.actionWindowStartedAt = now;
@@ -947,6 +1623,64 @@ function handlePlayerAction(socket, message) {
                 clientActionId: Math.floor(Number(message.action.clientActionId) || 0),
                 accepted: false,
                 reason: 'not_authority'
+            }
+        });
+        return;
+    }
+    if (message.action?.type === 'toggle_pause') {
+        if (pauseVotesByPlayerId.has(actor.playerId)) {
+            pauseVotesByPlayerId.delete(actor.playerId);
+        } else {
+            pauseVotesByPlayerId.add(actor.playerId);
+        }
+        recomputeServerPauseState();
+        sendMessage(socket, {
+            v: PROTOCOL_VERSION,
+            type: 'player_action_result',
+            result: {
+                actionType: 'toggle_pause',
+                clientActionId: Math.floor(Number(message.action.clientActionId) || 0),
+                accepted: true,
+                reason: ''
+            }
+        });
+        return;
+    }
+    if (message.action?.type === 'restart_session') {
+        if (restartVotesByPlayerId.has(actor.playerId)) {
+            restartVotesByPlayerId.delete(actor.playerId);
+        } else {
+            restartVotesByPlayerId.add(actor.playerId);
+        }
+        recomputeServerRestartVoteState();
+        const activePlayerIds = getActivePlayerIds();
+        const requiredVotes = Math.max(1, activePlayerIds.size);
+        const hasUnanimousRestart = restartVotesByPlayerId.size >= requiredVotes;
+        if (hasUnanimousRestart) {
+            triggerSessionRestart();
+        }
+        sendMessage(socket, {
+            v: PROTOCOL_VERSION,
+            type: 'player_action_result',
+            result: {
+                actionType: 'restart_session',
+                clientActionId: Math.floor(Number(message.action.clientActionId) || 0),
+                accepted: true,
+                reason: hasUnanimousRestart ? 'restart_triggered' : ''
+            }
+        });
+        return;
+    }
+    if (message.action?.type === 'force_reset_session') {
+        triggerSessionRestart();
+        sendMessage(socket, {
+            v: PROTOCOL_VERSION,
+            type: 'player_action_result',
+            result: {
+                actionType: 'force_reset_session',
+                clientActionId: Math.floor(Number(message.action.clientActionId) || 0),
+                accepted: true,
+                reason: ''
             }
         });
         return;
@@ -1018,6 +1752,45 @@ function handlePlayerAction(socket, message) {
                 }
             });
             return;
+        }
+        if (message.action.weapon === 'sword' && actor.playerId !== authorityPlayerId) {
+            const target = findPlausibleSwordTarget(message.action);
+            if (!target) {
+                serverPerf.rejectedPlayerActions += 1;
+                serverPerf.attackRejectedNoTarget += 1;
+                sendMessage(socket, {
+                    v: PROTOCOL_VERSION,
+                    type: 'player_action_result',
+                    result: {
+                        actionType: 'attack',
+                        clientActionId: Math.floor(Number(message.action.clientActionId) || 0),
+                        accepted: false,
+                        reason: 'attack_no_target'
+                    }
+                });
+                return;
+            }
+            queueServerEnemyHit(actor.playerId, target.enemyId, SERVER_SWORD_DAMAGE);
+            forwardedAction = {
+                ...message.action,
+                serverDamageApplied: true,
+                serverTargetEnemyId: target.enemyId
+            };
+        } else if (message.action.weapon === 'pistol' && actor.playerId !== authorityPlayerId) {
+            const target = findPlausiblePistolTarget(message.action);
+            if (target) {
+                queueServerEnemyHit(actor.playerId, target.enemyId, SERVER_PISTOL_DAMAGE);
+                forwardedAction = {
+                    ...message.action,
+                    serverDamageApplied: true,
+                    serverTargetEnemyId: target.enemyId
+                };
+            } else {
+                forwardedAction = {
+                    ...message.action,
+                    serverDamageApplied: true
+                };
+            }
         }
         sendMessage(socket, {
             v: PROTOCOL_VERSION,
@@ -1198,7 +1971,7 @@ function handlePlayerAction(socket, message) {
         v: PROTOCOL_VERSION,
         type: 'peer_action',
         actorPlayerId: actor.playerId,
-        action: message.action ?? null
+        action: forwardedAction
     });
 }
 
@@ -1331,13 +2104,20 @@ wss.on('connection', (socket, request) => {
         }
         const disconnected = clients.get(socket);
         clients.delete(socket);
+        if (disconnected?.playerId) {
+            pauseVotesByPlayerId.delete(disconnected.playerId);
+            restartVotesByPlayerId.delete(disconnected.playerId);
+        }
         if (disconnected && disconnected.playerId === authorityPlayerId) {
             authorityPlayerId = null;
             for (const remaining of clients.values()) {
                 authorityPlayerId = remaining.playerId;
                 break;
             }
+            resetAuthoritativeCombatState();
         }
+        recomputeServerPauseState();
+        recomputeServerRestartVoteState();
     });
 });
 
