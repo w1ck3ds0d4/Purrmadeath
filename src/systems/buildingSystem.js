@@ -1,6 +1,13 @@
 import * as PIXI from 'pixi.js';
 import { TILE_SIZE } from '../config/constants.js';
-
+import {
+    collidesWithUnits,
+    getPlacementTiles,
+    hasRequiredResources,
+    keyFromTile,
+    payCost,
+    screenToTile
+} from './buildingSystemUtils.js';
 export function createBuildingSystem({
     buildingLayer,
     getWorldPosition,
@@ -33,66 +40,10 @@ export function createBuildingSystem({
     let producedUnitsWindow = 0;
     let producedFramesWindow = 0;
     let producedPerSecond = 0;
-
     // Placement ghost rendered while build mode is active.
     const ghost = new PIXI.Graphics();
     ghost.visible = false;
     buildingLayer.addChild(ghost);
-
-    function keyFromTile(tileX, tileY) {
-        return `${tileX},${tileY}`;
-    }
-
-    function hasRequiredResources(cost) {
-        return Object.entries(cost).every(([resource, amount]) => (inventory[resource] ?? 0) >= amount);
-    }
-
-    function payCost(cost) {
-        for (const [resource, amount] of Object.entries(cost)) {
-            if (amount > 0) {
-                inventory[resource] -= amount;
-            }
-        }
-    }
-
-    function screenToTile(screenX, screenY) {
-        const worldPos = getWorldPosition();
-        const worldX = screenX - worldPos.x;
-        const worldY = screenY - worldPos.y;
-        return {
-            tileX: Math.floor(worldX / TILE_SIZE),
-            tileY: Math.floor(worldY / TILE_SIZE)
-        };
-    }
-
-    function getPlacementTiles(baseTileX, baseTileY, footprint) {
-        const tiles = [];
-        for (let dy = 0; dy < footprint.h; dy++) {
-            for (let dx = 0; dx < footprint.w; dx++) {
-                tiles.push({ x: baseTileX + dx, y: baseTileY + dy });
-            }
-        }
-        return tiles;
-    }
-
-    function collidesWithUnits(tiles) {
-        const tileSet = new Set(tiles.map((t) => keyFromTile(t.x, t.y)));
-        const player = getPlayerCenter();
-        const playerTileX = Math.floor(player.x / TILE_SIZE);
-        const playerTileY = Math.floor(player.y / TILE_SIZE);
-        if (tileSet.has(keyFromTile(playerTileX, playerTileY))) {
-            return true;
-        }
-
-        for (const enemy of getEnemies()) {
-            const enemyTileX = Math.floor((enemy.x + TILE_SIZE / 2) / TILE_SIZE);
-            const enemyTileY = Math.floor((enemy.y + TILE_SIZE / 2) / TILE_SIZE);
-            if (tileSet.has(keyFromTile(enemyTileX, enemyTileY))) {
-                return true;
-            }
-        }
-        return false;
-    }
 
     function canPlaceBuilding(buildingTypeId, baseTileX, baseTileY, options = {}) {
         const type = buildingTypes[buildingTypeId];
@@ -100,7 +51,7 @@ export function createBuildingSystem({
             return { ok: false, reason: 'Unknown building type' };
         }
         // Resource requirement check uses blueprint cost from `BUILDING_TYPES`.
-        if (!options.skipCost && !hasRequiredResources(type.cost)) {
+        if (!options.skipCost && !hasRequiredResources(inventory, type.cost)) {
             return { ok: false, reason: 'Not enough resources' };
         }
 
@@ -120,7 +71,7 @@ export function createBuildingSystem({
             }
         }
 
-        if (!options.skipUnitCollision && collidesWithUnits(tiles)) {
+        if (!options.skipUnitCollision && collidesWithUnits(tiles, getPlayerCenter, getEnemies)) {
             return { ok: false, reason: 'Unit collision' };
         }
 
@@ -170,7 +121,7 @@ export function createBuildingSystem({
             return false;
         }
         const mouse = getMouseScreenPosition();
-        const { tileX, tileY } = screenToTile(mouse.x, mouse.y);
+        const { tileX, tileY } = screenToTile(mouse.x, mouse.y, getWorldPosition());
         const check = canPlaceBuilding(selectedBuildingType, tileX, tileY);
         if (!check.ok) {
             onLog?.(`Build blocked: ${check.reason}`);
@@ -178,7 +129,7 @@ export function createBuildingSystem({
         }
 
         const type = buildingTypes[selectedBuildingType];
-        payCost(type.cost);
+        payCost(inventory, type.cost);
         placeBuildingByType(selectedBuildingType, tileX, tileY, { skipCost: true });
         onLog?.(`${type.label} placed`);
         return true;
@@ -193,7 +144,7 @@ export function createBuildingSystem({
             return false;
         }
         const type = buildingTypes[buildingTypeId];
-        payCost(type.cost);
+        payCost(inventory, type.cost);
         placeBuildingByType(buildingTypeId, tileX, tileY, { skipCost: true });
         onLog?.(`${type.label} placed`);
         return true;
@@ -212,7 +163,7 @@ export function createBuildingSystem({
             return null;
         }
         if (!options.skipCost) {
-            payCost(type.cost);
+            payCost(inventory, type.cost);
         }
 
         for (const tile of check.tiles) {
@@ -364,7 +315,7 @@ export function createBuildingSystem({
 
         const type = buildingTypes[selectedBuildingType];
         const mouse = getMouseScreenPosition();
-        const { tileX, tileY } = screenToTile(mouse.x, mouse.y);
+        const { tileX, tileY } = screenToTile(mouse.x, mouse.y, getWorldPosition());
         const valid = canPlaceBuilding(selectedBuildingType, tileX, tileY).ok;
         drawGhost(tileX, tileY, type, valid);
     }
@@ -409,7 +360,7 @@ export function createBuildingSystem({
 
     function selectBuildingAtMouse() {
         const mouse = getMouseScreenPosition();
-        const { tileX, tileY } = screenToTile(mouse.x, mouse.y);
+        const { tileX, tileY } = screenToTile(mouse.x, mouse.y, getWorldPosition());
         const buildingId = occupiedTileToBuildingId.get(keyFromTile(tileX, tileY)) ?? null;
         selectedPlacedBuildingId = buildingId;
         return buildingId !== null;

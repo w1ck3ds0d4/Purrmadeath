@@ -28,7 +28,16 @@ export function buildServerSectionLines(serverPerfStats) {
         `Sim avg/peak: ${Number(serverPerfStats.simMsAvg ?? 0).toFixed(2)} / ${Number(serverPerfStats.simMsPeak ?? 0).toFixed(2)} ms`,
         `Loop lag avg: ${Number(serverPerfStats.loopLagMsAvg ?? 0).toFixed(2)} ms`,
         `Net in/out: ${Number(serverPerfStats.inboundKbps ?? 0).toFixed(2)} / ${Number(serverPerfStats.outboundKbps ?? 0).toFixed(2)} kB/s`,
-        `Connected clients: ${serverPerfStats.connectedClients ?? 0}`
+        `Connected clients: ${serverPerfStats.connectedClients ?? 0}`,
+        `Player actions fwd/rej: ${serverPerfStats.forwardedPlayerActions ?? 0}/${serverPerfStats.rejectedPlayerActions ?? 0}`,
+        `Duplicate/stale actions: ${serverPerfStats.duplicateOrStaleActions ?? 0}`,
+        `Build reservations active/created/refunded: ${serverPerfStats.activeBuildReservations ?? 0}/${serverPerfStats.reservedBuildActions ?? 0}/${serverPerfStats.refundedBuildReservations ?? 0}`,
+        `Tile reservations active: ${serverPerfStats.activeTileReservations ?? 0}`,
+        `Producer sim avg: ${Number(serverPerfStats.producerSimUpdateMsAvg ?? 0).toFixed(3)} ms`,
+        `Server harvest ok/rej: ${serverPerfStats.serverHarvestApplied ?? 0}/${serverPerfStats.serverHarvestRejected ?? 0}`,
+        `Attack fwd/rej(origin/cd): ${serverPerfStats.forwardedAttackActions ?? 0}/${serverPerfStats.attackRejectedOrigin ?? 0}/${serverPerfStats.attackRejectedCooldown ?? 0}`,
+        `Range rejects(all): ${serverPerfStats.rangeRejectedActions ?? 0} | Privileged rejects: ${serverPerfStats.privilegedRejectedActions ?? 0}`,
+        `Building hash mismatch count: ${serverPerfStats.buildingStateMismatchCount ?? 0}`
     ];
 }
 

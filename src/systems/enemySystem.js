@@ -23,6 +23,15 @@ import {
     ENEMY_SPAWN_INTERVAL_FRAMES,
     TILE_SIZE
 } from '../config/constants.js';
+import {
+    findPathAStar as findPathAStarBase,
+    findPathToNearestWall as findPathToNearestWallBase,
+    tryGetOffscreenSpawnTile as tryGetOffscreenSpawnTileBase
+} from './enemyNavigation.js';
+import {
+    resolveEnemyCollisions as resolveEnemyCollisionsBase,
+    resolvePlayerEnemyCollisions as resolvePlayerEnemyCollisionsBase
+} from './enemyCollision.js';
 
 // Enemy system owns spawning, navigation, collision between enemies, and
 // enemy-player push/contact interactions. It keeps pathfinding metrics for debug UI.
@@ -99,163 +108,24 @@ export function createEnemySystem({
         enemy.healthFill.visible = ratio < 1;
     }
 
-    function estimatePathCost(ax, ay, bx, by) {
-        return Math.abs(ax - bx) + Math.abs(ay - by);
-    }
-
-    function reconstructPath(cameFrom, endKey) {
-        const path = [];
-        let currentKey = endKey;
-        while (currentKey) {
-            const [x, y] = currentKey.split(',').map(Number);
-            path.push({ x, y });
-            currentKey = cameFrom.get(currentKey);
-        }
-        path.reverse();
-        return path.slice(1);
-    }
-
     function findPathAStar(startX, startY, goalX, goalY) {
-        if (startX === goalX && startY === goalY) {
-            return [];
-        }
-
-        const minX = Math.min(startX, goalX) - ENEMY_PATH_GRID_RADIUS;
-        const maxX = Math.max(startX, goalX) + ENEMY_PATH_GRID_RADIUS;
-        const minY = Math.min(startY, goalY) - ENEMY_PATH_GRID_RADIUS;
-        const maxY = Math.max(startY, goalY) + ENEMY_PATH_GRID_RADIUS;
-
-        const startKey = `${startX},${startY}`;
-        const goalKey = `${goalX},${goalY}`;
-        const open = [{ key: startKey, x: startX, y: startY, f: estimatePathCost(startX, startY, goalX, goalY) }];
-        const openKeys = new Set([startKey]);
-        const closedKeys = new Set();
-        const cameFrom = new Map();
-        const gScore = new Map([[startKey, 0]]);
-
-        let steps = 0;
-        while (open.length > 0 && steps < ENEMY_PATH_MAX_STEPS) {
-            steps += 1;
-
-            let bestIdx = 0;
-            for (let i = 1; i < open.length; i++) {
-                if (open[i].f < open[bestIdx].f) {
-                    bestIdx = i;
-                }
-            }
-
-            const current = open.splice(bestIdx, 1)[0];
-            openKeys.delete(current.key);
-            if (current.key === goalKey) {
-                return reconstructPath(cameFrom, current.key);
-            }
-            closedKeys.add(current.key);
-
-            const neighbors = [
-                { x: current.x + 1, y: current.y, cost: 1, diagonal: false },
-                { x: current.x - 1, y: current.y, cost: 1, diagonal: false },
-                { x: current.x, y: current.y + 1, cost: 1, diagonal: false },
-                { x: current.x, y: current.y - 1, cost: 1, diagonal: false },
-                { x: current.x + 1, y: current.y + 1, cost: Math.SQRT2, diagonal: true },
-                { x: current.x + 1, y: current.y - 1, cost: Math.SQRT2, diagonal: true },
-                { x: current.x - 1, y: current.y + 1, cost: Math.SQRT2, diagonal: true },
-                { x: current.x - 1, y: current.y - 1, cost: Math.SQRT2, diagonal: true }
-            ];
-
-            for (const neighbor of neighbors) {
-                if (neighbor.x < minX || neighbor.x > maxX || neighbor.y < minY || neighbor.y > maxY) {
-                    continue;
-                }
-                if (neighbor.diagonal) {
-                    if (!isTileWalkable(current.x, neighbor.y) || !isTileWalkable(neighbor.x, current.y)) {
-                        continue;
-                    }
-                }
-                if (!isTileWalkable(neighbor.x, neighbor.y)) {
-                    continue;
-                }
-
-                const neighborKey = `${neighbor.x},${neighbor.y}`;
-                if (closedKeys.has(neighborKey)) {
-                    continue;
-                }
-
-                const tentativeG = (gScore.get(current.key) ?? Infinity) + neighbor.cost;
-                if (tentativeG >= (gScore.get(neighborKey) ?? Infinity)) {
-                    continue;
-                }
-
-                cameFrom.set(neighborKey, current.key);
-                gScore.set(neighborKey, tentativeG);
-                const fScore = tentativeG + estimatePathCost(neighbor.x, neighbor.y, goalX, goalY);
-                if (!openKeys.has(neighborKey)) {
-                    open.push({ key: neighborKey, x: neighbor.x, y: neighbor.y, f: fScore });
-                    openKeys.add(neighborKey);
-                } else {
-                    for (const node of open) {
-                        if (node.key === neighborKey) {
-                            node.f = fScore;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        return [];
-    }
-
-    function getViewTileBounds() {
-        const worldPos = getWorldPosition();
-        const viewport = getViewportSize();
-        const startTileX = Math.floor(-worldPos.x / TILE_SIZE);
-        const startTileY = Math.floor(-worldPos.y / TILE_SIZE);
-        const endTileX = startTileX + Math.ceil(viewport.width / TILE_SIZE);
-        const endTileY = startTileY + Math.ceil(viewport.height / TILE_SIZE);
-        return { startTileX, startTileY, endTileX, endTileY };
-    }
-
-    function isTileInView(tileX, tileY, bounds) {
-        return tileX >= bounds.startTileX && tileX <= bounds.endTileX && tileY >= bounds.startTileY && tileY <= bounds.endTileY;
+        return findPathAStarBase(startX, startY, goalX, goalY, {
+            isTileWalkable,
+            gridRadius: ENEMY_PATH_GRID_RADIUS,
+            maxSteps: ENEMY_PATH_MAX_STEPS
+        });
     }
 
     function tryGetOffscreenSpawnTile() {
-        const bounds = getViewTileBounds();
-        const margin = ENEMY_OFFSCREEN_MARGIN_TILES;
-        const minX = bounds.startTileX - margin;
-        const maxX = bounds.endTileX + margin;
-        const minY = bounds.startTileY - margin;
-        const maxY = bounds.endTileY + margin;
-        const playerTile = getPlayerTile();
-
-        for (let attempt = 0; attempt < 24; attempt++) {
-            const side = Math.floor(Math.random() * 4);
-            let tileX;
-            let tileY;
-            if (side === 0) {
-                tileX = minX + Math.floor(Math.random() * (maxX - minX + 1));
-                tileY = minY;
-            } else if (side === 1) {
-                tileX = minX + Math.floor(Math.random() * (maxX - minX + 1));
-                tileY = maxY;
-            } else if (side === 2) {
-                tileX = minX;
-                tileY = minY + Math.floor(Math.random() * (maxY - minY + 1));
-            } else {
-                tileX = maxX;
-                tileY = minY + Math.floor(Math.random() * (maxY - minY + 1));
-            }
-
-            if (isTileInView(tileX, tileY, bounds) || !isTileWalkable(tileX, tileY)) {
-                continue;
-            }
-            const dx = tileX - playerTile.x;
-            const dy = tileY - playerTile.y;
-            if ((dx * dx + dy * dy) < ENEMY_MIN_PLAYER_DISTANCE_TILES * ENEMY_MIN_PLAYER_DISTANCE_TILES) {
-                continue;
-            }
-            return { x: tileX, y: tileY };
-        }
-        return null;
+        return tryGetOffscreenSpawnTileBase({
+            getWorldPosition,
+            getViewportSize,
+            tileSize: TILE_SIZE,
+            offscreenMarginTiles: ENEMY_OFFSCREEN_MARGIN_TILES,
+            getPlayerTile,
+            minPlayerDistanceTiles: ENEMY_MIN_PLAYER_DISTANCE_TILES,
+            isTileWalkable
+        });
     }
 
     function spawnEnemyAtTile(tileX, tileY) {
@@ -390,183 +260,41 @@ export function createEnemySystem({
     }
 
     function resolveEnemyCollisions(options = {}) {
-        const minDistance = ENEMY_RADIUS * 2;
-        const minDistanceSq = minDistance * minDistance;
-        const cellSize = minDistance;
-        const separationPasses = 2;
-        const highDensityThreshold = options.highDensityThreshold ?? 120;
-        const highDensityStride = options.highDensityStride ?? 2;
-        if (enemies.length >= highDensityThreshold && (frameIndex % highDensityStride) !== 0) {
-            perfStats.collisionSkippedFrames += 1;
-            return;
-        }
-
-        for (let pass = 0; pass < separationPasses; pass++) {
-            const grid = new Map();
-            // Spatial hash reduces broad-phase collision checks from O(n^2) to local buckets.
-            for (let i = 0; i < enemies.length; i++) {
-                const enemy = enemies[i];
-                const cx = Math.floor((enemy.x + ENEMY_RADIUS) / cellSize);
-                const cy = Math.floor((enemy.y + ENEMY_RADIUS) / cellSize);
-                const key = `${cx},${cy}`;
-                if (!grid.has(key)) {
-                    grid.set(key, []);
-                }
-                grid.get(key).push(i);
-            }
-
-            for (let i = 0; i < enemies.length; i++) {
-                const base = enemies[i];
-                const bxCell = Math.floor((base.x + ENEMY_RADIUS) / cellSize);
-                const byCell = Math.floor((base.y + ENEMY_RADIUS) / cellSize);
-                for (let oy = -1; oy <= 1; oy++) {
-                    for (let ox = -1; ox <= 1; ox++) {
-                        const neighborKey = `${bxCell + ox},${byCell + oy}`;
-                        const bucket = grid.get(neighborKey);
-                        if (!bucket) {
-                            continue;
-                        }
-                        for (const j of bucket) {
-                            if (j <= i) {
-                                continue;
-                            }
-                            const a = enemies[i];
-                            const b = enemies[j];
-                            const ax = a.x + ENEMY_RADIUS;
-                            const ay = a.y + ENEMY_RADIUS;
-                            const bx = b.x + ENEMY_RADIUS;
-                            const by = b.y + ENEMY_RADIUS;
-                            let dx = bx - ax;
-                            let dy = by - ay;
-                            let distSq = dx * dx + dy * dy;
-                            if (distSq >= minDistanceSq) {
-                                continue;
-                            }
-                            if (distSq < 0.0001) {
-                                const angle = (a.id * 0.37 + b.id * 0.73) % (Math.PI * 2);
-                                dx = Math.cos(angle);
-                                dy = Math.sin(angle);
-                                distSq = 1;
-                            }
-                            const dist = Math.sqrt(distSq);
-                            const overlap = minDistance - dist;
-                            const nx = dx / dist;
-                            const ny = dy / dist;
-                            const halfPushX = nx * overlap * 0.6;
-                            const halfPushY = ny * overlap * 0.6;
-                            const newAX = a.x - halfPushX;
-                            const newAY = a.y - halfPushY;
-                            const newBX = b.x + halfPushX;
-                            const newBY = b.y + halfPushY;
-                            const aTileX = Math.floor((newAX + ENEMY_RADIUS) / TILE_SIZE);
-                            const aTileY = Math.floor((newAY + ENEMY_RADIUS) / TILE_SIZE);
-                            const bTileX = Math.floor((newBX + ENEMY_RADIUS) / TILE_SIZE);
-                            const bTileY = Math.floor((newBY + ENEMY_RADIUS) / TILE_SIZE);
-                            const canMoveA = isTileWalkable(aTileX, aTileY);
-                            const canMoveB = isTileWalkable(bTileX, bTileY);
-                            if (canMoveA && canMoveB) {
-                                a.x = newAX;
-                                a.y = newAY;
-                                b.x = newBX;
-                                b.y = newBY;
-                            } else if (canMoveA) {
-                                a.x -= nx * overlap;
-                                a.y -= ny * overlap;
-                            } else if (canMoveB) {
-                                b.x += nx * overlap;
-                                b.y += ny * overlap;
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        resolveEnemyCollisionsBase({
+            enemies,
+            enemyRadius: ENEMY_RADIUS,
+            tileSize: TILE_SIZE,
+            isTileWalkable,
+            frameIndex,
+            perfStats,
+            highDensityThreshold: options.highDensityThreshold,
+            highDensityStride: options.highDensityStride
+        });
     }
 
     function resolvePlayerEnemyCollisions() {
-        if (isPlayerDead()) {
-            return;
-        }
-        const minDistance = ENEMY_RADIUS + getPlayerCollisionRadius();
-        const minDistanceSq = minDistance * minDistance;
-        let player = getPlayerCenter();
-        for (const enemy of enemies) {
-            const enemyCenterX = enemy.x + ENEMY_RADIUS;
-            const enemyCenterY = enemy.y + ENEMY_RADIUS;
-            let dx = enemyCenterX - player.x;
-            let dy = enemyCenterY - player.y;
-            let distSq = dx * dx + dy * dy;
-            if (distSq >= minDistanceSq) {
-                continue;
-            }
-            if (distSq < 0.0001) {
-                const angle = (enemy.id * 0.61) % (Math.PI * 2);
-                dx = Math.cos(angle);
-                dy = Math.sin(angle);
-                distSq = 1;
-            }
-
-            const dist = Math.sqrt(distSq);
-            const overlap = minDistance - dist;
-            const nx = dx / dist;
-            const ny = dy / dist;
-            const pushedPlayerX = (player.x - TILE_SIZE / 2) - nx * overlap;
-            const pushedPlayerY = (player.y - TILE_SIZE / 2) - ny * overlap;
-            if (canMovePlayerTo(pushedPlayerX, pushedPlayerY)) {
-                setPlayerWorldPosition(pushedPlayerX, pushedPlayerY);
-                player = getPlayerCenter();
-            } else {
-                const pushedEnemyX = enemy.x + nx * overlap;
-                const pushedEnemyY = enemy.y + ny * overlap;
-                const pushedEnemyTileX = Math.floor((pushedEnemyX + ENEMY_RADIUS) / TILE_SIZE);
-                const pushedEnemyTileY = Math.floor((pushedEnemyY + ENEMY_RADIUS) / TILE_SIZE);
-                if (isTileWalkable(pushedEnemyTileX, pushedEnemyTileY)) {
-                    enemy.x = pushedEnemyX;
-                    enemy.y = pushedEnemyY;
-                    enemy.sprite.position.set(enemy.x, enemy.y);
-                }
-            }
-        }
+        resolvePlayerEnemyCollisionsBase({
+            enemies,
+            enemyRadius: ENEMY_RADIUS,
+            tileSize: TILE_SIZE,
+            isTileWalkable,
+            isPlayerDead,
+            getPlayerCollisionRadius,
+            getPlayerCenter,
+            setPlayerWorldPosition,
+            canMovePlayerTo
+        });
     }
 
     function findPathToNearestWall(enemyTileX, enemyTileY, enemyId = 0) {
-        const walls = getWalls();
-        if (walls.length === 0) {
-            return { path: [], targetTile: null };
-        }
-        const rankedWalls = walls
-            .map((wall) => ({
-                wall,
-                score: Math.abs(wall.tileX - enemyTileX) + Math.abs(wall.tileY - enemyTileY)
-            }))
-            .sort((a, b) => a.score - b.score);
-
-        // Lower probe count keeps fallback wall targeting cheaper under swarms.
-        const maxWallsToProbe = Math.min(4, rankedWalls.length);
-        const wallOffset = Math.abs(enemyId) % Math.max(1, maxWallsToProbe);
-        for (let wi = 0; wi < maxWallsToProbe; wi++) {
-            const wall = rankedWalls[(wi + wallOffset) % maxWallsToProbe].wall;
-            for (const tile of wall.tiles) {
-                const candidates = [
-                    { x: tile.x + 1, y: tile.y },
-                    { x: tile.x - 1, y: tile.y },
-                    { x: tile.x, y: tile.y + 1 },
-                    { x: tile.x, y: tile.y - 1 }
-                ];
-                const candidateOffset = Math.abs(enemyId + tile.x * 31 + tile.y * 17) % candidates.length;
-                for (let ci = 0; ci < candidates.length; ci++) {
-                    const candidate = candidates[(ci + candidateOffset) % candidates.length];
-                    if (!isTileWalkable(candidate.x, candidate.y)) {
-                        continue;
-                    }
-                    const path = findPathAStar(enemyTileX, enemyTileY, candidate.x, candidate.y);
-                    if (path.length > 0) {
-                        return { path, targetTile: candidate };
-                    }
-                }
-            }
-        }
-        return { path: [], targetTile: null };
+        return findPathToNearestWallBase(
+            enemyTileX,
+            enemyTileY,
+            enemyId,
+            getWalls,
+            isTileWalkable,
+            findPathAStar
+        );
     }
 
     function spawnTick(options = {}) {

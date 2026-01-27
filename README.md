@@ -71,6 +71,9 @@ Example:
 npm start             # local singleplayer/dev
 npm run start:lan     # serve game to LAN
 npm run multiplayer:server
+npm run multiplayer:test:sync   # deterministic sync probe
+npm run multiplayer:test:load   # bot load test (env: BOTS, DURATION_SEC)
+npm run multiplayer:test:fault  # disconnect/reconnect fault probe
 npm run build
 ```
 
@@ -87,7 +90,6 @@ npm run build
 - `F4` or `\u00e7`: toggle dev console
 - Dev sidebar sections: `C` perf, `V` cheats, `M` multiplayer, `N` logs, `G` core
 - Dev server metrics section: `Y` (shows server tick/sim/net load)
-- Dev slash commands: `/core`, `/perf`, `/multiplayer`, `/server`, `/logs`, `/cheats`, `/all`
 - Dev slash commands: `/core`, `/perf`, `/multiplayer`, `/server`, `/logs`, `/cheats`, `/all`, `/force-reset`
 - Dev command textbox appears in the sidebar (press `Tab` or type `/` to start command input)
 - Multiplayer connect toggle in dev sidebar: `P`
@@ -100,8 +102,22 @@ npm run build
 |- package.json
 |- server/
 |  |- multiplayerServer.js         # authoritative session server (WebSocket)
+|  |- actionUtils.js               # server action payload/resource validation helpers
+|  |- netSecurity.js               # IP/origin/rate-limit security helpers
+|  |- sanitizeState.js             # snapshot sanitization helpers
+|  |- replicationPayload.js        # per-client non-player payload filtering/delta compression
+|  |- tools/
+|  |  |- syncProbe.js              # deterministic sync probe across multiple clients
+|  |  |- loadTestBots.js           # configurable bot load test harness
+|  |  |- faultProbe.js             # reconnect/fault tolerance probe
 |- src/
-|  |- index.js                     # runtime orchestration and main loop
+|  |- index.js                     # thin bootstrap entrypoint
+|  |- game/
+|  |  |- bootstrap.js              # runtime orchestration and main loop
+|  |  |- runtimeUtils.js           # shared runtime helpers (clock + spatial index)
+|  |  |- persistenceController.js  # save/checkpoint persistence controller
+|  |  |- crashLogger.js            # browser crash log capture/persist/export
+|  |  |- simulationLoopController.js # fixed-step foreground/background simulation orchestrator
 |  |- config/
 |  |  |- constants.js              # gameplay/perf/network tuning constants
 |  |- net/
@@ -115,8 +131,18 @@ npm run build
 |  |  |- playerSystem.js           # local player state/visuals
 |  |  |- remotePlayerSystem.js     # replicated peer rendering/smoothing
 |  |  |- enemySystem.js            # enemy AI and combat state
+|  |  |- enemyNavigation.js        # extracted path/spawn navigation helpers
+|  |  |- enemyCollision.js         # extracted enemy collision helpers
 |  |  |- civilianSystem.js         # logistics workers
+|  |  |- civilianSpatialUtils.js   # civilian grid/perimeter/approach helpers
+|  |  |- civilianCollision.js      # civilian crowd + player collision helpers
+|  |  |- civilianReplication.js    # house timer label/replication helpers
+|  |  |- civilianSync.js           # follower civilian snapshot sync helper
 |  |  |- buildingSystem.js         # buildings, placement, production
+|  |  |- buildingSystemUtils.js    # building placement/resource utility helpers
+|  |- ui/
+|  |  |- debugConsoleCommands.js   # debug slash-command parsing + view map
+|  |  |- debugOverlaySections.js   # debug section line builders
 |- ROADMAP.md
 |- GUIDELINES.md
 ```
@@ -157,7 +183,7 @@ flowchart LR
   - player snapshot relevance culling
   - position quantization for lower bandwidth
   - authority-host replication for enemies/projectiles with relevance filtering
-- 2.2.3 co-op playability in progress:
+- Recent multiplayer highlights (2.2.x):
   - follower actions (attack/build/remove/harvest) relay to host authority
   - shared resources + building state sync from host to followers
   - enemies target all connected players
@@ -171,6 +197,7 @@ flowchart LR
   - non-player snapshots use adaptive full-vs-delta compression per client
   - simulation now runs on fixed 60Hz steps for consistent gameplay across different render FPS
   - dev console has a dedicated server section to inspect host tick/sim/net load
+  - server section now includes forwarded/rejected follower-action counters (early anti-flood telemetry)
   - server section includes a color-coded latency verdict hint (server-bound vs network-bound vs mixed)
   - follower harvest/resource-cheat actions relay to host authority and sync shared resources correctly
   - enemy ranged combat and damage processing include all connected players
@@ -190,6 +217,29 @@ flowchart LR
   - authority checkpoints for multiplayer session restore (per session id)
   - local movement now uses normalized vectors to match server-side input clamping (better host/follower speed parity)
   - hidden host tabs keep multiplayer progression closer to real time via higher fixed-step catch-up budget
-|  |- ui/
-|  |  |- debugConsoleCommands.js   # debug slash-command parsing + view map
-|  |  |- debugOverlaySections.js   # debug section line builders
+  - 2.2.5 started with trust-boundary hardening (server action validation + rate limiting)
+  - follower build/remove now use request IDs with authority action-result acknowledgements
+  - server now pre-validates follower build/remove requests (tile occupancy + resource sanity) before forwarding
+  - follower build requests use temporary server-side cost reservations (with reject/timeout refund) to reduce overspend races
+  - server now applies temporary tile reservation locks for follower build requests to avoid concurrent overlap races
+  - duplicate/stale follower build/remove action IDs are rejected server-side (replay-safe action path)
+  - build/remove requests now update server authoritative building replication state directly (faster follower consistency)
+  - server panel now tracks building-state hash mismatches as an early desync indicator
+  - producer output progression now ticks on the dedicated server authority path (cycle timers + stored output)
+  - follower producer-output harvest collection is now server-resolved and updates shared resources authoritatively
+  - shared resources now reconcile from authority snapshot baseline plus server-side adjustment deltas
+  - follower attack actions now pass server guardrails (origin distance + per-weapon cooldown), with server metrics for forwarded/rejected attack actions
+  - harvest/revive and build/remove actions now enforce server-side origin/range checks
+  - server-side privileged action boundary blocks follower force-reset and dev-resource actions
+  - auto quality governor now also reacts to server-load signals (`simMsAvg`, `loopLagMsAvg`) to protect co-op stability
+  - added dedicated multiplayer probes:
+    - `npm run multiplayer:test:sync`
+    - `npm run multiplayer:test:load`
+    - `npm run multiplayer:test:fault`
+
+## Security Notes
+
+- Keep WebSocket server private to LAN unless you add TLS + authentication.
+- Use `JOIN_TOKEN` on shared networks.
+- Keep `PRIVATE_NETWORK_ONLY=1` enabled unless explicitly testing remote WAN access.
+- Consider setting `ALLOWED_ORIGINS` to your known client URLs for stricter browser-origin filtering.
