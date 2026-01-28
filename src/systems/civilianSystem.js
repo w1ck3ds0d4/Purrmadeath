@@ -11,16 +11,9 @@ import {
     findBestApproachPoint,
     getBuildingCenter,
     getPerimeterTiles,
-    pushToTargetGrid,
     queryNearbyGridEntries
 } from './civilianSpatialUtils.js';
 import { resolveCivilianCollisions as resolveCivilianCollisionsBase, resolvePlayerCivilianCollision } from './civilianCollision.js';
-import {
-    ensureHouseStatesAndLabels,
-    getHouseTimerReplication as getHouseTimerReplicationBase,
-    syncReplicatedHouseTimers as syncReplicatedHouseTimersBase,
-    updateHouseTimerLabels as updateHouseTimerLabelsBase
-} from './civilianReplication.js';
 import {
     buildProducerLoadMap as buildProducerLoadMapBase,
     findNearestProducerWithOutput as findNearestProducerWithOutputBase,
@@ -29,6 +22,19 @@ import {
     getProducerQueuePoint as getProducerQueuePointBase
 } from './civilianLogisticsSelectors.js';
 import { syncReplicatedStateFromSnapshot } from './civilianSync.js';
+import { CIVILIAN_TUNING } from './civilianConfig.js';
+import {
+    ensureHouseStatesAdapter,
+    getHouseTimerReplicationAdapter,
+    syncReplicatedHouseTimersAdapter,
+    updateHouseTimerLabelsAdapter
+} from './civilianHouseStateAdapter.js';
+import {
+    findHouseSpawnPoint as findHouseSpawnPointBase,
+    findUnstuckPointForCivilian as findUnstuckPointForCivilianBase,
+    isCivilianSpawnPositionClear as isCivilianSpawnPositionClearBase
+} from './civilianSpawn.js';
+import { rebuildProducerGridEntries, rebuildWarehouseGridEntries } from './civilianTargetGrids.js';
 
 // Civilian system:
 // - Spawns civilians from houses based on per-house timers and cap rules.
@@ -42,27 +48,16 @@ export function createCivilianSystem({
     onDepositResource,
     onLog
 }) {
-    // Civilian movement tuning:
-    // - Increase `CIVILIAN_SPAWN_FRONT_OFFSET_TILES` to spawn farther from houses.
-    // - Increase `CIVILIAN_SEPARATION_PASSES` / `CIVILIAN_SEPARATION_PADDING` if overlap remains under heavy load.
-    const CIVILIAN_SPAWN_FRONT_OFFSET_TILES = 2;
-    const CIVILIAN_SEPARATION_PADDING = 2;
-    const CIVILIAN_SEPARATION_PASSES = 3;
-    const CIVILIAN_STUCK_FRAMES_THRESHOLD = 40;
-    const CIVILIAN_STUCK_PROGRESS_EPSILON_SQ = 0.09;
-    const CIVILIAN_DYNAMIC_AVOID_RADIUS = CIVILIAN_RADIUS * 2.5;
-    const CIVILIAN_DYNAMIC_AVOID_WEIGHT = 1.15;
-    const CIVILIAN_CARRY_AMOUNT = 5;
-    const CIVILIAN_PATROL_RECHECK_FRAMES = 45;
-    const CIVILIAN_STUCK_RECOVERY_COOLDOWN_FRAMES = 75;
-    const CIVILIAN_REROUTE_COOLDOWN_FRAMES = 30;
-    const CIVILIAN_PREEMPTIVE_REROUTE_FRAMES = 20;
-    const CIVILIAN_NO_PROGRESS_FRAMES_THRESHOLD = 85;
-    const CIVILIAN_MIN_PROGRESS_PER_FRAME = 0.08;
-    const CIVILIAN_ASSIGNMENTS_PER_FRAME = 10;
-    const CIVILIAN_TARGET_REFRESH_FRAMES = 24;
-    const CIVILIAN_TARGET_GRID_SIZE = TILE_SIZE * 10;
-    const CIVILIAN_COLLISION_DENSE_THRESHOLD = 45;
+    // See `civilianConfig.js` for the centralized knobs to tune civilian behavior.
+    const {
+        SPAWN_FRONT_OFFSET_TILES: CIVILIAN_SPAWN_FRONT_OFFSET_TILES, SEPARATION_PADDING: CIVILIAN_SEPARATION_PADDING, SEPARATION_PASSES: CIVILIAN_SEPARATION_PASSES,
+        STUCK_FRAMES_THRESHOLD: CIVILIAN_STUCK_FRAMES_THRESHOLD, STUCK_PROGRESS_EPSILON_SQ: CIVILIAN_STUCK_PROGRESS_EPSILON_SQ, DYNAMIC_AVOID_RADIUS: CIVILIAN_DYNAMIC_AVOID_RADIUS,
+        DYNAMIC_AVOID_WEIGHT: CIVILIAN_DYNAMIC_AVOID_WEIGHT, CARRY_AMOUNT: CIVILIAN_CARRY_AMOUNT, PATROL_RECHECK_FRAMES: CIVILIAN_PATROL_RECHECK_FRAMES,
+        STUCK_RECOVERY_COOLDOWN_FRAMES: CIVILIAN_STUCK_RECOVERY_COOLDOWN_FRAMES, REROUTE_COOLDOWN_FRAMES: CIVILIAN_REROUTE_COOLDOWN_FRAMES,
+        PREEMPTIVE_REROUTE_FRAMES: CIVILIAN_PREEMPTIVE_REROUTE_FRAMES, NO_PROGRESS_FRAMES_THRESHOLD: CIVILIAN_NO_PROGRESS_FRAMES_THRESHOLD,
+        MIN_PROGRESS_PER_FRAME: CIVILIAN_MIN_PROGRESS_PER_FRAME, ASSIGNMENTS_PER_FRAME: CIVILIAN_ASSIGNMENTS_PER_FRAME, TARGET_REFRESH_FRAMES: CIVILIAN_TARGET_REFRESH_FRAMES,
+        TARGET_GRID_SIZE: CIVILIAN_TARGET_GRID_SIZE, COLLISION_DENSE_THRESHOLD: CIVILIAN_COLLISION_DENSE_THRESHOLD
+    } = CIVILIAN_TUNING;
 
     const civilians = [];
     const civilianById = new Map();
@@ -96,146 +91,43 @@ export function createCivilianSystem({
     }
 
     function rebuildProducerGrid() {
-        producerGrid.clear();
-        const producers = buildingSystem.getProducers();
-        for (const producer of producers) {
-            if (producer.storedOutput <= 0 || !producer.outputResource) {
-                continue;
-            }
-            const center = getBuildingCenter(producer);
-            pushToTargetGrid(producerGrid, center.x, center.y, producer, CIVILIAN_TARGET_GRID_SIZE);
-        }
+        rebuildProducerGridEntries(producerGrid, buildingSystem, CIVILIAN_TARGET_GRID_SIZE);
     }
 
     function rebuildWarehouseGrid() {
-        warehouseGrid.clear();
-        const warehouses = buildingSystem.getWarehouses();
-        for (const warehouse of warehouses) {
-            const center = getBuildingCenter(warehouse);
-            pushToTargetGrid(warehouseGrid, center.x, center.y, warehouse, CIVILIAN_TARGET_GRID_SIZE);
-        }
+        rebuildWarehouseGridEntries(warehouseGrid, buildingSystem, CIVILIAN_TARGET_GRID_SIZE);
     }
 
-    // Civilians should spawn outside the house footprint. We prioritize "front"
-    // tiles (below the house) and then fall back to nearby perimeter tiles.
     function findHouseSpawnPoint(house) {
-        const frontTileY = house.tileY + house.footprintH + CIVILIAN_SPAWN_FRONT_OFFSET_TILES;
-        const frontMidTileX = house.tileX + Math.floor(house.footprintW / 2);
-        const candidates = [];
-
-        candidates.push({ x: frontMidTileX, y: frontTileY });
-        for (let dx = 0; dx < house.footprintW; dx++) {
-            candidates.push({ x: house.tileX + dx, y: frontTileY });
-        }
-        for (let dx = -1; dx <= house.footprintW; dx++) {
-            candidates.push({ x: house.tileX + dx, y: frontTileY - 1 });
-            candidates.push({ x: house.tileX + dx, y: frontTileY + 1 });
-        }
-
-        // Perimeter fallback if front is blocked (prefer wider padding first).
-        candidates.push(...getPerimeterTiles(house, isTileWalkable, 3));
-        candidates.push(...getPerimeterTiles(house, isTileWalkable, 2));
-        candidates.push(...getPerimeterTiles(house, isTileWalkable, 1));
-
-        let firstWalkableCenter = null;
-        for (const tile of candidates) {
-            if (!isTileWalkable(tile.x, tile.y)) {
-                continue;
-            }
-            const center = {
-                x: tile.x * TILE_SIZE + TILE_SIZE * 0.5,
-                y: tile.y * TILE_SIZE + TILE_SIZE * 0.5
-            };
-            if (!firstWalkableCenter) {
-                firstWalkableCenter = center;
-            }
-            if (isCivilianSpawnPositionClear(center.x, center.y)) {
-                return center;
-            }
-        }
-
-        if (firstWalkableCenter) {
-            return firstWalkableCenter;
-        }
-        // Last resort if fully enclosed.
-        return findUnstuckPointForCivilian(getBuildingCenter(house));
+        return findHouseSpawnPointBase({
+            house,
+            isTileWalkable,
+            spawnFrontOffsetTiles: CIVILIAN_SPAWN_FRONT_OFFSET_TILES,
+            isSpawnClear: (x, y) => isCivilianSpawnPositionClear(x, y),
+            getBuildingCenter
+        });
     }
 
     function isCivilianSpawnPositionClear(centerX, centerY) {
-        const minDistance = CIVILIAN_RADIUS * 2 + CIVILIAN_SEPARATION_PADDING;
-        const minDistanceSq = minDistance * minDistance;
-        for (const civilian of civilians) {
-            if (civilian.isDead) {
-                continue;
-            }
-            const dx = (civilian.x + CIVILIAN_RADIUS) - centerX;
-            const dy = (civilian.y + CIVILIAN_RADIUS) - centerY;
-            if (dx * dx + dy * dy < minDistanceSq) {
-                return false;
-            }
-        }
-        return true;
+        return isCivilianSpawnPositionClearBase(
+            civilians,
+            CIVILIAN_RADIUS,
+            CIVILIAN_SEPARATION_PADDING,
+            centerX,
+            centerY
+        );
     }
 
     function findUnstuckPointForCivilian(originCenter) {
-        const searchOffsets = [
-            { x: 1, y: 0 },
-            { x: -1, y: 0 },
-            { x: 0, y: 1 },
-            { x: 0, y: -1 },
-            { x: 1, y: 1 },
-            { x: 1, y: -1 },
-            { x: -1, y: 1 },
-            { x: -1, y: -1 },
-            { x: 2, y: 0 },
-            { x: -2, y: 0 },
-            { x: 0, y: 2 },
-            { x: 0, y: -2 },
-            { x: 2, y: 1 },
-            { x: 2, y: -1 },
-            { x: -2, y: 1 },
-            { x: -2, y: -1 }
-        ];
-        const tileX = Math.floor(originCenter.x / TILE_SIZE);
-        const tileY = Math.floor(originCenter.y / TILE_SIZE);
-        for (const offset of searchOffsets) {
-            const tx = tileX + offset.x;
-            const ty = tileY + offset.y;
-            if (!isTileWalkable(tx, ty)) {
-                continue;
-            }
-            const centerX = tx * TILE_SIZE + TILE_SIZE * 0.5;
-            const centerY = ty * TILE_SIZE + TILE_SIZE * 0.5;
-            if (isCivilianSpawnPositionClear(centerX, centerY)) {
-                return { x: centerX, y: centerY };
-            }
-        }
-        // Wider fallback to avoid teleports looping between the same nearby spots.
-        for (let radius = 3; radius <= 5; radius++) {
-            for (let dy = -radius; dy <= radius; dy++) {
-                for (let dx = -radius; dx <= radius; dx++) {
-                    if (Math.abs(dx) !== radius && Math.abs(dy) !== radius) {
-                        continue;
-                    }
-                    const tx = tileX + dx;
-                    const ty = tileY + dy;
-                    if (!isTileWalkable(tx, ty)) {
-                        continue;
-                    }
-                    return {
-                        x: tx * TILE_SIZE + TILE_SIZE * 0.5,
-                        y: ty * TILE_SIZE + TILE_SIZE * 0.5
-                    };
-                }
-            }
-        }
-        return originCenter;
+        return findUnstuckPointForCivilianBase({
+            originCenter,
+            isTileWalkable,
+            isSpawnClear: (x, y) => isCivilianSpawnPositionClear(x, y)
+        });
     }
 
     function ensureHouseStates() {
-        // House-state + UI-label reconciliation lives in a helper module so
-        // the core civilian update loop remains focused on gameplay transitions.
-        ensureHouseStatesAndLabels({
+        ensureHouseStatesAdapter({
             houses: buildingSystem.getHouses(),
             houseStates,
             houseTimerLabels,
@@ -246,7 +138,7 @@ export function createCivilianSystem({
     }
 
     function updateHouseTimerLabels() {
-        updateHouseTimerLabelsBase({
+        updateHouseTimerLabelsAdapter({
             houses: buildingSystem.getHouses(),
             houseStates,
             houseTimerLabels,
@@ -257,7 +149,7 @@ export function createCivilianSystem({
     }
 
     function getHouseTimerReplication() {
-        return getHouseTimerReplicationBase(houseStates);
+        return getHouseTimerReplicationAdapter(houseStates);
     }
 
     function spawnCivilianFromHouse(house) {
@@ -1019,15 +911,7 @@ export function createCivilianSystem({
             civilianCount: civilians.length,
             civilianCap: houseCount * HOUSE_CIVILIAN_CAP_BONUS,
             civiliansKilled,
-            perf: {
-                updateMs: perfStats.updateMs,
-                assignmentCalls: perfStats.assignmentCalls,
-                assignmentSkippedByBudget: perfStats.assignmentSkippedByBudget,
-                producerQueries: perfStats.producerQueries,
-                warehouseQueries: perfStats.warehouseQueries,
-                collisionPasses: perfStats.collisionPasses,
-                civiliansResolvedCollisions: perfStats.civiliansResolvedCollisions
-            }
+            perf: { ...perfStats }
         };
     }
 
@@ -1065,7 +949,7 @@ export function createCivilianSystem({
     }
 
     function syncReplicatedHouseTimers(entries) {
-        syncReplicatedHouseTimersBase({
+        syncReplicatedHouseTimersAdapter({
             entries,
             houses: buildingSystem.getHouses(),
             houseTimerLabels,

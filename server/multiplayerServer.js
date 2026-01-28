@@ -63,6 +63,12 @@ const SERVER_PISTOL_AIM_COS = Number(process.env.SERVER_PISTOL_AIM_COS || 0.95);
 const SERVER_ENEMY_RADIUS = Number(process.env.SERVER_ENEMY_RADIUS || 10);
 const SERVER_ENEMY_PROJECTILE_DAMAGE = Number(process.env.SERVER_ENEMY_PROJECTILE_DAMAGE || 12);
 const SERVER_ENEMY_PROJECTILE_RADIUS = Number(process.env.SERVER_ENEMY_PROJECTILE_RADIUS || 4);
+const SERVER_TOWER_PROJECTILE_DAMAGE = Number(process.env.SERVER_TOWER_PROJECTILE_DAMAGE || 16);
+const SERVER_TOWER_PROJECTILE_RADIUS = Number(process.env.SERVER_TOWER_PROJECTILE_RADIUS || 4);
+const SERVER_ENEMY_CONTACT_DAMAGE = Number(process.env.SERVER_ENEMY_CONTACT_DAMAGE || 10);
+const SERVER_ENEMY_CONTACT_COOLDOWN_MS = Number(process.env.SERVER_ENEMY_CONTACT_COOLDOWN_MS || 583);
+const AUTHORITY_SNAPSHOT_STALL_MS = Number(process.env.AUTHORITY_SNAPSHOT_STALL_MS || 1200);
+const AI_DIRECTIVE_BUDGET_MS = Number(process.env.AI_DIRECTIVE_BUDGET_MS || 1.5);
 const SERVER_PLAYER_RADIUS = Number(process.env.SERVER_PLAYER_RADIUS || 10);
 const SERVER_CIVILIAN_RADIUS = Number(process.env.SERVER_CIVILIAN_RADIUS || 8);
 const SERVER_PLAYER_RESPAWN_SECONDS = Number(process.env.SERVER_PLAYER_RESPAWN_SECONDS || 15);
@@ -165,6 +171,8 @@ let authoritativeNonKillGoldOffset = 0;
 let authoritativeCombatBaselineReady = false;
 const pendingServerEnemyHits = [];
 const consumedEnemyProjectileIds = new Map();
+const consumedTowerProjectileIds = new Map();
+const enemyContactCooldownByTarget = new Map();
 const authoritativeResourceDelta = createResourceState();
 // Server telemetry mirrored to dev console `/server` section.
 const serverPerf = {
@@ -205,7 +213,18 @@ const serverPerf = {
     enemyProjectilePlayerHits: 0,
     enemyProjectileCivilianHits: 0,
     enemyProjectileBuildingHits: 0,
+    towerProjectileDamageApplied: 0,
+    towerProjectileEnemyHits: 0,
+    enemyMeleeDamageApplied: 0,
+    enemyMeleePlayerHits: 0,
+    enemyMeleeCivilianHits: 0,
+    authoritySnapshotAgeMs: -1,
+    combatFrozenBySnapshotStall: 0,
+    combatFreezeTicks: 0,
+    droppedQueuedEnemyHits: 0,
     aiDirectiveMsAvg: 0,
+    aiDirectiveBudgetMs: AI_DIRECTIVE_BUDGET_MS,
+    aiDirectiveOverBudgetTicks: 0,
     aiTowerAssignments: 0,
     aiRangedAssignments: 0,
     aiCivilianAssignments: 0,
@@ -215,6 +234,7 @@ const serverPerf = {
 };
 let lastTickStartedAt = Date.now();
 let lastNetWindowAt = Date.now();
+let lastAuthoritySnapshotAt = 0;
 let cachedBuildingRevision = -1;
 let cachedOccupiedTiles = new Set();
 
@@ -613,6 +633,10 @@ function attachConnection(socket, state) {
     if (authorityPlayerId === null) {
         authorityPlayerId = state.playerId;
     }
+    if (state.playerId === authorityPlayerId) {
+        // Grace period for freshly elected/reconnected authority before first snapshot arrives.
+        lastAuthoritySnapshotAt = Date.now();
+    }
     // New players start unpaused; full session pause requires unanimous vote.
     pauseVotesByPlayerId.delete(state.playerId);
     restartVotesByPlayerId.delete(state.playerId);
@@ -640,6 +664,17 @@ function getActivePlayerIds() {
         }
     }
     return activePlayerIds;
+}
+
+function getAuthoritySnapshotAgeMs(now = Date.now()) {
+    if (authorityPlayerId === null || lastAuthoritySnapshotAt <= 0) {
+        return Number.POSITIVE_INFINITY;
+    }
+    return Math.max(0, now - lastAuthoritySnapshotAt);
+}
+
+function isCombatMutationFrozen(now = Date.now()) {
+    return getAuthoritySnapshotAgeMs(now) > AUTHORITY_SNAPSHOT_STALL_MS;
 }
 
 function recomputeServerPauseState() {
@@ -687,6 +722,8 @@ function resetAuthoritativeCombatState() {
     authoritativeCombatBaselineReady = false;
     pendingServerEnemyHits.length = 0;
     consumedEnemyProjectileIds.clear();
+    consumedTowerProjectileIds.clear();
+    enemyContactCooldownByTarget.clear();
 }
 
 function clearPendingReservations() {
@@ -930,6 +967,166 @@ function applyEnemyProjectileDamageAuthority(enemyProjectiles, playerStates, civ
         survivors.push(projectile);
     }
     return survivors;
+}
+
+function applyTowerProjectileDamageAuthority(towerProjectiles, enemyEntries) {
+    if (!Array.isArray(towerProjectiles) || towerProjectiles.length === 0 || !Array.isArray(enemyEntries)) {
+        return towerProjectiles;
+    }
+    const minAliveTick = tick - 1200;
+    for (const [projectileId, hitTick] of consumedTowerProjectileIds) {
+        if (hitTick < minAliveTick) {
+            consumedTowerProjectileIds.delete(projectileId);
+        }
+    }
+    const survivors = [];
+    for (const projectile of towerProjectiles) {
+        const projectileId = Math.floor(Number(projectile?.id) || 0);
+        if (projectileId > 0 && consumedTowerProjectileIds.has(projectileId)) {
+            continue;
+        }
+        const centerX = Number(projectile?.x) + SERVER_TOWER_PROJECTILE_RADIUS;
+        const centerY = Number(projectile?.y) + SERVER_TOWER_PROJECTILE_RADIUS;
+        if (!Number.isFinite(centerX) || !Number.isFinite(centerY)) {
+            continue;
+        }
+        let consumed = false;
+        for (const enemy of enemyEntries) {
+            if (!enemy) {
+                continue;
+            }
+            const enemyHp = Math.max(0, Number(enemy.hp) || 0);
+            if (enemyHp <= 0) {
+                continue;
+            }
+            const ex = Number(enemy.x) + SERVER_ENEMY_RADIUS;
+            const ey = Number(enemy.y) + SERVER_ENEMY_RADIUS;
+            if (!Number.isFinite(ex) || !Number.isFinite(ey)) {
+                continue;
+            }
+            const dx = ex - centerX;
+            const dy = ey - centerY;
+            const hitDistance = SERVER_ENEMY_RADIUS + SERVER_TOWER_PROJECTILE_RADIUS;
+            if ((dx * dx + dy * dy) > (hitDistance * hitDistance)) {
+                continue;
+            }
+            enemy.hp = Math.max(0, enemyHp - SERVER_TOWER_PROJECTILE_DAMAGE);
+            consumed = true;
+            serverPerf.towerProjectileDamageApplied += 1;
+            serverPerf.towerProjectileEnemyHits += 1;
+            if (projectileId > 0) {
+                consumedTowerProjectileIds.set(projectileId, tick);
+            }
+            break;
+        }
+        if (!consumed) {
+            survivors.push(projectile);
+        }
+    }
+    return survivors;
+}
+
+function applyEnemyMeleeContactDamageAuthority(enemyEntries, playerStates, civilians) {
+    if (!Array.isArray(enemyEntries) || enemyEntries.length === 0) {
+        return;
+    }
+    const now = Date.now();
+    const staleBefore = now - 30000;
+    for (const [key, ts] of enemyContactCooldownByTarget) {
+        if (ts < staleBefore) {
+            enemyContactCooldownByTarget.delete(key);
+        }
+    }
+
+    for (const enemy of enemyEntries) {
+        if (!enemy || (Number(enemy.hp) || 0) <= 0) {
+            continue;
+        }
+        const enemyId = Math.floor(Number(enemy.id) || 0);
+        if (enemyId <= 0) {
+            continue;
+        }
+        const ex = Number(enemy.x) + SERVER_ENEMY_RADIUS;
+        const ey = Number(enemy.y) + SERVER_ENEMY_RADIUS;
+        if (!Number.isFinite(ex) || !Number.isFinite(ey)) {
+            continue;
+        }
+
+        let consumedContact = false;
+        if (Array.isArray(playerStates)) {
+            for (const playerState of playerStates) {
+                if (!playerState || playerState.isDead) {
+                    continue;
+                }
+                const playerId = Math.floor(Number(playerState.playerId) || 0);
+                if (playerId <= 0) {
+                    continue;
+                }
+                const px = Number(playerState.x);
+                const py = Number(playerState.y);
+                if (!Number.isFinite(px) || !Number.isFinite(py)) {
+                    continue;
+                }
+                const key = `e:${enemyId}:p:${playerId}`;
+                const lastHitAt = Number(enemyContactCooldownByTarget.get(key) || 0);
+                if (now - lastHitAt < SERVER_ENEMY_CONTACT_COOLDOWN_MS) {
+                    continue;
+                }
+                const dx = px - ex;
+                const dy = py - ey;
+                const hitDistance = SERVER_ENEMY_RADIUS + SERVER_PLAYER_RADIUS;
+                if ((dx * dx + dy * dy) > (hitDistance * hitDistance)) {
+                    continue;
+                }
+                playerState.hp = Math.max(0, Math.floor(Number(playerState.hp) || 0) - SERVER_ENEMY_CONTACT_DAMAGE);
+                if (playerState.hp <= 0) {
+                    playerState.isDead = true;
+                    playerState.respawnTimer = Math.max(SERVER_PLAYER_RESPAWN_SECONDS, Number(playerState.respawnTimer) || 0);
+                }
+                enemyContactCooldownByTarget.set(key, now);
+                serverPerf.enemyMeleeDamageApplied += 1;
+                serverPerf.enemyMeleePlayerHits += 1;
+                consumedContact = true;
+                break;
+            }
+        }
+        if (consumedContact || !Array.isArray(civilians)) {
+            continue;
+        }
+        for (const civilian of civilians) {
+            if (!civilian || civilian.isDead) {
+                continue;
+            }
+            const civilianId = Math.floor(Number(civilian.id) || 0);
+            if (civilianId <= 0) {
+                continue;
+            }
+            const cx = Number(civilian.x);
+            const cy = Number(civilian.y);
+            if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
+                continue;
+            }
+            const key = `e:${enemyId}:c:${civilianId}`;
+            const lastHitAt = Number(enemyContactCooldownByTarget.get(key) || 0);
+            if (now - lastHitAt < SERVER_ENEMY_CONTACT_COOLDOWN_MS) {
+                continue;
+            }
+            const dx = cx - ex;
+            const dy = cy - ey;
+            const hitDistance = SERVER_ENEMY_RADIUS + SERVER_CIVILIAN_RADIUS;
+            if ((dx * dx + dy * dy) > (hitDistance * hitDistance)) {
+                continue;
+            }
+            civilian.hp = Math.max(0, Math.floor(Number(civilian.hp) || 0) - SERVER_ENEMY_CONTACT_DAMAGE);
+            if (civilian.hp <= 0) {
+                civilian.isDead = true;
+            }
+            enemyContactCooldownByTarget.set(key, now);
+            serverPerf.enemyMeleeDamageApplied += 1;
+            serverPerf.enemyMeleeCivilianHits += 1;
+            break;
+        }
+    }
 }
 
 function getBuildingFootprint(type) {
@@ -1296,7 +1493,18 @@ function broadcastSnapshot() {
                 enemyProjectilePlayerHits: serverPerf.enemyProjectilePlayerHits,
                 enemyProjectileCivilianHits: serverPerf.enemyProjectileCivilianHits,
                 enemyProjectileBuildingHits: serverPerf.enemyProjectileBuildingHits,
+                towerProjectileDamageApplied: serverPerf.towerProjectileDamageApplied,
+                towerProjectileEnemyHits: serverPerf.towerProjectileEnemyHits,
+                enemyMeleeDamageApplied: serverPerf.enemyMeleeDamageApplied,
+                enemyMeleePlayerHits: serverPerf.enemyMeleePlayerHits,
+                enemyMeleeCivilianHits: serverPerf.enemyMeleeCivilianHits,
+                authoritySnapshotAgeMs: serverPerf.authoritySnapshotAgeMs,
+                combatFrozenBySnapshotStall: serverPerf.combatFrozenBySnapshotStall,
+                combatFreezeTicks: serverPerf.combatFreezeTicks,
+                droppedQueuedEnemyHits: serverPerf.droppedQueuedEnemyHits,
                 aiDirectiveMsAvg: Number(serverPerf.aiDirectiveMsAvg.toFixed(3)),
+                aiDirectiveBudgetMs: Number(serverPerf.aiDirectiveBudgetMs.toFixed(3)),
+                aiDirectiveOverBudgetTicks: serverPerf.aiDirectiveOverBudgetTicks,
                 aiTowerAssignments: serverPerf.aiTowerAssignments,
                 aiRangedAssignments: serverPerf.aiRangedAssignments,
                 aiCivilianAssignments: serverPerf.aiCivilianAssignments
@@ -1330,6 +1538,17 @@ function simulateTick() {
     const dt = Math.min(TICK_MS * 2, elapsedTickMs) / 1000;
     const dtFrames60 = dt * 60;
     const now = Date.now();
+    const authoritySnapshotAgeMs = getAuthoritySnapshotAgeMs(now);
+    const combatMutationsFrozen = isCombatMutationFrozen(now);
+    serverPerf.authoritySnapshotAgeMs = Number.isFinite(authoritySnapshotAgeMs) ? authoritySnapshotAgeMs : -1;
+    serverPerf.combatFrozenBySnapshotStall = combatMutationsFrozen ? 1 : 0;
+    if (combatMutationsFrozen) {
+        serverPerf.combatFreezeTicks += 1;
+        if (pendingServerEnemyHits.length > 0) {
+            serverPerf.droppedQueuedEnemyHits += pendingServerEnemyHits.length;
+            pendingServerEnemyHits.length = 0;
+        }
+    }
     serverSessionTimeSeconds += dt;
     nonPlayerState.sessionTimeSeconds = serverSessionTimeSeconds;
     updateAuthoritativeProducerOutputs(dtFrames60);
@@ -1404,6 +1623,9 @@ function simulateTick() {
     nonPlayerState.aiDirectives = computeServerAiDirectives();
     const aiElapsedMs = performance.now() - aiStartedAt;
     serverPerf.aiDirectiveMsAvg = serverPerf.aiDirectiveMsAvg * 0.9 + aiElapsedMs * 0.1;
+    if (aiElapsedMs > AI_DIRECTIVE_BUDGET_MS) {
+        serverPerf.aiDirectiveOverBudgetTicks += 1;
+    }
     serverPerf.aiTowerAssignments = Object.keys(nonPlayerState.aiDirectives?.towers ?? {}).length;
     serverPerf.aiRangedAssignments = Object.keys(nonPlayerState.aiDirectives?.rangedEnemies ?? {}).length;
     serverPerf.aiCivilianAssignments = Object.keys(nonPlayerState.aiDirectives?.civilians ?? {}).length;
@@ -1495,6 +1717,7 @@ function handleEntitySnapshot(socket, message) {
     if (!state || state.playerId !== authorityPlayerId) {
         return;
     }
+    lastAuthoritySnapshotAt = Date.now();
     const seq = Number(message.seq);
     if (!Number.isFinite(seq) || seq <= nonPlayerState.seq) {
         return;
@@ -1529,15 +1752,24 @@ function handleEntitySnapshot(socket, message) {
     const sanitizedPlayerStates = sanitizePlayerStates(payload.playerStates, quantizePosition);
     const sanitizedCivilians = sanitizeCivilianStates(payload.civilians, quantizePosition);
     const sanitizedPlayerProjectiles = sanitizeProjectileEntries(payload.projectiles?.player, MAX_REPLICATED_PROJECTILES, quantizePosition);
-    const sanitizedTowerProjectiles = sanitizeProjectileEntries(payload.projectiles?.tower, MAX_REPLICATED_PROJECTILES, quantizePosition);
+    let sanitizedTowerProjectiles = sanitizeProjectileEntries(payload.projectiles?.tower, MAX_REPLICATED_PROJECTILES, quantizePosition);
     let sanitizedEnemyProjectiles = sanitizeProjectileEntries(payload.projectiles?.enemy, MAX_REPLICATED_PROJECTILES, quantizePosition);
-    applyQueuedEnemyHitsToEnemyState(sanitizedEnemies);
-    sanitizedEnemyProjectiles = applyEnemyProjectileDamageAuthority(
-        sanitizedEnemyProjectiles,
-        sanitizedPlayerStates,
-        sanitizedCivilians,
-        nonPlayerState.buildingsState
-    );
+    if (!isCombatMutationFrozen()) {
+        applyQueuedEnemyHitsToEnemyState(sanitizedEnemies);
+        sanitizedTowerProjectiles = applyTowerProjectileDamageAuthority(sanitizedTowerProjectiles, sanitizedEnemies);
+        applyEnemyMeleeContactDamageAuthority(sanitizedEnemies, sanitizedPlayerStates, sanitizedCivilians);
+        sanitizedEnemyProjectiles = applyEnemyProjectileDamageAuthority(
+            sanitizedEnemyProjectiles,
+            sanitizedPlayerStates,
+            sanitizedCivilians,
+            nonPlayerState.buildingsState
+        );
+    } else {
+        if (pendingServerEnemyHits.length > 0) {
+            serverPerf.droppedQueuedEnemyHits += pendingServerEnemyHits.length;
+            pendingServerEnemyHits.length = 0;
+        }
+    }
     reconcileAuthoritativeCombatState(sanitizedPlayerStates, effectiveSharedResources);
     nonPlayerState = {
         seq: Math.floor(seq),
@@ -2114,6 +2346,7 @@ wss.on('connection', (socket, request) => {
                 authorityPlayerId = remaining.playerId;
                 break;
             }
+            lastAuthoritySnapshotAt = authorityPlayerId === null ? 0 : Date.now();
             resetAuthoritativeCombatState();
         }
         recomputeServerPauseState();

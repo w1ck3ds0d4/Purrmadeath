@@ -13,7 +13,9 @@ function createProbeClient(index, globalState) {
         nonPlayerSeqLast: 0,
         sessionTimeLast: 0,
         snapshots: 0,
-        regressions: 0
+        regressions: 0,
+        enemyOrderMismatches: 0,
+        civilianOrderMismatches: 0
     };
     const socket = new WebSocket(WS_URL);
     state.socket = socket;
@@ -62,10 +64,18 @@ function createProbeClient(index, globalState) {
         if (!globalState.byTick.has(tick)) {
             globalState.byTick.set(tick, []);
         }
+        const enemyOrder = Array.isArray(message.nonPlayer?.enemies)
+            ? message.nonPlayer.enemies.map((entry) => Number(entry?.id) || 0).join(',')
+            : '';
+        const civilianOrder = Array.isArray(message.nonPlayer?.civilians)
+            ? message.nonPlayer.civilians.map((entry) => Number(entry?.id) || 0).join(',')
+            : '';
         globalState.byTick.get(tick).push({
             clientIndex: index,
             nonPlayerSeq,
-            sessionTime
+            sessionTime,
+            enemyOrder,
+            civilianOrder
         });
     });
 
@@ -84,6 +94,8 @@ async function main() {
         nonPlayerRegressions: 0,
         timeRegressions: 0,
         crossClientTickMismatches: 0,
+        crossClientEnemyOrderMismatches: 0,
+        crossClientCivilianOrderMismatches: 0,
         byTick: new Map()
     };
     const clients = [];
@@ -102,6 +114,14 @@ async function main() {
         if (mismatch) {
             globalState.crossClientTickMismatches += 1;
         }
+        const firstEnemyOrder = snapshots[0].enemyOrder;
+        if (snapshots.some((entry) => entry.enemyOrder !== firstEnemyOrder)) {
+            globalState.crossClientEnemyOrderMismatches += 1;
+        }
+        const firstCivilianOrder = snapshots[0].civilianOrder;
+        if (snapshots.some((entry) => entry.civilianOrder !== firstCivilianOrder)) {
+            globalState.crossClientCivilianOrderMismatches += 1;
+        }
     }
 
     for (const client of clients) {
@@ -119,6 +139,8 @@ async function main() {
         nonPlayerRegressions: globalState.nonPlayerRegressions,
         timeRegressions: globalState.timeRegressions,
         crossClientTickMismatches: globalState.crossClientTickMismatches,
+        crossClientEnemyOrderMismatches: globalState.crossClientEnemyOrderMismatches,
+        crossClientCivilianOrderMismatches: globalState.crossClientCivilianOrderMismatches,
         badMessages: globalState.badMessages,
         socketErrors: globalState.socketErrors
     };
@@ -127,7 +149,9 @@ async function main() {
     const success = summary.tickRegressions === 0
         && summary.nonPlayerRegressions === 0
         && summary.timeRegressions === 0
-        && summary.crossClientTickMismatches === 0;
+        && summary.crossClientTickMismatches === 0
+        && summary.crossClientEnemyOrderMismatches === 0
+        && summary.crossClientCivilianOrderMismatches === 0;
     process.exit(success ? 0 : 1);
 }
 
