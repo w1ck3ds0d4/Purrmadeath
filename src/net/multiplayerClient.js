@@ -189,6 +189,7 @@ export function createMultiplayerClient({
         }
         connectAttempts += 1;
         lastError = null;
+        let helloTimeoutId = null;
         socket = new WebSocket(url);
 
         socket.addEventListener('open', () => {
@@ -200,9 +201,20 @@ export function createMultiplayerClient({
                 joinToken
             });
             onLog(`Multiplayer connected (${url})`);
+            // Guard against servers that accept the socket but never send WELCOME.
+            helloTimeoutId = setTimeout(() => {
+                helloTimeoutId = null;
+                lastError = 'connection_timeout';
+                onLog('[multiplayer] connection timeout: no WELCOME received within 15s');
+                try { socket.close(); } catch { /* ignore */ }
+            }, 15000);
         });
 
         socket.addEventListener('close', () => {
+            if (helloTimeoutId !== null) {
+                clearTimeout(helloTimeoutId);
+                helloTimeoutId = null;
+            }
             connected = false;
             playerId = null;
             snapshotTick = 0;
@@ -237,6 +249,10 @@ export function createMultiplayerClient({
                 return;
             }
             if (message.type === 'welcome') {
+                if (helloTimeoutId !== null) {
+                    clearTimeout(helloTimeoutId);
+                    helloTimeoutId = null;
+                }
                 playerId = message.playerId ?? null;
                 reconnectToken = typeof message.reconnectToken === 'string'
                     ? message.reconnectToken

@@ -1,6 +1,9 @@
 import { PLAYER_MAX_HP } from '../config/constants.js';
 
-const SAVE_STORAGE_KEY = 'purrmadeath_save_v1';
+function getSingleplayerSaveKey(slotId) {
+    const normalized = Math.max(1, Math.min(3, Number(slotId) || 1));
+    return `purrmadeath_save_slot_${normalized}`;
+}
 
 function getMultiplayerCheckpointKey(sessionId) {
     return `purrmadeath_mp_checkpoint_${sessionId}`;
@@ -25,8 +28,10 @@ export function createPersistenceController(deps) {
         updateVisibleWorld,
         updateHud,
         updateHealthHud,
-        updateClockHud
+        updateClockHud,
+        singleplayerSaveSlot = 1
     } = deps;
+    const singleplayerSaveKey = getSingleplayerSaveKey(singleplayerSaveSlot);
 
     function buildSaveStateSnapshot() {
         const pos = getPlayerWorldPosition();
@@ -54,7 +59,7 @@ export function createPersistenceController(deps) {
             return;
         }
         try {
-            localStorage.setItem(SAVE_STORAGE_KEY, JSON.stringify(buildSaveStateSnapshot()));
+            localStorage.setItem(singleplayerSaveKey, JSON.stringify(buildSaveStateSnapshot()));
         } catch {
             // Ignore storage quota failures.
         }
@@ -62,7 +67,7 @@ export function createPersistenceController(deps) {
 
     function clearSavedGameState() {
         try {
-            localStorage.removeItem(SAVE_STORAGE_KEY);
+            localStorage.removeItem(singleplayerSaveKey);
         } catch {
             // Ignore storage access failures.
         }
@@ -85,7 +90,7 @@ export function createPersistenceController(deps) {
     function restoreSavedGameState() {
         let saved = null;
         try {
-            const raw = localStorage.getItem(SAVE_STORAGE_KEY);
+            const raw = localStorage.getItem(singleplayerSaveKey);
             if (!raw) {
                 return false;
             }
@@ -116,10 +121,11 @@ export function createPersistenceController(deps) {
 
         playerState.hp = Number.isFinite(playerSnapshot.hp) ? playerSnapshot.hp : PLAYER_MAX_HP;
         playerState.maxHp = Number.isFinite(playerSnapshot.maxHp) ? playerSnapshot.maxHp : PLAYER_MAX_HP;
-        playerState.invulnFrames = Number.isFinite(playerSnapshot.invulnFrames) ? playerSnapshot.invulnFrames : 0;
+        // Do not restore transient invulnerability/cooldowns to avoid stale "first action ignored" behavior.
+        playerState.invulnFrames = 0;
         playerState.isDead = false;
         playerCombat.weapon = playerSnapshot.weapon === 'pistol' ? 'pistol' : 'sword';
-        playerCombat.cooldownFrames = Number.isFinite(playerSnapshot.cooldownFrames) ? playerSnapshot.cooldownFrames : 0;
+        playerCombat.cooldownFrames = 0;
         setGameTimeSeconds(Number.isFinite(saved.gameTimeSeconds) ? saved.gameTimeSeconds : 0);
 
         setPlayerWorldPosition({
@@ -184,8 +190,20 @@ export function createPersistenceController(deps) {
         }
     }
 
+    function clearMultiplayerCheckpoint(sessionId) {
+        if (!sessionId) {
+            return;
+        }
+        try {
+            localStorage.removeItem(getMultiplayerCheckpointKey(sessionId));
+        } catch {
+            // Ignore storage access failures.
+        }
+    }
+
     return {
         clearMultiplayerCheckpointCache,
+        clearMultiplayerCheckpoint,
         clearSavedGameState,
         persistMultiplayerCheckpoint,
         persistSaveState,

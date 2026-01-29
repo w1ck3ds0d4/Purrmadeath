@@ -7,6 +7,8 @@ function getDefaultHost() {
 
 const STORAGE_LAST_MULTIPLAYER = 'purrmadeath:lastMultiplayer';
 const STORAGE_JOIN_HISTORY = 'purrmadeath:joinHistory';
+const SINGLEPLAYER_SLOT_KEYS = [1, 2, 3].map((slot) => `purrmadeath_save_slot_${slot}`);
+const MULTIPLAYER_HOST_SLOT_KEYS = [1, 2, 3].map((slot) => `purrmadeath_mp_checkpoint_host_slot_${slot}`);
 
 function encodeSessionCode(payload) {
     const raw = JSON.stringify(payload);
@@ -44,7 +46,8 @@ function parseInviteInput(inviteOrCode) {
         try {
             const url = new URL(raw);
             const host = url.searchParams.get('mpHost');
-            const port = Number(url.searchParams.get('mpPort') || 8080) || 8080;
+            let port = Number(url.searchParams.get('mpPort') || 8080) || 8080;
+            if (port < 1 || port > 65535) port = 8080;
             const joinToken = url.searchParams.get('joinToken') || '';
             if (!host) {
                 return null;
@@ -59,7 +62,8 @@ function parseInviteInput(inviteOrCode) {
         return null;
     }
     const host = typeof decoded.h === 'string' ? decoded.h : '';
-    const port = Number(decoded.p || 8080) || 8080;
+    let port = Number(decoded.p || 8080) || 8080;
+    if (port < 1 || port > 65535) port = 8080;
     const joinToken = typeof decoded.t === 'string' ? decoded.t : '';
     if (!host) {
         return null;
@@ -197,6 +201,27 @@ function getJoinHistory() {
         }));
 }
 
+function readSaveSlotMeta(storageKey) {
+    try {
+        const raw = window.localStorage.getItem(storageKey);
+        if (!raw) {
+            return null;
+        }
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') {
+            return null;
+        }
+        const savedAt = Number(parsed.savedAt) || 0;
+        return {
+            exists: true,
+            savedAt,
+            label: savedAt > 0 ? new Date(savedAt).toLocaleString() : 'Existing save'
+        };
+    } catch {
+        return null;
+    }
+}
+
 async function copyToClipboard(text) {
     const value = String(text || '');
     if (!value) {
@@ -286,7 +311,7 @@ export function showMainMenu() {
             note.style.fontSize = '12px';
             note.style.opacity = '0.85';
             note.textContent = 'Singleplayer auto-resumes save. Multiplayer supports host/join by invite link or code.';
-            singleBtn.onclick = () => finish({ mode: 'singleplayer' });
+            singleBtn.onclick = () => renderSingleplayerSlots();
             multiBtn.onclick = () => renderMultiplayerMenu();
             if (reconnect) {
                 reconnectBtn = createButton(`Reconnect (${reconnect.host}:${reconnect.port})`);
@@ -307,6 +332,46 @@ export function showMainMenu() {
             }
         }
 
+        function renderSingleplayerSlots() {
+            clearElement(content);
+            status.textContent = '';
+            const title = document.createElement('div');
+            title.style.fontSize = '12px';
+            title.style.opacity = '0.9';
+            title.textContent = 'Singleplayer slots: load existing or create new run.';
+            content.append(title);
+            for (let slot = 1; slot <= 3; slot++) {
+                const key = SINGLEPLAYER_SLOT_KEYS[slot - 1];
+                const meta = readSaveSlotMeta(key);
+                const slotCard = document.createElement('div');
+                slotCard.style.border = '1px solid #355b42';
+                slotCard.style.background = '#0f1e15';
+                slotCard.style.padding = '8px';
+                slotCard.style.display = 'grid';
+                slotCard.style.gap = '8px';
+                const slotLabel = document.createElement('div');
+                slotLabel.style.fontSize = '12px';
+                slotLabel.textContent = `Slot ${slot}: ${meta?.exists ? `Saved (${meta.label})` : 'Empty'}`;
+                const newBtn = createButton(`Start New (Slot ${slot})`);
+                const loadBtn = createButton(`Load Slot ${slot}`);
+                loadBtn.disabled = !meta?.exists;
+                loadBtn.style.opacity = meta?.exists ? '1' : '0.5';
+                newBtn.onclick = () => finish({
+                    mode: 'singleplayer',
+                    singleplayer: { saveSlot: slot, startFresh: true }
+                });
+                loadBtn.onclick = () => finish({
+                    mode: 'singleplayer',
+                    singleplayer: { saveSlot: slot, startFresh: false }
+                });
+                slotCard.append(slotLabel, newBtn, loadBtn);
+                content.append(slotCard);
+            }
+            const backBtn = createButton('Back');
+            backBtn.onclick = () => renderRoot();
+            content.append(backBtn);
+        }
+
         function renderMultiplayerMenu() {
             clearElement(content);
             status.textContent = '';
@@ -325,7 +390,8 @@ export function showMainMenu() {
             const hostInput = createInput('Host/IP (LAN)', defaultHost);
             const portInput = createInput('Port', '8080');
             const tokenInput = createInput('Join token (optional)', '');
-            const startBtn = createButton('Start Hosted Session');
+            const startNewBtn = createButton('Start New Hosted Session');
+            const loadExistingBtn = createButton('Load Existing Host Save');
             const backBtn = createButton('Back');
             const copyUrlBtn = createButton('Copy Invite URL');
             const copyCodeBtn = createButton('Copy Session Code');
@@ -345,6 +411,23 @@ export function showMainMenu() {
             hostCard.style.padding = '8px';
             hostCard.style.whiteSpace = 'pre-wrap';
             hostCard.textContent = 'Host Session Card\nPlayers: 1/4 (you)\nStatus: OPEN';
+            const slotInput = createInput('Host save slot (1-3)', '1');
+            const slotInfo = document.createElement('div');
+            slotInfo.style.fontSize = '12px';
+            slotInfo.style.opacity = '0.9';
+
+            function updateSlotInfo() {
+                const slot = Math.max(1, Math.min(3, Number(slotInput.value) || 1));
+                const slotMeta = readSaveSlotMeta(MULTIPLAYER_HOST_SLOT_KEYS[slot - 1]);
+                slotInfo.textContent = slotMeta?.exists
+                    ? `Host Slot ${slot}: Saved (${slotMeta.label})`
+                    : `Host Slot ${slot}: Empty`;
+                loadExistingBtn.disabled = !slotMeta?.exists;
+                loadExistingBtn.style.opacity = slotMeta?.exists ? '1' : '0.5';
+            }
+            slotInput.oninput = () => {
+                updateSlotInfo();
+            };
 
             function updateSharePreview() {
                 const host = hostInput.value.trim() || defaultHost;
@@ -369,10 +452,11 @@ export function showMainMenu() {
                 status.textContent = ok ? 'Session code copied.' : 'Failed to copy session code.';
             };
 
-            startBtn.onclick = () => {
+            function finishHostSelection(resumeCheckpoint) {
                 const host = hostInput.value.trim() || defaultHost;
                 const port = Number(portInput.value) || 8080;
                 const joinToken = tokenInput.value.trim();
+                const saveSlot = Math.max(1, Math.min(3, Number(slotInput.value) || 1));
                 saveLastMultiplayer({ host, port, joinToken });
                 finish({
                     mode: 'multiplayer',
@@ -380,12 +464,30 @@ export function showMainMenu() {
                         host,
                         port,
                         joinToken,
-                        lanHostHint: host
+                        lanHostHint: host,
+                        saveSlot,
+                        resumeCheckpoint
                     }
                 });
-            };
+            }
+            startNewBtn.onclick = () => finishHostSelection(false);
+            loadExistingBtn.onclick = () => finishHostSelection(true);
             backBtn.onclick = () => renderMultiplayerMenu();
-            content.append(hostCard, hostInput, portInput, tokenInput, shareLabel, copyUrlBtn, copyCodeBtn, startBtn, backBtn);
+            updateSlotInfo();
+            content.append(
+                hostCard,
+                slotInput,
+                slotInfo,
+                hostInput,
+                portInput,
+                tokenInput,
+                shareLabel,
+                copyUrlBtn,
+                copyCodeBtn,
+                startNewBtn,
+                loadExistingBtn,
+                backBtn
+            );
         }
 
         function renderJoinMenu() {
