@@ -1,0 +1,38 @@
+{
+  "name": "purrmadeath",
+  "version": "0.1.0",
+  "description": "2D co-op roguelike — base building, procedural world, up to 4 players",
+  "private": true,
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "concurrently -n \"app,server\" -c \"cyan,green\" \"electron-vite dev\" \"npm run server:dev\"",
+    "server:dev": "nodemon --watch server --watch shared --ext ts --exec \"tsx server/server.ts\"",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "server": "tsx server/server.ts",
+    "lint": "eslint src server shared --ext .ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pixi.js": "^8.6.0",
+    "simplex-noise": "^4.0.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^20.14.0",
+    "@types/ws": "^8.5.12",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "concurrently": "^8.2.2",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.0",
+    "electron-vite": "^2.3.0",
+    "eslint": "^9.0.0",
+    "globals": "^15.0.0",
+    "nodemon": "^3.1.4",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0"
+  }
+}

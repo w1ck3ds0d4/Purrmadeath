@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "paths": {
+      "@shared/*": ["./shared/*"],
+      "@client/*": ["./src/renderer/src/*"]
+    }
+  },
+  "include": [
+    "shared/**/*",
+    "src/**/*",
+    "server/**/*",
+    "electron.vite.config.ts",
+    "eslint.config.js"
+  ],
+  "exclude": ["node_modules", "out", "dist"]
+}
