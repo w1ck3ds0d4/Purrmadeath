@@ -1,10 +1,11 @@
-import { Application, Graphics, Text } from 'pixi.js';
+import { Application } from 'pixi.js';
 
 /**
- * Renderer wraps the Pixi.js Application and owns the top-level stage.
+ * Renderer owns the Pixi.js Application and the root stage.
+ * All game layers (world, entities, UI) are added as children of stage.
  *
- * Phase 0: minimal setup — colored rectangle + debug text to confirm rendering works.
- * Phase 1+: will expose Camera, chunk layers, entity sprite layer, UI layer.
+ * Phase 1: minimal setup — just canvas + ticker.
+ * Phase 2+: will expose layer containers (worldLayer, entityLayer, uiLayer).
  */
 export class Renderer {
   private app: Application;
@@ -16,46 +17,33 @@ export class Renderer {
   /** Initialize and mount the canvas into the given container element. */
   async init(container: HTMLElement): Promise<void> {
     await this.app.init({
-      resizeTo: container,          // canvas always fills the container
-      backgroundColor: 0x0a0a0f,   // matches body background
-      antialias: false,             // pixel-accurate (no blur on tile edges)
+      resizeTo: container,
+      backgroundColor: 0x0a0a0f,
+      antialias: false,             // pixel-accurate edges
       resolution: window.devicePixelRatio || 1,
-      autoDensity: true,            // scale canvas correctly on hi-DPI screens
+      autoDensity: true,            // correct hi-DPI scaling
     });
 
     container.appendChild(this.app.canvas);
-
-    // ── Phase 0 placeholder content ──────────────────────────────────────────
-    // A colored square in the center confirms Pixi.js is working.
-    const square = new Graphics();
-    square.rect(0, 0, 120, 120);
-    square.fill({ color: 0x4a90d9 });
-    square.pivot.set(60, 60); // center the pivot so positioning is intuitive
-    this.app.stage.addChild(square);
-
-    // Keep the square centered on resize
-    const reposition = () => {
-      square.position.set(this.app.screen.width / 2, this.app.screen.height / 2);
-    };
-    reposition();
-    this.app.renderer.on('resize', reposition);
-
-    // Debug label in the top-left corner
-    const label = new Text({
-      text: 'Purrmadeath — Phase 0',
-      style: { fontSize: 13, fill: 0x00ff88, fontFamily: 'monospace' },
-    });
-    label.position.set(10, 10);
-    this.app.stage.addChild(label);
   }
 
-  /** The root Pixi stage — add child containers here. */
+  /** The root Pixi stage. Add layer containers here. */
   get stage() {
     return this.app.stage;
   }
 
+  /** Screen dimensions in CSS pixels. */
   get screen() {
     return this.app.screen;
+  }
+
+  /**
+   * The Pixi Ticker — drives the game's render loop.
+   * Register update callbacks with: renderer.ticker.add((ticker) => { ... })
+   * ticker.deltaMS gives elapsed ms since last frame.
+   */
+  get ticker() {
+    return this.app.ticker;
   }
 
   destroy(): void {
