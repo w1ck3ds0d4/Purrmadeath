@@ -5,15 +5,126 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Purrmadeath</title>
     <style>
-      /* Full-screen game canvas — no scroll, no margin */
+      /* ── Base ──────────────────────────────────────────────────────────── */
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0f; }
       #game { width: 100%; height: 100%; display: block; }
+
+      /* ── Overlay container — sits above the canvas ─────────────────────── */
+      #overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 10;
+        pointer-events: none; /* pass-through by default; buttons enable themselves */
+      }
+
+      /* ── Shared screen style ────────────────────────────────────────────── */
+      .screen {
+        position: absolute;
+        inset: 0;
+        display: none; /* shown via JS when active */
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        pointer-events: auto;
+        background: rgba(4, 4, 10, 0.74);
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+      }
+
+      /* ── Main menu ─────────────────────────────────────────────────────── */
+      .game-title {
+        font-family: 'Segoe UI', 'Helvetica Neue', sans-serif;
+        font-size: 72px;
+        font-weight: 900;
+        color: #e8c96a;
+        letter-spacing: 6px;
+        text-shadow: 0 0 40px rgba(232, 201, 106, 0.45);
+        margin-bottom: 8px;
+        user-select: none;
+      }
+
+      .game-subtitle {
+        font-family: monospace;
+        font-size: 13px;
+        color: #6a7a8a;
+        letter-spacing: 3px;
+        margin-bottom: 56px;
+        user-select: none;
+      }
+
+      /* ── Pause menu ─────────────────────────────────────────────────────── */
+      .pause-title {
+        font-family: 'Segoe UI', sans-serif;
+        font-size: 40px;
+        font-weight: 700;
+        color: #ccd8ea;
+        letter-spacing: 5px;
+        margin-bottom: 40px;
+        user-select: none;
+      }
+
+      /* ── Buttons (shared) ───────────────────────────────────────────────── */
+      .menu-btn {
+        font-family: 'Segoe UI', monospace;
+        font-size: 17px;
+        color: #d8e2ef;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        padding: 13px 52px;
+        margin: 5px 0;
+        cursor: pointer;
+        letter-spacing: 1px;
+        min-width: 230px;
+        transition: background 0.15s ease, border-color 0.15s ease, color 0.12s ease;
+        outline: none;
+      }
+
+      .menu-btn:hover {
+        background: rgba(255, 255, 255, 0.13);
+        border-color: rgba(255, 255, 255, 0.32);
+        color: #ffffff;
+      }
+
+      .menu-btn:active {
+        background: rgba(255, 255, 255, 0.20);
+      }
+
+      .menu-btn.muted {
+        color: #6a7a8a;
+        border-color: rgba(255, 255, 255, 0.07);
+      }
+
+      .menu-btn.muted:hover {
+        color: #9ab0c8;
+        border-color: rgba(255, 255, 255, 0.18);
+      }
     </style>
   </head>
   <body>
-    <!-- Pixi.js appends its canvas here -->
+    <!-- Pixi.js canvas is appended here -->
     <div id="game"></div>
+
+    <!-- HTML overlay for menus — world renders as an animated background -->
+    <div id="overlay">
+
+      <!-- ── Main Menu ─────────────────────────────────────────────────────── -->
+      <div id="menu-screen" class="screen">
+        <h1 class="game-title">PURRMADEATH</h1>
+        <p class="game-subtitle">co-op &nbsp;·&nbsp; roguelike &nbsp;·&nbsp; survival</p>
+        <button id="btn-new-game" class="menu-btn">New Game</button>
+        <button id="btn-settings" class="menu-btn muted">Settings</button>
+      </div>
+
+      <!-- ── Pause Screen ──────────────────────────────────────────────────── -->
+      <div id="pause-screen" class="screen">
+        <h2 class="pause-title">PAUSED</h2>
+        <button id="btn-resume" class="menu-btn">Resume</button>
+        <button id="btn-quit"   class="menu-btn muted">Quit to Menu</button>
+      </div>
+
+    </div>
+
     <script type="module" src="./src/game.ts"></script>
   </body>
 </html>

@@ -1,6 +1,7 @@
 import { CHUNK_SIZE, TILE_SIZE, VIEW_RADIUS_CHUNKS } from '@shared/constants';
 import { Chunk } from '@shared/world/Chunk';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
+import { TileId } from '@shared/world/TileRegistry';
 import type { ChunkCoord } from '@shared/types';
 
 /**
@@ -29,6 +30,20 @@ export class ChunkManager {
   /** True if the chunk is already in the cache. */
   has(cx: number, cy: number): boolean {
     return this.cache.has(chunkKey(cx, cy));
+  }
+
+  /**
+   * Returns the tile ID at world tile coordinates (tx, ty).
+   * Loads the chunk on demand — needed for collision queries near unloaded chunk edges.
+   */
+  getTile(tx: number, ty: number): TileId {
+    const cx = Math.floor(tx / CHUNK_SIZE);
+    const cy = Math.floor(ty / CHUNK_SIZE);
+    const chunk = this.getOrGenerate(cx, cy);
+    // Handle negative tile coords: JS % can produce negative values
+    const ltx = ((tx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const lty = ((ty % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    return chunk.getTile(ltx, lty) as TileId;
   }
 
   // ── Visibility ──────────────────────────────────────────────────────────────

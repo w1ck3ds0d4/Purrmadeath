@@ -20,7 +20,7 @@ export class Camera {
 
   // ── Zoom ────────────────────────────────────────────────────────────────────
   /** Screen pixels per world pixel. >1 = zoomed in, <1 = zoomed out. */
-  zoom = 0.5;
+  zoom = 1.5;
 
   // ── Look-around state ────────────────────────────────────────────────────────
   private lookOffsetX = 0;

@@ -36,3 +36,31 @@ export const CHUNK_SIZE = 32;
 
 /** How many chunks around the player are kept loaded. */
 export const VIEW_RADIUS_CHUNKS = 3;
+
+// ─── Player ───────────────────────────────────────────────────────────────────
+
+/** Collision and render radius of the player circle in world pixels. */
+export const PLAYER_RADIUS = 12;
+
+/** Base movement speed in world pixels per second. */
+export const PLAYER_BASE_SPEED = 180;
+
+/** Full health at spawn. */
+export const PLAYER_MAX_HEALTH = 100;
+
+/** Full stamina at spawn. */
+export const PLAYER_MAX_STAMINA = 100;
+
+/** Stamina recovered per second while passive (not sprinting). */
+export const PLAYER_STAMINA_REGEN = 15;
+
+/**
+ * One color per player slot (index 0–3).
+ * P1=blue · P2=red · P3=green · P4=yellow
+ */
+export const PLAYER_COLORS: readonly number[] = [
+  0x4a90d9, // P1 — blue
+  0xe05252, // P2 — red
+  0x52c062, // P3 — green
+  0xe0a830, // P4 — yellow
+];
