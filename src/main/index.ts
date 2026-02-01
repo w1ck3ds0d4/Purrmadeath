@@ -1,10 +1,81 @@
-import { app, BrowserWindow, shell, session } from 'electron';
+import { app, BrowserWindow, shell, session, ipcMain } from 'electron';
 import { join } from 'path';
+import * as dgram from 'node:dgram';
+import { DISCOVERY_PORT } from '../../server/discovery';
+import type { DiscoveryBeaconPayload } from '../../server/discovery';
 
-// Only suppress Chromium sandbox warnings in dev — never in packaged builds.
 if (!app.isPackaged) {
   process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true';
 }
+
+// ─── LAN Session Discovery ─────────────────────────────────────────────────────
+// Listens for UDP beacon broadcasts from game servers on the LAN.
+// The renderer resolves a 4-letter code → host IP via IPC instead of typing IPs.
+
+interface DiscoveredSession {
+  code: string;
+  ip: string;
+  port: number;
+  playerCount: number;
+  maxPlayers: number;
+  lastSeen: number;
+}
+
+const discoveredSessions = new Map<string, DiscoveredSession>(); // key: `ip:code`
+const SESSION_EXPIRY_MS = 8_000;
+
+function startDiscoveryListener(): void {
+  const sock = dgram.createSocket('udp4');
+
+  sock.on('message', (buf, rinfo) => {
+    try {
+      const payload = JSON.parse(buf.toString()) as DiscoveryBeaconPayload;
+      if (payload.v !== 1 || !payload.code) return;
+
+      const key = `${rinfo.address}:${payload.code}`;
+      discoveredSessions.set(key, {
+        code: payload.code,
+        ip: rinfo.address,
+        port: payload.port,
+        playerCount: payload.playerCount,
+        maxPlayers: payload.maxPlayers,
+        lastSeen: Date.now(),
+      });
+    } catch {
+      // malformed packet — ignore
+    }
+  });
+
+  sock.on('error', (err) => {
+    console.warn('[Discovery] Listener error:', err.message);
+  });
+
+  sock.bind(DISCOVERY_PORT, '0.0.0.0', () => {
+    console.log(`[Main] LAN discovery listening on UDP ${DISCOVERY_PORT}`);
+  });
+
+  // Prune stale sessions every 4 s
+  setInterval(() => {
+    const cutoff = Date.now() - SESSION_EXPIRY_MS;
+    for (const [key, s] of discoveredSessions) {
+      if (s.lastSeen < cutoff) discoveredSessions.delete(key);
+    }
+  }, 4_000);
+}
+
+// IPC: renderer → list of active sessions
+ipcMain.handle('discover-sessions', () => [...discoveredSessions.values()]);
+
+// IPC: renderer resolves code → { ip, port } or null
+ipcMain.handle('resolve-session-code', (_event, code: string) => {
+  const upper = (code ?? '').toUpperCase().trim();
+  for (const s of discoveredSessions.values()) {
+    if (s.code === upper) return { ip: s.ip, port: s.port };
+  }
+  return null;
+});
+
+// ─── Window ────────────────────────────────────────────────────────────────────
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -13,17 +84,14 @@ function createWindow(): void {
     minWidth: 800,
     minHeight: 600,
     title: 'Purrmadeath',
-    backgroundColor: '#0a0a0f', // matches CSS body background, avoids white flash
+    backgroundColor: '#0a0a0f',
     webPreferences: {
-      // Preload runs in the renderer but has access to Node APIs.
-      // It bridges safe APIs to the game via contextBridge.
       preload: join(__dirname, '../preload/index.js'),
-      nodeIntegration: false,  // never expose Node directly to renderer
-      contextIsolation: true,  // isolate preload from renderer JS context
+      nodeIntegration: false,
+      contextIsolation: true,
     },
   });
 
-  // electron-vite sets ELECTRON_RENDERER_URL in dev mode (points to Vite dev server)
   if (process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL']);
     win.webContents.openDevTools({ mode: 'detach' });
@@ -31,21 +99,13 @@ function createWindow(): void {
     win.loadFile(join(__dirname, '../renderer/index.html'));
   }
 
-  // Only open https:// links in the system browser.
-  // Blocking file://, javascript:, and other schemes prevents the renderer
-  // from triggering unintended local file access or code execution.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('https://')) {
-      shell.openExternal(url);
-    }
-    return { action: 'deny' }; // always deny Electron from opening a new window
+    if (url.startsWith('https://')) shell.openExternal(url);
+    return { action: 'deny' };
   });
 }
 
 app.whenReady().then(() => {
-  // Apply a Content-Security-Policy to all renderer responses.
-  // Restricts what content the renderer can load, mitigating XSS impact.
-  // 'unsafe-eval' is required by Vite and Pixi.js in dev; tighten for prod if needed.
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {
@@ -53,19 +113,20 @@ app.whenReady().then(() => {
         'Content-Security-Policy': [
           [
             "default-src 'self'",
-            "script-src 'self' 'unsafe-eval'",   // Vite HMR + Pixi.js WebGL shaders
+            "script-src 'self' 'unsafe-eval'",
             "style-src 'self' 'unsafe-inline'",
-            "img-src 'self' data: blob:",          // Pixi.js uses blob: for textures
-            "connect-src 'self' ws://localhost:*", // WebSocket to local game server
+            "img-src 'self' data: blob:",
+            // ws: allows WebSocket to any IP (required for LAN play to non-localhost)
+            "connect-src 'self' ws: wss:",
           ].join('; '),
         ],
       },
     });
   });
 
+  startDiscoveryListener();
   createWindow();
 
-  // macOS: re-create the window when the dock icon is clicked with no windows open
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

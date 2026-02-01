@@ -99,6 +99,241 @@
         color: #9ab0c8;
         border-color: rgba(255, 255, 255, 0.18);
       }
+
+      /* ── Menu column — fixed-width wrapper so all items share the same width */
+      .menu-col {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        width: 320px;
+      }
+
+      /* Stretch direct-child buttons, inputs, and the connect-row to fill the column.
+         Using > (not space) so the compact Join button inside .connect-row is excluded. */
+      .menu-col > .menu-btn,
+      .menu-col > .connect-row,
+      .menu-col > .menu-input {
+        width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+      }
+
+      /* ── Connect form (inside menu) ─────────────────────────────────────── */
+      .connect-row {
+        display: flex;
+        gap: 8px;
+        margin: 5px 0;
+        align-items: stretch;
+      }
+
+      /* Join button — shares menu-btn visuals but no margin and matches input font-size */
+      .join-menu-btn {
+        font-family: 'Segoe UI', monospace;
+        font-size: 15px;
+        color: #d8e2ef;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        padding: 12px 24px;
+        cursor: pointer;
+        letter-spacing: 1px;
+        white-space: nowrap;
+        transition: background 0.15s ease, border-color 0.15s ease, color 0.12s ease;
+        outline: none;
+      }
+
+      .join-menu-btn:hover {
+        background: rgba(255, 255, 255, 0.13);
+        border-color: rgba(255, 255, 255, 0.32);
+        color: #ffffff;
+      }
+
+      .join-menu-btn:active { background: rgba(255, 255, 255, 0.20); }
+
+      .menu-input {
+        font-family: monospace;
+        font-size: 15px;
+        color: #d8e2ef;
+        background: rgba(255, 255, 255, 0.07);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        padding: 12px 16px;
+        outline: none;
+        min-width: 0;
+        flex: none; /* override per-container below */
+      }
+
+      /* Inside the IP row the input should grow to fill remaining space */
+      .connect-row .menu-input { flex: 1; }
+
+      .menu-input::placeholder { color: #4a5a6a; }
+
+      .menu-input:focus {
+        border-color: rgba(255, 255, 255, 0.38);
+        background: rgba(255, 255, 255, 0.10);
+      }
+
+      .menu-btn.compact {
+        min-width: 0;
+        padding: 12px 24px;
+        white-space: nowrap;
+      }
+
+      /* ── Lobby screen ───────────────────────────────────────────────────── */
+      #lobby-screen {
+        align-items: stretch;
+        justify-content: flex-start;
+        padding: 48px;
+        gap: 0;
+      }
+
+      .lobby-title {
+        font-family: 'Segoe UI', sans-serif;
+        font-size: 26px;
+        font-weight: 700;
+        color: #ccd8ea;
+        letter-spacing: 4px;
+        margin-bottom: 4px;
+        user-select: none;
+      }
+
+      /* Share row (code + IP copy buttons) */
+      #lobby-share-row {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 28px;
+        flex-wrap: wrap;
+      }
+
+      .lobby-share-item {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(30,40,55,0.6);
+        border: 1px solid rgba(255,255,255,0.07);
+        border-radius: 4px;
+        padding: 4px 10px 4px 8px;
+      }
+
+      .lobby-share-label {
+        font-family: monospace;
+        font-size: 10px;
+        color: #4a5a6a;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        user-select: none;
+      }
+
+      .lobby-share-value {
+        font-family: monospace;
+        font-size: 14px;
+        font-weight: 700;
+        color: #9bb8d8;
+        letter-spacing: 3px;
+        user-select: all;
+      }
+
+      .btn-copy {
+        font-family: monospace;
+        font-size: 10px;
+        color: #4a5a6a;
+        background: none;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 3px;
+        padding: 2px 6px;
+        cursor: pointer;
+        transition: color 0.15s, border-color 0.15s;
+        user-select: none;
+      }
+
+      .btn-copy:hover { color: #9bb8d8; border-color: rgba(255,255,255,0.25); }
+      .btn-copy.copied { color: #6bcf7f; border-color: #6bcf7f; }
+
+      .lobby-layout {
+        display: flex;
+        gap: 28px;
+        flex: 1;
+        min-height: 0;
+      }
+
+      /* Player list */
+      .lobby-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .lobby-panel-title {
+        font-family: monospace;
+        font-size: 11px;
+        color: #4a5a6a;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        margin-bottom: 4px;
+      }
+
+      #lobby-player-list {
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-width: 220px;
+      }
+
+      .lobby-slot {
+        font-family: 'Segoe UI', sans-serif;
+        font-size: 15px;
+        padding: 10px 16px;
+        border: 1px solid rgba(255, 255, 255, 0.07);
+        background: rgba(255, 255, 255, 0.03);
+      }
+
+      .lobby-slot.filled {
+        color: #d8e2ef;
+        border-color: rgba(255, 255, 255, 0.14);
+        background: rgba(255, 255, 255, 0.07);
+      }
+
+      .lobby-slot.empty { color: #3a4a5a; }
+
+      /* Chat */
+      .lobby-chat {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-width: 0;
+        max-width: 340px;
+      }
+
+      #lobby-chat-log {
+        flex: 1;
+        overflow-y: auto;
+        background: rgba(0, 0, 0, 0.3);
+        padding: 10px 12px;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        margin-bottom: 8px;
+        max-height: 220px;
+      }
+
+      .chat-line { font-family: monospace; font-size: 12px; color: #8a9ab0; margin: 2px 0; }
+      .chat-name { color: #e8c96a; }
+
+      #lobby-chat-input {
+        font-family: monospace;
+        font-size: 13px;
+        color: #d8e2ef;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        padding: 9px 12px;
+        outline: none;
+      }
+
+      #lobby-chat-input:focus { border-color: rgba(255, 255, 255, 0.3); }
+
+      /* Lobby bottom action row */
+      .lobby-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 24px;
+      }
     </style>
   </head>
   <body>
@@ -112,8 +347,52 @@
       <div id="menu-screen" class="screen">
         <h1 class="game-title">PURRMADEATH</h1>
         <p class="game-subtitle">co-op &nbsp;·&nbsp; roguelike &nbsp;·&nbsp; survival</p>
-        <button id="btn-new-game" class="menu-btn">New Game</button>
-        <button id="btn-settings" class="menu-btn muted">Settings</button>
+
+        <div class="menu-col">
+          <!-- Name entry -->
+          <input id="input-display-name" class="menu-input" type="text"
+                 placeholder="Your name…" maxlength="24"
+                 style="margin-bottom:16px; text-align:center;" />
+
+          <!-- Host -->
+          <button id="btn-host-game" class="menu-btn">Host Game</button>
+
+          <!-- Join row: session code + Join button -->
+          <div class="connect-row">
+            <input id="input-session-code" class="menu-input" type="text"
+                   placeholder="CODE or IP"
+                   style="text-align:center;" />
+            <button id="btn-join-game" class="join-menu-btn">Join</button>
+          </div>
+
+          <button id="btn-settings" class="menu-btn muted" style="margin-top:8px;">Settings</button>
+        </div>
+      </div>
+
+      <!-- ── Lobby Screen ───────────────────────────────────────────────────── -->
+      <div id="lobby-screen" class="screen">
+        <p class="lobby-title">LOBBY</p>
+        <div id="lobby-share-row"></div>
+
+        <div class="lobby-layout">
+          <!-- Player slots -->
+          <div class="lobby-panel">
+            <p class="lobby-panel-title">Players</p>
+            <ul id="lobby-player-list"></ul>
+          </div>
+
+          <!-- Chat -->
+          <div class="lobby-chat">
+            <p class="lobby-panel-title">Chat</p>
+            <div id="lobby-chat-log"></div>
+            <input id="lobby-chat-input" type="text" placeholder="Press Enter to chat…" maxlength="200" />
+          </div>
+        </div>
+
+        <div class="lobby-actions">
+          <button id="btn-lobby-start" class="menu-btn">Start Game</button>
+          <button id="btn-lobby-leave" class="menu-btn muted">Leave</button>
+        </div>
       </div>
 
       <!-- ── Pause Screen ──────────────────────────────────────────────────── -->

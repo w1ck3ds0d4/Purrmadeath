@@ -21,6 +21,7 @@ export interface ConnectedClient {
 }
 
 type ClientHandler = (client: ConnectedClient, msg: BaseMessage) => void;
+type DisconnectHandler = (client: ConnectedClient) => void;
 
 /**
  * ServerSocket wraps the `ws` WebSocketServer with:
@@ -31,20 +32,18 @@ type ClientHandler = (client: ConnectedClient, msg: BaseMessage) => void;
  *   - Automatic PING/PONG heartbeat
  *   - Stale-client cleanup on a periodic timer
  *   - Safe send / broadcast helpers that check socket state first
- *
- * Phase 3+ will add session and room management on top of this layer.
+ *   - onDisconnect callback for session cleanup
  */
 export class ServerSocket {
   private wss: WebSocketServer;
   private clients = new Map<string, ConnectedClient>();
   private handlers = new Map<string, Set<ClientHandler>>();
+  private disconnectHandlers = new Set<DisconnectHandler>();
   private nextId = 1;
 
   constructor(port: number) {
     this.wss = new WebSocketServer({
       port,
-      // Reject any message larger than MAX_MESSAGE_BYTES at the transport level.
-      // This prevents a single client from allocating unbounded server memory.
       maxPayload: MAX_MESSAGE_BYTES,
     });
     this.setupServer();
@@ -60,8 +59,6 @@ export class ServerSocket {
   }
 
   private onConnection(ws: WebSocket): void {
-    // Enforce the player cap before doing anything else.
-    // Close code 1013 = "Try Again Later" (RFC 6455).
     if (this.clients.size >= MAX_PLAYERS) {
       ws.close(1013, 'Server full');
       return;
@@ -79,33 +76,26 @@ export class ServerSocket {
     this.clients.set(id, client);
     console.log(`[Server] Client ${id} connected (${this.clients.size}/${MAX_PLAYERS})`);
 
-    // Acknowledge the connection with the server's current tick
     this.send(client, {
       type: MessageType.HANDSHAKE_ACK,
       clientId: id,
-      serverTick: 0, // game loop tick counter wired in Phase 3
+      serverTick: 0,
     });
 
     ws.on('message', (data) => {
-      // Rate-limit check: slide the window if needed, then count this message.
-      // Exceeding the limit disconnects the client immediately.
       if (!this.checkRateLimit(client)) {
         console.warn(`[Server] Client ${id} exceeded rate limit — disconnecting`);
-        ws.close(1008, 'Rate limit exceeded'); // 1008 = Policy Violation
-        this.clients.delete(id);
+        ws.close(1008, 'Rate limit exceeded');
+        this.removeClient(id, client);
         return;
       }
 
       try {
         const msg = JSON.parse(data.toString()) as BaseMessage;
-
-        // Validate the `type` field before touching the dispatch table.
-        // An absent, non-string, empty, or oversized type is silently dropped.
         if (!this.isValidType(msg.type)) {
           console.warn(`[Server] Client ${id} sent invalid message type`);
           return;
         }
-
         this.dispatch(client, msg);
       } catch {
         console.warn(`[Server] Unparseable message from client ${id}`);
@@ -113,26 +103,28 @@ export class ServerSocket {
     });
 
     ws.on('close', () => {
-      this.clients.delete(id);
+      this.removeClient(id, client);
       console.log(`[Server] Client ${id} disconnected (${this.clients.size}/${MAX_PLAYERS})`);
     });
 
     ws.on('error', (err) => {
       console.error(`[Server] Client ${id} error: ${err.message}`);
-      this.clients.delete(id);
+      this.removeClient(id, client);
     });
+  }
+
+  /** Internal: remove client and fire disconnect handlers. */
+  private removeClient(id: string, client: ConnectedClient): void {
+    if (!this.clients.has(id)) return; // already removed
+    this.clients.delete(id);
+    for (const fn of this.disconnectHandlers) fn(client);
   }
 
   // ── Rate limiting ───────────────────────────────────────────────────────────
 
-  /**
-   * Sliding-window rate limiter: allows MAX_MESSAGES_PER_SECOND per client.
-   * Returns false if the client has exceeded the limit.
-   */
   private checkRateLimit(client: ConnectedClient): boolean {
     const now = Date.now();
     if (now - client.rateWindowStart >= 1_000) {
-      // Reset window
       client.rateWindowStart = now;
       client.rateCount = 0;
     }
@@ -142,12 +134,6 @@ export class ServerSocket {
 
   // ── Message validation ──────────────────────────────────────────────────────
 
-  /**
-   * Ensure the message type is a non-empty string of reasonable length.
-   * We don't restrict to known MessageType values here so that future
-   * message types added by phases can be handled by registered handlers
-   * without touching this file. The handler registry itself is the gate.
-   */
   private isValidType(type: unknown): type is string {
     return typeof type === 'string' && type.length > 0 && type.length <= 64;
   }
@@ -155,7 +141,6 @@ export class ServerSocket {
   // ── Message routing ─────────────────────────────────────────────────────────
 
   private dispatch(client: ConnectedClient, msg: BaseMessage): void {
-    // Built-in PING handler — keeps the connection alive without reaching user code
     if (msg.type === MessageType.PING) {
       client.lastPing = Date.now();
       this.send(client, { type: MessageType.PONG });
@@ -172,6 +157,11 @@ export class ServerSocket {
   on(type: MessageType, handler: ClientHandler): void {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
     this.handlers.get(type)!.add(handler);
+  }
+
+  /** Register a handler called whenever any client disconnects. */
+  onDisconnect(handler: DisconnectHandler): void {
+    this.disconnectHandlers.add(handler);
   }
 
   // ── Send helpers ────────────────────────────────────────────────────────────
@@ -201,7 +191,7 @@ export class ServerSocket {
       if (now - client.lastPing > HEARTBEAT_TIMEOUT_MS) {
         console.warn(`[Server] Client ${id} timed out — terminating`);
         client.ws.terminate();
-        this.clients.delete(id);
+        this.removeClient(id, client);
       }
     }
   }

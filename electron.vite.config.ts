@@ -20,6 +20,10 @@ export default defineConfig({
   // --- Renderer process (browser context — Pixi.js, game logic) ---
   renderer: {
     root: 'src/renderer',
+    server: {
+      // Bind to all interfaces so other machines on the LAN can open the dev server URL
+      host: true,
+    },
     resolve: {
       alias: {
         '@shared': resolve('shared'),

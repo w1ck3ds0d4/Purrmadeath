@@ -1,5 +1,6 @@
 export enum GameState {
   Menu,
+  Lobby,
   Loading,
   Playing,
   Paused,

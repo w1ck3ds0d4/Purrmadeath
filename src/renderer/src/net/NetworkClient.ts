@@ -21,6 +21,7 @@ export class NetworkClient {
   private reconnectDelay = 1_000; // ms, doubles on each failed attempt (max 30 s)
   private shouldReconnect = true;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
+  private dropHandler: (() => void) | null = null;
 
   constructor(private readonly url: string) {}
 
@@ -46,10 +47,14 @@ export class NetworkClient {
       console.log('[Net] Disconnected');
       this.stopPing();
       if (this.shouldReconnect) {
-        console.log(`[Net] Reconnecting in ${this.reconnectDelay}ms…`);
-        setTimeout(() => this.connect(), this.reconnectDelay);
-        // Exponential backoff, capped at 30 s
-        this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30_000);
+        // Unexpected drop — notify the game before attempting reconnect
+        this.dropHandler?.();
+        // Only reconnect if the handler didn't call disconnect()
+        if (this.shouldReconnect) {
+          console.log(`[Net] Reconnecting in ${this.reconnectDelay}ms…`);
+          this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30_000);
+          setTimeout(() => { if (this.shouldReconnect) this.connect(); }, this.reconnectDelay);
+        }
       }
     };
 
@@ -57,6 +62,11 @@ export class NetworkClient {
       // onerror fires before onclose — the reconnect happens in onclose
       console.warn('[Net] WebSocket error');
     };
+  }
+
+  /** Called when the connection drops unexpectedly (not via disconnect()). */
+  onDrop(handler: () => void): void {
+    this.dropHandler = handler;
   }
 
   disconnect(): void {

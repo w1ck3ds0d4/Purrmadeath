@@ -18,8 +18,9 @@ export const HEARTBEAT_TIMEOUT_MS = 60_000;
 /** Maximum WebSocket message size in bytes. Prevents memory exhaustion from oversized payloads. */
 export const MAX_MESSAGE_BYTES = 64 * 1024; // 64 KB
 
-/** Maximum messages a single client may send per second before being disconnected. */
-export const MAX_MESSAGES_PER_SECOND = 60;
+/** Maximum messages a single client may send per second before being disconnected.
+ *  Clients send one INPUT per render frame; allow headroom for 240 Hz + chat + pings. */
+export const MAX_MESSAGES_PER_SECOND = 300;
 
 // ─── Session ─────────────────────────────────────────────────────────────────
 

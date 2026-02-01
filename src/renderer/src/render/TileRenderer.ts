@@ -13,16 +13,29 @@ import type { Chunk } from '@shared/world/Chunk';
  * Phase 9: swap Graphics for RenderTexture + Sprite (GPU-cached) and add tile sprites.
  */
 export class TileRenderer {
-  /** Container that holds all chunk Graphics. Transformed by the camera every frame. */
+  /**
+   * Root container transformed by the camera every frame.
+   * Entities (players, enemies) should be added directly to this container
+   * so they are always drawn on top of the tile layer below.
+   */
   readonly worldContainer: Container;
+
+  /** Internal sub-container for tile Graphics. Always index 0 in worldContainer
+   *  so that any entity Graphics added later are guaranteed to render on top. */
+  private tilesContainer: Container;
 
   /** Map from chunk key → Graphics node. Used for dedup and cleanup. */
   private chunkGraphics = new Map<string, Graphics>();
 
   constructor(stage: Container) {
     this.worldContainer = new Container();
-    // Insert at index 0 so the world is always below entities and UI
+    // Insert at index 0 so the world is always below the HUD
     stage.addChildAt(this.worldContainer, 0);
+
+    // Tile sub-container sits at index 0 inside worldContainer.
+    // Entity Graphics added by other systems go at index 1+ and are drawn on top.
+    this.tilesContainer = new Container();
+    this.worldContainer.addChild(this.tilesContainer);
   }
 
   // ── Chunk management ─────────────────────────────────────────────────────────
@@ -62,7 +75,7 @@ export class TileRenderer {
       g.fill({ color });
     }
 
-    this.worldContainer.addChild(g);
+    this.tilesContainer.addChild(g);
     this.chunkGraphics.set(key, g);
   }
 
