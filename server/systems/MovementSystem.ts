@@ -5,8 +5,9 @@ import {
   VelocityComponent,
   SpeedComponent,
   PlayerInputComponent,
+  KnockbackReceiverComponent,
 } from '@shared/components';
-import { TILE_SIZE, PLAYER_RADIUS } from '@shared/constants';
+import { TILE_SIZE, PLAYER_RADIUS, PLAYER_SPRINT_MULTIPLIER } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
 
@@ -30,7 +31,7 @@ export class MovementSystem {
       const speed = world.getComponent<SpeedComponent>(id, C.Speed)!;
       const inp   = world.getComponent<PlayerInputComponent>(id, C.PlayerInput)!;
 
-      const maxSpeed = speed.base * speed.multiplier;
+      const maxSpeed = speed.base * speed.multiplier * (inp.sprint ? PLAYER_SPRINT_MULTIPLIER : 1);
 
       let dx = inp.dx;
       let dy = inp.dy;
@@ -68,23 +69,44 @@ export class MovementSystem {
         vel.vx = 0;
         vel.vy = 0;
       }
+
+      // Apply and decay knockback impulse (separate from movement velocity)
+      const kb = world.getComponent<KnockbackReceiverComponent>(id, C.KnockbackReceiver);
+      if (kb && (kb.vx !== 0 || kb.vy !== 0)) {
+        const kx = pos.x + kb.vx * dt;
+        const ky = pos.y + kb.vy * dt;
+        if (!this.overlapsAny(kx, ky)) {
+          pos.x = kx; pos.y = ky;
+        } else if (!this.overlapsAny(kx, pos.y)) {
+          pos.x = kx;
+        } else if (!this.overlapsAny(pos.x, ky)) {
+          pos.y = ky;
+        }
+        const decay = Math.max(0, 1 - 8 * dt);
+        kb.vx *= decay;
+        kb.vy *= decay;
+        if (Math.abs(kb.vx) < 1) kb.vx = 0;
+        if (Math.abs(kb.vy) < 1) kb.vy = 0;
+      }
     }
   }
 
   private overlapsAny(px: number, py: number): boolean {
     const r = PLAYER_RADIUS - 1;
     return (
-      this.tileIsSolid(px - r, py - r) ||
-      this.tileIsSolid(px + r, py - r) ||
-      this.tileIsSolid(px - r, py + r) ||
-      this.tileIsSolid(px + r, py + r)
+      this.tileBlocksMovement(px - r, py - r) ||
+      this.tileBlocksMovement(px + r, py - r) ||
+      this.tileBlocksMovement(px - r, py + r) ||
+      this.tileBlocksMovement(px + r, py + r)
     );
   }
 
-  private tileIsSolid(wx: number, wy: number): boolean {
+  /** Blocks entity movement if a tile is not walkable (water, mountains, etc.).
+   *  Projectiles use a separate solid-only check so they fly over water. */
+  private tileBlocksMovement(wx: number, wy: number): boolean {
     const tx = Math.floor(wx / TILE_SIZE);
     const ty = Math.floor(wy / TILE_SIZE);
     const tileId = this.generator.getTile(tx, ty);
-    return TILE_DEFS[tileId]?.solid ?? true;
+    return !(TILE_DEFS[tileId]?.walkable ?? false);
   }
 }

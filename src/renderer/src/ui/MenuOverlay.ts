@@ -13,14 +13,16 @@ export class MenuOverlay {
   private onResume:     (() => void) | null = null;
   private onQuitToMenu: (() => void) | null = null;
 
-  private nameInput:  HTMLInputElement;
-  private codeInput:  HTMLInputElement;
+  private nameInput:     HTMLInputElement;
+  private codeInput:     HTMLInputElement;
+  private pauseSubtitle: HTMLElement;
 
   constructor() {
     this.menuScreen  = this.require('menu-screen');
     this.pauseScreen = this.require('pause-screen');
-    this.nameInput   = this.require('input-display-name') as HTMLInputElement;
-    this.codeInput   = this.require('input-session-code') as HTMLInputElement;
+    this.nameInput     = this.require('input-display-name') as HTMLInputElement;
+    this.codeInput     = this.require('input-session-code') as HTMLInputElement;
+    this.pauseSubtitle = this.require('pause-subtitle');
 
     // Uppercase only when the value is all letters (session code, not an IP)
     this.codeInput.addEventListener('input', () => {
@@ -65,9 +67,15 @@ export class MenuOverlay {
     this.pauseScreen.style.display = 'none';
   }
 
-  showPause(): void {
+  showPause(subtitle?: string): void {
     this.menuScreen.style.display  = 'none';
     this.pauseScreen.style.display = 'flex';
+    if (subtitle) {
+      this.pauseSubtitle.textContent = subtitle;
+      this.pauseSubtitle.style.display = 'block';
+    } else {
+      this.pauseSubtitle.style.display = 'none';
+    }
   }
 
   /** Hide all overlay screens (transition to Playing or Lobby). */

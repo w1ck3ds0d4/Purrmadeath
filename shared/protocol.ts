@@ -50,8 +50,28 @@ export enum MessageType {
   /** Client → Server: input frame */
   INPUT = 'INPUT',
 
+  // ── Combat ────────────────────────────────────────────────────────────────
+  /** Client → Server: player attack action (melee or ranged) */
+  ATTACK = 'ATTACK',
+  /** Server → all: a player performed an attack (for remote arc animation, fires even on miss) */
+  ATTACK_PERFORMED = 'ATTACK_PERFORMED',
+  /** Server → all: an attack landed on a target */
+  HIT = 'HIT',
+
+  // ── Pause ────────────────────────────────────────────────────────────────
+  /** Client → Server: player votes to pause or resume (toggle). */
+  PAUSE_VOTE = 'PAUSE_VOTE',
+  /** Server → all: intermediate vote tally while collecting votes. */
+  PAUSE_VOTE_UPDATE = 'PAUSE_VOTE_UPDATE',
+  /** Server → all: authoritative pause state change. */
+  PAUSE_STATE = 'PAUSE_STATE',
+
   // ── Chat ──────────────────────────────────────────────────────────────────
   CHAT = 'CHAT',
+
+  // ── Debug ─────────────────────────────────────────────────────────────────
+  /** Client → Server: spawn a wave of enemies around the sender (dev tool). */
+  DEBUG_SPAWN_ENEMIES = 'DEBUG_SPAWN_ENEMIES',
 }
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
@@ -163,8 +183,10 @@ export interface SessionStartingMessage extends BaseMessage {
 /** Component data for a single entity in a snapshot or delta. */
 export interface EntitySnapshot {
   entityId: number;
-  /** Slot index if this is a player entity. */
+  /** Slot index if this is a player entity. Absent for enemies. */
   slot?: number;
+  /** 'player' or 'enemy' — used by the client renderer to pick the visual. */
+  faction?: 'player' | 'enemy';
   x: number;
   y: number;
   vx: number;
@@ -200,8 +222,70 @@ export interface InputMessage extends BaseMessage {
   /** Normalised movement vector [-1..1]. */
   dx: number;
   dy: number;
+  /** True when Shift is held and the player has stamina remaining. */
+  sprint: boolean;
   /** Timestamp (performance.now()) the input was sampled. */
   t: number;
+}
+
+// ─── Combat ───────────────────────────────────────────────────────────────────
+
+/** Client → Server: player performed an attack. */
+export interface AttackMessage extends BaseMessage {
+  type: typeof MessageType.ATTACK;
+  /** Only 'melee' for now; 'ranged' added in 4.4. */
+  attackType: 'melee';
+  /** World-space facing angle in radians (mouse direction). */
+  facing: number;
+  /** Client-predicted attacker position (used for lag-compensated hit detection). */
+  x: number;
+  y: number;
+  /** Client timestamp for latency diagnostics. */
+  t: number;
+}
+
+/** Server → all: a player swung (even on miss) — clients play the arc animation. */
+export interface AttackPerformedMessage extends BaseMessage {
+  type: typeof MessageType.ATTACK_PERFORMED;
+  /** Entity ID of the attacker. */
+  sourceId: number;
+  /** Facing angle (radians) of the swing. */
+  facing: number;
+}
+
+/** Server → all: an attack connected with a target. */
+export interface HitMessage extends BaseMessage {
+  type: typeof MessageType.HIT;
+  sourceId: number;
+  targetId: number;
+  damage: number;
+  knockbackVx: number;
+  knockbackVy: number;
+}
+
+// ─── Pause ────────────────────────────────────────────────────────────────────
+
+/** Client → Server: the player wants to pause (or resume). */
+export interface PauseVoteMessage extends BaseMessage {
+  type: typeof MessageType.PAUSE_VOTE;
+}
+
+/** Server → all: intermediate vote tally while collecting votes. */
+export interface PauseVoteUpdateMessage extends BaseMessage {
+  type: typeof MessageType.PAUSE_VOTE_UPDATE;
+  /** 'pause' if collecting votes to pause, 'resume' if collecting votes to resume. */
+  direction: 'pause' | 'resume';
+  /** Display names of players who have voted so far. */
+  voters: string[];
+  /** Total number of votes needed (= player count). */
+  required: number;
+}
+
+/** Server → all: authoritative pause state transition. */
+export interface PauseStateMessage extends BaseMessage {
+  type: typeof MessageType.PAUSE_STATE;
+  /** True = game is now paused. False = game has resumed. */
+  paused: boolean;
 }
 
 // ─── Chat ─────────────────────────────────────────────────────────────────────
@@ -223,6 +307,14 @@ export interface ChatSendMessage extends BaseMessage {
   slot?: undefined;
 }
 
+// ─── Debug ────────────────────────────────────────────────────────────────────
+
+export interface DebugSpawnEnemiesMessage extends BaseMessage {
+  type: typeof MessageType.DEBUG_SPAWN_ENEMIES;
+  /** Number of enemies to spawn (capped server-side). Defaults to 5. */
+  count?: number;
+}
+
 // ─── Union ────────────────────────────────────────────────────────────────────
 
 export type AnyMessage =
@@ -242,5 +334,12 @@ export type AnyMessage =
   | SnapshotMessage
   | DeltaMessage
   | InputMessage
+  | AttackMessage
+  | AttackPerformedMessage
+  | HitMessage
+  | PauseVoteMessage
+  | PauseVoteUpdateMessage
+  | PauseStateMessage
   | ChatMessage
+  | DebugSpawnEnemiesMessage
   | BaseMessage;

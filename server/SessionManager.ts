@@ -9,6 +9,8 @@ import type {
   SessionStartMessage,
   SessionLeaveMessage,
   InputMessage,
+  AttackMessage,
+  DebugSpawnEnemiesMessage,
   ChatSendMessage,
   SessionAckMessage,
   PlayerJoinedMessage,
@@ -39,7 +41,10 @@ export class SessionManager {
     socket.on(MessageType.SESSION_LEAVE,  (c, m) => this.onSessionLeave(c, m as SessionLeaveMessage));
     socket.on(MessageType.SESSION_START,  (c, m) => this.onSessionStart(c, m as SessionStartMessage));
     socket.on(MessageType.INPUT,          (c, m) => this.onInput(c, m as InputMessage));
-    socket.on(MessageType.CHAT,           (c, m) => this.onChat(c, m as ChatSendMessage));
+    socket.on(MessageType.ATTACK,               (c, m) => this.onAttack(c, m as AttackMessage));
+    socket.on(MessageType.DEBUG_SPAWN_ENEMIES,  (c, m) => this.onDebugSpawnEnemies(c, m as DebugSpawnEnemiesMessage));
+    socket.on(MessageType.CHAT,                 (c, m) => this.onChat(c, m as ChatSendMessage));
+    socket.on(MessageType.PAUSE_VOTE,            (c) => this.onPauseVote(c));
     socket.onDisconnect((c) => this.onDisconnect(c));
   }
 
@@ -172,6 +177,18 @@ export class SessionManager {
     this.session?.applyInput(client.id, msg);
   }
 
+  private onAttack(client: ConnectedClient, msg: AttackMessage): void {
+    this.session?.handleAttack(client.id, msg, (c, m) => this.socket.send(c, m));
+  }
+
+  private onDebugSpawnEnemies(client: ConnectedClient, msg: DebugSpawnEnemiesMessage): void {
+    this.session?.debugSpawnEnemies(client.id, msg.count);
+  }
+
+  private onPauseVote(client: ConnectedClient): void {
+    this.session?.handlePauseVote(client.id, (c, m) => this.socket.send(c, m));
+  }
+
   private onChat(client: ConnectedClient, msg: ChatSendMessage): void {
     if (!this.session?.getPlayer(client.id)) return;
 
@@ -222,6 +239,11 @@ export class SessionManager {
       slot: player.slot,
     };
     this.broadcastToSession(left, client.id);
+
+    // Re-evaluate pause votes now that a player left
+    if (this.session.isPlaying) {
+      this.session.recheckPauseVotes((c, m) => this.socket.send(c, m));
+    }
 
     // Destroy the session when it's empty
     if (this.session.playerCount === 0) {

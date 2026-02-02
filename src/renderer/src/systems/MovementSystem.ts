@@ -6,7 +6,7 @@ import {
   SpeedComponent,
   PlayerInputComponent,
 } from '@shared/components';
-import { TILE_SIZE, PLAYER_RADIUS } from '@shared/constants';
+import { TILE_SIZE, PLAYER_RADIUS, PLAYER_SPRINT_MULTIPLIER } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import { ChunkManager } from '../world/ChunkManager';
 
@@ -31,7 +31,7 @@ export class MovementSystem {
       const speed = world.getComponent<SpeedComponent>(id, C.Speed)!;
       const inp   = world.getComponent<PlayerInputComponent>(id, C.PlayerInput)!;
 
-      const maxSpeed = speed.base * speed.multiplier;
+      const maxSpeed = speed.base * speed.multiplier * (inp.sprint ? PLAYER_SPRINT_MULTIPLIER : 1);
 
       // Normalize diagonal so 45° doesn't move faster than cardinal
       let dx = inp.dx;
@@ -75,23 +75,25 @@ export class MovementSystem {
   }
 
   /**
-   * Returns true if the player circle centered at (px, py) overlaps any solid tile.
+   * Returns true if the player circle centered at (px, py) overlaps any impassable tile.
    * Checks the four corners of the AABB with a 1px inset to avoid edge-hugging.
    */
   private overlapsAny(px: number, py: number): boolean {
     const r = PLAYER_RADIUS - 1;
     return (
-      this.tileIsSolid(px - r, py - r) ||
-      this.tileIsSolid(px + r, py - r) ||
-      this.tileIsSolid(px - r, py + r) ||
-      this.tileIsSolid(px + r, py + r)
+      this.tileBlocksMovement(px - r, py - r) ||
+      this.tileBlocksMovement(px + r, py - r) ||
+      this.tileBlocksMovement(px - r, py + r) ||
+      this.tileBlocksMovement(px + r, py + r)
     );
   }
 
-  private tileIsSolid(wx: number, wy: number): boolean {
+  /** Blocks entity movement if a tile is not walkable (water, mountains, etc.).
+   *  Projectiles use a separate solid-only check so they fly over water. */
+  private tileBlocksMovement(wx: number, wy: number): boolean {
     const tx = Math.floor(wx / TILE_SIZE);
     const ty = Math.floor(wy / TILE_SIZE);
     const tileId = this.chunks.getTile(tx, ty);
-    return TILE_DEFS[tileId]?.solid ?? true;
+    return !(TILE_DEFS[tileId]?.walkable ?? false);
   }
 }

@@ -23,7 +23,24 @@ export class NetworkClient {
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private dropHandler: (() => void) | null = null;
 
-  constructor(private readonly url: string) {}
+  // ── Network metrics ──────────────────────────────────────────────────────────
+  private pingTime = 0;
+  private rtt = 0;
+  /** Circular window of the last 20 pings: true = pong received, false = lost. */
+  private pingWindow = new Array<boolean>(20).fill(true);
+  private pingWindowIdx = 0;
+  private msgCount = 0;
+  private msgCountStart = 0;
+  private msgsPerSec = 0;
+
+  constructor(private readonly url: string) {
+    // Internal PONG handler for latency / packet-loss tracking.
+    // Registered once so reconnects don't stack up duplicate handlers.
+    this.on(MessageType.PONG, () => {
+      this.rtt = Math.round(performance.now() - this.pingTime);
+      this.pingWindow[this.pingWindowIdx] = true;
+    });
+  }
 
   connect(): void {
     this.ws = new WebSocket(this.url);
@@ -35,6 +52,16 @@ export class NetworkClient {
     };
 
     this.ws.onmessage = (event: MessageEvent<string>) => {
+      // Track incoming message rate
+      this.msgCount++;
+      const now = performance.now();
+      const elapsed = now - this.msgCountStart;
+      if (elapsed >= 1_000) {
+        this.msgsPerSec = Math.round(this.msgCount / elapsed * 1_000);
+        this.msgCount = 0;
+        this.msgCountStart = now;
+      }
+
       try {
         const msg = JSON.parse(event.data) as BaseMessage;
         this.dispatch(msg);
@@ -100,10 +127,14 @@ export class NetworkClient {
   }
 
   private startPing(): void {
-    this.pingInterval = setInterval(
-      () => this.send({ type: MessageType.PING }),
-      15_000
-    );
+    this.msgCountStart = performance.now();
+    this.pingInterval = setInterval(() => {
+      // Advance circular window and mark this slot as pending (no pong yet)
+      this.pingWindowIdx = (this.pingWindowIdx + 1) % this.pingWindow.length;
+      this.pingWindow[this.pingWindowIdx] = false;
+      this.pingTime = performance.now();
+      this.send({ type: MessageType.PING });
+    }, 2_000);
   }
 
   private stopPing(): void {
@@ -115,5 +146,15 @@ export class NetworkClient {
 
   get isConnected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  /** Live network metrics for the debug overlay. */
+  get stats(): { rtt: number; packetLoss: number; msgsPerSec: number } {
+    const lost = this.pingWindow.filter((v) => !v).length;
+    return {
+      rtt: this.rtt,
+      packetLoss: Math.round(lost / this.pingWindow.length * 100),
+      msgsPerSec: this.msgsPerSec,
+    };
   }
 }

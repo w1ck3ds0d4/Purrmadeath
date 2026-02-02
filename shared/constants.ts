@@ -65,3 +65,39 @@ export const PLAYER_COLORS: readonly number[] = [
   0x52c062, // P3 — green
   0xe0a830, // P4 — yellow
 ];
+
+/** Speed multiplier applied while sprinting. */
+export const PLAYER_SPRINT_MULTIPLIER = 1.5;
+
+/** Stamina drained per second while sprinting. */
+export const PLAYER_SPRINT_STAMINA_DRAIN = 30;
+
+// ─── Enemy ────────────────────────────────────────────────────────────────────
+
+/** Collision radius of an enemy in world pixels. */
+export const ENEMY_RADIUS = 10;
+
+/** Base movement speed for enemies in world pixels per second. */
+export const ENEMY_BASE_SPEED = 75;
+
+/** Starting health for a basic enemy. */
+export const ENEMY_MAX_HEALTH = 40;
+
+/** Distance (px) at which an enemy begins chasing the nearest player. */
+export const ENEMY_AGGRO_RANGE = 500;
+
+/** Number of test enemies spawned on game start (replaced by portals in 4.7). */
+export const ENEMY_INITIAL_COUNT = 5;
+
+// ─── Melee combat ─────────────────────────────────────────────────────────────
+
+/** Reach of a melee swing in world pixels. */
+export const MELEE_RANGE = 60;
+/** Full swing arc in radians (120°). Hit is within ±60° of facing. */
+export const MELEE_ARC = (2 * Math.PI) / 3;
+/** Base damage per melee hit (before defense reduction). */
+export const MELEE_DAMAGE = 15;
+/** Seconds between melee swings. */
+export const MELEE_COOLDOWN = 0.5;
+/** Knockback impulse speed applied to the struck entity (px/s). */
+export const MELEE_KNOCKBACK = 250;

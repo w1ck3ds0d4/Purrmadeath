@@ -29,8 +29,8 @@ export class Reconciler {
   /** Entity ID of the local player. Set by game.ts after spawn. */
   localEntityId: number | null = null;
 
-  /** Threshold (px) below which we accept the server correction silently. */
-  private static readonly CORRECTION_THRESHOLD = 2;
+  /** Threshold (px) below which we skip correction entirely (rounding noise). */
+  private static readonly CORRECTION_THRESHOLD = 4;
 
   // ── Input recording ─────────────────────────────────────────────────────────
 
@@ -38,9 +38,9 @@ export class Reconciler {
    * Stamp the current input frame and add it to the pending buffer.
    * Returns the sequence number to include in the INPUT message.
    */
-  recordInput(dx: number, dy: number, dt: number): number {
+  recordInput(dx: number, dy: number, sprint: boolean, dt: number): number {
     const s = ++this.seq;
-    this.pending.push({ seq: s, dx, dy, dt });
+    this.pending.push({ seq: s, dx, dy, sprint, dt });
     return s;
   }
 
@@ -84,6 +84,7 @@ export class Reconciler {
       for (const p of this.pending) {
         inp.dx = p.dx;
         inp.dy = p.dy;
+        inp.sprint = p.sprint;
         moveFn(p.dt);
       }
     }
@@ -115,6 +116,7 @@ interface PendingInput {
   seq: number;
   dx: number;
   dy: number;
+  sprint: boolean;
   dt: number;
 }
 

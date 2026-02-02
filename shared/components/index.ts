@@ -3,14 +3,19 @@
 // Prevents typos and makes future renames a single-file change.
 
 export const C = {
-  Position:    'Position',
-  Velocity:    'Velocity',
-  Health:      'Health',
-  Stamina:     'Stamina',
-  Defense:     'Defense',
-  Speed:       'Speed',
-  PlayerIndex: 'PlayerIndex',
-  PlayerInput: 'PlayerInput',
+  Position:        'Position',
+  Velocity:        'Velocity',
+  Health:          'Health',
+  Stamina:         'Stamina',
+  Defense:         'Defense',
+  Speed:           'Speed',
+  PlayerIndex:     'PlayerIndex',
+  PlayerInput:     'PlayerInput',
+  // ── Phase 4 ──────────────────────────────────────────────────────────────
+  Facing:          'Facing',
+  Faction:         'Faction',
+  AttackCooldown:  'AttackCooldown',
+  KnockbackReceiver: 'KnockbackReceiver',
 } as const;
 
 // ─── Component interfaces ──────────────────────────────────────────────────────
@@ -33,8 +38,9 @@ export interface HealthComponent {
 export interface StaminaComponent {
   current: number;
   max: number;
-  /** Units recovered per second while passive (sprint depletion added in Phase 4). */
   regenRate: number;
+  /** True after stamina hits 0 while sprinting; cleared when the player releases Sprint. */
+  exhausted: boolean;
 }
 
 export interface DefenseComponent {
@@ -64,4 +70,37 @@ export interface PlayerInputComponent {
   dx: number;
   /** -1 = up,   0 = none, +1 = down */
   dy: number;
+  /** True while Shift is held and stamina > 0. */
+  sprint: boolean;
+}
+
+// ── Phase 4 components ────────────────────────────────────────────────────────
+
+/** World-space facing angle in radians. Driven by mouse cursor for players,
+ *  velocity direction for enemies. Used for melee arc and directional arrow. */
+export interface FacingComponent {
+  angle: number;
+}
+
+/** Which team an entity belongs to. Determines targetting and rendering. */
+export interface FactionComponent {
+  type: 'player' | 'enemy';
+}
+
+/** Tracks remaining cooldown before the entity can attack again. */
+export interface AttackCooldownComponent {
+  /** Seconds until next attack is allowed. Counts down each tick. */
+  remaining: number;
+  /** Full cooldown duration reset after each attack. */
+  max: number;
+}
+
+/**
+ * Stores a knockback impulse applied by an attack.
+ * Separate from Velocity so that knockback decays independently
+ * of movement physics (added on top of movement each frame).
+ */
+export interface KnockbackReceiverComponent {
+  vx: number;
+  vy: number;
 }

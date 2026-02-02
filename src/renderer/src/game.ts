@@ -13,6 +13,7 @@ import {
   PLAYER_MAX_STAMINA,
   PLAYER_STAMINA_REGEN,
   PLAYER_BASE_SPEED,
+  MELEE_COOLDOWN,
 } from '@shared/constants';
 import type {
   HandshakeAckMessage,
@@ -21,6 +22,10 @@ import type {
   PlayerLeftMessage,
   SnapshotMessage,
   DeltaMessage,
+  AttackPerformedMessage,
+  HitMessage,
+  PauseVoteUpdateMessage,
+  PauseStateMessage,
   ChatMessage,
   LobbySlot,
 } from '@shared/protocol';
@@ -39,6 +44,7 @@ import { Reconciler } from './net/Reconciler';
 import { HUD } from './ui/HUD';
 import { MenuOverlay } from './ui/MenuOverlay';
 import { LobbyOverlay } from './ui/LobbyOverlay';
+import { PauseBanner } from './ui/PauseBanner';
 
 // Slow world pan behind menus (world pixels per millisecond)
 const BG_PAN_X = 0.05;
@@ -93,6 +99,15 @@ async function main(): Promise<void> {
   let currentSessionId   = '';
   let currentSessionCode = '';
   let lobbyPlayers: LobbySlot[] = [];
+  let isMultiplayer = false;
+
+  // ── Mouse tracking (for player facing direction) ─────────────────────────────
+  let mouseX = 0;
+  let mouseY = 0;
+
+  // ── Attack cooldown (client-side mirror of server AttackCooldown) ────────────
+  let attackCooldown = 0;
+  document.addEventListener('mousemove', (e) => { mouseX = e.clientX; mouseY = e.clientY; });
 
   // ── State machine ───────────────────────────────────────────────────────────
   const stateMgr = new GameStateManager();
@@ -100,16 +115,20 @@ async function main(): Promise<void> {
   // ── Overlays ─────────────────────────────────────────────────────────────────
   const menuOverlay  = new MenuOverlay();
   const lobbyOverlay = new LobbyOverlay();
+  const pauseBanner  = new PauseBanner();
 
   // ── State: Menu ─────────────────────────────────────────────────────────────
   stateMgr.onEnter(GameState.Menu, () => {
     menuOverlay.showMenu();
     lobbyOverlay.hide();
+    pauseBanner.hide();
     hud.setVisible(false);
     world.clear();
     playerRenderer.destroy();
+    remotePlayerSys.destroy();
     localEntityId = null;
     reconciler.localEntityId = null;
+    isMultiplayer = false;
     if (net) { net.disconnect(); net = null; }
   });
 
@@ -137,7 +156,10 @@ async function main(): Promise<void> {
 
   // ── State: Paused ───────────────────────────────────────────────────────────
   stateMgr.onEnter(GameState.Paused, () => {
-    menuOverlay.showPause();
+    pauseBanner.hide();
+    menuOverlay.showPause(
+      isMultiplayer ? 'All players must press ESC to resume' : undefined,
+    );
   });
 
   // ── Menu callbacks ───────────────────────────────────────────────────────────
@@ -169,7 +191,7 @@ async function main(): Promise<void> {
         connectToServer(value, menuOverlay.displayName, 'join');
       }
     },
-    onResume:     () => stateMgr.transition(GameState.Playing),
+    onResume:     () => net?.send({ type: MessageType.PAUSE_VOTE }),
     onQuitToMenu: () => stateMgr.transition(GameState.Menu),
   });
 
@@ -239,6 +261,9 @@ async function main(): Promise<void> {
       world.clear();
       playerRenderer.destroy();
 
+      // Track multiplayer status for pause voting
+      isMultiplayer = lobbyPlayers.length > 1;
+
       // Create all remote player entities from server snapshot
       remotePlayerSys.applySnapshot(world, snap);
 
@@ -250,8 +275,8 @@ async function main(): Promise<void> {
 
         // Add prediction-only components (not sent by server)
         world.addComponent(localEntityId, C.Speed,       { base: PLAYER_BASE_SPEED, multiplier: 1 });
-        world.addComponent(localEntityId, C.Stamina,     { current: PLAYER_MAX_STAMINA, max: PLAYER_MAX_STAMINA, regenRate: PLAYER_STAMINA_REGEN });
-        world.addComponent(localEntityId, C.PlayerInput, { dx: 0, dy: 0 });
+        world.addComponent(localEntityId, C.Stamina,     { current: PLAYER_MAX_STAMINA, max: PLAYER_MAX_STAMINA, regenRate: PLAYER_STAMINA_REGEN, exhausted: false });
+        world.addComponent(localEntityId, C.PlayerInput, { dx: 0, dy: 0, sprint: false });
 
         // Snap camera — no lerp pop on first frame
         const pos = world.getComponent<PositionComponent>(localEntityId, C.Position)!;
@@ -273,6 +298,37 @@ async function main(): Promise<void> {
 
       // Apply remote entity updates
       remotePlayerSys.applyDelta(world, delta);
+    });
+
+    net.on(MessageType.ATTACK_PERFORMED, (msg) => {
+      const ap = msg as AttackPerformedMessage;
+      // Skip local player — their arc is triggered immediately on input
+      if (ap.sourceId !== localEntityId) {
+        playerRenderer.notifyAttack(ap.sourceId, ap.facing);
+      }
+    });
+
+    net.on(MessageType.HIT, (msg) => {
+      const hit = msg as HitMessage;
+      playerRenderer.notifyHit(hit.targetId);
+    });
+
+    net.on(MessageType.PAUSE_VOTE_UPDATE, (msg) => {
+      const update = msg as PauseVoteUpdateMessage;
+      pauseBanner.show(update.direction, update.voters, update.required);
+    });
+
+    net.on(MessageType.PAUSE_STATE, (msg) => {
+      const ps = msg as PauseStateMessage;
+      pauseBanner.hide();
+      if (ps.paused) {
+        // Send zero-input so the server zeros our velocity
+        const seq = reconciler.recordInput(0, 0, false, 0);
+        net?.send({ type: MessageType.INPUT, seq, dx: 0, dy: 0, sprint: false, t: performance.now() });
+        stateMgr.transition(GameState.Paused);
+      } else {
+        stateMgr.transition(GameState.Playing);
+      }
     });
 
     net.on(MessageType.CHAT, (msg) => {
@@ -308,13 +364,14 @@ async function main(): Promise<void> {
 
   // ── Game loop ────────────────────────────────────────────────────────────────
   renderer.ticker.add((ticker) => {
-    const dt    = ticker.deltaMS / 1000;
+    const dt    = Math.min(ticker.deltaMS / 1000, 0.1); // cap at 100ms to prevent teleport on resume
     const state = stateMgr.current;
 
-    // ESC toggles pause
+    // ESC: send pause vote to server (server decides when to pause/resume)
     if (input.isJustPressed(Action.Pause)) {
-      if (state === GameState.Playing)     stateMgr.transition(GameState.Paused);
-      else if (state === GameState.Paused) stateMgr.transition(GameState.Playing);
+      if (state === GameState.Playing || state === GameState.Paused) {
+        net?.send({ type: MessageType.PAUSE_VOTE });
+      }
     }
 
     // Menu + Lobby: animate world in background (menu generator)
@@ -329,21 +386,44 @@ async function main(): Promise<void> {
       inputSystem.update(world);
 
       // 2. Read current input
-      const inp = world.getComponent<{ dx: number; dy: number }>(localEntityId, C.PlayerInput)!;
+      const inp = world.getComponent<{ dx: number; dy: number; sprint: boolean }>(localEntityId, C.PlayerInput)!;
 
       // 3. Record for reconciliation + send to server
-      const seq = reconciler.recordInput(inp.dx, inp.dy, dt);
-      net?.send({ type: MessageType.INPUT, seq, dx: inp.dx, dy: inp.dy, t: performance.now() });
+      const seq = reconciler.recordInput(inp.dx, inp.dy, inp.sprint, dt);
+      net?.send({ type: MessageType.INPUT, seq, dx: inp.dx, dy: inp.dy, sprint: inp.sprint, t: performance.now() });
 
-      // 4. Predict locally
+      // 4. Predict locally + interpolate remote entities
       movementSystem?.update(world, dt);
       staminaSystem.update(world, dt);
+      remotePlayerSys.interpolate(world, dt);
 
-      // 5. Render players
-      playerRenderer.update(world);
+      // 5. Render players — compute mouse-facing angle for local player
+      const pos = world.getComponent<PositionComponent>(localEntityId, C.Position);
+      let localFacing: number | null = null;
+      if (pos) {
+        const { width, height } = renderer.screen;
+        const worldMouseX = camera.viewX + (mouseX - width  / 2) / camera.zoom;
+        const worldMouseY = camera.viewY + (mouseY - height / 2) / camera.zoom;
+        localFacing = Math.atan2(worldMouseY - pos.y, worldMouseX - pos.x);
+      }
+
+      // Attack: client-side cooldown mirrors server AttackCooldown so animation and
+      // damage are always in sync — no ghost swings during the cooldown window.
+      if (attackCooldown > 0) attackCooldown = Math.max(0, attackCooldown - dt);
+      if (input.isJustPressed(Action.Attack) && localFacing !== null && pos && attackCooldown <= 0) {
+        attackCooldown = MELEE_COOLDOWN;
+        net?.send({ type: MessageType.ATTACK, attackType: 'melee', facing: localFacing, x: pos.x, y: pos.y, t: performance.now() });
+        playerRenderer.notifyAttack(localEntityId!, localFacing);
+      }
+
+      // Debug: F5 spawns a fresh wave of enemies around the local player
+      if (input.isJustPressed(Action.DebugSpawnEnemies)) {
+        net?.send({ type: MessageType.DEBUG_SPAWN_ENEMIES });
+      }
+
+      playerRenderer.update(world, localEntityId, localFacing, dt);
 
       // 6. Camera follows local player
-      const pos = world.getComponent<PositionComponent>(localEntityId, C.Position);
       if (pos) { camera.targetX = pos.x; camera.targetY = pos.y; }
     }
 
@@ -378,12 +458,12 @@ async function main(): Promise<void> {
     const tileY = Math.floor(camera.y / TILE_SIZE);
     const ag    = (isPlaying ? generator : menuGenerator) ?? menuGenerator;
     const biome = BIOME_DEFS[ag.getBiome(tileX, tileY)].name;
-    debug.update(dt, { camera, loadedChunks: tileRenderer.loadedChunkCount, biome, seed });
+    debug.update(dt, { camera, loadedChunks: tileRenderer.loadedChunkCount, biome, seed, net: net?.stats });
 
     input.flush();
   });
 
-  console.log('[Game] Phase 3 ready — Host or Join a game to begin');
+  console.log('[Game] Phase 4 ready — Host or Join a game to begin. Press F4 for debug overlay.');
 }
 
 main().catch((err) => {

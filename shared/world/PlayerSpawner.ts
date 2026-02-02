@@ -8,6 +8,7 @@ import {
   PLAYER_MAX_STAMINA,
   PLAYER_STAMINA_REGEN,
   PLAYER_BASE_SPEED,
+  MELEE_COOLDOWN,
 } from '@shared/constants';
 
 /**
@@ -34,11 +35,13 @@ export function spawnPlayer(
   world.addComponent(id, C.Position,    { x, y });
   world.addComponent(id, C.Velocity,    { vx: 0, vy: 0 });
   world.addComponent(id, C.Health,      { current: PLAYER_MAX_HEALTH,  max: PLAYER_MAX_HEALTH });
-  world.addComponent(id, C.Stamina,     { current: PLAYER_MAX_STAMINA, max: PLAYER_MAX_STAMINA, regenRate: PLAYER_STAMINA_REGEN });
+  world.addComponent(id, C.Stamina,     { current: PLAYER_MAX_STAMINA, max: PLAYER_MAX_STAMINA, regenRate: PLAYER_STAMINA_REGEN, exhausted: false });
   world.addComponent(id, C.Defense,     { flat: 0, percent: 0 });
   world.addComponent(id, C.Speed,       { base: PLAYER_BASE_SPEED, multiplier: 1 });
-  world.addComponent(id, C.PlayerIndex, { index: playerIndex });
-  world.addComponent(id, C.PlayerInput, { dx: 0, dy: 0 });
+  world.addComponent(id, C.PlayerIndex,        { index: playerIndex });
+  world.addComponent(id, C.PlayerInput,        { dx: 0, dy: 0, sprint: false });
+  world.addComponent(id, C.AttackCooldown,     { remaining: 0, max: MELEE_COOLDOWN });
+  world.addComponent(id, C.KnockbackReceiver,  { vx: 0, vy: 0 });
 
   return id;
 }

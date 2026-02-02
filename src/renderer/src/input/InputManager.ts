@@ -9,18 +9,22 @@ export enum Action {
   MoveRight,
   Interact,
   Attack,
+  Sprint,
   Pause,
+  DebugSpawnEnemies,
 }
 
 // One or more key strings per action (Set.has is O(1)).
 const DEFAULT_BINDINGS: Readonly<Record<Action, readonly string[]>> = {
-  [Action.MoveUp]:    ['w', 'ArrowUp'],
-  [Action.MoveDown]:  ['s', 'ArrowDown'],
-  [Action.MoveLeft]:  ['a', 'ArrowLeft'],
-  [Action.MoveRight]: ['d', 'ArrowRight'],
-  [Action.Interact]:  ['e', 'f'],
-  [Action.Attack]:    [' '],
-  [Action.Pause]:     ['Escape'],
+  [Action.MoveUp]:             ['w', 'ArrowUp'],
+  [Action.MoveDown]:           ['s', 'ArrowDown'],
+  [Action.MoveLeft]:           ['a', 'ArrowLeft'],
+  [Action.MoveRight]:          ['d', 'ArrowRight'],
+  [Action.Interact]:           ['e', 'f'],
+  [Action.Attack]:             ['MouseLeft'],
+  [Action.Sprint]:             ['Shift'],
+  [Action.Pause]:              ['Escape'],
+  [Action.DebugSpawnEnemies]:  ['F5'],
 };
 
 export class InputManager {
@@ -29,10 +33,23 @@ export class InputManager {
 
   constructor() {
     document.addEventListener('keydown', (e) => {
-      if (!this.held.has(e.key)) this.justPressedSet.add(e.key);
-      this.held.add(e.key);
+      const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      if (!this.held.has(key)) this.justPressedSet.add(key);
+      this.held.add(key);
     });
-    document.addEventListener('keyup', (e) => this.held.delete(e.key));
+    document.addEventListener('keyup', (e) => {
+      const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      this.held.delete(key);
+    });
+    document.addEventListener('mousedown', (e) => {
+      if (e.button === 0) {
+        if (!this.held.has('MouseLeft')) this.justPressedSet.add('MouseLeft');
+        this.held.add('MouseLeft');
+      }
+    });
+    document.addEventListener('mouseup', (e) => {
+      if (e.button === 0) this.held.delete('MouseLeft');
+    });
   }
 
   /** True while the key(s) for this action are held down. */
