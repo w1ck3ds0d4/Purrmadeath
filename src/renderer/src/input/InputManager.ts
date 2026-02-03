@@ -11,7 +11,11 @@ export enum Action {
   Attack,
   Sprint,
   Pause,
+  WeaponSlot1,
+  WeaponSlot2,
   DebugSpawnEnemies,
+  DebugWaveSkip,
+  DebugWavePause,
 }
 
 // One or more key strings per action (Set.has is O(1)).
@@ -24,7 +28,11 @@ const DEFAULT_BINDINGS: Readonly<Record<Action, readonly string[]>> = {
   [Action.Attack]:             ['MouseLeft'],
   [Action.Sprint]:             ['Shift'],
   [Action.Pause]:              ['Escape'],
+  [Action.WeaponSlot1]:        ['1'],
+  [Action.WeaponSlot2]:        ['2'],
   [Action.DebugSpawnEnemies]:  ['F5'],
+  [Action.DebugWaveSkip]:      ['F6'],
+  [Action.DebugWavePause]:     ['F7'],
 };
 
 export class InputManager {
@@ -45,11 +53,16 @@ export class InputManager {
       if (e.button === 0) {
         if (!this.held.has('MouseLeft')) this.justPressedSet.add('MouseLeft');
         this.held.add('MouseLeft');
+      } else if (e.button === 2) {
+        if (!this.held.has('MouseRight')) this.justPressedSet.add('MouseRight');
+        this.held.add('MouseRight');
       }
     });
     document.addEventListener('mouseup', (e) => {
       if (e.button === 0) this.held.delete('MouseLeft');
+      else if (e.button === 2) this.held.delete('MouseRight');
     });
+    document.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
   /** True while the key(s) for this action are held down. */

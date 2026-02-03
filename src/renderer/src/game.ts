@@ -14,6 +14,7 @@ import {
   PLAYER_STAMINA_REGEN,
   PLAYER_BASE_SPEED,
   MELEE_COOLDOWN,
+  RANGED_COOLDOWN,
 } from '@shared/constants';
 import type {
   HandshakeAckMessage,
@@ -24,9 +25,14 @@ import type {
   DeltaMessage,
   AttackPerformedMessage,
   HitMessage,
+  ProjectileSpawnMessage,
+  ProjectileRemoveMessage,
   PauseVoteUpdateMessage,
   PauseStateMessage,
   ChatMessage,
+  WaveStartMessage,
+  WaveEndMessage,
+  WaveTimerSyncMessage,
   LobbySlot,
 } from '@shared/protocol';
 
@@ -45,10 +51,17 @@ import { HUD } from './ui/HUD';
 import { MenuOverlay } from './ui/MenuOverlay';
 import { LobbyOverlay } from './ui/LobbyOverlay';
 import { PauseBanner } from './ui/PauseBanner';
+import { WeaponHotbar } from './ui/WeaponHotbar';
+import { ProjectileRendererSystem } from './systems/ProjectileRendererSystem';
+import { WaveHUD } from './ui/WaveHUD';
 
 // Slow world pan behind menus (world pixels per millisecond)
 const BG_PAN_X = 0.05;
 const BG_PAN_Y = 0.025;
+
+// Weapon slot tables — indexed by selectedWeapon (0 = melee, 1 = ranged)
+const WEAPON_TYPES: readonly ('melee' | 'ranged')[] = ['melee', 'ranged'];
+const WEAPON_COOLDOWNS = [MELEE_COOLDOWN, RANGED_COOLDOWN] as const;
 
 async function main(): Promise<void> {
   const container = document.getElementById('game');
@@ -62,8 +75,10 @@ async function main(): Promise<void> {
   const camera = new Camera();
   const tileRenderer = new TileRenderer(renderer.stage);
   const playerRenderer = new PlayerRendererSystem(tileRenderer.worldContainer);
-  const hud   = new HUD(renderer.stage);
-  const debug = new DebugOverlay(renderer.stage);
+  const projectileRenderer = new ProjectileRendererSystem(tileRenderer.worldContainer);
+  const hud          = new HUD(renderer.stage);
+  const weaponHotbar = new WeaponHotbar(renderer.stage);
+  const debug        = new DebugOverlay(renderer.stage);
 
   // ── ECS world ───────────────────────────────────────────────────────────────
   const world = new World();
@@ -107,6 +122,7 @@ async function main(): Promise<void> {
 
   // ── Attack cooldown (client-side mirror of server AttackCooldown) ────────────
   let attackCooldown = 0;
+  let selectedWeapon: 0 | 1 = 0; // 0 = melee (Sword), 1 = ranged (Bow)
   document.addEventListener('mousemove', (e) => { mouseX = e.clientX; mouseY = e.clientY; });
 
   // ── State machine ───────────────────────────────────────────────────────────
@@ -116,19 +132,24 @@ async function main(): Promise<void> {
   const menuOverlay  = new MenuOverlay();
   const lobbyOverlay = new LobbyOverlay();
   const pauseBanner  = new PauseBanner();
+  const waveHUD      = new WaveHUD();
 
   // ── State: Menu ─────────────────────────────────────────────────────────────
   stateMgr.onEnter(GameState.Menu, () => {
     menuOverlay.showMenu();
     lobbyOverlay.hide();
     pauseBanner.hide();
+    waveHUD.hide();
     hud.setVisible(false);
+    weaponHotbar.setVisible(false);
     world.clear();
     playerRenderer.destroy();
+    projectileRenderer.destroy();
     remotePlayerSys.destroy();
     localEntityId = null;
     reconciler.localEntityId = null;
     isMultiplayer = false;
+    selectedWeapon = 0;
     if (net) { net.disconnect(); net = null; }
   });
 
@@ -138,6 +159,7 @@ async function main(): Promise<void> {
     lobbyOverlay.show(currentSessionId, currentSessionCode, isHost);
     lobbyOverlay.updatePlayers(lobbyPlayers);
     hud.setVisible(false);
+    weaponHotbar.setVisible(false);
   });
 
   // ── State: Playing ──────────────────────────────────────────────────────────
@@ -145,6 +167,8 @@ async function main(): Promise<void> {
     menuOverlay.hide();
     lobbyOverlay.hide();
     hud.setVisible(true);
+    weaponHotbar.setVisible(true);
+    waveHUD.setVisible(true);
 
     // Clear menu background chunks from the tile renderer
     for (const key of menuStreamedKeys) {
@@ -313,6 +337,16 @@ async function main(): Promise<void> {
       playerRenderer.notifyHit(hit.targetId);
     });
 
+    net.on(MessageType.PROJECTILE_SPAWN, (msg) => {
+      const ps = msg as ProjectileSpawnMessage;
+      projectileRenderer.spawn(ps.projectileId, ps.x, ps.y, ps.vx, ps.vy, ps.ownerSlot);
+    });
+
+    net.on(MessageType.PROJECTILE_REMOVE, (msg) => {
+      const pr = msg as ProjectileRemoveMessage;
+      projectileRenderer.remove(pr.projectileId);
+    });
+
     net.on(MessageType.PAUSE_VOTE_UPDATE, (msg) => {
       const update = msg as PauseVoteUpdateMessage;
       pauseBanner.show(update.direction, update.voters, update.required);
@@ -334,6 +368,21 @@ async function main(): Promise<void> {
     net.on(MessageType.CHAT, (msg) => {
       const chat = msg as ChatMessage;
       lobbyOverlay.addChatMessage(chat.displayName, chat.text);
+    });
+
+    net.on(MessageType.WAVE_START, (msg) => {
+      const ws = msg as WaveStartMessage;
+      waveHUD.onWaveStart(ws.waveNumber, ws.prepDuration);
+    });
+
+    net.on(MessageType.WAVE_END, (msg) => {
+      const we = msg as WaveEndMessage;
+      waveHUD.onWaveEnd(we.waveNumber);
+    });
+
+    net.on(MessageType.WAVE_TIMER_SYNC, (msg) => {
+      const sync = msg as WaveTimerSyncMessage;
+      waveHUD.onTimerSync(sync.waveNumber, sync.remaining, sync.paused);
     });
 
     net.on(MessageType.ERROR, (msg) => {
@@ -396,6 +445,7 @@ async function main(): Promise<void> {
       movementSystem?.update(world, dt);
       staminaSystem.update(world, dt);
       remotePlayerSys.interpolate(world, dt);
+      waveHUD.update(dt);
 
       // 5. Render players — compute mouse-facing angle for local player
       const pos = world.getComponent<PositionComponent>(localEntityId, C.Position);
@@ -407,23 +457,39 @@ async function main(): Promise<void> {
         localFacing = Math.atan2(worldMouseY - pos.y, worldMouseX - pos.x);
       }
 
+      // Weapon switching (number keys)
+      if (input.isJustPressed(Action.WeaponSlot1)) selectedWeapon = 0;
+      if (input.isJustPressed(Action.WeaponSlot2)) selectedWeapon = 1;
+
       // Attack: client-side cooldown mirrors server AttackCooldown so animation and
       // damage are always in sync — no ghost swings during the cooldown window.
       if (attackCooldown > 0) attackCooldown = Math.max(0, attackCooldown - dt);
       if (input.isJustPressed(Action.Attack) && localFacing !== null && pos && attackCooldown <= 0) {
-        attackCooldown = MELEE_COOLDOWN;
-        net?.send({ type: MessageType.ATTACK, attackType: 'melee', facing: localFacing, x: pos.x, y: pos.y, t: performance.now() });
-        playerRenderer.notifyAttack(localEntityId!, localFacing);
+        const attackType = WEAPON_TYPES[selectedWeapon];
+        attackCooldown = WEAPON_COOLDOWNS[selectedWeapon];
+        net?.send({ type: MessageType.ATTACK, attackType, facing: localFacing, x: pos.x, y: pos.y, t: performance.now() });
+        if (attackType === 'melee') playerRenderer.notifyAttack(localEntityId!, localFacing);
       }
 
-      // Debug: F5 spawns a fresh wave of enemies around the local player
+      // Debug shortcuts
       if (input.isJustPressed(Action.DebugSpawnEnemies)) {
         net?.send({ type: MessageType.DEBUG_SPAWN_ENEMIES });
+      }
+      if (input.isJustPressed(Action.DebugWaveSkip)) {
+        net?.send({ type: MessageType.DEBUG_WAVE_SKIP });
+      }
+      if (input.isJustPressed(Action.DebugWavePause)) {
+        net?.send({ type: MessageType.DEBUG_WAVE_PAUSE });
       }
 
       playerRenderer.update(world, localEntityId, localFacing, dt);
 
-      // 6. Camera follows local player
+      // 6. Update and render projectiles
+      const { width: sw, height: sh } = renderer.screen;
+      projectileRenderer.update(dt);
+      projectileRenderer.render(camera.viewX, camera.viewY, camera.zoom, sw, sh);
+
+      // 7. Camera follows local player
       if (pos) { camera.targetX = pos.x; camera.targetY = pos.y; }
     }
 
@@ -452,6 +518,7 @@ async function main(): Promise<void> {
 
     if (state === GameState.Playing) {
       hud.update(world, width, height);
+      weaponHotbar.update(selectedWeapon, attackCooldown, WEAPON_COOLDOWNS[selectedWeapon], width, height);
     }
 
     const tileX = Math.floor(camera.x / TILE_SIZE);

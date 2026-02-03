@@ -99,7 +99,15 @@ export class DebugOverlay {
       );
     }
 
-    lines.push(``, `[F4] close`);
+    lines.push(
+      ``,
+      `── Shortcuts ──`,
+      `[F4]  Debug panel`,
+      `[F5]  Spawn enemies`,
+      `[F6]  Skip wave prep`,
+      `[F7]  Pause wave timer`,
+      `[Esc] Pause vote`,
+    );
 
     this.label.text = lines.join('\n');
 

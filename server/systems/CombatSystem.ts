@@ -18,12 +18,19 @@ export interface HitResult {
   knockbackVy: number;
 }
 
+/** Optional per-call overrides for enemy melee (or future weapon variants). */
+export interface MeleeOverrides {
+  damage?: number;
+  range?: number;
+  knockback?: number;
+}
+
 /**
  * Server-authoritative combat system.
  *
- * processMeleeAttack — called immediately when an ATTACK message arrives.
+ * processMeleeAttack — called when a player or enemy attacks.
  *   - Enforces AttackCooldown (drops the request if still on cooldown).
- *   - Checks all enemies in a 120° arc within MELEE_RANGE.
+ *   - Checks all targets in a 120° arc within range.
  *   - Applies damage (flat + percent Defense reduction) and knockback.
  *   - Returns hit results (for HIT broadcast) and dead entity IDs.
  *
@@ -45,15 +52,21 @@ export class CombatSystem {
    *                   If within MAX_LAG_COMP_DIST of the server position it's used for
    *                   range/arc checks so moving attacks feel accurate. Falls back to
    *                   server position when absent or too far.
+   * @param overrides  Optional damage/range/knockback overrides (used by enemy attacks).
    */
   processMeleeAttack(
     world: World,
     sourceId: number,
     facing: number,
     clientPos?: { x: number; y: number },
+    overrides?: MeleeOverrides,
   ): { hits: HitResult[]; deaths: number[] } {
     const hits: HitResult[] = [];
     const deaths: number[] = [];
+
+    const meleeRange     = overrides?.range     ?? MELEE_RANGE;
+    const meleeDamage    = overrides?.damage    ?? MELEE_DAMAGE;
+    const meleeKnockback = overrides?.knockback ?? MELEE_KNOCKBACK;
 
     // Enforce cooldown
     const cd = world.getComponent<AttackCooldownComponent>(sourceId, C.AttackCooldown);
@@ -88,11 +101,14 @@ export class CombatSystem {
       const tgtFaction = world.getComponent<FactionComponent>(targetId, C.Faction);
       if (srcFaction && tgtFaction && srcFaction.type === tgtFaction.type) continue;
 
+      // Enemies don't attack portals
+      if (srcFaction?.type === 'enemy' && tgtFaction?.type === 'portal') continue;
+
       const tgtPos = world.getComponent<PositionComponent>(targetId, C.Position)!;
       const dx = tgtPos.x - attackX;
       const dy = tgtPos.y - attackY;
       const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist > MELEE_RANGE || dist === 0) continue;
+      if (dist > meleeRange || dist === 0) continue;
 
       // Arc check — must be within ±60° of facing
       const angleToTarget = Math.atan2(dy, dx);
@@ -103,20 +119,24 @@ export class CombatSystem {
       // Damage with defense reduction
       const hp  = world.getComponent<HealthComponent>(targetId, C.Health)!;
       const def = world.getComponent<DefenseComponent>(targetId, C.Defense);
-      let damage = MELEE_DAMAGE;
-      if (def) damage = Math.max(0, Math.round((damage - def.flat) * (1 - def.percent)));
-      hp.current = Math.max(0, hp.current - damage);
+      let dmg = meleeDamage;
+      if (def) dmg = Math.max(0, Math.round((dmg - def.flat) * (1 - def.percent)));
+      hp.current = Math.max(0, hp.current - dmg);
 
-      // Knockback impulse — use real target-to-source direction
-      const knockbackVx = (dx / dist) * MELEE_KNOCKBACK;
-      const knockbackVy = (dy / dist) * MELEE_KNOCKBACK;
-      const kb = world.getComponent<KnockbackReceiverComponent>(targetId, C.KnockbackReceiver);
-      if (kb) {
-        kb.vx += knockbackVx;
-        kb.vy += knockbackVy;
+      // Knockback impulse — direction from attacker to target
+      let knockbackVx = 0;
+      let knockbackVy = 0;
+      if (meleeKnockback > 0) {
+        knockbackVx = (dx / dist) * meleeKnockback;
+        knockbackVy = (dy / dist) * meleeKnockback;
+        const kb = world.getComponent<KnockbackReceiverComponent>(targetId, C.KnockbackReceiver);
+        if (kb) {
+          kb.vx += knockbackVx;
+          kb.vy += knockbackVy;
+        }
       }
 
-      hits.push({ sourceId, targetId, damage, knockbackVx, knockbackVy });
+      hits.push({ sourceId, targetId, damage: dmg, knockbackVx, knockbackVy });
       if (hp.current <= 0) deaths.push(targetId);
     }
 

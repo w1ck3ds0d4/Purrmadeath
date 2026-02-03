@@ -16,6 +16,8 @@ export const C = {
   Faction:         'Faction',
   AttackCooldown:  'AttackCooldown',
   KnockbackReceiver: 'KnockbackReceiver',
+  Projectile:      'Projectile',
+  Portal:          'Portal',
 } as const;
 
 // ─── Component interfaces ──────────────────────────────────────────────────────
@@ -84,7 +86,7 @@ export interface FacingComponent {
 
 /** Which team an entity belongs to. Determines targetting and rendering. */
 export interface FactionComponent {
-  type: 'player' | 'enemy';
+  type: 'player' | 'enemy' | 'portal';
 }
 
 /** Tracks remaining cooldown before the entity can attack again. */
@@ -103,4 +105,24 @@ export interface AttackCooldownComponent {
 export interface KnockbackReceiverComponent {
   vx: number;
   vy: number;
+}
+
+/** Tags an entity as a portal that spawns enemies during a wave. */
+export interface PortalComponent {
+  /** Which wave this portal belongs to. */
+  waveNumber: number;
+  /** Seconds until next enemy spawn. */
+  spawnTimer: number;
+  /** Full spawn interval duration (seconds between enemy spawns). */
+  spawnInterval: number;
+}
+
+/** Tags an entity as a projectile (arrow, bolt, etc.). */
+export interface ProjectileComponent {
+  /** Entity ID of the owner who fired this projectile. */
+  ownerId: number;
+  /** Base damage dealt on hit (before defense reduction). */
+  damage: number;
+  /** Seconds remaining before the projectile is destroyed. */
+  lifetime: number;
 }

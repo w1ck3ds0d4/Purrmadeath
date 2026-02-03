@@ -57,6 +57,10 @@ export enum MessageType {
   ATTACK_PERFORMED = 'ATTACK_PERFORMED',
   /** Server → all: an attack landed on a target */
   HIT = 'HIT',
+  /** Server → all: a projectile was spawned (ranged attack). */
+  PROJECTILE_SPAWN = 'PROJECTILE_SPAWN',
+  /** Server → all: a projectile was destroyed (hit, wall, or expired). */
+  PROJECTILE_REMOVE = 'PROJECTILE_REMOVE',
 
   // ── Pause ────────────────────────────────────────────────────────────────
   /** Client → Server: player votes to pause or resume (toggle). */
@@ -69,9 +73,21 @@ export enum MessageType {
   // ── Chat ──────────────────────────────────────────────────────────────────
   CHAT = 'CHAT',
 
+  // ── Waves ────────────────────────────────────────────────────────────────
+  /** Server → all: a new wave is beginning (prep phase or active phase). */
+  WAVE_START = 'WAVE_START',
+  /** Server → all: a wave has ended (all portals destroyed). */
+  WAVE_END = 'WAVE_END',
+  /** Server → all: authoritative wave timer sync (pause/resume + drift correction). */
+  WAVE_TIMER_SYNC = 'WAVE_TIMER_SYNC',
+
   // ── Debug ─────────────────────────────────────────────────────────────────
   /** Client → Server: spawn a wave of enemies around the sender (dev tool). */
   DEBUG_SPAWN_ENEMIES = 'DEBUG_SPAWN_ENEMIES',
+  /** Client → Server: skip wave prep timer, immediately spawn portals (dev tool). */
+  DEBUG_WAVE_SKIP = 'DEBUG_WAVE_SKIP',
+  /** Client → Server: pause/resume the wave timer (dev tool). */
+  DEBUG_WAVE_PAUSE = 'DEBUG_WAVE_PAUSE',
 }
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
@@ -185,8 +201,8 @@ export interface EntitySnapshot {
   entityId: number;
   /** Slot index if this is a player entity. Absent for enemies. */
   slot?: number;
-  /** 'player' or 'enemy' — used by the client renderer to pick the visual. */
-  faction?: 'player' | 'enemy';
+  /** Faction — used by the client renderer to pick the visual. */
+  faction?: 'player' | 'enemy' | 'portal';
   x: number;
   y: number;
   vx: number;
@@ -233,8 +249,7 @@ export interface InputMessage extends BaseMessage {
 /** Client → Server: player performed an attack. */
 export interface AttackMessage extends BaseMessage {
   type: typeof MessageType.ATTACK;
-  /** Only 'melee' for now; 'ranged' added in 4.4. */
-  attackType: 'melee';
+  attackType: 'melee' | 'ranged';
   /** World-space facing angle in radians (mouse direction). */
   facing: number;
   /** Client-predicted attacker position (used for lag-compensated hit detection). */
@@ -261,6 +276,27 @@ export interface HitMessage extends BaseMessage {
   damage: number;
   knockbackVx: number;
   knockbackVy: number;
+}
+
+/** Server → all: a new projectile was created (ranged attack). */
+export interface ProjectileSpawnMessage extends BaseMessage {
+  type: typeof MessageType.PROJECTILE_SPAWN;
+  /** Entity ID of the projectile (used to correlate with PROJECTILE_REMOVE). */
+  projectileId: number;
+  /** Spawn position. */
+  x: number;
+  y: number;
+  /** Constant velocity for client-side prediction. */
+  vx: number;
+  vy: number;
+  /** Slot of the player who fired (for color). */
+  ownerSlot: number;
+}
+
+/** Server → all: a projectile was destroyed. */
+export interface ProjectileRemoveMessage extends BaseMessage {
+  type: typeof MessageType.PROJECTILE_REMOVE;
+  projectileId: number;
 }
 
 // ─── Pause ────────────────────────────────────────────────────────────────────
@@ -309,6 +345,31 @@ export interface ChatSendMessage extends BaseMessage {
 
 // ─── Debug ────────────────────────────────────────────────────────────────────
 
+/** Server → all: a wave is starting (prep countdown or portals activating). */
+export interface WaveStartMessage extends BaseMessage {
+  type: typeof MessageType.WAVE_START;
+  waveNumber: number;
+  /** Seconds of prep time before portals activate (0 = portals are now live). */
+  prepDuration: number;
+}
+
+/** Server → all: a wave has ended (all portals destroyed). */
+export interface WaveEndMessage extends BaseMessage {
+  type: typeof MessageType.WAVE_END;
+  waveNumber: number;
+  outcome: 'cleared' | 'failed';
+}
+
+/** Server → all: authoritative timer sync (sent on pause/resume + periodic drift correction). */
+export interface WaveTimerSyncMessage extends BaseMessage {
+  type: typeof MessageType.WAVE_TIMER_SYNC;
+  waveNumber: number;
+  /** Seconds remaining in prep phase (-1 if active or idle). */
+  remaining: number;
+  /** True if the wave timer is currently paused (debug). */
+  paused: boolean;
+}
+
 export interface DebugSpawnEnemiesMessage extends BaseMessage {
   type: typeof MessageType.DEBUG_SPAWN_ENEMIES;
   /** Number of enemies to spawn (capped server-side). Defaults to 5. */
@@ -337,9 +398,14 @@ export type AnyMessage =
   | AttackMessage
   | AttackPerformedMessage
   | HitMessage
+  | ProjectileSpawnMessage
+  | ProjectileRemoveMessage
   | PauseVoteMessage
   | PauseVoteUpdateMessage
   | PauseStateMessage
   | ChatMessage
+  | WaveStartMessage
+  | WaveEndMessage
+  | WaveTimerSyncMessage
   | DebugSpawnEnemiesMessage
   | BaseMessage;

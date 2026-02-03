@@ -42,7 +42,9 @@ export class SessionManager {
     socket.on(MessageType.SESSION_START,  (c, m) => this.onSessionStart(c, m as SessionStartMessage));
     socket.on(MessageType.INPUT,          (c, m) => this.onInput(c, m as InputMessage));
     socket.on(MessageType.ATTACK,               (c, m) => this.onAttack(c, m as AttackMessage));
-    socket.on(MessageType.DEBUG_SPAWN_ENEMIES,  (c, m) => this.onDebugSpawnEnemies(c, m as DebugSpawnEnemiesMessage));
+    socket.on(MessageType.DEBUG_SPAWN_ENEMIES,  (c, m) => this.onDebugAction(c, () => this.onDebugSpawnEnemies(c, m as DebugSpawnEnemiesMessage)));
+    socket.on(MessageType.DEBUG_WAVE_SKIP,     (c) => this.onDebugAction(c, () => this.session?.debugWaveSkip((cl, msg) => this.socket.send(cl, msg))));
+    socket.on(MessageType.DEBUG_WAVE_PAUSE,    (c) => this.onDebugAction(c, () => this.session?.debugWavePause((cl, msg) => this.socket.send(cl, msg))));
     socket.on(MessageType.CHAT,                 (c, m) => this.onChat(c, m as ChatSendMessage));
     socket.on(MessageType.PAUSE_VOTE,            (c) => this.onPauseVote(c));
     socket.onDisconnect((c) => this.onDisconnect(c));
@@ -94,6 +96,15 @@ export class SessionManager {
         type: MessageType.ERROR,
         code: 'NO_SESSION',
         message: 'No session exists. Host one first.',
+      });
+      return;
+    }
+
+    if (this.session.getPlayer(client.id)) {
+      this.socket.send(client, {
+        type: MessageType.ERROR,
+        code: 'ALREADY_IN_SESSION',
+        message: 'You are already in this session.',
       });
       return;
     }
@@ -179,6 +190,12 @@ export class SessionManager {
 
   private onAttack(client: ConnectedClient, msg: AttackMessage): void {
     this.session?.handleAttack(client.id, msg, (c, m) => this.socket.send(c, m));
+  }
+
+  /** Host-only guard for debug commands. */
+  private onDebugAction(client: ConnectedClient, action: () => void): void {
+    if (!this.session?.getPlayer(client.id)?.isHost) return;
+    action();
   }
 
   private onDebugSpawnEnemies(client: ConnectedClient, msg: DebugSpawnEnemiesMessage): void {
