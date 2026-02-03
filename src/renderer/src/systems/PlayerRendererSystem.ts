@@ -6,14 +6,31 @@ import {
   PlayerIndexComponent,
   FactionComponent,
   HealthComponent,
+  ResourceNodeComponent,
+  ItemDropComponent,
 } from '@shared/components';
-import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, PORTAL_RADIUS } from '@shared/constants';
+import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS } from '@shared/constants';
 
 // Enemy body color
 const ENEMY_COLOR = 0xcc3333;
 // Portal colors
 const PORTAL_OUTER_COLOR = 0x9933ff;
 const PORTAL_CORE_COLOR  = 0x6600cc;
+// Resource node colors by type
+const RESOURCE_COLORS: Record<string, { body: number; core: number }> = {
+  wood:    { body: 0x2d8a4e, core: 0x6b3a1f },
+  stone:   { body: 0x888888, core: 0x555555 },
+  iron:    { body: 0x8a5a3a, core: 0xbbaa88 },
+  diamond: { body: 0x44ccdd, core: 0x88eeff },
+};
+// Item drop colors by type
+const ITEM_DROP_COLORS: Record<string, number> = {
+  wood:    0x8a6a3a,
+  stone:   0x888888,
+  iron:    0x8a5a3a,
+  diamond: 0x44ccdd,
+  gold:    0xe0c030,
+};
 // Duration of the white hit-flash in seconds
 const HIT_FLASH_DURATION = 0.15;
 // Duration of the attack arc animation in seconds
@@ -74,17 +91,21 @@ export class PlayerRendererSystem {
     localFacing: number | null = null,
     dt = 0,
   ): void {
-    // Collect all renderable entities: players, enemies, and portals
+    // Collect all renderable entities: players, enemies, portals, resources, item drops
     const playerIds = new Set(world.query(C.Position, C.PlayerIndex));
     const factionEntities = world.query(C.Position, C.Faction);
-    const enemyIds  = new Set<number>();
-    const portalIds = new Set<number>();
+    const enemyIds    = new Set<number>();
+    const portalIds   = new Set<number>();
+    const resourceIds = new Set<number>();
+    const itemIds     = new Set<number>();
     for (const id of factionEntities) {
       const f = world.getComponent<FactionComponent>(id, C.Faction)!;
       if (f.type === 'enemy') enemyIds.add(id);
       else if (f.type === 'portal') portalIds.add(id);
+      else if (f.type === 'resource') resourceIds.add(id);
+      else if (f.type === 'item') itemIds.add(id);
     }
-    const living = new Set([...playerIds, ...enemyIds, ...portalIds]);
+    const living = new Set([...playerIds, ...enemyIds, ...portalIds, ...resourceIds, ...itemIds]);
 
     // Remove sprites for entities that no longer exist; clean up all timers
     for (const [id, gfx] of this.sprites) {
@@ -101,8 +122,10 @@ export class PlayerRendererSystem {
       const pos     = world.getComponent<PositionComponent>(id, C.Position)!;
       const pIdx    = world.getComponent<PlayerIndexComponent>(id, C.PlayerIndex);
       const hp      = world.getComponent<HealthComponent>(id, C.Health);
-      const isEnemy  = enemyIds.has(id);
-      const isPortal = portalIds.has(id);
+      const isEnemy    = enemyIds.has(id);
+      const isPortal   = portalIds.has(id);
+      const isResource = resourceIds.has(id);
+      const isItem     = itemIds.has(id);
 
       if (!this.sprites.has(id)) {
         const gfx = new Graphics();
@@ -157,6 +180,71 @@ export class PlayerRendererSystem {
             gfx.fill({ color: barColor, alpha: 1 });
           }
         }
+      } else if (isResource) {
+        // ── Resource node rendering ──────────────────────────────────────────
+        const rn = world.getComponent<ResourceNodeComponent>(id, C.ResourceNode);
+        const resType = rn?.resourceType ?? 'wood';
+        const colors = RESOURCE_COLORS[resType] ?? RESOURCE_COLORS.wood;
+        const rr = RESOURCE_NODE_RADIUS;
+
+        // Tick down hit flash
+        const rFlash = this.hitTimers.get(id) ?? 0;
+        if (rFlash > 0) this.hitTimers.set(id, Math.max(0, rFlash - dt));
+        const rFlashT = Math.min(1, rFlash / HIT_FLASH_DURATION);
+        const bodyColor = rFlashT > 0 ? lerpColor(colors.body, 0xffffff, rFlashT * 0.6) : colors.body;
+
+        // Outer body
+        gfx.circle(0, 0, rr);
+        gfx.fill({ color: bodyColor, alpha: 0.9 });
+
+        // Inner core
+        gfx.circle(0, 0, rr * 0.45);
+        gfx.fill({ color: colors.core, alpha: 0.8 });
+
+        // Outline
+        gfx.circle(0, 0, rr);
+        gfx.stroke({ color: 0x000000, alpha: 0.35, width: 1.5 });
+
+        // Health bar (only show if damaged)
+        if (hp && hp.max > 0 && hp.current < hp.max) {
+          const ratio    = Math.max(0, hp.current / hp.max);
+          const barColor = ratio > 0.5 ? 0x44cc44 : ratio > 0.25 ? 0xddaa22 : 0xcc3333;
+          const resBarW = rr * 2 + 4;
+          const resBarY = -(rr + 10);
+
+          gfx.rect(-resBarW / 2, resBarY, resBarW, BAR_H);
+          gfx.fill({ color: 0x222222, alpha: 0.8 });
+          if (ratio > 0) {
+            gfx.rect(-resBarW / 2, resBarY, resBarW * ratio, BAR_H);
+            gfx.fill({ color: barColor, alpha: 1 });
+          }
+        }
+
+      } else if (isItem) {
+        // ── Item drop rendering ──────────────────────────────────────────────
+        const drop = world.getComponent<ItemDropComponent>(id, C.ItemDrop);
+        const dropType = drop?.itemType ?? 'wood';
+        const dropColor = ITEM_DROP_COLORS[dropType] ?? 0xcccccc;
+        const ir = ITEM_DROP_RADIUS;
+
+        // Gentle vertical bob
+        const bob = Math.sin(performance.now() / 600 + id * 1.7) * 2;
+
+        // Pulsing glow
+        const pulse = 0.4 + 0.3 * Math.sin(performance.now() / 800 + id);
+
+        // Glow ring
+        gfx.circle(0, bob, ir + 3);
+        gfx.fill({ color: dropColor, alpha: 0.12 * pulse });
+
+        // Diamond shape
+        gfx.poly([0, bob - ir, ir * 0.7, bob, 0, bob + ir, -ir * 0.7, bob]);
+        gfx.fill({ color: dropColor, alpha: 0.9 });
+
+        // Outline
+        gfx.poly([0, bob - ir, ir * 0.7, bob, 0, bob + ir, -ir * 0.7, bob]);
+        gfx.stroke({ color: 0xffffff, alpha: 0.3, width: 1 });
+
       } else {
         // ── Standard entity rendering (players + enemies) ────────────────────
 

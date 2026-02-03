@@ -10,8 +10,8 @@ const PAD     = 14;
 /**
  * In-game HUD rendered in Pixi.js (screen space, not affected by the world camera).
  *
- * Phase 2: shows P1's health bar, stamina bar, and world-pixel coordinates.
- * Phase 3+: expand to show all 4 player bars.
+ * Shows P1's health bar, stamina bar, and world-pixel coordinates.
+ * Resource counters are displayed by the separate DOM-based ResourceHUD.
  */
 export class HUD {
   private container: Container;
@@ -43,7 +43,6 @@ export class HUD {
     const players = world.query(C.Health, C.Stamina, C.Position);
     if (players.length === 0) return;
 
-    // Phase 2: display P1's stats (bottom-left corner)
     const id  = players[0];
     const hp  = world.getComponent<HealthComponent>(id, C.Health)!;
     const st  = world.getComponent<StaminaComponent>(id, C.Stamina)!;
@@ -55,14 +54,11 @@ export class HUD {
 
     // ── Health bar ─────────────────────────────────────────────────────────────
     this.healthGfx.clear();
-    // Background track
     this.healthGfx.rect(x, hy, BAR_W, BAR_H);
     this.healthGfx.fill({ color: 0x3a0a0a });
-    // Fill (proportional to current HP)
     const hFill = Math.max(0, (hp.current / hp.max) * BAR_W);
     this.healthGfx.rect(x, hy, hFill, BAR_H);
     this.healthGfx.fill({ color: 0xd94040 });
-    // Outline
     this.healthGfx.rect(x, hy, BAR_W, BAR_H);
     this.healthGfx.stroke({ color: 0xffffff, alpha: 0.25, width: 1 });
 

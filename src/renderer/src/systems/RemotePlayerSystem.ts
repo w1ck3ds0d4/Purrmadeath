@@ -1,5 +1,12 @@
 import { World } from '@shared/ecs/World';
-import { C, PositionComponent, VelocityComponent, HealthComponent } from '@shared/components';
+import {
+  C,
+  PositionComponent,
+  VelocityComponent,
+  HealthComponent,
+  ResourceNodeComponent,
+  ItemDropComponent,
+} from '@shared/components';
 import type { SnapshotMessage, DeltaMessage, EntitySnapshot } from '@shared/protocol';
 
 /**
@@ -105,6 +112,22 @@ export class RemotePlayerSystem {
       }
       if (snap.faction) {
         world.addComponent(snap.entityId, C.Faction, { type: snap.faction });
+      }
+      // Resource node metadata (for renderer color selection)
+      if (snap.resourceType) {
+        world.addComponent(snap.entityId, C.ResourceNode, {
+          resourceType: snap.resourceType,
+          yield: 0, // yield is server-only; client only needs resourceType for rendering
+        } as ResourceNodeComponent);
+      }
+      // Item drop metadata (for renderer color selection)
+      if (snap.itemType) {
+        world.addComponent(snap.entityId, C.ItemDrop, {
+          itemType: snap.itemType,
+          quantity: snap.itemQuantity ?? 1,
+          autoPickup: true,
+          lifetime: 60,
+        } as ItemDropComponent);
       }
     } else {
       // Update velocity + health immediately; position is interpolated in interpolate()

@@ -18,6 +18,9 @@ export const C = {
   KnockbackReceiver: 'KnockbackReceiver',
   Projectile:      'Projectile',
   Portal:          'Portal',
+  ResourceNode:    'ResourceNode',
+  ItemDrop:        'ItemDrop',
+  Resources:       'Resources',
 } as const;
 
 // ─── Component interfaces ──────────────────────────────────────────────────────
@@ -86,7 +89,7 @@ export interface FacingComponent {
 
 /** Which team an entity belongs to. Determines targetting and rendering. */
 export interface FactionComponent {
-  type: 'player' | 'enemy' | 'portal';
+  type: 'player' | 'enemy' | 'portal' | 'resource' | 'item';
 }
 
 /** Tracks remaining cooldown before the entity can attack again. */
@@ -125,4 +128,35 @@ export interface ProjectileComponent {
   damage: number;
   /** Seconds remaining before the projectile is destroyed. */
   lifetime: number;
+}
+
+// ── Phase 4.8+ components ─────────────────────────────────────────────────────
+
+export type ResourceType = 'wood' | 'stone' | 'iron' | 'diamond';
+
+/** Tags an entity as a harvestable resource node (tree, stone deposit, etc.). */
+export interface ResourceNodeComponent {
+  resourceType: ResourceType;
+  /** How much resource this node yields when destroyed. */
+  yield: number;
+}
+
+/** Tags an entity as an item drop sitting in the world. */
+export interface ItemDropComponent {
+  /** Resource type or item ID. */
+  itemType: string;
+  quantity: number;
+  /** True = auto-pickup on overlap (resources). False = requires E-interact (equipment). */
+  autoPickup: boolean;
+  /** Seconds until this drop despawns. */
+  lifetime: number;
+}
+
+/** Per-player resource counters. Attached to player entities on the server. */
+export interface ResourcesComponent {
+  wood: number;
+  stone: number;
+  iron: number;
+  diamond: number;
+  gold: number;
 }

@@ -33,6 +33,7 @@ import type {
   WaveStartMessage,
   WaveEndMessage,
   WaveTimerSyncMessage,
+  ResourceUpdateMessage,
   LobbySlot,
 } from '@shared/protocol';
 
@@ -54,6 +55,7 @@ import { PauseBanner } from './ui/PauseBanner';
 import { WeaponHotbar } from './ui/WeaponHotbar';
 import { ProjectileRendererSystem } from './systems/ProjectileRendererSystem';
 import { WaveHUD } from './ui/WaveHUD';
+import { ResourceHUD } from './ui/ResourceHUD';
 
 // Slow world pan behind menus (world pixels per millisecond)
 const BG_PAN_X = 0.05;
@@ -133,6 +135,7 @@ async function main(): Promise<void> {
   const lobbyOverlay = new LobbyOverlay();
   const pauseBanner  = new PauseBanner();
   const waveHUD      = new WaveHUD();
+  const resourceHUD  = new ResourceHUD();
 
   // ── State: Menu ─────────────────────────────────────────────────────────────
   stateMgr.onEnter(GameState.Menu, () => {
@@ -150,6 +153,8 @@ async function main(): Promise<void> {
     reconciler.localEntityId = null;
     isMultiplayer = false;
     selectedWeapon = 0;
+    resourceHUD.setResources(0, 0, 0, 0, 0);
+    resourceHUD.hide();
     if (net) { net.disconnect(); net = null; }
   });
 
@@ -169,6 +174,7 @@ async function main(): Promise<void> {
     hud.setVisible(true);
     weaponHotbar.setVisible(true);
     waveHUD.setVisible(true);
+    resourceHUD.setVisible(true);
 
     // Clear menu background chunks from the tile renderer
     for (const key of menuStreamedKeys) {
@@ -385,6 +391,11 @@ async function main(): Promise<void> {
       waveHUD.onTimerSync(sync.waveNumber, sync.remaining, sync.paused);
     });
 
+    net.on(MessageType.RESOURCE_UPDATE, (msg) => {
+      const ru = msg as ResourceUpdateMessage;
+      resourceHUD.setResources(ru.wood, ru.stone, ru.iron, ru.diamond, ru.gold);
+    });
+
     net.on(MessageType.ERROR, (msg) => {
       const err = msg as unknown as { code: string; message: string };
       console.error(`[Net] Server error ${err.code}: ${err.message}`);
@@ -469,6 +480,11 @@ async function main(): Promise<void> {
         attackCooldown = WEAPON_COOLDOWNS[selectedWeapon];
         net?.send({ type: MessageType.ATTACK, attackType, facing: localFacing, x: pos.x, y: pos.y, t: performance.now() });
         if (attackType === 'melee') playerRenderer.notifyAttack(localEntityId!, localFacing);
+      }
+
+      // E-interact: pick up nearby non-auto-pickup items
+      if (input.isJustPressed(Action.Interact) && pos) {
+        net?.send({ type: MessageType.INTERACT, x: pos.x, y: pos.y, t: performance.now() });
       }
 
       // Debug shortcuts

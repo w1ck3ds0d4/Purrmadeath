@@ -10,7 +10,11 @@ import {
   AttackCooldownComponent,
   FactionComponent,
   PortalComponent,
+  ResourceNodeComponent,
+  ResourcesComponent,
+  ItemDropComponent,
 } from '@shared/components';
+import type { ResourceType } from '@shared/components';
 import {
   TILE_SIZE,
   PLAYER_RADIUS,
@@ -33,7 +37,14 @@ import {
   PORTAL_MIN_DIST,
   PORTAL_MAX_DIST,
   PORTAL_MIN_SPACING,
+  CHUNK_SIZE,
+  MAX_RESOURCE_NODES,
+  ITEM_DROP_LIFETIME,
+  ITEM_DROP_SCATTER_SPEED,
+  ITEM_DROP_INTERACT_RADIUS,
 } from '@shared/constants';
+import { RESOURCE_STATS, RESOURCE_SPAWN_TABLE, TILE_SPAWN_CHANCE } from '@shared/data/ResourceSpawnTable';
+import { LOOT_TABLES } from '@shared/data/LootTables';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import { MessageType } from '@shared/protocol';
 import type {
@@ -53,7 +64,10 @@ import type {
   WaveStartMessage,
   WaveEndMessage,
   WaveTimerSyncMessage,
+  ResourceUpdateMessage,
+  InteractMessage,
 } from '@shared/protocol';
+import { ItemDropSystem, PickupResult } from './systems/ItemDropSystem';
 import type { ConnectedClient } from './net/ServerSocket';
 import { MovementSystem } from './systems/MovementSystem';
 import { EnemySystem } from './systems/EnemySystem';
@@ -107,6 +121,7 @@ export class GameSession {
   private combat: CombatSystem;
   private projectile: ProjectileSystem;
   private portal: PortalSystem;
+  private itemDrop: ItemDropSystem;
 
   private players = new Map<string, SessionPlayer>(); // keyed by clientId
   /** Fast lookup: entity IDs that belong to players (updated on spawn/despawn). */
@@ -128,6 +143,12 @@ export class GameSession {
   /** Current count of enemy entities for cap enforcement. */
   private enemyCount = 0;
   private static readonly MAX_ENEMIES = 200;
+  /** Current count of resource node entities. */
+  private resourceNodeCount = 0;
+  /** Chunks already processed for resource generation (never re-generated). */
+  private processedChunks = new Set<string>();
+  /** How many chunks around each player to generate (in chunk units). */
+  private static readonly RESOURCE_GEN_RADIUS = 2;
 
   /** Snapshot of entity positions from the previous tick, for delta diffing. */
   private prevSnapshot = new Map<number, EntitySnapshot>();
@@ -147,6 +168,7 @@ export class GameSession {
     this.enemy = new EnemySystem(this.combat, this.generator);
     this.projectile = new ProjectileSystem(this.generator);
     this.portal = new PortalSystem();
+    this.itemDrop = new ItemDropSystem();
   }
 
   // ── Lobby management ────────────────────────────────────────────────────────
@@ -371,6 +393,185 @@ export class GameSession {
     console.log(`[Wave] Spawned ${placed.length}/${numPortals} portals for wave ${wave}`);
   }
 
+  // ── Resource & Item spawning ───────────────────────────────────────────────
+
+  /**
+   * Populate the area around the spawn origin with biome-appropriate resource nodes.
+   * Uses seeded deterministic RNG so all clients see the same world.
+   */
+  /**
+   * Chunk-based resource generation — called each tick.
+   * For each player, checks nearby chunks. Unprocessed chunks get resources
+   * generated using a deterministic per-chunk PRNG. Already-processed chunks
+   * are skipped permanently (resources persist, no re-spawning).
+   */
+  private generateResourcesNearPlayers(): void {
+    const R = GameSession.RESOURCE_GEN_RADIUS;
+
+    for (const player of this.players.values()) {
+      if (!player.entityId) continue;
+      const pos = this.world.getComponent<PositionComponent>(player.entityId, C.Position);
+      if (!pos) continue;
+
+      const pcx = Math.floor(pos.x / (TILE_SIZE * CHUNK_SIZE));
+      const pcy = Math.floor(pos.y / (TILE_SIZE * CHUNK_SIZE));
+
+      for (let cx = pcx - R; cx <= pcx + R; cx++) {
+        for (let cy = pcy - R; cy <= pcy + R; cy++) {
+          const key = `${cx},${cy}`;
+          if (this.processedChunks.has(key)) continue;
+          this.processedChunks.add(key);
+          this.generateResourcesForChunk(cx, cy);
+        }
+      }
+    }
+  }
+
+  /**
+   * Generate resources for a single chunk using deterministic per-chunk seeding.
+   * Same seed + chunk coords = same resources, regardless of when the chunk is visited.
+   */
+  private generateResourcesForChunk(cx: number, cy: number): void {
+    // Deterministic seed per chunk: mix world seed with chunk coordinates
+    let s = ((this.seed ^ (cx * 73856093) ^ (cy * 19349663)) >>> 0);
+    const rand = (): number => {
+      s = (s + 0x6d2b79f5) | 0;
+      let t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+
+    let spawned = 0;
+    const baseTx = cx * CHUNK_SIZE;
+    const baseTy = cy * CHUNK_SIZE;
+
+    for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+      for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+        if (this.resourceNodeCount >= MAX_RESOURCE_NODES) return;
+
+        const tx = baseTx + lx;
+        const ty = baseTy + ly;
+        const tileId = this.generator.getTile(tx, ty);
+
+        const chance = TILE_SPAWN_CHANCE[tileId];
+        if (!chance || rand() >= chance) continue;
+
+        const entries = RESOURCE_SPAWN_TABLE[tileId];
+        if (!entries || entries.length === 0) continue;
+
+        // Weighted random selection
+        const totalWeight = entries.reduce((sum, e) => sum + e.weight, 0);
+        let roll = rand() * totalWeight;
+        let picked = entries[0].resourceType;
+        for (const entry of entries) {
+          roll -= entry.weight;
+          if (roll <= 0) { picked = entry.resourceType; break; }
+        }
+
+        const wx = tx * TILE_SIZE + TILE_SIZE / 2;
+        const wy = ty * TILE_SIZE + TILE_SIZE / 2;
+        this.spawnResourceNode(wx, wy, picked);
+        spawned++;
+      }
+    }
+
+    if (spawned > 0) {
+      console.log(`[Resources] Chunk (${cx},${cy}): +${spawned} nodes (total: ${this.resourceNodeCount})`);
+    }
+  }
+
+  private spawnResourceNode(x: number, y: number, type: ResourceType): number {
+    const stats = RESOURCE_STATS[type];
+    const id = this.world.createEntity();
+    this.world.addComponent(id, C.Position,          { x, y });
+    this.world.addComponent(id, C.Velocity,          { vx: 0, vy: 0 });
+    this.world.addComponent(id, C.Health,            { current: stats.hp, max: stats.hp });
+    this.world.addComponent(id, C.Faction,           { type: 'resource' });
+    this.world.addComponent(id, C.ResourceNode,      { resourceType: type, yield: stats.yield });
+    this.world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
+    this.resourceNodeCount++;
+    return id;
+  }
+
+  private spawnItemDrop(
+    x: number, y: number,
+    itemType: string, quantity: number, autoPickup: boolean,
+  ): number {
+    const angle = Math.random() * Math.PI * 2;
+    const id = this.world.createEntity();
+    this.world.addComponent(id, C.Position, { x, y });
+    this.world.addComponent(id, C.Velocity, {
+      vx: Math.cos(angle) * ITEM_DROP_SCATTER_SPEED,
+      vy: Math.sin(angle) * ITEM_DROP_SCATTER_SPEED,
+    });
+    this.world.addComponent(id, C.Health,   { current: 1, max: 1 }); // dummy for DELTA sync
+    this.world.addComponent(id, C.Faction,  { type: 'item' });
+    this.world.addComponent(id, C.ItemDrop, {
+      itemType, quantity, autoPickup,
+      lifetime: ITEM_DROP_LIFETIME,
+    });
+    return id;
+  }
+
+  private rollLootTable(tableId: string): { itemType: string; quantity: number; autoPickup: boolean }[] {
+    const table = LOOT_TABLES[tableId];
+    if (!table) return [];
+    const drops: { itemType: string; quantity: number; autoPickup: boolean }[] = [];
+    for (const entry of table.entries) {
+      if (Math.random() < entry.chance) {
+        const qty = entry.minQty + Math.floor(Math.random() * (entry.maxQty - entry.minQty + 1));
+        drops.push({ itemType: entry.itemType, quantity: qty, autoPickup: entry.autoPickup });
+      }
+    }
+    return drops;
+  }
+
+  private spawnLootDrops(deadEntityId: number): void {
+    const pos = this.world.getComponent<PositionComponent>(deadEntityId, C.Position);
+    if (!pos) return;
+    const drops = this.rollLootTable('basic_enemy');
+    for (const drop of drops) {
+      this.spawnItemDrop(pos.x, pos.y, drop.itemType, drop.quantity, drop.autoPickup);
+    }
+  }
+
+  /**
+   * Credit a player's resource counter and send RESOURCE_UPDATE.
+   */
+  private creditResources(
+    playerEntityId: number,
+    itemType: string,
+    quantity: number,
+    send: (client: ConnectedClient, msg: object) => void,
+  ): void {
+    // Find the SessionPlayer for this entity
+    let target: SessionPlayer | undefined;
+    for (const p of this.players.values()) {
+      if (p.entityId === playerEntityId) { target = p; break; }
+    }
+    if (!target) return;
+
+    const res = this.world.getComponent<ResourcesComponent>(playerEntityId, C.Resources);
+    if (!res) return;
+
+    // Credit the resource
+    if (itemType === 'wood') res.wood += quantity;
+    else if (itemType === 'stone') res.stone += quantity;
+    else if (itemType === 'iron') res.iron += quantity;
+    else if (itemType === 'diamond') res.diamond += quantity;
+    else if (itemType === 'gold') res.gold += quantity;
+
+    const update: ResourceUpdateMessage = {
+      type: MessageType.RESOURCE_UPDATE,
+      wood: res.wood,
+      stone: res.stone,
+      iron: res.iron,
+      diamond: res.diamond,
+      gold: res.gold,
+    };
+    send(target.client, update);
+  }
+
   private spawnEnemy(x: number, y: number): number | null {
     if (this.enemyCount >= GameSession.MAX_ENEMIES) return null;
     const id = this.world.createEntity();
@@ -437,6 +638,48 @@ export class GameSession {
     }
   }
 
+  /**
+   * Called when a client presses E to interact with a nearby non-auto-pickup item.
+   */
+  handleInteract(
+    clientId: string,
+    msg: InteractMessage,
+    send: (client: ConnectedClient, m: object) => void,
+  ): void {
+    if (this.phase !== 'playing' || this.paused) return;
+    const player = this.players.get(clientId);
+    if (!player || player.entityId === null) return;
+    if (!Number.isFinite(msg.x) || !Number.isFinite(msg.y)) return;
+
+    const playerPos = this.world.getComponent<PositionComponent>(player.entityId, C.Position);
+    if (!playerPos) return;
+
+    // Find nearest non-auto-pickup ItemDrop within interact radius
+    const r2 = ITEM_DROP_INTERACT_RADIUS * ITEM_DROP_INTERACT_RADIUS;
+    let bestId = -1;
+    let bestDist = Infinity;
+
+    for (const id of this.world.query(C.ItemDrop, C.Position)) {
+      const drop = this.world.getComponent<ItemDropComponent>(id, C.ItemDrop)!;
+      if (drop.autoPickup) continue;
+
+      const dpos = this.world.getComponent<PositionComponent>(id, C.Position)!;
+      const dx = dpos.x - playerPos.x;
+      const dy = dpos.y - playerPos.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 <= r2 && d2 < bestDist) {
+        bestDist = d2;
+        bestId = id;
+      }
+    }
+
+    if (bestId < 0) return;
+
+    const drop = this.world.getComponent<ItemDropComponent>(bestId, C.ItemDrop)!;
+    this.creditResources(player.entityId, drop.itemType, drop.quantity, send);
+    this.world.destroyEntity(bestId);
+  }
+
   private handleMeleeAttack(
     player: SessionPlayer,
     msg: AttackMessage,
@@ -463,8 +706,13 @@ export class GameSession {
       for (const p of this.players.values()) send(p.client, hitMsg);
     }
 
+    // Build attacker map so destroyDeadEntities can credit resource harvesting
+    const attackerMap = new Map<number, number>();
+    for (const hit of hits) {
+      if (!attackerMap.has(hit.targetId)) attackerMap.set(hit.targetId, hit.sourceId);
+    }
     // Remove dead non-player entities; player death handled in 4.11
-    this.destroyDeadEntities(deaths);
+    this.destroyDeadEntities(deaths, attackerMap, send);
   }
 
   private handleRangedAttack(
@@ -512,12 +760,37 @@ export class GameSession {
     for (const p of this.players.values()) send(p.client, spawn);
   }
 
-  /** Destroy dead non-player entities (enemies and portals) from the world. */
-  private destroyDeadEntities(deaths: number[]): void {
+  /**
+   * Destroy dead non-player entities from the world.
+   * @param deaths     Entity IDs whose HP reached 0.
+   * @param attackerMap Optional map of deadId → sourceId for resource crediting.
+   * @param send       Required when attackerMap is provided (to send RESOURCE_UPDATE).
+   */
+  private destroyDeadEntities(
+    deaths: number[],
+    attackerMap?: Map<number, number>,
+    send?: (client: ConnectedClient, msg: object) => void,
+  ): void {
     for (const deadId of deaths) {
       if (this.playerEntityIds.has(deadId)) continue;
       const faction = this.world.getComponent<FactionComponent>(deadId, C.Faction);
-      if (faction?.type === 'enemy') this.enemyCount--;
+
+      // Resource node → credit attacker
+      if (faction?.type === 'resource' && attackerMap && send) {
+        const rn = this.world.getComponent<ResourceNodeComponent>(deadId, C.ResourceNode);
+        const attackerId = attackerMap.get(deadId);
+        if (rn && attackerId !== undefined) {
+          this.creditResources(attackerId, rn.resourceType, rn.yield, send);
+        }
+        this.resourceNodeCount--;
+      }
+
+      // Enemy → spawn loot drops
+      if (faction?.type === 'enemy') {
+        this.spawnLootDrops(deadId);
+        this.enemyCount--;
+      }
+
       this.world.destroyEntity(deadId);
     }
   }
@@ -766,6 +1039,9 @@ export class GameSession {
     if (this.phase !== 'playing' || this.paused) return;
     this.tick++;
 
+    // Spawn resources near players (chunk-based, processed chunks are skipped)
+    this.generateResourcesNearPlayers();
+
     this.combat.update(this.world, dt);
     const enemyResult = this.enemy.update(this.world, dt);
     this.movement.update(this.world, dt);
@@ -806,8 +1082,23 @@ export class GameSession {
       this.world.destroyEntity(projId);
     }
 
+    // Build attacker map for projectile kills (sourceId = projectile owner)
+    const projAttackerMap = new Map<number, number>();
+    for (const hit of projResult.hits) {
+      if (!projAttackerMap.has(hit.targetId)) projAttackerMap.set(hit.targetId, hit.sourceId);
+    }
     // Destroy dead non-player entities hit by projectiles
-    this.destroyDeadEntities(projResult.deaths);
+    this.destroyDeadEntities(projResult.deaths, projAttackerMap, send);
+
+    // ── Item drop system (lifetime, scatter, auto-pickup) ──────────────────────
+    const dropResult = this.itemDrop.update(this.world, dt, this.playerEntityIds);
+    for (const pickup of dropResult.pickups) {
+      this.creditResources(pickup.playerId, pickup.itemType, pickup.quantity, send);
+      this.world.destroyEntity(pickup.dropId);
+    }
+    for (const expiredId of dropResult.expired) {
+      this.world.destroyEntity(expiredId);
+    }
 
     // ── Wave state machine ────────────────────────────────────────────────────
     this.tickWave(dt, send);
@@ -878,7 +1169,7 @@ export class GameSession {
       const factionComp = this.world.getComponent<FactionComponent>(id, C.Faction);
       const faction = factionComp?.type ?? (playerEntry ? 'player' : 'enemy');
 
-      snaps.push({
+      const snap: EntitySnapshot = {
         entityId: id,
         slot: playerEntry?.slot,
         faction,
@@ -888,7 +1179,20 @@ export class GameSession {
         vy: vel.vy,
         hp: hp.current,
         maxHp: hp.max,
-      });
+      };
+
+      // Resource node metadata
+      const rn = this.world.getComponent<ResourceNodeComponent>(id, C.ResourceNode);
+      if (rn) snap.resourceType = rn.resourceType;
+
+      // Item drop metadata
+      const drop = this.world.getComponent<ItemDropComponent>(id, C.ItemDrop);
+      if (drop) {
+        snap.itemType = drop.itemType;
+        snap.itemQuantity = drop.quantity;
+      }
+
+      snaps.push(snap);
     }
     return snaps;
   }
@@ -897,7 +1201,9 @@ export class GameSession {
     return (
       prev.x !== curr.x || prev.y !== curr.y ||
       prev.vx !== curr.vx || prev.vy !== curr.vy ||
-      prev.hp !== curr.hp
+      prev.hp !== curr.hp ||
+      prev.resourceType !== curr.resourceType ||
+      prev.itemType !== curr.itemType
     );
   }
 }

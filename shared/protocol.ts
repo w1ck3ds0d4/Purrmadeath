@@ -73,6 +73,12 @@ export enum MessageType {
   // ── Chat ──────────────────────────────────────────────────────────────────
   CHAT = 'CHAT',
 
+  // ── Resources & Items ────────────────────────────────────────────────────
+  /** Server → Client: updated resource counts for this player. */
+  RESOURCE_UPDATE = 'RESOURCE_UPDATE',
+  /** Client → Server: player pressed E to interact/pick up nearby item. */
+  INTERACT = 'INTERACT',
+
   // ── Waves ────────────────────────────────────────────────────────────────
   /** Server → all: a new wave is beginning (prep phase or active phase). */
   WAVE_START = 'WAVE_START',
@@ -202,13 +208,19 @@ export interface EntitySnapshot {
   /** Slot index if this is a player entity. Absent for enemies. */
   slot?: number;
   /** Faction — used by the client renderer to pick the visual. */
-  faction?: 'player' | 'enemy' | 'portal';
+  faction?: 'player' | 'enemy' | 'portal' | 'resource' | 'item';
   x: number;
   y: number;
   vx: number;
   vy: number;
   hp: number;
   maxHp: number;
+  /** Present only for 'resource' faction entities. */
+  resourceType?: 'wood' | 'stone' | 'iron' | 'diamond';
+  /** Present only for 'item' faction entities — resource type or item ID. */
+  itemType?: string;
+  /** Present only for 'item' faction entities. */
+  itemQuantity?: number;
 }
 
 /** Full world snapshot sent on game start or player rejoin. */
@@ -360,6 +372,29 @@ export interface WaveEndMessage extends BaseMessage {
   outcome: 'cleared' | 'failed';
 }
 
+// ─── Resources & Items ────────────────────────────────────────────────────────
+
+/** Server → Client: updated resource counts for this player. */
+export interface ResourceUpdateMessage extends BaseMessage {
+  type: typeof MessageType.RESOURCE_UPDATE;
+  wood: number;
+  stone: number;
+  iron: number;
+  diamond: number;
+  gold: number;
+}
+
+/** Client → Server: player pressed E to interact/pick up nearby item. */
+export interface InteractMessage extends BaseMessage {
+  type: typeof MessageType.INTERACT;
+  /** Client-predicted player position (lag compensation). */
+  x: number;
+  y: number;
+  t: number;
+}
+
+// ─── Waves ────────────────────────────────────────────────────────────────────
+
 /** Server → all: authoritative timer sync (sent on pause/resume + periodic drift correction). */
 export interface WaveTimerSyncMessage extends BaseMessage {
   type: typeof MessageType.WAVE_TIMER_SYNC;
@@ -407,5 +442,7 @@ export type AnyMessage =
   | WaveStartMessage
   | WaveEndMessage
   | WaveTimerSyncMessage
+  | ResourceUpdateMessage
+  | InteractMessage
   | DebugSpawnEnemiesMessage
   | BaseMessage;

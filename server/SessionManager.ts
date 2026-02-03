@@ -10,6 +10,7 @@ import type {
   SessionLeaveMessage,
   InputMessage,
   AttackMessage,
+  InteractMessage,
   DebugSpawnEnemiesMessage,
   ChatSendMessage,
   SessionAckMessage,
@@ -42,6 +43,7 @@ export class SessionManager {
     socket.on(MessageType.SESSION_START,  (c, m) => this.onSessionStart(c, m as SessionStartMessage));
     socket.on(MessageType.INPUT,          (c, m) => this.onInput(c, m as InputMessage));
     socket.on(MessageType.ATTACK,               (c, m) => this.onAttack(c, m as AttackMessage));
+    socket.on(MessageType.INTERACT,             (c, m) => this.onInteract(c, m as InteractMessage));
     socket.on(MessageType.DEBUG_SPAWN_ENEMIES,  (c, m) => this.onDebugAction(c, () => this.onDebugSpawnEnemies(c, m as DebugSpawnEnemiesMessage)));
     socket.on(MessageType.DEBUG_WAVE_SKIP,     (c) => this.onDebugAction(c, () => this.session?.debugWaveSkip((cl, msg) => this.socket.send(cl, msg))));
     socket.on(MessageType.DEBUG_WAVE_PAUSE,    (c) => this.onDebugAction(c, () => this.session?.debugWavePause((cl, msg) => this.socket.send(cl, msg))));
@@ -190,6 +192,10 @@ export class SessionManager {
 
   private onAttack(client: ConnectedClient, msg: AttackMessage): void {
     this.session?.handleAttack(client.id, msg, (c, m) => this.socket.send(c, m));
+  }
+
+  private onInteract(client: ConnectedClient, msg: InteractMessage): void {
+    this.session?.handleInteract(client.id, msg, (c, m) => this.socket.send(c, m));
   }
 
   /** Host-only guard for debug commands. */
