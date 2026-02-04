@@ -6,8 +6,10 @@ import { DiscoveryBeacon } from './discovery';
 
 // ─── Network ──────────────────────────────────────────────────────────────────
 
-const socket   = new ServerSocket(SERVER_PORT);
-const beacon   = new DiscoveryBeacon(SERVER_PORT);
+// Allow PORT env var override for cloud deployments (e.g. AWS, Railway).
+const port     = process.env.PORT ? parseInt(process.env.PORT, 10) : SERVER_PORT;
+const socket   = new ServerSocket(port);
+const beacon   = new DiscoveryBeacon(port);
 const sessions = new SessionManager(socket, beacon);
 
 // ─── Game loop ────────────────────────────────────────────────────────────────
@@ -20,7 +22,7 @@ beacon.start();
 // ─── Startup log ──────────────────────────────────────────────────────────────
 
 console.log(`[Server] Purrmadeath server started`);
-console.log(`[Server]   Port:      ${SERVER_PORT}`);
+console.log(`[Server]   Port:      ${port}`);
 console.log(`[Server]   Tick rate: ${TICK_RATE} TPS`);
 console.log(`[Server]   Discovery: UDP broadcast on port 7778`);
 

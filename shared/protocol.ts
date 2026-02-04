@@ -79,6 +79,24 @@ export enum MessageType {
   /** Client → Server: player pressed E to interact/pick up nearby item. */
   INTERACT = 'INTERACT',
 
+  // ── Death & Respawn (4.11) ──────────────────────────────────────────────
+  /** Server → all: a player has been downed (HP reached 0). */
+  PLAYER_DOWNED = 'PLAYER_DOWNED',
+  /** Server → all: revive progress update for a downed player. */
+  REVIVE_PROGRESS = 'REVIVE_PROGRESS',
+  /** Server → all: a downed player has been revived by a teammate. */
+  PLAYER_REVIVED = 'PLAYER_REVIVED',
+  /** Server → all: a player has fully died (bleed-out expired). */
+  PLAYER_DIED = 'PLAYER_DIED',
+  /** Server → all: a player has respawned at the spawn origin. */
+  PLAYER_RESPAWNED = 'PLAYER_RESPAWNED',
+
+  // ── Wave Wipe (4.12) ───────────────────────────────────────────────────
+  /** Server → all: full party wipe occurred. */
+  PARTY_WIPE = 'PARTY_WIPE',
+  /** Server → all: run is over. */
+  GAME_OVER = 'GAME_OVER',
+
   // ── Waves ────────────────────────────────────────────────────────────────
   /** Server → all: a new wave is beginning (prep phase or active phase). */
   WAVE_START = 'WAVE_START',
@@ -221,6 +239,8 @@ export interface EntitySnapshot {
   itemType?: string;
   /** Present only for 'item' faction entities. */
   itemQuantity?: number;
+  /** True if this player entity is in the downed state. */
+  downed?: boolean;
 }
 
 /** Full world snapshot sent on game start or player rejoin. */
@@ -411,6 +431,69 @@ export interface DebugSpawnEnemiesMessage extends BaseMessage {
   count?: number;
 }
 
+// ─── Death & Respawn (4.11) ──────────────────────────────────────────────────
+
+/** Server → all: a player has been downed (HP reached 0). */
+export interface PlayerDownedMessage extends BaseMessage {
+  type: typeof MessageType.PLAYER_DOWNED;
+  entityId: number;
+  slot: number;
+  bleedTimer: number;
+}
+
+/** Server → all: revive progress for a downed player. */
+export interface ReviveProgressMessage extends BaseMessage {
+  type: typeof MessageType.REVIVE_PROGRESS;
+  targetId: number;
+  /** 0–1 progress toward completion. */
+  progress: number;
+  reviverId: number;
+}
+
+/** Server → all: a downed player has been revived by a teammate. */
+export interface PlayerRevivedMessage extends BaseMessage {
+  type: typeof MessageType.PLAYER_REVIVED;
+  entityId: number;
+  slot: number;
+  hp: number;
+}
+
+/** Server → all: a player has fully died (bleed-out expired). */
+export interface PlayerDiedMessage extends BaseMessage {
+  type: typeof MessageType.PLAYER_DIED;
+  entityId: number;
+  slot: number;
+  respawnTimer: number;
+}
+
+/** Server → all: a player has respawned. */
+export interface PlayerRespawnedMessage extends BaseMessage {
+  type: typeof MessageType.PLAYER_RESPAWNED;
+  entityId: number;
+  slot: number;
+  x: number;
+  y: number;
+  hp: number;
+}
+
+// ─── Wave Wipe (4.12) ───────────────────────────────────────────────────────
+
+/** Server → all: full party wipe occurred. */
+export interface PartyWipeMessage extends BaseMessage {
+  type: typeof MessageType.PARTY_WIPE;
+  wipeCount: number;
+  outcome: 'penalty' | 'game_over';
+}
+
+/** Server → all: run is over. */
+export interface GameOverMessage extends BaseMessage {
+  type: typeof MessageType.GAME_OVER;
+  waveReached: number;
+  reason: string;
+  enemiesKilled: number;
+  timePlayed: number; // seconds
+}
+
 // ─── Union ────────────────────────────────────────────────────────────────────
 
 export type AnyMessage =
@@ -445,4 +528,11 @@ export type AnyMessage =
   | ResourceUpdateMessage
   | InteractMessage
   | DebugSpawnEnemiesMessage
+  | PlayerDownedMessage
+  | ReviveProgressMessage
+  | PlayerRevivedMessage
+  | PlayerDiedMessage
+  | PlayerRespawnedMessage
+  | PartyWipeMessage
+  | GameOverMessage
   | BaseMessage;

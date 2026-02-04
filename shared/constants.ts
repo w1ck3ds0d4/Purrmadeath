@@ -200,3 +200,33 @@ export const ITEM_DROP_INTERACT_RADIUS = 40;
 export const ITEM_DROP_SCATTER_SPEED = 120;
 /** Friction decay rate for item drop scatter velocity. */
 export const ITEM_DROP_FRICTION = 6;
+
+// ─── Death & Respawn (4.11) ───────────────────────────────────────────
+
+/** Seconds a downed player has before they fully die (bleed-out timer). */
+export const DOWNED_BLEED_TIME = 30;
+/** Seconds a teammate must stay near a downed player to complete a revive. */
+export const REVIVE_DURATION = 5;
+/** HP restored on revive as a fraction of max HP (0.3 = 30%). */
+export const REVIVE_HP_PERCENT = 0.3;
+/** Seconds after full death before the player respawns at origin. */
+export const RESPAWN_DELAY = 8;
+/** Max distance (px) between reviver and downed player for revive to work. */
+export const REVIVE_RANGE = 50;
+
+// ─── Wave Wipe (4.12) ────────────────────────────────────────────────
+
+/** Fraction of resources lost on first party wipe (0.25 = 25%). */
+export const WIPE_1_RESOURCE_LOSS_PERCENT = 0.25;
+
+// ─── Anti-exploit (4.13) ──────────────────────────────────────────────
+
+/** Max distance (px) between client-reported and server position for attacks.
+ *  Beyond this, the server substitutes its own authoritative position. */
+export const MAX_ATTACK_POSITION_TOLERANCE = 80;
+
+// ─── Entity Collision ─────────────────────────────────────────────────
+
+/** Iterations of the entity-entity separation pass per tick.
+ *  More iterations = better chain resolution, but costs O(n²) each. */
+export const ENTITY_SEPARATION_ITERATIONS = 2;

@@ -34,6 +34,13 @@ import type {
   WaveEndMessage,
   WaveTimerSyncMessage,
   ResourceUpdateMessage,
+  PlayerDownedMessage,
+  ReviveProgressMessage,
+  PlayerRevivedMessage,
+  PlayerDiedMessage,
+  PlayerRespawnedMessage,
+  PartyWipeMessage,
+  GameOverMessage,
   LobbySlot,
 } from '@shared/protocol';
 
@@ -56,6 +63,8 @@ import { WeaponHotbar } from './ui/WeaponHotbar';
 import { ProjectileRendererSystem } from './systems/ProjectileRendererSystem';
 import { WaveHUD } from './ui/WaveHUD';
 import { ResourceHUD } from './ui/ResourceHUD';
+import { DeathOverlay } from './ui/DeathOverlay';
+import { GameOverOverlay } from './ui/GameOverOverlay';
 
 // Slow world pan behind menus (world pixels per millisecond)
 const BG_PAN_X = 0.05;
@@ -125,6 +134,13 @@ async function main(): Promise<void> {
   // ── Attack cooldown (client-side mirror of server AttackCooldown) ────────────
   let attackCooldown = 0;
   let selectedWeapon: 0 | 1 = 0; // 0 = melee (Sword), 1 = ranged (Bow)
+
+  // ── Death / respawn state ──────────────────────────────────────────────────
+  let localDowned   = false;
+  let localDead     = false;
+  let respawnTimer  = 0;
+  let localGameOver = false;
+
   document.addEventListener('mousemove', (e) => { mouseX = e.clientX; mouseY = e.clientY; });
 
   // ── State machine ───────────────────────────────────────────────────────────
@@ -136,6 +152,9 @@ async function main(): Promise<void> {
   const pauseBanner  = new PauseBanner();
   const waveHUD      = new WaveHUD();
   const resourceHUD  = new ResourceHUD();
+  const deathOverlay   = new DeathOverlay();
+  const gameOverOverlay = new GameOverOverlay();
+  gameOverOverlay.setOnMenu(() => stateMgr.transition(GameState.Menu));
 
   // ── State: Menu ─────────────────────────────────────────────────────────────
   stateMgr.onEnter(GameState.Menu, () => {
@@ -153,6 +172,12 @@ async function main(): Promise<void> {
     reconciler.localEntityId = null;
     isMultiplayer = false;
     selectedWeapon = 0;
+    localDowned = false;
+    localDead   = false;
+    respawnTimer = 0;
+    localGameOver = false;
+    deathOverlay.hide();
+    gameOverOverlay.hide();
     resourceHUD.setResources(0, 0, 0, 0, 0);
     resourceHUD.hide();
     if (net) { net.disconnect(); net = null; }
@@ -396,6 +421,87 @@ async function main(): Promise<void> {
       resourceHUD.setResources(ru.wood, ru.stone, ru.iron, ru.diamond, ru.gold);
     });
 
+    // ── Death / respawn handlers ──────────────────────────────────────────────
+    net.on(MessageType.PLAYER_DOWNED, (msg) => {
+      if (localGameOver) return;
+      const pd = msg as PlayerDownedMessage;
+      playerRenderer.notifyDowned(pd.entityId);
+      if (pd.entityId === localEntityId) {
+        localDowned = true;
+        deathOverlay.showDowned(pd.bleedTimer);
+      }
+    });
+
+    net.on(MessageType.REVIVE_PROGRESS, (msg) => {
+      if (localGameOver) return;
+      const rp = msg as ReviveProgressMessage;
+      playerRenderer.notifyReviveProgress(rp.targetId, rp.progress);
+      if (rp.targetId === localEntityId) {
+        deathOverlay.showReviving(rp.progress);
+      }
+    });
+
+    net.on(MessageType.PLAYER_REVIVED, (msg) => {
+      if (localGameOver) return;
+      const pr = msg as PlayerRevivedMessage;
+      playerRenderer.notifyRevived(pr.entityId);
+      if (pr.entityId === localEntityId) {
+        localDowned = false;
+        localDead   = false;
+        deathOverlay.hide();
+      }
+    });
+
+    net.on(MessageType.PLAYER_DIED, (msg) => {
+      if (localGameOver) return;
+      const pd = msg as PlayerDiedMessage;
+      playerRenderer.notifyDeath(pd.entityId);
+      if (pd.entityId === localEntityId) {
+        localDowned = false;
+        localDead   = true;
+        respawnTimer = pd.respawnTimer;
+        deathOverlay.showDead(pd.respawnTimer);
+      }
+    });
+
+    net.on(MessageType.PLAYER_RESPAWNED, (msg) => {
+      if (localGameOver) return;
+      const pr = msg as PlayerRespawnedMessage;
+      playerRenderer.notifyRespawned(pr.entityId);
+      if (pr.entityId === localEntityId) {
+        localDowned = false;
+        localDead   = false;
+        respawnTimer = 0;
+        deathOverlay.hide();
+        // Snap camera to respawn position
+        camera.x = pr.x; camera.y = pr.y;
+        camera.targetX = pr.x; camera.targetY = pr.y;
+      }
+    });
+
+    net.on(MessageType.PARTY_WIPE, (msg) => {
+      if (localGameOver) return;
+      const pw = msg as PartyWipeMessage;
+      if (pw.outcome === 'penalty') {
+        console.log(`[Game] Party wipe #${pw.wipeCount} — 25% resource penalty`);
+      }
+    });
+
+    net.on(MessageType.GAME_OVER, (msg) => {
+      const go = msg as GameOverMessage;
+      console.log(`[Game] Game Over — reached wave ${go.waveReached}, reason: ${go.reason}`);
+      localGameOver = true;
+      localDowned = false;
+      localDead   = false;
+      deathOverlay.hide();
+      gameOverOverlay.show({
+        waveReached: go.waveReached,
+        enemiesKilled: go.enemiesKilled,
+        timePlayed: go.timePlayed,
+        reason: go.reason,
+      });
+    });
+
     net.on(MessageType.ERROR, (msg) => {
       const err = msg as unknown as { code: string; message: string };
       console.error(`[Net] Server error ${err.code}: ${err.message}`);
@@ -442,18 +548,21 @@ async function main(): Promise<void> {
 
     // Playing: local prediction + send input
     if (state === GameState.Playing && localEntityId !== null) {
-      // 1. Map keyboard → PlayerInput component (only local entity has it)
-      inputSystem.update(world);
+      const canAct = !localDowned && !localDead;
 
-      // 2. Read current input
+      // 1. Map keyboard → PlayerInput component (only local entity has it)
+      if (canAct) inputSystem.update(world);
+
+      // 2. Read current input (zero when incapacitated)
       const inp = world.getComponent<{ dx: number; dy: number; sprint: boolean }>(localEntityId, C.PlayerInput)!;
+      if (!canAct) { inp.dx = 0; inp.dy = 0; inp.sprint = false; }
 
       // 3. Record for reconciliation + send to server
       const seq = reconciler.recordInput(inp.dx, inp.dy, inp.sprint, dt);
       net?.send({ type: MessageType.INPUT, seq, dx: inp.dx, dy: inp.dy, sprint: inp.sprint, t: performance.now() });
 
       // 4. Predict locally + interpolate remote entities
-      movementSystem?.update(world, dt);
+      movementSystem?.update(world, dt, localEntityId);
       staminaSystem.update(world, dt);
       remotePlayerSys.interpolate(world, dt);
       waveHUD.update(dt);
@@ -475,14 +584,14 @@ async function main(): Promise<void> {
       // Attack: client-side cooldown mirrors server AttackCooldown so animation and
       // damage are always in sync — no ghost swings during the cooldown window.
       if (attackCooldown > 0) attackCooldown = Math.max(0, attackCooldown - dt);
-      if (input.isJustPressed(Action.Attack) && localFacing !== null && pos && attackCooldown <= 0) {
+      if (canAct && input.isJustPressed(Action.Attack) && localFacing !== null && pos && attackCooldown <= 0) {
         const attackType = WEAPON_TYPES[selectedWeapon];
         attackCooldown = WEAPON_COOLDOWNS[selectedWeapon];
         net?.send({ type: MessageType.ATTACK, attackType, facing: localFacing, x: pos.x, y: pos.y, t: performance.now() });
         if (attackType === 'melee') playerRenderer.notifyAttack(localEntityId!, localFacing);
       }
 
-      // E-interact: pick up nearby non-auto-pickup items
+      // E-interact: pick up nearby non-auto-pickup items (also initiates revive)
       if (input.isJustPressed(Action.Interact) && pos) {
         net?.send({ type: MessageType.INTERACT, x: pos.x, y: pos.y, t: performance.now() });
       }
@@ -499,14 +608,19 @@ async function main(): Promise<void> {
       }
 
       playerRenderer.update(world, localEntityId, localFacing, dt);
+      deathOverlay.update(dt);
 
       // 6. Update and render projectiles
       const { width: sw, height: sh } = renderer.screen;
       projectileRenderer.update(dt);
       projectileRenderer.render(camera.viewX, camera.viewY, camera.zoom, sw, sh);
 
-      // 7. Camera follows local player
-      if (pos) { camera.targetX = pos.x; camera.targetY = pos.y; }
+      // 7. Camera follows local player (with smooth correction offset)
+      reconciler.decaySmooth(dt);
+      if (pos) {
+        camera.targetX = pos.x + reconciler.smoothX;
+        camera.targetY = pos.y + reconciler.smoothY;
+      }
     }
 
     camera.update(dt);

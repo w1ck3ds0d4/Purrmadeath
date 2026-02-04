@@ -79,6 +79,9 @@ export class EnemySystem {
       let nearestPos: PositionComponent | null = null;
 
       for (const pid of playerIds) {
+        // Skip downed players — enemies don't target them
+        if (world.hasComponent(pid, C.Downed)) continue;
+
         const ppos = world.getComponent<PositionComponent>(pid, C.Position)!;
         const ddx = ppos.x - pos.x;
         const ddy = ppos.y - pos.y;

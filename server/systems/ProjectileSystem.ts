@@ -86,6 +86,9 @@ export class ProjectileSystem {
         // Skip the owner entity (can't shoot yourself)
         if (targetId === proj.ownerId) continue;
 
+        // Skip downed players — they're already at 0 HP
+        if (world.hasComponent(targetId, C.Downed)) continue;
+
         const tgtPos = world.getComponent<PositionComponent>(targetId, C.Position)!;
         const dx = tgtPos.x - pos.x;
         const dy = tgtPos.y - pos.y;

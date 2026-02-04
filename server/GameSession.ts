@@ -13,11 +13,13 @@ import {
   ResourceNodeComponent,
   ResourcesComponent,
   ItemDropComponent,
+  DownedComponent,
 } from '@shared/components';
 import type { ResourceType } from '@shared/components';
 import {
   TILE_SIZE,
   PLAYER_RADIUS,
+  PLAYER_MAX_HEALTH,
   ENEMY_BASE_SPEED,
   ENEMY_MAX_HEALTH,
   ENEMY_MELEE_COOLDOWN,
@@ -42,6 +44,13 @@ import {
   ITEM_DROP_LIFETIME,
   ITEM_DROP_SCATTER_SPEED,
   ITEM_DROP_INTERACT_RADIUS,
+  DOWNED_BLEED_TIME,
+  REVIVE_DURATION,
+  REVIVE_HP_PERCENT,
+  RESPAWN_DELAY,
+  REVIVE_RANGE,
+  WIPE_1_RESOURCE_LOSS_PERCENT,
+  MAX_ATTACK_POSITION_TOLERANCE,
 } from '@shared/constants';
 import { RESOURCE_STATS, RESOURCE_SPAWN_TABLE, TILE_SPAWN_CHANCE } from '@shared/data/ResourceSpawnTable';
 import { LOOT_TABLES } from '@shared/data/LootTables';
@@ -66,6 +75,13 @@ import type {
   WaveTimerSyncMessage,
   ResourceUpdateMessage,
   InteractMessage,
+  PlayerDownedMessage,
+  ReviveProgressMessage,
+  PlayerRevivedMessage,
+  PlayerDiedMessage,
+  PlayerRespawnedMessage,
+  PartyWipeMessage,
+  GameOverMessage,
 } from '@shared/protocol';
 import { ItemDropSystem, PickupResult } from './systems/ItemDropSystem';
 import type { ConnectedClient } from './net/ServerSocket';
@@ -89,6 +105,9 @@ export interface SessionPlayer {
 }
 
 export type SessionPhase = 'lobby' | 'playing';
+
+/** Shorthand for the send callback used throughout GameSession. */
+type SendFn = (client: ConnectedClient, msg: object) => void;
 
 // ─── GameSession ──────────────────────────────────────────────────────────────
 
@@ -149,6 +168,19 @@ export class GameSession {
   private processedChunks = new Set<string>();
   /** How many chunks around each player to generate (in chunk units). */
   private static readonly RESOURCE_GEN_RADIUS = 2;
+
+  /** Spawn origin (set during start()) — downed players respawn here. */
+  private spawnOrigin: { x: number; y: number } = { x: 0, y: 0 };
+  /** Players waiting to respawn: clientId → seconds remaining. */
+  private respawnTimers = new Map<string, number>();
+  /** Per-wave wipe count. Reset when a new wave begins. */
+  private wipeCount = 0;
+  /** True after GAME_OVER is sent — stops all death/respawn/wave processing. */
+  private gameOver = false;
+
+  // ── Run stats ──────────────────────────────────────────────────────────────
+  private enemiesKilled = 0;
+  private startTime = 0;
 
   /** Snapshot of entity positions from the previous tick, for delta diffing. */
   private prevSnapshot = new Map<number, EntitySnapshot>();
@@ -256,9 +288,12 @@ export class GameSession {
   start(send: (client: ConnectedClient, msg: object) => void): void {
     if (this.phase !== 'lobby') return;
     this.phase = 'playing';
+    this.startTime = Date.now();
+    this.enemiesKilled = 0;
 
     // Find a single walkable origin and spread players around it
     const origin = findSpawnPoint(this.generator);
+    this.spawnOrigin = origin;
     const OFFSET = 40; // pixels apart
     const offsets = [
       { dx:  0,      dy:  0 },
@@ -601,6 +636,16 @@ export class GameSession {
     );
     if (!inp) return;
 
+    // Downed or dead players cannot move — still acknowledge seq for reconciliation
+    if (this.world.hasComponent(player.entityId, C.Downed) || this.respawnTimers.has(clientId)) {
+      inp.dx = 0;
+      inp.dy = 0;
+      inp.sprint = false;
+      const seq = Number(msg.seq);
+      if (Number.isFinite(seq) && seq > player.lastSeq) player.lastSeq = seq;
+      return;
+    }
+
     // Validate and clamp movement to [-1, 1]
     const dx = Number(msg.dx);
     const dy = Number(msg.dy);
@@ -627,9 +672,24 @@ export class GameSession {
     if (this.phase !== 'playing' || this.paused) return;
     const player = this.players.get(clientId);
     if (!player || player.entityId === null) return;
+    if (this.world.hasComponent(player.entityId, C.Downed)) return;
+    if (this.respawnTimers.has(clientId)) return;
     if (!Number.isFinite(msg.facing)) return;
     if (msg.attackType !== 'melee' && msg.attackType !== 'ranged') return;
     if (!Number.isFinite(msg.x) || !Number.isFinite(msg.y)) return;
+
+    // 4.13 Anti-exploit: validate facing angle
+    if (msg.facing < -Math.PI || msg.facing > Math.PI) return;
+
+    // 4.13 Anti-exploit: validate client position vs server position
+    const serverPos = this.world.getComponent<PositionComponent>(player.entityId, C.Position);
+    if (serverPos) {
+      const adx = msg.x - serverPos.x;
+      const ady = msg.y - serverPos.y;
+      if (adx * adx + ady * ady > MAX_ATTACK_POSITION_TOLERANCE * MAX_ATTACK_POSITION_TOLERANCE) {
+        msg = { ...msg, x: serverPos.x, y: serverPos.y };
+      }
+    }
 
     if (msg.attackType === 'ranged') {
       this.handleRangedAttack(player, msg.facing, send);
@@ -649,10 +709,34 @@ export class GameSession {
     if (this.phase !== 'playing' || this.paused) return;
     const player = this.players.get(clientId);
     if (!player || player.entityId === null) return;
+    // Downed or dead players cannot interact
+    if (this.world.hasComponent(player.entityId, C.Downed)) return;
+    if (this.respawnTimers.has(clientId)) return;
     if (!Number.isFinite(msg.x) || !Number.isFinite(msg.y)) return;
 
     const playerPos = this.world.getComponent<PositionComponent>(player.entityId, C.Position);
     if (!playerPos) return;
+
+    // Check for nearby downed teammate (revive takes priority over item pickup)
+    const revR2 = REVIVE_RANGE * REVIVE_RANGE;
+    for (const downedId of this.world.query(C.Downed, C.Position)) {
+      if (downedId === player.entityId) continue; // can't revive self
+      const dpos = this.world.getComponent<PositionComponent>(downedId, C.Position)!;
+      const rdx = dpos.x - playerPos.x;
+      const rdy = dpos.y - playerPos.y;
+      if (rdx * rdx + rdy * rdy <= revR2) {
+        const downed = this.world.getComponent<DownedComponent>(downedId, C.Downed)!;
+        if (downed.reviverId === player.entityId) {
+          // Already reviving — pressing E again cancels
+          downed.reviverId = -1;
+          downed.reviveProgress = 0;
+        } else {
+          downed.reviverId = player.entityId;
+          downed.reviveProgress = 0;
+        }
+        return; // Don't pick up items while initiating revive
+      }
+    }
 
     // Find nearest non-auto-pickup ItemDrop within interact radius
     const r2 = ITEM_DROP_INTERACT_RADIUS * ITEM_DROP_INTERACT_RADIUS;
@@ -769,10 +853,14 @@ export class GameSession {
   private destroyDeadEntities(
     deaths: number[],
     attackerMap?: Map<number, number>,
-    send?: (client: ConnectedClient, msg: object) => void,
+    send?: SendFn,
   ): void {
     for (const deadId of deaths) {
-      if (this.playerEntityIds.has(deadId)) continue;
+      // Player death → downed state (don't destroy the entity)
+      if (this.playerEntityIds.has(deadId)) {
+        if (send) this.checkPlayerDowned(deadId, send);
+        continue;
+      }
       const faction = this.world.getComponent<FactionComponent>(deadId, C.Faction);
 
       // Resource node → credit attacker
@@ -789,6 +877,7 @@ export class GameSession {
       if (faction?.type === 'enemy') {
         this.spawnLootDrops(deadId);
         this.enemyCount--;
+        this.enemiesKilled++;
       }
 
       this.world.destroyEntity(deadId);
@@ -854,6 +943,7 @@ export class GameSession {
         for (const p of this.players.values()) send(p.client, waveEnd);
 
         this.currentWave++;
+        this.wipeCount = 0; // Reset wipe count for new wave
         this.wavePhase = 'prep';
         this.prepTimer = WAVE_PREP_BETWEEN;
 
@@ -1062,8 +1152,8 @@ export class GameSession {
       for (const p of this.players.values()) send(p.client, hitMsg);
     }
 
-    // Destroy non-player entities killed by enemy attacks (player death deferred to 4.11)
-    this.destroyDeadEntities(enemyResult.deaths);
+    // Destroy dead entities (players enter downed state, others are removed)
+    this.destroyDeadEntities(enemyResult.deaths, undefined, send);
 
     // Projectile movement, collision, and cleanup
     const projResult = this.projectile.update(this.world, dt);
@@ -1100,8 +1190,14 @@ export class GameSession {
       this.world.destroyEntity(expiredId);
     }
 
+    // ── Death & Respawn (4.11) ──────────────────────────────────────────────
+    if (!this.gameOver) {
+      this.tickDownedPlayers(dt, send);
+      this.tickRespawnTimers(dt, send);
+    }
+
     // ── Wave state machine ────────────────────────────────────────────────────
-    this.tickWave(dt, send);
+    if (!this.gameOver) this.tickWave(dt, send);
 
     const delta = this.buildDelta();
     for (const p of this.players.values()) {
@@ -1192,6 +1288,9 @@ export class GameSession {
         snap.itemQuantity = drop.quantity;
       }
 
+      // Downed state
+      if (this.world.hasComponent(id, C.Downed)) snap.downed = true;
+
       snaps.push(snap);
     }
     return snaps;
@@ -1202,8 +1301,306 @@ export class GameSession {
       prev.x !== curr.x || prev.y !== curr.y ||
       prev.vx !== curr.vx || prev.vy !== curr.vy ||
       prev.hp !== curr.hp ||
+      prev.downed !== curr.downed ||
       prev.resourceType !== curr.resourceType ||
       prev.itemType !== curr.itemType
     );
+  }
+
+  // ── Death & Respawn (4.11) ───────────────────────────────────────────────
+
+  /** Check if a player entity should enter downed state after taking lethal damage. */
+  private checkPlayerDowned(entityId: number, send: SendFn): void {
+    if (this.gameOver) return;
+    if (!this.playerEntityIds.has(entityId)) return;
+    if (this.world.hasComponent(entityId, C.Downed)) return; // already downed
+
+    // Skip if already dead and awaiting respawn
+    const spCheck = this.findSessionPlayerByEntity(entityId);
+    if (spCheck && this.respawnTimers.has(spCheck.client.id)) return;
+
+    const hp = this.world.getComponent<HealthComponent>(entityId, C.Health);
+    if (!hp || hp.current > 0) return;
+
+    // Solo: skip downed state — treat as party wipe (penalty progression)
+    if (this.players.size <= 1) {
+      this.world.addComponent(entityId, C.Downed, {
+        bleedTimer: 0,
+        reviveProgress: 0,
+        reviverId: -1,
+      });
+      this.handlePartyWipe(send);
+      return;
+    }
+
+    // Co-op: enter downed state
+    this.world.addComponent(entityId, C.Downed, {
+      bleedTimer: DOWNED_BLEED_TIME,
+      reviveProgress: 0,
+      reviverId: -1,
+    });
+
+    // Zero out their input so they stop moving
+    const inp = this.world.getComponent<PlayerInputComponent>(entityId, C.PlayerInput);
+    if (inp) { inp.dx = 0; inp.dy = 0; inp.sprint = false; }
+
+    const sp = this.findSessionPlayerByEntity(entityId);
+    const msg: PlayerDownedMessage = {
+      type: MessageType.PLAYER_DOWNED,
+      entityId,
+      slot: sp?.slot ?? -1,
+      bleedTimer: DOWNED_BLEED_TIME,
+    };
+    for (const p of this.players.values()) send(p.client, msg);
+    console.log(`[Death] Player ${sp?.slot ?? '?'} downed (${DOWNED_BLEED_TIME}s bleed-out)`);
+
+    // Check if ALL players are now downed/dead → party wipe
+    if (this.countAlivePlayers() === 0) {
+      this.handlePartyWipe(send);
+    }
+  }
+
+  /** Tick bleed timers and revive progress for all downed players. */
+  private tickDownedPlayers(dt: number, send: SendFn): void {
+    for (const id of this.world.query(C.Downed, C.Position)) {
+      // Skip dead players awaiting respawn — they keep Downed but don't tick
+      const spDown = this.findSessionPlayerByEntity(id);
+      if (spDown && this.respawnTimers.has(spDown.client.id)) continue;
+
+      const downed = this.world.getComponent<DownedComponent>(id, C.Downed)!;
+
+      // Tick bleed-out timer
+      downed.bleedTimer -= dt;
+      if (downed.bleedTimer <= 0) {
+        this.handlePlayerDeath(id, send);
+        continue;
+      }
+
+      // Check revive progress
+      if (downed.reviverId >= 0) {
+        const reviverPos = this.world.getComponent<PositionComponent>(downed.reviverId, C.Position);
+        const myPos = this.world.getComponent<PositionComponent>(id, C.Position);
+        const reviverDowned = this.world.hasComponent(downed.reviverId, C.Downed);
+
+        if (!reviverPos || !myPos || reviverDowned) {
+          // Reviver invalid — cancel
+          downed.reviverId = -1;
+          downed.reviveProgress = 0;
+          this.broadcastReviveProgress(id, 0, -1, send);
+        } else {
+          const rdx = reviverPos.x - myPos.x;
+          const rdy = reviverPos.y - myPos.y;
+          if (rdx * rdx + rdy * rdy > REVIVE_RANGE * REVIVE_RANGE) {
+            // Reviver moved out of range — cancel
+            downed.reviverId = -1;
+            downed.reviveProgress = 0;
+            this.broadcastReviveProgress(id, 0, -1, send);
+          } else {
+            // Revive in progress
+            downed.reviveProgress += dt;
+            this.broadcastReviveProgress(id, downed.reviveProgress / REVIVE_DURATION, downed.reviverId, send);
+
+            if (downed.reviveProgress >= REVIVE_DURATION) {
+              this.revivePlayer(id, send);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /** Broadcast revive progress to all clients. */
+  private broadcastReviveProgress(targetId: number, progress: number, reviverId: number, send: SendFn): void {
+    const msg: ReviveProgressMessage = {
+      type: MessageType.REVIVE_PROGRESS,
+      targetId,
+      progress: Math.min(1, progress),
+      reviverId,
+    };
+    for (const p of this.players.values()) send(p.client, msg);
+  }
+
+  /** Revive a downed player (restore HP, remove Downed component). */
+  private revivePlayer(entityId: number, send: SendFn): void {
+    const hp = this.world.getComponent<HealthComponent>(entityId, C.Health);
+    if (hp) {
+      hp.current = Math.round(hp.max * REVIVE_HP_PERCENT);
+    }
+    this.world.removeComponent(entityId, C.Downed);
+
+    const sp = this.findSessionPlayerByEntity(entityId);
+    const msg: PlayerRevivedMessage = {
+      type: MessageType.PLAYER_REVIVED,
+      entityId,
+      slot: sp?.slot ?? -1,
+      hp: hp?.current ?? 0,
+    };
+    for (const p of this.players.values()) send(p.client, msg);
+    console.log(`[Death] Player ${sp?.slot ?? '?'} revived at ${hp?.current ?? 0} HP`);
+  }
+
+  /** Handle full player death (bleed-out expired). Start respawn timer. */
+  private handlePlayerDeath(entityId: number, send: SendFn): void {
+    const sp = this.findSessionPlayerByEntity(entityId);
+    if (!sp) return;
+
+    // Keep Downed component so enemies ignore this entity until respawn.
+    // respawnPlayer() removes it when the player actually respawns.
+
+    // Zero velocity
+    const vel = this.world.getComponent<VelocityComponent>(entityId, C.Velocity);
+    if (vel) { vel.vx = 0; vel.vy = 0; }
+
+    // Start respawn timer
+    this.respawnTimers.set(sp.client.id, RESPAWN_DELAY);
+
+    const msg: PlayerDiedMessage = {
+      type: MessageType.PLAYER_DIED,
+      entityId,
+      slot: sp.slot,
+      respawnTimer: RESPAWN_DELAY,
+    };
+    for (const p of this.players.values()) send(p.client, msg);
+    console.log(`[Death] Player ${sp.slot} died — respawn in ${RESPAWN_DELAY}s`);
+  }
+
+  /** Tick respawn timers and respawn players when ready. */
+  private tickRespawnTimers(dt: number, send: SendFn): void {
+    for (const [clientId, timer] of this.respawnTimers) {
+      const remaining = timer - dt;
+      if (remaining <= 0) {
+        this.respawnTimers.delete(clientId);
+        this.respawnPlayer(clientId, send);
+      } else {
+        this.respawnTimers.set(clientId, remaining);
+      }
+    }
+  }
+
+  /** Respawn a player at the spawn origin with full HP. */
+  private respawnPlayer(clientId: string, send: SendFn): void {
+    const sp = this.players.get(clientId);
+    if (!sp || sp.entityId === null) return;
+
+    const hp = this.world.getComponent<HealthComponent>(sp.entityId, C.Health);
+    if (hp) { hp.current = hp.max; }
+
+    const pos = this.world.getComponent<PositionComponent>(sp.entityId, C.Position);
+    const offsets = [
+      { dx: 0, dy: 0 }, { dx: 40, dy: 0 },
+      { dx: 0, dy: 40 }, { dx: 40, dy: 40 },
+    ];
+    const off = offsets[sp.slot] ?? { dx: 0, dy: 0 };
+    if (pos) {
+      pos.x = this.spawnOrigin.x + off.dx;
+      pos.y = this.spawnOrigin.y + off.dy;
+    }
+
+    // Clear any lingering Downed component
+    this.world.removeComponent(sp.entityId, C.Downed);
+
+    const msg: PlayerRespawnedMessage = {
+      type: MessageType.PLAYER_RESPAWNED,
+      entityId: sp.entityId,
+      slot: sp.slot,
+      x: pos?.x ?? 0,
+      y: pos?.y ?? 0,
+      hp: hp?.max ?? PLAYER_MAX_HEALTH,
+    };
+    for (const p of this.players.values()) send(p.client, msg);
+    console.log(`[Death] Player ${sp.slot} respawned at (${pos?.x ?? 0}, ${pos?.y ?? 0})`);
+  }
+
+  /** Count players that are alive (not downed, not waiting to respawn). */
+  private countAlivePlayers(): number {
+    let count = 0;
+    for (const p of this.players.values()) {
+      if (p.entityId === null) continue;
+      if (this.world.hasComponent(p.entityId, C.Downed)) continue;
+      if (this.respawnTimers.has(p.client.id)) continue;
+      const hp = this.world.getComponent<HealthComponent>(p.entityId, C.Health);
+      if (hp && hp.current > 0) count++;
+    }
+    return count;
+  }
+
+  /** Reverse lookup: entity ID → SessionPlayer. */
+  private findSessionPlayerByEntity(entityId: number): SessionPlayer | undefined {
+    for (const p of this.players.values()) {
+      if (p.entityId === entityId) return p;
+    }
+    return undefined;
+  }
+
+  // ── Wave Wipe (4.12) ─────────────────────────────────────────────────────
+
+  /** Handle a full party wipe (all players downed/dead simultaneously). */
+  private handlePartyWipe(send: SendFn): void {
+    this.wipeCount++;
+    console.log(`[Wipe] Party wipe #${this.wipeCount} on wave ${this.currentWave}`);
+
+    if (this.wipeCount >= 2) {
+      // 2nd wipe: game over — halt all death/respawn processing
+      this.gameOver = true;
+      this.respawnTimers.clear();
+      for (const sp of this.players.values()) {
+        if (sp.entityId !== null) this.world.removeComponent(sp.entityId, C.Downed);
+      }
+
+      const msg: GameOverMessage = {
+        type: MessageType.GAME_OVER,
+        waveReached: this.currentWave,
+        reason: '2nd party wipe — run over',
+        enemiesKilled: this.enemiesKilled,
+        timePlayed: Math.round((Date.now() - this.startTime) / 1000),
+      };
+      for (const p of this.players.values()) send(p.client, msg);
+      return;
+    }
+
+    // 1st wipe: resource penalty + scatter drops + respawn all
+    const wipeMsg: PartyWipeMessage = {
+      type: MessageType.PARTY_WIPE,
+      wipeCount: this.wipeCount,
+      outcome: 'penalty',
+    };
+    for (const p of this.players.values()) send(p.client, wipeMsg);
+
+    // Deduct 25% of each resource and scatter as item drops near spawn
+    for (const sp of this.players.values()) {
+      if (sp.entityId === null) continue;
+      const res = this.world.getComponent<ResourcesComponent>(sp.entityId, C.Resources);
+      if (!res) continue;
+
+      for (const key of ['wood', 'stone', 'iron', 'diamond', 'gold'] as const) {
+        const loss = Math.floor(res[key] * WIPE_1_RESOURCE_LOSS_PERCENT);
+        if (loss > 0) {
+          res[key] -= loss;
+          const angle = Math.random() * Math.PI * 2;
+          const dist = 50 + Math.random() * 100;
+          this.spawnItemDrop(
+            this.spawnOrigin.x + Math.cos(angle) * dist,
+            this.spawnOrigin.y + Math.sin(angle) * dist,
+            key, loss, true,
+          );
+        }
+      }
+
+      // Send updated resource counts
+      const update: ResourceUpdateMessage = {
+        type: MessageType.RESOURCE_UPDATE,
+        wood: res.wood, stone: res.stone, iron: res.iron,
+        diamond: res.diamond, gold: res.gold,
+      };
+      send(sp.client, update);
+    }
+
+    // Respawn all players immediately
+    for (const [clientId, sp] of this.players) {
+      if (sp.entityId === null) continue;
+      this.world.removeComponent(sp.entityId, C.Downed);
+      this.respawnTimers.delete(clientId);
+      this.respawnPlayer(clientId, send);
+    }
   }
 }

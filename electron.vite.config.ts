@@ -13,8 +13,18 @@ export default defineConfig({
   },
 
   // --- Preload script (bridge between main and renderer) ---
+  // Force CJS output with .cjs extension so Electron can load it regardless
+  // of "type": "module" in package.json (ESM preloads require sandbox:false).
   preload: {
     plugins: [externalizeDepsPlugin()],
+    build: {
+      rollupOptions: {
+        output: {
+          format: 'cjs',
+          entryFileNames: '[name].cjs',
+        },
+      },
+    },
   },
 
   // --- Renderer process (browser context — Pixi.js, game logic) ---

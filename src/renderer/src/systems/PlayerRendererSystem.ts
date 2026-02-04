@@ -67,6 +67,8 @@ export class PlayerRendererSystem {
   private sprites     = new Map<EntityId, Graphics>();
   private hitTimers   = new Map<EntityId, number>();  // remaining flash seconds
   private attackArcs  = new Map<EntityId, { facing: number; elapsed: number }>();
+  private downedEntities = new Set<EntityId>();
+  private reviveProgress = new Map<EntityId, number>(); // entityId → 0..1
 
   constructor(private readonly worldContainer: Container) {}
 
@@ -78,6 +80,38 @@ export class PlayerRendererSystem {
   /** Triggers a sword-arc animation (220ms) originating from the attacker. */
   notifyAttack(entityId: EntityId, facing: number): void {
     this.attackArcs.set(entityId, { facing, elapsed: 0 });
+  }
+
+  /** Mark a player entity as downed (dark tint, X overlay). */
+  notifyDowned(entityId: EntityId): void {
+    this.downedEntities.add(entityId);
+  }
+
+  /** Update revive progress bar for a downed entity (0 = none, 0..1 = bar). */
+  notifyReviveProgress(entityId: EntityId, progress: number): void {
+    if (progress <= 0) {
+      this.reviveProgress.delete(entityId);
+    } else {
+      this.reviveProgress.set(entityId, progress);
+    }
+  }
+
+  /** Clear downed state for a revived player. */
+  notifyRevived(entityId: EntityId): void {
+    this.downedEntities.delete(entityId);
+    this.reviveProgress.delete(entityId);
+  }
+
+  /** Clear downed state on full death. */
+  notifyDeath(entityId: EntityId): void {
+    this.downedEntities.delete(entityId);
+    this.reviveProgress.delete(entityId);
+  }
+
+  /** Clear downed state on respawn. */
+  notifyRespawned(entityId: EntityId): void {
+    this.downedEntities.delete(entityId);
+    this.reviveProgress.delete(entityId);
   }
 
   /**
@@ -282,15 +316,42 @@ export class PlayerRendererSystem {
 
         // ── Body ────────────────────────────────────────────────────────────────
 
-        gfx.circle(0, 0, r);
-        gfx.fill({ color, alpha: 1 });
+        const isDowned = this.downedEntities.has(id);
+        if (isDowned) {
+          // Downed: dark tint + reduced alpha
+          gfx.circle(0, 0, r);
+          gfx.fill({ color: lerpColor(color, 0x111111, 0.5), alpha: 0.55 });
 
-        gfx.circle(0, 0, r);
-        gfx.stroke({ color: 0x000000, alpha: 0.45, width: 2 });
+          gfx.circle(0, 0, r);
+          gfx.stroke({ color: 0xff3333, alpha: 0.5, width: 2 });
 
-        // ── Facing triangle (local player only) ─────────────────────────────────
+          // Red X overlay
+          const xr = r * 0.6;
+          gfx.moveTo(-xr, -xr); gfx.lineTo(xr, xr);
+          gfx.moveTo(xr, -xr); gfx.lineTo(-xr, xr);
+          gfx.stroke({ color: 0xff3333, alpha: 0.8, width: 3 });
 
-        if (id === localEntityId && localFacing !== null) {
+          // Revive progress bar (below entity)
+          const revProg = this.reviveProgress.get(id);
+          if (revProg !== undefined && revProg > 0) {
+            const progBarW = BAR_W;
+            const progBarY = r + 6;
+            gfx.rect(-progBarW / 2, progBarY, progBarW, BAR_H + 1);
+            gfx.fill({ color: 0x222222, alpha: 0.8 });
+            gfx.rect(-progBarW / 2, progBarY, progBarW * revProg, BAR_H + 1);
+            gfx.fill({ color: 0x44ccff, alpha: 1 });
+          }
+        } else {
+          gfx.circle(0, 0, r);
+          gfx.fill({ color, alpha: 1 });
+
+          gfx.circle(0, 0, r);
+          gfx.stroke({ color: 0x000000, alpha: 0.45, width: 2 });
+        }
+
+        // ── Facing triangle (local player only, skip when downed) ────────────────
+
+        if (id === localEntityId && localFacing !== null && !isDowned) {
           const tipX = Math.cos(localFacing) * (TRI_DIST + TRI_SIZE);
           const tipY = Math.sin(localFacing) * (TRI_DIST + TRI_SIZE);
           const perpX = -Math.sin(localFacing) * TRI_SIZE;
@@ -329,5 +390,7 @@ export class PlayerRendererSystem {
     this.sprites.clear();
     this.hitTimers.clear();
     this.attackArcs.clear();
+    this.downedEntities.clear();
+    this.reviveProgress.clear();
   }
 }

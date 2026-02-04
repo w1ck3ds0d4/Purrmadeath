@@ -21,6 +21,7 @@ export const C = {
   ResourceNode:    'ResourceNode',
   ItemDrop:        'ItemDrop',
   Resources:       'Resources',
+  Downed:          'Downed',
 } as const;
 
 // ─── Component interfaces ──────────────────────────────────────────────────────
@@ -159,4 +160,16 @@ export interface ResourcesComponent {
   iron: number;
   diamond: number;
   gold: number;
+}
+
+// ── Phase 4.11 components ────────────────────────────────────────────────────
+
+/** Marks a player as downed (HP reached 0). Present only while in downed state. */
+export interface DownedComponent {
+  /** Seconds remaining before the player fully dies (bleed-out timer). */
+  bleedTimer: number;
+  /** Seconds of revive progress accumulated so far. */
+  reviveProgress: number;
+  /** Entity ID of the teammate currently reviving, or -1 if none. */
+  reviverId: number;
 }

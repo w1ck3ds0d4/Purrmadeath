@@ -101,6 +101,9 @@ export class CombatSystem {
       const tgtFaction = world.getComponent<FactionComponent>(targetId, C.Faction);
       if (srcFaction && tgtFaction && srcFaction.type === tgtFaction.type) continue;
 
+      // Skip downed players — they're already at 0 HP
+      if (world.hasComponent(targetId, C.Downed)) continue;
+
       // Enemies don't attack portals
       if (srcFaction?.type === 'enemy' && tgtFaction?.type === 'portal') continue;
 

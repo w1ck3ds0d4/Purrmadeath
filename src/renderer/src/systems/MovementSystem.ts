@@ -5,8 +5,17 @@ import {
   VelocityComponent,
   SpeedComponent,
   PlayerInputComponent,
+  FactionComponent,
 } from '@shared/components';
-import { TILE_SIZE, PLAYER_RADIUS, PLAYER_SPRINT_MULTIPLIER } from '@shared/constants';
+import {
+  TILE_SIZE,
+  PLAYER_RADIUS,
+  PLAYER_SPRINT_MULTIPLIER,
+  ENEMY_RADIUS,
+  PORTAL_RADIUS,
+  RESOURCE_NODE_RADIUS,
+  ENTITY_SEPARATION_ITERATIONS,
+} from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import { ChunkManager } from '../world/ChunkManager';
 
@@ -15,16 +24,61 @@ const ACCEL   = 20;
 // How quickly velocity drops to zero when no input (higher = shorter slide)
 const FRICTION = 16;
 
+function getEntityRadius(factionType: string): number {
+  switch (factionType) {
+    case 'player':   return PLAYER_RADIUS;
+    case 'enemy':    return ENEMY_RADIUS;
+    case 'portal':   return PORTAL_RADIUS;
+    case 'resource': return RESOURCE_NODE_RADIUS;
+    default:         return 0;
+  }
+}
+
+function isSquareEntity(factionType: string): boolean {
+  return factionType === 'resource';
+}
+
+/** Circle-vs-AABB push: returns vector to push circle OUT of box, or null. */
+function circleAABBPush(
+  cx: number, cy: number, cr: number,
+  bx: number, by: number, bHalf: number,
+): { px: number; py: number } | null {
+  const closestX = Math.max(bx - bHalf, Math.min(cx, bx + bHalf));
+  const closestY = Math.max(by - bHalf, Math.min(cy, by + bHalf));
+  const dx = cx - closestX;
+  const dy = cy - closestY;
+  const distSq = dx * dx + dy * dy;
+  if (distSq >= cr * cr) return null;
+  if (distSq < 0.0001) {
+    const overlapL = (cx - (bx - bHalf)) + cr;
+    const overlapR = ((bx + bHalf) - cx) + cr;
+    const overlapT = (cy - (by - bHalf)) + cr;
+    const overlapB = ((by + bHalf) - cy) + cr;
+    const min = Math.min(overlapL, overlapR, overlapT, overlapB);
+    if (min === overlapL) return { px: -min, py: 0 };
+    if (min === overlapR) return { px: min, py: 0 };
+    if (min === overlapT) return { px: 0, py: -min };
+    return { px: 0, py: min };
+  }
+  const dist = Math.sqrt(distSq);
+  const overlap = cr - dist;
+  return { px: (dx / dist) * overlap, py: (dy / dist) * overlap };
+}
+
 /**
  * Applies WASD input to velocity, then moves entities with tile collision.
  *
  * Wall-slide: if the full diagonal move is blocked, try each axis independently
  * so the player glides along walls instead of getting stuck at corners.
+ *
+ * When localEntityId is provided (main prediction frame only), runs entity
+ * separation for the local player to match the server-side separation pass.
+ * NOT called during reconciler replay to avoid stale-position divergence.
  */
 export class MovementSystem {
   constructor(private readonly chunks: ChunkManager) {}
 
-  update(world: World, dt: number): void {
+  update(world: World, dt: number, localEntityId?: number | null): void {
     for (const id of world.query(C.Position, C.Velocity, C.Speed, C.PlayerInput)) {
       const pos   = world.getComponent<PositionComponent>(id, C.Position)!;
       const vel   = world.getComponent<VelocityComponent>(id, C.Velocity)!;
@@ -71,6 +125,73 @@ export class MovementSystem {
         vel.vx = 0;
         vel.vy = 0;
       }
+    }
+
+    // Entity separation for local player — matches server-side pass
+    if (localEntityId != null) {
+      this.separateLocalPlayer(world, localEntityId);
+    }
+  }
+
+  /**
+   * Push the local player away from overlapping entities.
+   * Only the local player is moved — other entities are positioned by the server.
+   */
+  private separateLocalPlayer(world: World, localId: number): void {
+    const pos = world.getComponent<PositionComponent>(localId, C.Position);
+    if (!pos) return;
+
+    for (let iter = 0; iter < ENTITY_SEPARATION_ITERATIONS; iter++) {
+      for (const otherId of world.query(C.Position, C.Faction)) {
+        if (otherId === localId) continue;
+        const faction = world.getComponent<FactionComponent>(otherId, C.Faction)!;
+        const otherR = getEntityRadius(faction.type);
+        if (otherR <= 0) continue;
+
+        const otherPos = world.getComponent<PositionComponent>(otherId, C.Position)!;
+
+        let pushX: number, pushY: number;
+
+        if (isSquareEntity(faction.type)) {
+          // Circle (player) vs AABB (resource)
+          const push = circleAABBPush(pos.x, pos.y, PLAYER_RADIUS, otherPos.x, otherPos.y, otherR);
+          if (!push) continue;
+          pushX = push.px;
+          pushY = push.py;
+        } else {
+          // Circle vs circle
+          const dx = pos.x - otherPos.x;
+          const dy = pos.y - otherPos.y;
+          const distSq = dx * dx + dy * dy;
+          const minDist = PLAYER_RADIUS + otherR;
+          if (distSq >= minDist * minDist || distSq === 0) continue;
+          const dist = Math.sqrt(distSq);
+          const overlap = minDist - dist;
+          pushX = (dx / dist) * overlap;
+          pushY = (dy / dist) * overlap;
+        }
+
+        // If the other entity is also movable (player/enemy), the server splits
+        // the push evenly — we only move our half. Static entities push us fully.
+        const otherMovable = faction.type === 'player' || faction.type === 'enemy';
+        const scale = otherMovable ? 0.5 : 1;
+
+        this.pushIfValid(pos, pushX * scale, pushY * scale);
+      }
+    }
+  }
+
+  /** Push an entity by (dx, dy) but only if the new position is on walkable tiles. */
+  private pushIfValid(pos: PositionComponent, dx: number, dy: number): void {
+    const nx = pos.x + dx;
+    const ny = pos.y + dy;
+    if (!this.overlapsAny(nx, ny)) {
+      pos.x = nx;
+      pos.y = ny;
+    } else if (!this.overlapsAny(nx, pos.y)) {
+      pos.x = nx;
+    } else if (!this.overlapsAny(pos.x, ny)) {
+      pos.y = ny;
     }
   }
 

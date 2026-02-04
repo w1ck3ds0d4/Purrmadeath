@@ -1,11 +1,56 @@
 import { app, BrowserWindow, shell, session, ipcMain } from 'electron';
 import { join } from 'path';
+import { spawn, type ChildProcess } from 'node:child_process';
 import * as dgram from 'node:dgram';
 import { DISCOVERY_PORT } from '../../server/discovery';
 import type { DiscoveryBeaconPayload } from '../../server/discovery';
 
 if (!app.isPackaged) {
   process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true';
+}
+
+// ─── Embedded Game Server ─────────────────────────────────────────────────────
+// Auto-start the game server so every device running the Electron app can host.
+// If the port is already bound (e.g. `npm start` concurrently script), we detect
+// the EADDRINUSE error and silently fall back to the existing server.
+
+let serverProcess: ChildProcess | null = null;
+
+function startEmbeddedServer(): void {
+  const serverScript = join(__dirname, '../../server/server.ts');
+  serverProcess = spawn('npx', ['tsx', serverScript], {
+    shell: true,
+    stdio: 'pipe',
+    cwd: join(__dirname, '../..'),
+  });
+
+  serverProcess.stdout?.on('data', (data: Buffer) => {
+    console.log(`[EmbeddedServer] ${data.toString().trim()}`);
+  });
+
+  serverProcess.stderr?.on('data', (data: Buffer) => {
+    const msg = data.toString().trim();
+    if (msg.includes('EADDRINUSE')) {
+      console.log('[Main] Server port already in use, using existing server');
+      serverProcess = null;
+    } else if (msg) {
+      console.error(`[EmbeddedServer] ${msg}`);
+    }
+  });
+
+  serverProcess.on('exit', (code) => {
+    if (code !== null && code !== 0) {
+      console.log(`[EmbeddedServer] Server exited with code ${code}`);
+    }
+    serverProcess = null;
+  });
+}
+
+function stopEmbeddedServer(): void {
+  if (serverProcess) {
+    serverProcess.kill();
+    serverProcess = null;
+  }
 }
 
 // ─── LAN Session Discovery ─────────────────────────────────────────────────────
@@ -86,7 +131,7 @@ function createWindow(): void {
     title: 'Purrmadeath',
     backgroundColor: '#0a0a0f',
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
+      preload: join(__dirname, '../preload/index.cjs'),
       nodeIntegration: false,
       contextIsolation: true,
     },
@@ -124,6 +169,7 @@ app.whenReady().then(() => {
     });
   });
 
+  startEmbeddedServer();
   startDiscoveryListener();
   createWindow();
 
@@ -133,5 +179,6 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  stopEmbeddedServer();
   if (process.platform !== 'darwin') app.quit();
 });

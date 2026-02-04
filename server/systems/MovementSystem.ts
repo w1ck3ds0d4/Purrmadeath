@@ -6,13 +6,72 @@ import {
   SpeedComponent,
   PlayerInputComponent,
   KnockbackReceiverComponent,
+  FactionComponent,
 } from '@shared/components';
-import { TILE_SIZE, PLAYER_RADIUS, PLAYER_SPRINT_MULTIPLIER } from '@shared/constants';
+import {
+  TILE_SIZE,
+  PLAYER_RADIUS,
+  PLAYER_SPRINT_MULTIPLIER,
+  ENEMY_RADIUS,
+  PORTAL_RADIUS,
+  RESOURCE_NODE_RADIUS,
+  ENTITY_SEPARATION_ITERATIONS,
+} from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
 
 const ACCEL   = 20;
 const FRICTION = 16;
+
+function getEntityRadius(factionType: string): number {
+  switch (factionType) {
+    case 'player':   return PLAYER_RADIUS;
+    case 'enemy':    return ENEMY_RADIUS;
+    case 'portal':   return PORTAL_RADIUS;
+    case 'resource': return RESOURCE_NODE_RADIUS;
+    default:         return 0;
+  }
+}
+
+/** True for entity types that use AABB (square) collision instead of circle. */
+function isSquareEntity(factionType: string): boolean {
+  return factionType === 'resource';
+}
+
+/**
+ * Circle-vs-AABB overlap resolution.
+ * Returns the push vector to move the circle OUT of the box, or null if no overlap.
+ */
+function circleAABBPush(
+  cx: number, cy: number, cr: number,        // circle center + radius
+  bx: number, by: number, bHalf: number,     // box center + half-extent
+): { px: number; py: number } | null {
+  const closestX = Math.max(bx - bHalf, Math.min(cx, bx + bHalf));
+  const closestY = Math.max(by - bHalf, Math.min(cy, by + bHalf));
+
+  const dx = cx - closestX;
+  const dy = cy - closestY;
+  const distSq = dx * dx + dy * dy;
+
+  if (distSq >= cr * cr) return null;
+
+  if (distSq < 0.0001) {
+    // Circle center is inside the box — push along shortest axis
+    const overlapL = (cx - (bx - bHalf)) + cr;
+    const overlapR = ((bx + bHalf) - cx) + cr;
+    const overlapT = (cy - (by - bHalf)) + cr;
+    const overlapB = ((by + bHalf) - cy) + cr;
+    const min = Math.min(overlapL, overlapR, overlapT, overlapB);
+    if (min === overlapL) return { px: -min, py: 0 };
+    if (min === overlapR) return { px: min, py: 0 };
+    if (min === overlapT) return { px: 0, py: -min };
+    return { px: 0, py: min };
+  }
+
+  const dist = Math.sqrt(distSq);
+  const overlap = cr - dist;
+  return { px: (dx / dist) * overlap, py: (dy / dist) * overlap };
+}
 
 /**
  * Authoritative server-side movement system.
@@ -26,6 +85,9 @@ export class MovementSystem {
 
   update(world: World, dt: number): void {
     for (const id of world.query(C.Position, C.Velocity, C.Speed, C.PlayerInput)) {
+      // Skip downed entities — they cannot move
+      if (world.hasComponent(id, C.Downed)) continue;
+
       const pos   = world.getComponent<PositionComponent>(id, C.Position)!;
       const vel   = world.getComponent<VelocityComponent>(id, C.Velocity)!;
       const speed = world.getComponent<SpeedComponent>(id, C.Speed)!;
@@ -89,6 +151,85 @@ export class MovementSystem {
         if (Math.abs(kb.vy) < 1) kb.vy = 0;
       }
     }
+
+    // Entity-entity separation — prevents stacking/overlapping
+    this.separateEntities(world);
+  }
+
+  /** Push overlapping entities apart so they can't stack. */
+  private separateEntities(world: World): void {
+    // Collect all solid entities
+    const bodies: { id: number; pos: PositionComponent; r: number; movable: boolean; square: boolean }[] = [];
+    for (const id of world.query(C.Position, C.Faction)) {
+      const faction = world.getComponent<FactionComponent>(id, C.Faction)!;
+      const r = getEntityRadius(faction.type);
+      if (r <= 0) continue;
+      const pos = world.getComponent<PositionComponent>(id, C.Position)!;
+      const movable = faction.type === 'player' || faction.type === 'enemy';
+      bodies.push({ id, pos, r, movable, square: isSquareEntity(faction.type) });
+    }
+
+    for (let iter = 0; iter < ENTITY_SEPARATION_ITERATIONS; iter++) {
+      for (let i = 0; i < bodies.length; i++) {
+        for (let j = i + 1; j < bodies.length; j++) {
+          const a = bodies[i];
+          const b = bodies[j];
+          if (!a.movable && !b.movable) continue; // both static
+
+          // Determine push vector based on collision shapes
+          let pushX: number, pushY: number;
+
+          if (a.square || b.square) {
+            // Circle-vs-AABB: the square entity is the box, the other is the circle
+            const circle = a.square ? b : a;
+            const box    = a.square ? a : b;
+            const push   = circleAABBPush(circle.pos.x, circle.pos.y, circle.r, box.pos.x, box.pos.y, box.r);
+            if (!push) continue;
+            // push points FROM box TO circle — apply to the circle entity
+            if (circle === a) {
+              pushX = push.px;  pushY = push.py;   // push A away
+            } else {
+              pushX = -push.px; pushY = -push.py;  // push B away (invert for A)
+            }
+          } else {
+            // Circle-vs-circle (original logic)
+            const dx = b.pos.x - a.pos.x;
+            const dy = b.pos.y - a.pos.y;
+            const distSq = dx * dx + dy * dy;
+            const minDist = a.r + b.r;
+            if (distSq >= minDist * minDist || distSq === 0) continue;
+            const dist = Math.sqrt(distSq);
+            const overlap = minDist - dist;
+            pushX = (dx / dist) * overlap;
+            pushY = (dy / dist) * overlap;
+          }
+
+          if (a.movable && b.movable) {
+            this.pushIfValid(a.pos, -pushX * 0.5, -pushY * 0.5);
+            this.pushIfValid(b.pos, pushX * 0.5, pushY * 0.5);
+          } else if (a.movable) {
+            this.pushIfValid(a.pos, -pushX, -pushY);
+          } else {
+            this.pushIfValid(b.pos, pushX, pushY);
+          }
+        }
+      }
+    }
+  }
+
+  /** Push an entity by (dx, dy) but only if the new position is on walkable tiles. */
+  private pushIfValid(pos: PositionComponent, dx: number, dy: number): void {
+    const nx = pos.x + dx;
+    const ny = pos.y + dy;
+    if (!this.overlapsAny(nx, ny)) {
+      pos.x = nx;
+      pos.y = ny;
+    } else if (!this.overlapsAny(nx, pos.y)) {
+      pos.x = nx;
+    } else if (!this.overlapsAny(pos.x, ny)) {
+      pos.y = ny;
+    }
+    // If all blocked, don't push (entity stays overlapping rather than going into a wall)
   }
 
   private overlapsAny(px: number, py: number): boolean {

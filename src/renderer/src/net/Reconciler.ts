@@ -1,5 +1,5 @@
 import { World } from '@shared/ecs/World';
-import { C, PositionComponent, VelocityComponent, PlayerInputComponent } from '@shared/components';
+import { C, PositionComponent, VelocityComponent, PlayerInputComponent, HealthComponent } from '@shared/components';
 import type { EntitySnapshot, DeltaMessage } from '@shared/protocol';
 
 /**
@@ -32,6 +32,14 @@ export class Reconciler {
   /** Threshold (px) below which we skip correction entirely (rounding noise). */
   private static readonly CORRECTION_THRESHOLD = 4;
 
+  /** Above this distance, hard-snap instead of blending (teleport / major desync). */
+  private static readonly HARD_SNAP_THRESHOLD = 100;
+
+  /** Visual offset that smooths out corrections over multiple render frames.
+   *  Applied to camera target only — physics position stays clean for prediction. */
+  smoothX = 0;
+  smoothY = 0;
+
   // ── Input recording ─────────────────────────────────────────────────────────
 
   /**
@@ -61,6 +69,13 @@ export class Reconciler {
     // Step 1: discard acknowledged inputs
     this.pending = this.pending.filter((p) => p.seq > delta.lastSeq);
 
+    // Always sync health from server (not predicted client-side)
+    const hp = world.getComponent<HealthComponent>(this.localEntityId, C.Health);
+    if (hp && serverSnap.hp !== undefined) {
+      hp.current = serverSnap.hp;
+      hp.max     = serverSnap.maxHp ?? hp.max;
+    }
+
     // Step 2: measure error
     const pos = world.getComponent<PositionComponent>(this.localEntityId, C.Position);
     if (!pos) return;
@@ -70,6 +85,10 @@ export class Reconciler {
     const err = Math.sqrt(errX * errX + errY * errY);
 
     if (err < Reconciler.CORRECTION_THRESHOLD) return; // no correction needed
+
+    // Save pre-correction visual position (physics + any remaining smoothing offset)
+    const oldVisualX = pos.x + this.smoothX;
+    const oldVisualY = pos.y + this.smoothY;
 
     // Step 3: snap to server position
     pos.x = serverSnap.x;
@@ -88,6 +107,33 @@ export class Reconciler {
         moveFn(p.dt);
       }
     }
+
+    // Step 5: compute smoothing offset (difference between old visual and new physics)
+    if (err >= Reconciler.HARD_SNAP_THRESHOLD) {
+      // Large desync (teleport) — no smoothing, snap immediately
+      this.smoothX = 0;
+      this.smoothY = 0;
+    } else {
+      this.smoothX = oldVisualX - pos.x;
+      this.smoothY = oldVisualY - pos.y;
+    }
+  }
+
+  /**
+   * Decay the visual smoothing offset each render frame.
+   * game.ts adds smoothX/smoothY to the camera target so corrections
+   * blend over ~100-150ms instead of hard-snapping.
+   */
+  decaySmooth(dt: number): void {
+    if (this.smoothX === 0 && this.smoothY === 0) return;
+
+    const decay = Math.min(12 * dt, 1);
+    this.smoothX *= (1 - decay);
+    this.smoothY *= (1 - decay);
+
+    // Snap to zero when close enough to avoid perpetual drift
+    if (Math.abs(this.smoothX) < 0.5) this.smoothX = 0;
+    if (Math.abs(this.smoothY) < 0.5) this.smoothY = 0;
   }
 
   // ── Apply remote entity positions ───────────────────────────────────────────

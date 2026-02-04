@@ -6,7 +6,7 @@
   "type": "module",
   "main": "out/main/index.js",
   "scripts": {
-    "dev": "concurrently -n \"app,server\" -c \"cyan,green\" \"electron-vite dev\" \"npm run server:dev\"",
+    "dev": "electron-vite dev",
     "server:dev": "nodemon --watch server --watch shared --ext ts --exec \"tsx server/server.ts\"",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
