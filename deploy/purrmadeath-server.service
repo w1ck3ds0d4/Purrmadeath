@@ -1,0 +1,29 @@
+[Unit]
+Description=Purrmadeath Game Server
+After=network.target
+
+[Service]
+Type=simple
+User=purrmadeath
+Group=purrmadeath
+WorkingDirectory=/opt/purrmadeath
+ExecStart=/usr/bin/npx tsx server/server.ts
+Restart=always
+RestartSec=5
+
+# Env
+Environment=NODE_ENV=production
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=purrmadeath
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/purrmadeath
+
+[Install]
+WantedBy=multi-user.target
