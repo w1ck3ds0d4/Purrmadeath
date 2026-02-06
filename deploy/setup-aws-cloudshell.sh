@@ -60,7 +60,7 @@ else
   echo "Creating security group '$SG_NAME'..."
   SG_ID=$(aws ec2 create-security-group \
     --group-name "$SG_NAME" \
-    --description "Purrmadeath game server — SSH + WebSocket" \
+    --description "Purrmadeath game server - SSH and WebSocket" \
     --region "$REGION" \
     --query "GroupId" \
     --output text)
