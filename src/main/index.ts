@@ -4,7 +4,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import * as dgram from 'node:dgram';
 import { DISCOVERY_PORT } from '../../server/discovery';
 import type { DiscoveryBeaconPayload } from '../../server/discovery';
-import { autoUpdater } from 'electron-updater';
+import pkg from 'electron-updater';
+const { autoUpdater } = pkg;
 
 if (!app.isPackaged) {
   process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true';

@@ -19,6 +19,9 @@ Thumbs.db
 .env
 .env.*
 
+# SSH keys
+*.pem
+
 # Documentation 
 *.md
 !README.md

@@ -106,9 +106,16 @@ export class NetworkClient {
   /** Close current connection and reconnect to a different URL (dev-mode IP switching). */
   reconnectTo(newUrl: string): void {
     this.url = newUrl;
-    this.shouldReconnect = true;
     this.stopPing();
-    this.ws?.close();
+    // Detach handlers from old socket so its onclose doesn't trigger drop/reconnect
+    if (this.ws) {
+      this.ws.onopen = null;
+      this.ws.onmessage = null;
+      this.ws.onclose = null;
+      this.ws.onerror = null;
+      this.ws.close();
+    }
+    this.reconnectDelay = 1_000;
     this.connect();
   }
 

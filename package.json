@@ -1,6 +1,6 @@
 {
   "name": "purrmadeath",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "2D co-op roguelike — base building, procedural world, up to 4 players",
   "private": true,
   "type": "module",
@@ -45,8 +45,7 @@
       "output": "dist"
     },
     "win": {
-      "target": "nsis",
-      "icon": "resources/icon.ico"
+      "target": "nsis"
     },
     "nsis": {
       "oneClick": true,
