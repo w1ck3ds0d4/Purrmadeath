@@ -126,6 +126,8 @@ export interface HandshakeMessage extends BaseMessage {
   type: typeof MessageType.HANDSHAKE;
   /** Display name chosen by the player. */
   displayName: string;
+  /** Client build version (compared server-side for version gating). */
+  version: string;
 }
 
 export interface HandshakeAckMessage extends BaseMessage {
@@ -134,6 +136,10 @@ export interface HandshakeAckMessage extends BaseMessage {
   clientId: string;
   /** Current server tick number (for clock sync). */
   serverTick: number;
+  /** Server build version — client compares to trigger auto-update on mismatch. */
+  serverVersion: string;
+  /** If the server recognises this IP, the display name last used by this player. */
+  lastDisplayName?: string;
 }
 
 // ─── Error ────────────────────────────────────────────────────────────────────
@@ -152,7 +158,8 @@ export interface SessionCreateMessage extends BaseMessage {
 
 export interface SessionJoinMessage extends BaseMessage {
   type: typeof MessageType.SESSION_JOIN;
-  sessionId: string;
+  /** 4-letter invite code (case-insensitive). Empty string = join any active session (dev/LAN). */
+  code: string;
 }
 
 export interface SessionLeaveMessage extends BaseMessage {

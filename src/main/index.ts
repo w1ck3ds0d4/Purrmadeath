@@ -4,6 +4,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import * as dgram from 'node:dgram';
 import { DISCOVERY_PORT } from '../../server/discovery';
 import type { DiscoveryBeaconPayload } from '../../server/discovery';
+import { autoUpdater } from 'electron-updater';
 
 if (!app.isPackaged) {
   process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true';
@@ -169,8 +170,15 @@ app.whenReady().then(() => {
     });
   });
 
-  startEmbeddedServer();
-  startDiscoveryListener();
+  // Dev: start local server + LAN discovery. Production: connect to remote server.
+  if (!app.isPackaged) {
+    startEmbeddedServer();
+    startDiscoveryListener();
+  } else {
+    // Check for updates silently — downloads in background, installs on next restart
+    autoUpdater.checkForUpdatesAndNotify();
+  }
+
   createWindow();
 
   app.on('activate', () => {
@@ -179,6 +187,6 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  stopEmbeddedServer();
+  if (!app.isPackaged) stopEmbeddedServer();
   if (process.platform !== 'darwin') app.quit();
 });

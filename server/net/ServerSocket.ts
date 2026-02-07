@@ -1,17 +1,23 @@
 import { WebSocketServer, WebSocket } from 'ws';
+import type { IncomingMessage } from 'node:http';
 import { MessageType } from '@shared/protocol';
 import type { BaseMessage } from '@shared/protocol';
 import {
   HEARTBEAT_TIMEOUT_MS,
-  MAX_PLAYERS,
+  MAX_CONNECTIONS,
   MAX_MESSAGE_BYTES,
   MAX_MESSAGES_PER_SECOND,
+  GAME_VERSION,
 } from '@shared/constants';
+
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
 /** Represents one connected client from the server's perspective. */
 export interface ConnectedClient {
   id: string;
   ws: WebSocket;
+  /** Remote IP address of the client. */
+  ip: string;
   /** Timestamp of the last received PING (used to detect stale connections). */
   lastPing: number;
   /** Rate-limit state: messages received in the current 1-second window. */
@@ -22,10 +28,12 @@ export interface ConnectedClient {
 
 type ClientHandler = (client: ConnectedClient, msg: BaseMessage) => void;
 type DisconnectHandler = (client: ConnectedClient) => void;
+type NameLookup = (ip: string) => string | undefined;
 
 /**
  * ServerSocket wraps the `ws` WebSocketServer with:
- *   - Hard connection cap at MAX_PLAYERS
+ *   - Hard connection cap at MAX_CONNECTIONS
+ *   - Per-IP connection limit (1 in production, unlimited in dev)
  *   - 64 KB payload size limit (prevents memory exhaustion)
  *   - Per-client message rate limiting (disconnects flood attackers)
  *   - Message type validation before dispatch
@@ -41,6 +49,12 @@ export class ServerSocket {
   private disconnectHandlers = new Set<DisconnectHandler>();
   private nextId = 1;
 
+  /** Tracks IP → set of active client IDs for per-IP enforcement. */
+  private ipConnections = new Map<string, Set<string>>();
+
+  /** Optional callback to look up a returning player's name by IP. */
+  private nameLookup: NameLookup | null = null;
+
   constructor(port: number) {
     this.wss = new WebSocketServer({
       port,
@@ -51,35 +65,67 @@ export class ServerSocket {
     setInterval(() => this.sweepDeadClients(), 30_000);
   }
 
+  /**
+   * Register a function that returns a last-known display name for an IP.
+   * Called during connection setup to populate HANDSHAKE_ACK.lastDisplayName.
+   */
+  setNameLookup(fn: NameLookup): void {
+    this.nameLookup = fn;
+  }
+
   // ── Server setup ────────────────────────────────────────────────────────────
 
   private setupServer(): void {
-    this.wss.on('connection', (ws) => this.onConnection(ws));
+    this.wss.on('connection', (ws, req) => this.onConnection(ws, req));
     this.wss.on('error', (err) => console.error('[ServerSocket] WSS error:', err.message));
   }
 
-  private onConnection(ws: WebSocket): void {
-    if (this.clients.size >= MAX_PLAYERS) {
+  private onConnection(ws: WebSocket, req: IncomingMessage): void {
+    // ── Hard cap ────────────────────────────────────────────────────────────
+    if (this.clients.size >= MAX_CONNECTIONS) {
       ws.close(1013, 'Server full');
       return;
+    }
+
+    // ── Extract IP ──────────────────────────────────────────────────────────
+    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim()
+      ?? req.socket.remoteAddress
+      ?? 'unknown';
+
+    // ── Per-IP limit (production: 1 connection per IP) ──────────────────────
+    if (IS_PRODUCTION) {
+      const existing = this.ipConnections.get(ip);
+      if (existing && existing.size > 0) {
+        ws.close(1008, 'Already connected from this IP');
+        return;
+      }
     }
 
     const id = String(this.nextId++);
     const now = Date.now();
     const client: ConnectedClient = {
       id,
+      ip,
       ws,
       lastPing: now,
       rateCount: 0,
       rateWindowStart: now,
     };
     this.clients.set(id, client);
-    console.log(`[Server] Client ${id} connected (${this.clients.size}/${MAX_PLAYERS})`);
 
+    // Track IP → client
+    if (!this.ipConnections.has(ip)) this.ipConnections.set(ip, new Set());
+    this.ipConnections.get(ip)!.add(id);
+
+    console.log(`[Server] Client ${id} connected from ${ip} (${this.clients.size}/${MAX_CONNECTIONS})`);
+
+    const lastDisplayName = this.nameLookup?.(ip);
     this.send(client, {
       type: MessageType.HANDSHAKE_ACK,
       clientId: id,
       serverTick: 0,
+      serverVersion: GAME_VERSION,
+      ...(lastDisplayName ? { lastDisplayName } : {}),
     });
 
     ws.on('message', (data) => {
@@ -104,7 +150,7 @@ export class ServerSocket {
 
     ws.on('close', () => {
       this.removeClient(id, client);
-      console.log(`[Server] Client ${id} disconnected (${this.clients.size}/${MAX_PLAYERS})`);
+      console.log(`[Server] Client ${id} disconnected (${this.clients.size}/${MAX_CONNECTIONS})`);
     });
 
     ws.on('error', (err) => {
@@ -117,6 +163,14 @@ export class ServerSocket {
   private removeClient(id: string, client: ConnectedClient): void {
     if (!this.clients.has(id)) return; // already removed
     this.clients.delete(id);
+
+    // Clean up IP tracking
+    const ipSet = this.ipConnections.get(client.ip);
+    if (ipSet) {
+      ipSet.delete(id);
+      if (ipSet.size === 0) this.ipConnections.delete(client.ip);
+    }
+
     for (const fn of this.disconnectHandlers) fn(client);
   }
 

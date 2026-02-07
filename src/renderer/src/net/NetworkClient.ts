@@ -22,6 +22,7 @@ export class NetworkClient {
   private shouldReconnect = true;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private dropHandler: (() => void) | null = null;
+  private connectHandler: (() => void) | null = null;
 
   // ── Network metrics ──────────────────────────────────────────────────────────
   private pingTime = 0;
@@ -33,7 +34,7 @@ export class NetworkClient {
   private msgCountStart = 0;
   private msgsPerSec = 0;
 
-  constructor(private readonly url: string) {
+  constructor(private url: string) {
     // Internal PONG handler for latency / packet-loss tracking.
     // Registered once so reconnects don't stack up duplicate handlers.
     this.on(MessageType.PONG, () => {
@@ -49,6 +50,7 @@ export class NetworkClient {
       console.log('[Net] Connected to server');
       this.reconnectDelay = 1_000; // reset backoff on success
       this.startPing();
+      this.connectHandler?.();
     };
 
     this.ws.onmessage = (event: MessageEvent<string>) => {
@@ -91,9 +93,23 @@ export class NetworkClient {
     };
   }
 
+  /** Called when the WebSocket opens (fires on initial connect AND reconnects). */
+  onConnect(handler: () => void): void {
+    this.connectHandler = handler;
+  }
+
   /** Called when the connection drops unexpectedly (not via disconnect()). */
   onDrop(handler: () => void): void {
     this.dropHandler = handler;
+  }
+
+  /** Close current connection and reconnect to a different URL (dev-mode IP switching). */
+  reconnectTo(newUrl: string): void {
+    this.url = newUrl;
+    this.shouldReconnect = true;
+    this.stopPing();
+    this.ws?.close();
+    this.connect();
   }
 
   disconnect(): void {

@@ -3,6 +3,7 @@ import type { ServerSocket } from './net/ServerSocket';
 import { GameSession } from './GameSession';
 import type { DiscoveryBeacon } from './discovery';
 import { MessageType } from '@shared/protocol';
+import type { HandshakeMessage } from '@shared/protocol';
 import type {
   SessionCreateMessage,
   SessionJoinMessage,
@@ -19,6 +20,22 @@ import type {
   SessionClosedMessage,
   ChatMessage,
 } from '@shared/protocol';
+import { GAME_VERSION, RECONNECT_GRACE_MS } from '@shared/constants';
+
+/** Minimum interval (ms) between SESSION_CREATE or SESSION_JOIN per client. */
+const SESSION_ACTION_COOLDOWN_MS = 2_000;
+
+/** Pending reconnection: player disconnected mid-game, slot held for a grace period. */
+interface PendingReconnect {
+  /** IP of the disconnected player. */
+  ip: string;
+  /** Original client ID in GameSession. */
+  oldClientId: string;
+  displayName: string;
+  slot: number;
+  isHost: boolean;
+  timer: ReturnType<typeof setTimeout>;
+}
 
 /**
  * SessionManager wires socket message handlers to GameSession lifecycle.
@@ -32,11 +49,23 @@ export class SessionManager {
   /** displayName stored on HANDSHAKE — keyed by clientId. */
   private displayNames = new Map<string, string>();
 
+  /** IP → last-known display name (persists while server runs). */
+  private knownPlayers = new Map<string, string>();
+
+  /** Per-client session action cooldown (clientId → last action timestamp). */
+  private lastSessionAction = new Map<string, number>();
+
+  /** Players disconnected mid-game waiting for reconnection (keyed by IP). */
+  private pendingReconnects = new Map<string, PendingReconnect>();
+
   constructor(
     private readonly socket: ServerSocket,
     private readonly beacon: DiscoveryBeacon,
   ) {
-    socket.on(MessageType.HANDSHAKE,      (c, m) => this.onHandshake(c, m as { displayName?: string }));
+    // Wire up IP → name lookup so HANDSHAKE_ACK includes lastDisplayName
+    socket.setNameLookup((ip) => this.knownPlayers.get(ip));
+
+    socket.on(MessageType.HANDSHAKE,      (c, m) => this.onHandshake(c, m as HandshakeMessage));
     socket.on(MessageType.SESSION_CREATE, (c, m) => this.onSessionCreate(c, m as SessionCreateMessage));
     socket.on(MessageType.SESSION_JOIN,   (c, m) => this.onSessionJoin(c, m as SessionJoinMessage));
     socket.on(MessageType.SESSION_LEAVE,  (c, m) => this.onSessionLeave(c, m as SessionLeaveMessage));
@@ -54,12 +83,64 @@ export class SessionManager {
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
-  private onHandshake(client: ConnectedClient, msg: { displayName?: string }): void {
+  private onHandshake(client: ConnectedClient, msg: HandshakeMessage): void {
+    // Version gate: reject clients with mismatched version
+    const clientVersion = (msg.version ?? '').trim();
+    if (clientVersion && clientVersion !== GAME_VERSION) {
+      this.socket.send(client, {
+        type: MessageType.ERROR,
+        code: 'VERSION_MISMATCH',
+        message: `Server version ${GAME_VERSION}, client version ${clientVersion}. Please update.`,
+      });
+      return;
+    }
+
     const name = (msg.displayName ?? '').trim().slice(0, 24) || `Player${client.id}`;
     this.displayNames.set(client.id, name);
+
+    // Save IP → name for returning player recognition
+    this.knownPlayers.set(client.ip, name);
+
+    // Check for pending reconnection (same IP reconnecting mid-game)
+    const pending = this.pendingReconnects.get(client.ip);
+    if (pending && this.session) {
+      clearTimeout(pending.timer);
+      this.pendingReconnects.delete(client.ip);
+
+      const player = this.session.rebindPlayer(pending.oldClientId, client);
+      if (player) {
+        console.log(`[Session] ${name} reconnected to slot ${player.slot}`);
+        // Send session state so the client can re-enter the game
+        const ack: SessionAckMessage = {
+          type: MessageType.SESSION_ACK,
+          sessionId: this.session.id,
+          code: this.session.code,
+          seed: this.session.seed,
+          slot: player.slot,
+          playerId: player.playerId,
+          isHost: player.isHost,
+          players: this.session.getLobbySlots(),
+        };
+        this.socket.send(client, ack);
+        return;
+      }
+    }
   }
 
   private onSessionCreate(client: ConnectedClient, _msg: SessionCreateMessage): void {
+    // Require HANDSHAKE first
+    if (!this.displayNames.has(client.id)) {
+      this.socket.send(client, {
+        type: MessageType.ERROR,
+        code: 'NOT_IDENTIFIED',
+        message: 'Send HANDSHAKE before creating a session.',
+      });
+      return;
+    }
+
+    // Rate limit
+    if (!this.checkSessionCooldown(client)) return;
+
     if (this.session) {
       this.socket.send(client, {
         type: MessageType.ERROR,
@@ -93,11 +174,35 @@ export class SessionManager {
   }
 
   private onSessionJoin(client: ConnectedClient, msg: SessionJoinMessage): void {
+    // Require HANDSHAKE first
+    if (!this.displayNames.has(client.id)) {
+      this.socket.send(client, {
+        type: MessageType.ERROR,
+        code: 'NOT_IDENTIFIED',
+        message: 'Send HANDSHAKE before joining a session.',
+      });
+      return;
+    }
+
+    // Rate limit
+    if (!this.checkSessionCooldown(client)) return;
+
     if (!this.session) {
       this.socket.send(client, {
         type: MessageType.ERROR,
         code: 'NO_SESSION',
         message: 'No session exists. Host one first.',
+      });
+      return;
+    }
+
+    // Validate invite code (case-insensitive). Empty string = accept any (dev/LAN compat).
+    const code = (msg.code ?? '').toUpperCase().trim();
+    if (code && code !== this.session.code) {
+      this.socket.send(client, {
+        type: MessageType.ERROR,
+        code: 'INVALID_CODE',
+        message: 'Invalid invite code.',
       });
       return;
     }
@@ -157,7 +262,7 @@ export class SessionManager {
   }
 
   private onSessionLeave(client: ConnectedClient, _msg: SessionLeaveMessage): void {
-    this.handlePlayerLeave(client);
+    this.handlePlayerLeave(client, /* isDisconnect */ false);
   }
 
   private onSessionStart(client: ConnectedClient, _msg: SessionStartMessage): void {
@@ -230,22 +335,81 @@ export class SessionManager {
 
   private onDisconnect(client: ConnectedClient): void {
     this.displayNames.delete(client.id);
-    this.handlePlayerLeave(client);
+    this.lastSessionAction.delete(client.id);
+    this.handlePlayerLeave(client, /* isDisconnect */ true);
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
 
-  private handlePlayerLeave(client: ConnectedClient): void {
+  /** Returns false and sends an error if the client is on cooldown. */
+  private checkSessionCooldown(client: ConnectedClient): boolean {
+    const now = Date.now();
+    const last = this.lastSessionAction.get(client.id) ?? 0;
+    if (now - last < SESSION_ACTION_COOLDOWN_MS) {
+      this.socket.send(client, {
+        type: MessageType.ERROR,
+        code: 'RATE_LIMITED',
+        message: 'Please wait before trying again.',
+      });
+      return false;
+    }
+    this.lastSessionAction.set(client.id, now);
+    return true;
+  }
+
+  private handlePlayerLeave(client: ConnectedClient, isDisconnect: boolean): void {
     if (!this.session) return;
 
-    const player = this.session.removePlayer(client.id);
+    const player = this.session.getPlayer(client.id);
     if (!player) return;
 
-    console.log(`[Session] ${player.displayName} left (slot ${player.slot})`);
+    // ── Reconnection grace period ──────────────────────────────────────────
+    // If the game is in progress and the player disconnected (not a voluntary leave),
+    // hold their slot for RECONNECT_GRACE_MS to allow the same IP to rejoin.
+    if (isDisconnect && this.session.isPlaying && !player.isHost) {
+      this.session.suspendPlayer(client.id);
+      console.log(`[Session] ${player.displayName} disconnected — holding slot ${player.slot} for ${RECONNECT_GRACE_MS / 1000}s`);
 
-    if (player.isHost) {
+      const timer = setTimeout(() => {
+        this.pendingReconnects.delete(client.ip);
+        this.finalizePlayerRemoval(client.id, player.displayName, player.isHost, player.slot, player.playerId);
+      }, RECONNECT_GRACE_MS);
+
+      this.pendingReconnects.set(client.ip, {
+        ip: client.ip,
+        oldClientId: client.id,
+        displayName: player.displayName,
+        slot: player.slot,
+        isHost: player.isHost,
+        timer,
+      });
+      return;
+    }
+
+    this.finalizePlayerRemoval(client.id, player.displayName, player.isHost, player.slot, player.playerId);
+  }
+
+  private finalizePlayerRemoval(
+    clientId: string,
+    displayName: string,
+    isHost: boolean,
+    slot: number,
+    playerId: string,
+  ): void {
+    if (!this.session) return;
+
+    this.session.removePlayer(clientId);
+    console.log(`[Session] ${displayName} left (slot ${slot})`);
+
+    if (isHost) {
       // Host left — close the session for everyone immediately
       console.log('[Session] Host left — closing session for all remaining players');
+      // Also clean up any pending reconnects
+      for (const [, pending] of this.pendingReconnects) {
+        clearTimeout(pending.timer);
+      }
+      this.pendingReconnects.clear();
+
       const closed: SessionClosedMessage = {
         type: MessageType.SESSION_CLOSED,
         reason: 'Host left the session',
@@ -258,18 +422,18 @@ export class SessionManager {
 
     const left: PlayerLeftMessage = {
       type: MessageType.PLAYER_LEFT,
-      playerId: player.playerId,
-      slot: player.slot,
+      playerId,
+      slot,
     };
-    this.broadcastToSession(left, client.id);
+    this.broadcastToSession(left);
 
     // Re-evaluate pause votes now that a player left
     if (this.session.isPlaying) {
       this.session.recheckPauseVotes((c, m) => this.socket.send(c, m));
     }
 
-    // Destroy the session when it's empty
-    if (this.session.playerCount === 0) {
+    // Destroy the session when it's empty (and no pending reconnects)
+    if (this.session.playerCount === 0 && this.pendingReconnects.size === 0) {
       console.log('[Session] Session empty — destroying');
       this.session = null;
       this.beacon.update({ code: '', playerCount: 0 });

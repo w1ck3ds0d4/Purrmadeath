@@ -22,6 +22,17 @@ export const MAX_MESSAGE_BYTES = 64 * 1024; // 64 KB
  *  Clients send one INPUT per render frame; allow headroom for 240 Hz + chat + pings. */
 export const MAX_MESSAGES_PER_SECOND = 300;
 
+// ─── Connection ─────────────────────────────────────────────────────────────
+
+/** Hard cap on total WebSocket connections the server accepts (idle + in-game). */
+export const MAX_CONNECTIONS = 16;
+
+/** Semantic version string — compared in HANDSHAKE for version gating. */
+export const GAME_VERSION = '0.1.0';
+
+/** Milliseconds a disconnected player's slot is held before removal. */
+export const RECONNECT_GRACE_MS = 30_000;
+
 // ─── Session ─────────────────────────────────────────────────────────────────
 
 /** Maximum number of players per session. */

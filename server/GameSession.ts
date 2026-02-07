@@ -264,6 +264,35 @@ export class GameSession {
     return this.players.get(clientId);
   }
 
+  /**
+   * Suspend a player during an active game (for reconnection grace period).
+   * Zeros their input so the entity stands still, but keeps entity + slot intact.
+   */
+  suspendPlayer(clientId: string): SessionPlayer | undefined {
+    const player = this.players.get(clientId);
+    if (!player) return undefined;
+    // Zero input so the entity freezes in place
+    if (player.entityId !== null) {
+      const inp = this.world.getComponent<PlayerInputComponent>(player.entityId, C.PlayerInput);
+      if (inp) { inp.dx = 0; inp.dy = 0; inp.sprint = false; }
+    }
+    return player;
+  }
+
+  /**
+   * Rebind a suspended player to a new WebSocket client (after reconnection).
+   * The player keeps their slot, entity, and game state.
+   */
+  rebindPlayer(oldClientId: string, newClient: ConnectedClient): SessionPlayer | undefined {
+    const player = this.players.get(oldClientId);
+    if (!player) return undefined;
+    this.players.delete(oldClientId);
+    player.client = newClient;
+    player.playerId = newClient.id;
+    this.players.set(newClient.id, player);
+    return player;
+  }
+
   getLobbySlots(): LobbySlot[] {
     return [...this.players.values()].map((p) => ({
       playerId: p.playerId,

@@ -12,9 +12,12 @@
     "preview": "electron-vite preview",
     "server": "tsx server/server.ts",
     "lint": "eslint src server shared --ext .ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:win": "electron-vite build && electron-builder --win",
+    "publish": "electron-vite build && electron-builder --win --publish always"
   },
   "dependencies": {
+    "electron-updater": "^6.8.3",
     "pixi.js": "^8.6.0",
     "simplex-noise": "^4.0.1",
     "ws": "^8.18.0"
@@ -34,5 +37,25 @@
     "nodemon": "^3.1.4",
     "tsx": "^4.16.0",
     "typescript": "^5.5.0"
+  },
+  "build": {
+    "appId": "com.purrmadeath.app",
+    "productName": "Purrmadeath",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "resources/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "allowToChangeInstallationDirectory": false
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "WickedSoda",
+      "repo": "Purrmadeath"
+    }
   }
 }

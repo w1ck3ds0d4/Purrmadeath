@@ -15,6 +15,7 @@ import {
   PLAYER_BASE_SPEED,
   MELEE_COOLDOWN,
   RANGED_COOLDOWN,
+  GAME_VERSION,
 } from '@shared/constants';
 import type {
   HandshakeAckMessage,
@@ -74,6 +75,10 @@ const BG_PAN_Y = 0.025;
 const WEAPON_TYPES: readonly ('melee' | 'ranged')[] = ['melee', 'ranged'];
 const WEAPON_COOLDOWNS = [MELEE_COOLDOWN, RANGED_COOLDOWN] as const;
 
+// ── Environment: production uses VITE_SERVER_IP, dev defaults to localhost ───
+const serverIp = import.meta.env.VITE_SERVER_IP ?? 'localhost';
+const isDev = !import.meta.env.VITE_SERVER_IP;
+
 async function main(): Promise<void> {
   const container = document.getElementById('game');
   if (!container) throw new Error('Missing #game element in index.html');
@@ -118,7 +123,6 @@ async function main(): Promise<void> {
   const reconciler      = new Reconciler();
   const remotePlayerSys = new RemotePlayerSystem(() => localEntityId);
 
-  let net: NetworkClient | null = null;
   let localSlot        = 0;
   let localEntityId: number | null = null;
   let isHost           = false;
@@ -126,6 +130,8 @@ async function main(): Promise<void> {
   let currentSessionCode = '';
   let lobbyPlayers: LobbySlot[] = [];
   let isMultiplayer = false;
+  /** True when transport is connected AND HANDSHAKE_ACK received. */
+  let transportReady = false;
 
   // ── Mouse tracking (for player facing direction) ─────────────────────────────
   let mouseX = 0;
@@ -156,6 +162,19 @@ async function main(): Promise<void> {
   const gameOverOverlay = new GameOverOverlay();
   gameOverOverlay.setOnMenu(() => stateMgr.transition(GameState.Menu));
 
+  // Configure dev/prod UI
+  menuOverlay.setDevMode(isDev);
+  menuOverlay.setButtonsEnabled(false);
+  menuOverlay.setConnectionStatus('connecting');
+
+  // ── electronAPI (injected by preload in Electron) ───────────────────────────
+  const electronAPI = (window as unknown as { electronAPI?: {
+    platform: string;
+    discoverSessions: () => Promise<unknown[]>;
+    resolveSessionCode: (code: string) => Promise<{ ip: string; port: number } | null>;
+    checkForUpdates?: () => void;
+  } }).electronAPI;
+
   // ── State: Menu ─────────────────────────────────────────────────────────────
   stateMgr.onEnter(GameState.Menu, () => {
     menuOverlay.showMenu();
@@ -180,7 +199,9 @@ async function main(): Promise<void> {
     gameOverOverlay.hide();
     resourceHUD.setResources(0, 0, 0, 0, 0);
     resourceHUD.hide();
-    if (net) { net.disconnect(); net = null; }
+    // Transport stays alive — don't disconnect
+    menuOverlay.setButtonsEnabled(transportReady);
+    menuOverlay.setConnectionStatus(transportReady ? 'connected' : 'connecting');
   });
 
   // ── State: Lobby ────────────────────────────────────────────────────────────
@@ -217,318 +238,367 @@ async function main(): Promise<void> {
     );
   });
 
-  // ── Menu callbacks ───────────────────────────────────────────────────────────
-  // electronAPI is injected by the preload script in Electron. Outside Electron
-  // (plain browser) it won't be present, so we fall back gracefully.
-  const electronAPI = (window as unknown as { electronAPI?: {
-    platform: string;
-    discoverSessions: () => Promise<unknown[]>;
-    resolveSessionCode: (code: string) => Promise<{ ip: string; port: number } | null>;
-  } }).electronAPI;
+  // ─── Persistent Transport Connection ──────────────────────────────────────────
+  // Created once at startup and persists across sessions. The transport handles
+  // WebSocket lifecycle (connect, reconnect, heartbeat). Session actions (host,
+  // join, leave) are sent over this existing connection.
 
+  const net = new NetworkClient(`ws://${serverIp}:${SERVER_PORT}`);
+
+  // ── Transport: HANDSHAKE_ACK (fires on each connect / reconnect) ──────────
+  net.on(MessageType.HANDSHAKE_ACK, (msg) => {
+    const ack = msg as HandshakeAckMessage;
+    console.log(`[Net] Connected — clientId: ${ack.clientId}, server v${ack.serverVersion}`);
+
+    transportReady = true;
+    menuOverlay.setConnectionStatus('connected');
+    menuOverlay.setButtonsEnabled(true);
+
+    // Version gate
+    if (ack.serverVersion !== GAME_VERSION) {
+      console.warn(`[Net] Version mismatch: client ${GAME_VERSION}, server ${ack.serverVersion}`);
+      menuOverlay.setConnectionStatus('disconnected');
+      menuOverlay.setButtonsEnabled(false);
+      electronAPI?.checkForUpdates?.();
+      return;
+    }
+
+    // Pre-fill name from server's IP memory
+    if (ack.lastDisplayName) {
+      menuOverlay.displayName = ack.lastDisplayName;
+    }
+  });
+
+  // ── Transport: connection status callbacks ────────────────────────────────
+  net.onConnect(() => {
+    menuOverlay.setConnectionStatus('connecting');
+  });
+
+  net.onDrop(() => {
+    transportReady = false;
+    menuOverlay.setConnectionStatus('disconnected');
+    menuOverlay.setButtonsEnabled(false);
+
+    // If in a game session, return to menu (session state is lost)
+    if (stateMgr.current !== GameState.Menu) {
+      console.warn('[Net] Connection lost — returning to menu');
+      stateMgr.transition(GameState.Menu);
+    }
+  });
+
+  // ── Register all game message handlers (called once) ──────────────────────
+  net.on(MessageType.SESSION_ACK, (msg) => {
+    const ack = msg as SessionAckMessage;
+    localSlot          = ack.slot;
+    isHost             = ack.isHost;
+    currentSessionId   = ack.sessionId;
+    currentSessionCode = ack.code ?? '';
+    lobbyPlayers       = ack.players;
+    seed               = ack.seed;
+    generator      = new WorldGenerator(ack.seed);
+    chunks         = new ChunkManager(generator);
+    movementSystem = new MovementSystem(chunks);
+
+    stateMgr.transition(GameState.Lobby);
+  });
+
+  net.on(MessageType.PLAYER_JOINED, (msg) => {
+    const pj = msg as PlayerJoinedMessage;
+    lobbyPlayers = lobbyPlayers.filter((p) => p.playerId !== pj.player.playerId);
+    lobbyPlayers.push(pj.player);
+    lobbyOverlay.updatePlayers(lobbyPlayers);
+    lobbyOverlay.addChatMessage('→', `${pj.player.displayName} joined`);
+  });
+
+  net.on(MessageType.PLAYER_LEFT, (msg) => {
+    const pl = msg as PlayerLeftMessage;
+    lobbyPlayers = lobbyPlayers.filter((p) => p.playerId !== pl.playerId);
+    lobbyOverlay.updatePlayers(lobbyPlayers);
+    lobbyOverlay.addChatMessage('←', `Player ${pl.slot + 1} left`);
+  });
+
+  net.on(MessageType.SNAPSHOT, (msg) => {
+    const snap = msg as SnapshotMessage;
+
+    world.clear();
+    playerRenderer.destroy();
+
+    // Track multiplayer status for pause voting
+    isMultiplayer = lobbyPlayers.length > 1;
+
+    // Create all remote player entities from server snapshot
+    remotePlayerSys.applySnapshot(world, snap);
+
+    // Find and configure the local player entity
+    const localSnap = snap.entities.find((e) => e.slot === localSlot);
+    if (localSnap) {
+      localEntityId = localSnap.entityId;
+      reconciler.localEntityId = localEntityId;
+
+      // Add prediction-only components (not sent by server)
+      world.addComponent(localEntityId, C.Speed,       { base: PLAYER_BASE_SPEED, multiplier: 1 });
+      world.addComponent(localEntityId, C.Stamina,     { current: PLAYER_MAX_STAMINA, max: PLAYER_MAX_STAMINA, regenRate: PLAYER_STAMINA_REGEN, exhausted: false });
+      world.addComponent(localEntityId, C.PlayerInput, { dx: 0, dy: 0, sprint: false });
+
+      // Snap camera — no lerp pop on first frame
+      const pos = world.getComponent<PositionComponent>(localEntityId, C.Position)!;
+      camera.x = pos.x; camera.y = pos.y;
+      camera.targetX = pos.x; camera.targetY = pos.y;
+    }
+
+    stateMgr.transition(GameState.Playing);
+  });
+
+  net.on(MessageType.DELTA, (msg) => {
+    if (stateMgr.current !== GameState.Playing) return;
+    const delta = msg as DeltaMessage;
+
+    // Reconcile local player (snap-to-server + replay pending inputs)
+    reconciler.applyDelta(world, delta, (replayDt) => {
+      movementSystem?.update(world, replayDt);
+    });
+
+    // Apply remote entity updates
+    remotePlayerSys.applyDelta(world, delta);
+  });
+
+  net.on(MessageType.ATTACK_PERFORMED, (msg) => {
+    const ap = msg as AttackPerformedMessage;
+    // Skip local player — their arc is triggered immediately on input
+    if (ap.sourceId !== localEntityId) {
+      playerRenderer.notifyAttack(ap.sourceId, ap.facing);
+    }
+  });
+
+  net.on(MessageType.HIT, (msg) => {
+    const hit = msg as HitMessage;
+    playerRenderer.notifyHit(hit.targetId);
+  });
+
+  net.on(MessageType.PROJECTILE_SPAWN, (msg) => {
+    const ps = msg as ProjectileSpawnMessage;
+    projectileRenderer.spawn(ps.projectileId, ps.x, ps.y, ps.vx, ps.vy, ps.ownerSlot);
+  });
+
+  net.on(MessageType.PROJECTILE_REMOVE, (msg) => {
+    const pr = msg as ProjectileRemoveMessage;
+    projectileRenderer.remove(pr.projectileId);
+  });
+
+  net.on(MessageType.PAUSE_VOTE_UPDATE, (msg) => {
+    const update = msg as PauseVoteUpdateMessage;
+    pauseBanner.show(update.direction, update.voters, update.required);
+  });
+
+  net.on(MessageType.PAUSE_STATE, (msg) => {
+    const ps = msg as PauseStateMessage;
+    pauseBanner.hide();
+    if (ps.paused) {
+      // Send zero-input so the server zeros our velocity
+      const seq = reconciler.recordInput(0, 0, false, 0);
+      net.send({ type: MessageType.INPUT, seq, dx: 0, dy: 0, sprint: false, t: performance.now() });
+      stateMgr.transition(GameState.Paused);
+    } else {
+      stateMgr.transition(GameState.Playing);
+    }
+  });
+
+  net.on(MessageType.CHAT, (msg) => {
+    const chat = msg as ChatMessage;
+    lobbyOverlay.addChatMessage(chat.displayName, chat.text);
+  });
+
+  net.on(MessageType.WAVE_START, (msg) => {
+    const ws = msg as WaveStartMessage;
+    waveHUD.onWaveStart(ws.waveNumber, ws.prepDuration);
+  });
+
+  net.on(MessageType.WAVE_END, (msg) => {
+    const we = msg as WaveEndMessage;
+    waveHUD.onWaveEnd(we.waveNumber);
+  });
+
+  net.on(MessageType.WAVE_TIMER_SYNC, (msg) => {
+    const sync = msg as WaveTimerSyncMessage;
+    waveHUD.onTimerSync(sync.waveNumber, sync.remaining, sync.paused);
+  });
+
+  net.on(MessageType.RESOURCE_UPDATE, (msg) => {
+    const ru = msg as ResourceUpdateMessage;
+    resourceHUD.setResources(ru.wood, ru.stone, ru.iron, ru.diamond, ru.gold);
+  });
+
+  // ── Death / respawn handlers ──────────────────────────────────────────────
+  net.on(MessageType.PLAYER_DOWNED, (msg) => {
+    if (localGameOver) return;
+    const pd = msg as PlayerDownedMessage;
+    playerRenderer.notifyDowned(pd.entityId);
+    if (pd.entityId === localEntityId) {
+      localDowned = true;
+      deathOverlay.showDowned(pd.bleedTimer);
+    }
+  });
+
+  net.on(MessageType.REVIVE_PROGRESS, (msg) => {
+    if (localGameOver) return;
+    const rp = msg as ReviveProgressMessage;
+    playerRenderer.notifyReviveProgress(rp.targetId, rp.progress);
+    if (rp.targetId === localEntityId) {
+      deathOverlay.showReviving(rp.progress);
+    }
+  });
+
+  net.on(MessageType.PLAYER_REVIVED, (msg) => {
+    if (localGameOver) return;
+    const pr = msg as PlayerRevivedMessage;
+    playerRenderer.notifyRevived(pr.entityId);
+    if (pr.entityId === localEntityId) {
+      localDowned = false;
+      localDead   = false;
+      deathOverlay.hide();
+    }
+  });
+
+  net.on(MessageType.PLAYER_DIED, (msg) => {
+    if (localGameOver) return;
+    const pd = msg as PlayerDiedMessage;
+    playerRenderer.notifyDeath(pd.entityId);
+    if (pd.entityId === localEntityId) {
+      localDowned = false;
+      localDead   = true;
+      respawnTimer = pd.respawnTimer;
+      deathOverlay.showDead(pd.respawnTimer);
+    }
+  });
+
+  net.on(MessageType.PLAYER_RESPAWNED, (msg) => {
+    if (localGameOver) return;
+    const pr = msg as PlayerRespawnedMessage;
+    playerRenderer.notifyRespawned(pr.entityId);
+    if (pr.entityId === localEntityId) {
+      localDowned = false;
+      localDead   = false;
+      respawnTimer = 0;
+      deathOverlay.hide();
+      // Snap camera to respawn position
+      camera.x = pr.x; camera.y = pr.y;
+      camera.targetX = pr.x; camera.targetY = pr.y;
+    }
+  });
+
+  net.on(MessageType.PARTY_WIPE, (msg) => {
+    if (localGameOver) return;
+    const pw = msg as PartyWipeMessage;
+    if (pw.outcome === 'penalty') {
+      console.log(`[Game] Party wipe #${pw.wipeCount} — 25% resource penalty`);
+    }
+  });
+
+  net.on(MessageType.GAME_OVER, (msg) => {
+    const go = msg as GameOverMessage;
+    console.log(`[Game] Game Over — reached wave ${go.waveReached}, reason: ${go.reason}`);
+    localGameOver = true;
+    localDowned = false;
+    localDead   = false;
+    deathOverlay.hide();
+    gameOverOverlay.show({
+      waveReached: go.waveReached,
+      enemiesKilled: go.enemiesKilled,
+      timePlayed: go.timePlayed,
+      reason: go.reason,
+    });
+  });
+
+  net.on(MessageType.ERROR, (msg) => {
+    const err = msg as unknown as { code: string; message: string };
+    console.error(`[Net] Server error ${err.code}: ${err.message}`);
+    if (err.code === 'VERSION_MISMATCH') {
+      menuOverlay.setConnectionStatus('disconnected');
+      menuOverlay.setButtonsEnabled(false);
+      electronAPI?.checkForUpdates?.();
+    }
+  });
+
+  // Session closed by host departure (clean message path)
+  net.on(MessageType.SESSION_CLOSED, (msg) => {
+    const closed = msg as unknown as { reason: string };
+    console.warn(`[Net] Session closed: ${closed.reason}`);
+    stateMgr.transition(GameState.Menu);
+  });
+
+  // ── Session action helper ─────────────────────────────────────────────────
+  function joinSession(role: 'host' | 'join', displayName: string, code?: string): void {
+    if (!transportReady) {
+      console.warn('[Game] Not connected to server');
+      return;
+    }
+    // Send HANDSHAKE (identifies player + version), then session action
+    net.send({ type: MessageType.HANDSHAKE, displayName, version: GAME_VERSION });
+    if (role === 'host') {
+      net.send({ type: MessageType.SESSION_CREATE });
+    } else {
+      net.send({ type: MessageType.SESSION_JOIN, code: code ?? '' });
+    }
+  }
+
+  // ── Menu callbacks ────────────────────────────────────────────────────────
   menuOverlay.setCallbacks({
-    onHost: () => connectToServer('localhost', menuOverlay.displayName, 'host'),
+    onHost: () => joinSession('host', menuOverlay.displayName),
     onJoin: (value) => {
-      if (!value) { console.warn('[Game] Enter a session code or host IP first'); return; }
+      if (!value) { console.warn('[Game] Enter an invite code first'); return; }
+
+      // Dev-mode: if the input looks like an IP, reconnect transport to that IP
+      if (isDev && /[\d.].*:|\d+\.\d+/.test(value)) {
+        const ip = value.includes(':') ? value.split(':')[0] : value;
+        net.reconnectTo(`ws://${ip}:${SERVER_PORT}`);
+        return;
+      }
+
+      // LAN code resolution via Electron IPC
       const isCode = electronAPI && /^[A-Za-z]{4}$/.test(value);
       if (isCode) {
-        // Electron: resolve 4-letter code → IP via LAN UDP beacon
         void (async () => {
           const resolved = await electronAPI!.resolveSessionCode(value.toUpperCase());
           if (!resolved) {
             console.warn(`[Game] Session code "${value.toUpperCase()}" not found on LAN`);
             return;
           }
-          connectToServer(resolved.ip, menuOverlay.displayName, 'join');
+          // In dev, redirect transport to the resolved LAN IP
+          if (isDev) {
+            net.reconnectTo(`ws://${resolved.ip}:${SERVER_PORT}`);
+          } else {
+            // In production, transport is fixed to the cloud server — just join with code
+            joinSession('join', menuOverlay.displayName, value.toUpperCase());
+          }
         })();
       } else {
-        // Browser / direct IP: treat the value as a hostname or IP address
-        connectToServer(value, menuOverlay.displayName, 'join');
+        // Production: treat value as an invite code
+        joinSession('join', menuOverlay.displayName, value.toUpperCase());
       }
     },
-    onResume:     () => net?.send({ type: MessageType.PAUSE_VOTE }),
-    onQuitToMenu: () => stateMgr.transition(GameState.Menu),
+    onResume:     () => net.send({ type: MessageType.PAUSE_VOTE }),
+    onQuitToMenu: () => {
+      // Send SESSION_LEAVE so the server frees the slot, but keep transport alive
+      net.send({ type: MessageType.SESSION_LEAVE });
+      stateMgr.transition(GameState.Menu);
+    },
   });
 
   // ── Lobby callbacks ──────────────────────────────────────────────────────────
   lobbyOverlay.setCallbacks({
-    onStart: () => net?.send({ type: MessageType.SESSION_START }),
+    onStart: () => net.send({ type: MessageType.SESSION_START }),
     onLeave: () => {
-      net?.send({ type: MessageType.SESSION_LEAVE });
+      net.send({ type: MessageType.SESSION_LEAVE });
       stateMgr.transition(GameState.Menu);
     },
-    onChat: (text) => net?.send({ type: MessageType.CHAT, text }),
+    onChat: (text) => net.send({ type: MessageType.CHAT, text }),
   });
 
-  // ── Network connection ───────────────────────────────────────────────────────
-  function connectToServer(ip: string, displayName: string, role: 'host' | 'join'): void {
-    if (net) { net.disconnect(); }
-
-    net = new NetworkClient(`ws://${ip}:${SERVER_PORT}`);
-
-    net.on(MessageType.HANDSHAKE_ACK, (msg) => {
-      const ack = msg as HandshakeAckMessage;
-      console.log(`[Net] Connected — clientId: ${ack.clientId}`);
-      // Identify self, then immediately request session
-      net!.send({ type: MessageType.HANDSHAKE, displayName });
-      if (role === 'host') {
-        net!.send({ type: MessageType.SESSION_CREATE });
-      } else {
-        // Single-session server: sessionId is ignored, send empty string
-        net!.send({ type: MessageType.SESSION_JOIN, sessionId: '' });
-      }
-    });
-
-    net.on(MessageType.SESSION_ACK, (msg) => {
-      const ack = msg as SessionAckMessage;
-      localSlot          = ack.slot;
-      isHost             = ack.isHost;
-      currentSessionId   = ack.sessionId;
-      currentSessionCode = ack.code ?? '';
-      lobbyPlayers       = ack.players;
-      seed               = ack.seed;
-      generator      = new WorldGenerator(ack.seed);
-      chunks         = new ChunkManager(generator);
-      movementSystem = new MovementSystem(chunks);
-
-      stateMgr.transition(GameState.Lobby);
-
-    });
-
-    net.on(MessageType.PLAYER_JOINED, (msg) => {
-      const pj = msg as PlayerJoinedMessage;
-      lobbyPlayers = lobbyPlayers.filter((p) => p.playerId !== pj.player.playerId);
-      lobbyPlayers.push(pj.player);
-      lobbyOverlay.updatePlayers(lobbyPlayers);
-      lobbyOverlay.addChatMessage('→', `${pj.player.displayName} joined`);
-    });
-
-    net.on(MessageType.PLAYER_LEFT, (msg) => {
-      const pl = msg as PlayerLeftMessage;
-      lobbyPlayers = lobbyPlayers.filter((p) => p.playerId !== pl.playerId);
-      lobbyOverlay.updatePlayers(lobbyPlayers);
-      lobbyOverlay.addChatMessage('←', `Player ${pl.slot + 1} left`);
-    });
-
-    net.on(MessageType.SNAPSHOT, (msg) => {
-      const snap = msg as SnapshotMessage;
-
-      world.clear();
-      playerRenderer.destroy();
-
-      // Track multiplayer status for pause voting
-      isMultiplayer = lobbyPlayers.length > 1;
-
-      // Create all remote player entities from server snapshot
-      remotePlayerSys.applySnapshot(world, snap);
-
-      // Find and configure the local player entity
-      const localSnap = snap.entities.find((e) => e.slot === localSlot);
-      if (localSnap) {
-        localEntityId = localSnap.entityId;
-        reconciler.localEntityId = localEntityId;
-
-        // Add prediction-only components (not sent by server)
-        world.addComponent(localEntityId, C.Speed,       { base: PLAYER_BASE_SPEED, multiplier: 1 });
-        world.addComponent(localEntityId, C.Stamina,     { current: PLAYER_MAX_STAMINA, max: PLAYER_MAX_STAMINA, regenRate: PLAYER_STAMINA_REGEN, exhausted: false });
-        world.addComponent(localEntityId, C.PlayerInput, { dx: 0, dy: 0, sprint: false });
-
-        // Snap camera — no lerp pop on first frame
-        const pos = world.getComponent<PositionComponent>(localEntityId, C.Position)!;
-        camera.x = pos.x; camera.y = pos.y;
-        camera.targetX = pos.x; camera.targetY = pos.y;
-      }
-
-      stateMgr.transition(GameState.Playing);
-    });
-
-    net.on(MessageType.DELTA, (msg) => {
-      if (stateMgr.current !== GameState.Playing) return;
-      const delta = msg as DeltaMessage;
-
-      // Reconcile local player (snap-to-server + replay pending inputs)
-      reconciler.applyDelta(world, delta, (replayDt) => {
-        movementSystem?.update(world, replayDt);
-      });
-
-      // Apply remote entity updates
-      remotePlayerSys.applyDelta(world, delta);
-    });
-
-    net.on(MessageType.ATTACK_PERFORMED, (msg) => {
-      const ap = msg as AttackPerformedMessage;
-      // Skip local player — their arc is triggered immediately on input
-      if (ap.sourceId !== localEntityId) {
-        playerRenderer.notifyAttack(ap.sourceId, ap.facing);
-      }
-    });
-
-    net.on(MessageType.HIT, (msg) => {
-      const hit = msg as HitMessage;
-      playerRenderer.notifyHit(hit.targetId);
-    });
-
-    net.on(MessageType.PROJECTILE_SPAWN, (msg) => {
-      const ps = msg as ProjectileSpawnMessage;
-      projectileRenderer.spawn(ps.projectileId, ps.x, ps.y, ps.vx, ps.vy, ps.ownerSlot);
-    });
-
-    net.on(MessageType.PROJECTILE_REMOVE, (msg) => {
-      const pr = msg as ProjectileRemoveMessage;
-      projectileRenderer.remove(pr.projectileId);
-    });
-
-    net.on(MessageType.PAUSE_VOTE_UPDATE, (msg) => {
-      const update = msg as PauseVoteUpdateMessage;
-      pauseBanner.show(update.direction, update.voters, update.required);
-    });
-
-    net.on(MessageType.PAUSE_STATE, (msg) => {
-      const ps = msg as PauseStateMessage;
-      pauseBanner.hide();
-      if (ps.paused) {
-        // Send zero-input so the server zeros our velocity
-        const seq = reconciler.recordInput(0, 0, false, 0);
-        net?.send({ type: MessageType.INPUT, seq, dx: 0, dy: 0, sprint: false, t: performance.now() });
-        stateMgr.transition(GameState.Paused);
-      } else {
-        stateMgr.transition(GameState.Playing);
-      }
-    });
-
-    net.on(MessageType.CHAT, (msg) => {
-      const chat = msg as ChatMessage;
-      lobbyOverlay.addChatMessage(chat.displayName, chat.text);
-    });
-
-    net.on(MessageType.WAVE_START, (msg) => {
-      const ws = msg as WaveStartMessage;
-      waveHUD.onWaveStart(ws.waveNumber, ws.prepDuration);
-    });
-
-    net.on(MessageType.WAVE_END, (msg) => {
-      const we = msg as WaveEndMessage;
-      waveHUD.onWaveEnd(we.waveNumber);
-    });
-
-    net.on(MessageType.WAVE_TIMER_SYNC, (msg) => {
-      const sync = msg as WaveTimerSyncMessage;
-      waveHUD.onTimerSync(sync.waveNumber, sync.remaining, sync.paused);
-    });
-
-    net.on(MessageType.RESOURCE_UPDATE, (msg) => {
-      const ru = msg as ResourceUpdateMessage;
-      resourceHUD.setResources(ru.wood, ru.stone, ru.iron, ru.diamond, ru.gold);
-    });
-
-    // ── Death / respawn handlers ──────────────────────────────────────────────
-    net.on(MessageType.PLAYER_DOWNED, (msg) => {
-      if (localGameOver) return;
-      const pd = msg as PlayerDownedMessage;
-      playerRenderer.notifyDowned(pd.entityId);
-      if (pd.entityId === localEntityId) {
-        localDowned = true;
-        deathOverlay.showDowned(pd.bleedTimer);
-      }
-    });
-
-    net.on(MessageType.REVIVE_PROGRESS, (msg) => {
-      if (localGameOver) return;
-      const rp = msg as ReviveProgressMessage;
-      playerRenderer.notifyReviveProgress(rp.targetId, rp.progress);
-      if (rp.targetId === localEntityId) {
-        deathOverlay.showReviving(rp.progress);
-      }
-    });
-
-    net.on(MessageType.PLAYER_REVIVED, (msg) => {
-      if (localGameOver) return;
-      const pr = msg as PlayerRevivedMessage;
-      playerRenderer.notifyRevived(pr.entityId);
-      if (pr.entityId === localEntityId) {
-        localDowned = false;
-        localDead   = false;
-        deathOverlay.hide();
-      }
-    });
-
-    net.on(MessageType.PLAYER_DIED, (msg) => {
-      if (localGameOver) return;
-      const pd = msg as PlayerDiedMessage;
-      playerRenderer.notifyDeath(pd.entityId);
-      if (pd.entityId === localEntityId) {
-        localDowned = false;
-        localDead   = true;
-        respawnTimer = pd.respawnTimer;
-        deathOverlay.showDead(pd.respawnTimer);
-      }
-    });
-
-    net.on(MessageType.PLAYER_RESPAWNED, (msg) => {
-      if (localGameOver) return;
-      const pr = msg as PlayerRespawnedMessage;
-      playerRenderer.notifyRespawned(pr.entityId);
-      if (pr.entityId === localEntityId) {
-        localDowned = false;
-        localDead   = false;
-        respawnTimer = 0;
-        deathOverlay.hide();
-        // Snap camera to respawn position
-        camera.x = pr.x; camera.y = pr.y;
-        camera.targetX = pr.x; camera.targetY = pr.y;
-      }
-    });
-
-    net.on(MessageType.PARTY_WIPE, (msg) => {
-      if (localGameOver) return;
-      const pw = msg as PartyWipeMessage;
-      if (pw.outcome === 'penalty') {
-        console.log(`[Game] Party wipe #${pw.wipeCount} — 25% resource penalty`);
-      }
-    });
-
-    net.on(MessageType.GAME_OVER, (msg) => {
-      const go = msg as GameOverMessage;
-      console.log(`[Game] Game Over — reached wave ${go.waveReached}, reason: ${go.reason}`);
-      localGameOver = true;
-      localDowned = false;
-      localDead   = false;
-      deathOverlay.hide();
-      gameOverOverlay.show({
-        waveReached: go.waveReached,
-        enemiesKilled: go.enemiesKilled,
-        timePlayed: go.timePlayed,
-        reason: go.reason,
-      });
-    });
-
-    net.on(MessageType.ERROR, (msg) => {
-      const err = msg as unknown as { code: string; message: string };
-      console.error(`[Net] Server error ${err.code}: ${err.message}`);
-    });
-
-    // Session closed by host departure (clean message path)
-    net.on(MessageType.SESSION_CLOSED, (msg) => {
-      const closed = msg as unknown as { reason: string };
-      console.warn(`[Net] Session closed: ${closed.reason}`);
-      stateMgr.transition(GameState.Menu);
-    });
-
-    // WebSocket dropped unexpectedly (server crash, network loss, etc.)
-    net.onDrop(() => {
-      if (stateMgr.current !== GameState.Menu) {
-        console.warn('[Net] Connection lost — returning to menu');
-        stateMgr.transition(GameState.Menu);
-      }
-    });
-
-    net.connect();
-  }
-
-  // ── Start in Menu ────────────────────────────────────────────────────────────
+  // ── Start transport + show menu ────────────────────────────────────────────
+  net.connect();
   stateMgr.transition(GameState.Menu);
 
-  // ── Game loop ────────────────────────────────────────────────────────────────
+  // ── Game loop ──────────────────────────────────────────────────────────────
   renderer.ticker.add((ticker) => {
     const dt    = Math.min(ticker.deltaMS / 1000, 0.1); // cap at 100ms to prevent teleport on resume
     const state = stateMgr.current;
@@ -536,7 +606,7 @@ async function main(): Promise<void> {
     // ESC: send pause vote to server (server decides when to pause/resume)
     if (input.isJustPressed(Action.Pause)) {
       if (state === GameState.Playing || state === GameState.Paused) {
-        net?.send({ type: MessageType.PAUSE_VOTE });
+        net.send({ type: MessageType.PAUSE_VOTE });
       }
     }
 
@@ -559,7 +629,7 @@ async function main(): Promise<void> {
 
       // 3. Record for reconciliation + send to server
       const seq = reconciler.recordInput(inp.dx, inp.dy, inp.sprint, dt);
-      net?.send({ type: MessageType.INPUT, seq, dx: inp.dx, dy: inp.dy, sprint: inp.sprint, t: performance.now() });
+      net.send({ type: MessageType.INPUT, seq, dx: inp.dx, dy: inp.dy, sprint: inp.sprint, t: performance.now() });
 
       // 4. Predict locally + interpolate remote entities
       movementSystem?.update(world, dt, localEntityId);
@@ -587,24 +657,24 @@ async function main(): Promise<void> {
       if (canAct && input.isJustPressed(Action.Attack) && localFacing !== null && pos && attackCooldown <= 0) {
         const attackType = WEAPON_TYPES[selectedWeapon];
         attackCooldown = WEAPON_COOLDOWNS[selectedWeapon];
-        net?.send({ type: MessageType.ATTACK, attackType, facing: localFacing, x: pos.x, y: pos.y, t: performance.now() });
+        net.send({ type: MessageType.ATTACK, attackType, facing: localFacing, x: pos.x, y: pos.y, t: performance.now() });
         if (attackType === 'melee') playerRenderer.notifyAttack(localEntityId!, localFacing);
       }
 
       // E-interact: pick up nearby non-auto-pickup items (also initiates revive)
       if (input.isJustPressed(Action.Interact) && pos) {
-        net?.send({ type: MessageType.INTERACT, x: pos.x, y: pos.y, t: performance.now() });
+        net.send({ type: MessageType.INTERACT, x: pos.x, y: pos.y, t: performance.now() });
       }
 
       // Debug shortcuts
       if (input.isJustPressed(Action.DebugSpawnEnemies)) {
-        net?.send({ type: MessageType.DEBUG_SPAWN_ENEMIES });
+        net.send({ type: MessageType.DEBUG_SPAWN_ENEMIES });
       }
       if (input.isJustPressed(Action.DebugWaveSkip)) {
-        net?.send({ type: MessageType.DEBUG_WAVE_SKIP });
+        net.send({ type: MessageType.DEBUG_WAVE_SKIP });
       }
       if (input.isJustPressed(Action.DebugWavePause)) {
-        net?.send({ type: MessageType.DEBUG_WAVE_PAUSE });
+        net.send({ type: MessageType.DEBUG_WAVE_PAUSE });
       }
 
       playerRenderer.update(world, localEntityId, localFacing, dt);
@@ -655,12 +725,12 @@ async function main(): Promise<void> {
     const tileY = Math.floor(camera.y / TILE_SIZE);
     const ag    = (isPlaying ? generator : menuGenerator) ?? menuGenerator;
     const biome = BIOME_DEFS[ag.getBiome(tileX, tileY)].name;
-    debug.update(dt, { camera, loadedChunks: tileRenderer.loadedChunkCount, biome, seed, net: net?.stats });
+    debug.update(dt, { camera, loadedChunks: tileRenderer.loadedChunkCount, biome, seed, net: net.stats });
 
     input.flush();
   });
 
-  console.log('[Game] Phase 4 ready — Host or Join a game to begin. Press F4 for debug overlay.');
+  console.log(`[Game] Ready — auto-connecting to ${serverIp}:${SERVER_PORT}. Press F4 for debug overlay.`);
 }
 
 main().catch((err) => {

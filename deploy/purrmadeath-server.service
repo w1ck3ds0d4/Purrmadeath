@@ -23,7 +23,7 @@ SyslogIdentifier=purrmadeath
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/purrmadeath
+ReadWritePaths=/opt/purrmadeath /tmp
 
 [Install]
 WantedBy=multi-user.target
