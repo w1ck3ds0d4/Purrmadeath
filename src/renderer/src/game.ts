@@ -79,6 +79,10 @@ const WEAPON_COOLDOWNS = [MELEE_COOLDOWN, RANGED_COOLDOWN] as const;
 const serverIp = import.meta.env.VITE_SERVER_IP ?? 'localhost';
 const isDev = !import.meta.env.VITE_SERVER_IP;
 
+// ── Version label ────────────────────────────────────────────────────────────
+const versionEl = document.getElementById('version-label');
+if (versionEl) versionEl.textContent = `v${GAME_VERSION}`;
+
 async function main(): Promise<void> {
   const container = document.getElementById('game');
   if (!container) throw new Error('Missing #game element in index.html');
