@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create .env.production
+        run: echo "VITE_SERVER_IP=${{ secrets.VITE_SERVER_IP }}" > .env.production
+
+      - name: Build & publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run publish
+
+  deploy-server:
+    needs: build-and-release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd /opt/purrmadeath
+            sudo -u purrmadeath git pull
+            sudo -u purrmadeath npm install --include=dev
+            sudo systemctl restart purrmadeath-server
+            echo "=== Server updated ==="
+            sudo systemctl status purrmadeath-server --no-pager -l
