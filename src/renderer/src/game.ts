@@ -609,7 +609,7 @@ async function main(): Promise<void> {
 
     // ESC: send pause vote to server (server decides when to pause/resume)
     if (input.isJustPressed(Action.Pause)) {
-      if (state === GameState.Playing || state === GameState.Paused) {
+      if (!localGameOver && (state === GameState.Playing || state === GameState.Paused)) {
         net.send({ type: MessageType.PAUSE_VOTE });
       }
     }
@@ -622,7 +622,7 @@ async function main(): Promise<void> {
 
     // Playing: local prediction + send input
     if (state === GameState.Playing && localEntityId !== null) {
-      const canAct = !localDowned && !localDead;
+      const canAct = !localDowned && !localDead && !localGameOver;
 
       // 1. Map keyboard → PlayerInput component (only local entity has it)
       if (canAct) inputSystem.update(world);

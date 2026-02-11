@@ -21,6 +21,7 @@ export class GameOverOverlay {
       'flex-direction: column',
       'align-items: center',
       'justify-content: center',
+      'pointer-events: auto',
       "font-family: 'Segoe UI', monospace",
     ].join('; ');
 
