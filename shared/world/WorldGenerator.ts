@@ -5,7 +5,7 @@ import { BiomeId } from './BiomeRegistry';
 import { Chunk } from './Chunk';
 
 // ─── Seeded PRNG ──────────────────────────────────────────────────────────────
-// Mulberry32 — fast, good distribution, seed-deterministic.
+// Mulberry32 - fast, good distribution, seed-deterministic.
 
 function mulberry32(seed: number): () => number {
   let s = seed | 0;
@@ -27,7 +27,7 @@ function mulberry32(seed: number): () => number {
  * ### Domain warping (primary fix)
  * Before sampling elevation/moisture, the tile coordinates are offset by a
  * medium-scale warp noise. This "twists" the smooth gradients into irregular,
- * coastline-like shapes — the standard technique for organic procedural terrain.
+ * coastline-like shapes - the standard technique for organic procedural terrain.
  * Reference: Inigo Quilez, "Warping" (iquilezles.org).
  *
  * ### Fractal Brownian Motion (fBm) on elevation
@@ -37,17 +37,17 @@ function mulberry32(seed: number): () => number {
  * variation than a single frequency can.
  *
  * ### Five independent noise layers
- *   elevNoise   — base elevation (two-octave fBm)
- *   moistNoise  — moisture / vegetation density
- *   detailNoise — intra-biome tile accent variation
- *   warpXNoise  — x-axis domain warp displacement
- *   warpYNoise  — y-axis domain warp displacement
+ *   elevNoise   - base elevation (two-octave fBm)
+ *   moistNoise  - moisture / vegetation density
+ *   detailNoise - intra-biome tile accent variation
+ *   warpXNoise  - x-axis domain warp displacement
+ *   warpYNoise  - y-axis domain warp displacement
  */
 export class WorldGenerator {
   private readonly elevNoise:   ReturnType<typeof createNoise2D>;
   private readonly moistNoise:  ReturnType<typeof createNoise2D>;
   private readonly detailNoise: ReturnType<typeof createNoise2D>;
-  // Warp layers — displace sampling coords to break up straight gradients
+  // Warp layers - displace sampling coords to break up straight gradients
   private readonly warpXNoise:  ReturnType<typeof createNoise2D>;
   private readonly warpYNoise:  ReturnType<typeof createNoise2D>;
 
@@ -95,8 +95,8 @@ export class WorldGenerator {
     // Multiplying by 2-1 converts [0,1] → [-1,1] so displacement is bidirectional.
     // WARP_SCALE controls how wide the warp features are (larger = smoother twists).
     // WARP_STRENGTH controls max tile displacement (larger = more distorted borders).
-    const WARP_SCALE    = 200; // tiles — medium-scale warping features
-    const WARP_STRENGTH = 130; // tiles — aggressive enough to fully break linearity
+    const WARP_SCALE    = 200; // tiles - medium-scale warping features
+    const WARP_STRENGTH = 130; // tiles - aggressive enough to fully break linearity
 
     const dx = (this.sample(this.warpXNoise, wx, wy, WARP_SCALE) * 2 - 1) * WARP_STRENGTH;
     const dy = (this.sample(this.warpYNoise, wx, wy, WARP_SCALE) * 2 - 1) * WARP_STRENGTH;
@@ -112,7 +112,7 @@ export class WorldGenerator {
             + this.sample(this.elevNoise, wx2, wy2, 180) * 0.30;
 
     // ── Step 3: moisture ────────────────────────────────────────────────────
-    // Single octave at a larger scale than elevation — moisture changes slowly
+    // Single octave at a larger scale than elevation - moisture changes slowly
     // across continents, giving wide climate bands rather than rapid switching.
     const m = this.sample(this.moistNoise, wx2, wy2, 700);
 

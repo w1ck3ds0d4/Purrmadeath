@@ -34,7 +34,7 @@ export class ChunkManager {
 
   /**
    * Returns the tile ID at world tile coordinates (tx, ty).
-   * Loads the chunk on demand — needed for collision queries near unloaded chunk edges.
+   * Loads the chunk on demand - needed for collision queries near unloaded chunk edges.
    */
   getTile(tx: number, ty: number): TileId {
     const cx = Math.floor(tx / CHUNK_SIZE);

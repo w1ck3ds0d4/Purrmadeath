@@ -8,7 +8,7 @@ import { TileId } from './TileRegistry';
  * serialization. Index formula: i = ty * CHUNK_SIZE + tx.
  *
  * The server owns the authoritative chunks; the client caches received/generated
- * chunks locally. In Phase 1, clients generate chunks themselves — in Phase 3,
+ * chunks locally. In Phase 1, clients generate chunks themselves - in Phase 3,
  * they request chunks from the server.
  */
 export class Chunk {

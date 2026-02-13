@@ -58,17 +58,17 @@ export interface DefenseComponent {
 
 export interface SpeedComponent {
   base: number;
-  /** Multiplied by base — modified by buildings/abilities in later phases. */
+  /** Multiplied by base - modified by buildings/abilities in later phases. */
   multiplier: number;
 }
 
-/** Slot index 0–3 — determines player color and spawn order. */
+/** Slot index 0–3 - determines player color and spawn order. */
 export interface PlayerIndexComponent {
   index: number;
 }
 
 /**
- * Transient each-frame input intent — written by InputSystem each tick,
+ * Transient each-frame input intent - written by InputSystem each tick,
  * consumed by MovementSystem. Reset to 0 when no keys are held.
  */
 export interface PlayerInputComponent {

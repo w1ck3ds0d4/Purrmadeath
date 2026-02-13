@@ -51,6 +51,7 @@ import {
   REVIVE_RANGE,
   WIPE_1_RESOURCE_LOSS_PERCENT,
   MAX_ATTACK_POSITION_TOLERANCE,
+  TICK_MS,
 } from '@shared/constants';
 import { RESOURCE_STATS, RESOURCE_SPAWN_TABLE, TILE_SPAWN_CHANCE } from '@shared/data/ResourceSpawnTable';
 import { LOOT_TABLES } from '@shared/data/LootTables';
@@ -130,7 +131,7 @@ function generateCode(): string {
 export class GameSession {
   readonly id: string;
   readonly seed: number;
-  /** 4-letter code shown in the lobby — used by joiners to find this session. */
+  /** 4-letter code shown in the lobby - used by joiners to find this session. */
   readonly code: string;
 
   private world = new World();
@@ -169,13 +170,13 @@ export class GameSession {
   /** How many chunks around each player to generate (in chunk units). */
   private static readonly RESOURCE_GEN_RADIUS = 2;
 
-  /** Spawn origin (set during start()) — downed players respawn here. */
+  /** Spawn origin (set during start()) - downed players respawn here. */
   private spawnOrigin: { x: number; y: number } = { x: 0, y: 0 };
   /** Players waiting to respawn: clientId → seconds remaining. */
   private respawnTimers = new Map<string, number>();
   /** Per-wave wipe count. Reset when a new wave begins. */
   private wipeCount = 0;
-  /** True after GAME_OVER is sent — stops all death/respawn/wave processing. */
+  /** True after GAME_OVER is sent - stops all death/respawn/wave processing. */
   private gameOver = false;
 
   // ── Run stats ──────────────────────────────────────────────────────────────
@@ -464,7 +465,7 @@ export class GameSession {
    * Uses seeded deterministic RNG so all clients see the same world.
    */
   /**
-   * Chunk-based resource generation — called each tick.
+   * Chunk-based resource generation - called each tick.
    * For each player, checks nearby chunks. Unprocessed chunks get resources
    * generated using a deterministic per-chunk PRNG. Already-processed chunks
    * are skipped permanently (resources persist, no re-spawning).
@@ -665,7 +666,7 @@ export class GameSession {
     );
     if (!inp) return;
 
-    // Downed or dead players cannot move — still acknowledge seq for reconciliation
+    // Downed or dead players cannot move - still acknowledge seq for reconciliation
     if (this.world.hasComponent(player.entityId, C.Downed) || this.respawnTimers.has(clientId)) {
       inp.dx = 0;
       inp.dy = 0;
@@ -756,7 +757,7 @@ export class GameSession {
       if (rdx * rdx + rdy * rdy <= revR2) {
         const downed = this.world.getComponent<DownedComponent>(downedId, C.Downed)!;
         if (downed.reviverId === player.entityId) {
-          // Already reviving — pressing E again cancels
+          // Already reviving - pressing E again cancels
           downed.reviverId = -1;
           downed.reviveProgress = 0;
         } else {
@@ -798,9 +799,15 @@ export class GameSession {
     msg: AttackMessage,
     send: (client: ConnectedClient, m: object) => void,
   ): void {
+    const entityId = player.entityId!;
+
+    // Pre-check cooldown so we don't broadcast a fake swing animation
+    const cd = this.world.getComponent<AttackCooldownComponent>(entityId, C.AttackCooldown);
+    if (cd && cd.remaining > TICK_MS / 1000) return;
+
     const { hits, deaths } = this.combat.processMeleeAttack(
       this.world,
-      player.entityId!,
+      entityId,
       msg.facing,
       { x: msg.x, y: msg.y },
     );
@@ -808,7 +815,7 @@ export class GameSession {
     // Broadcast attack animation to all players (fires even on miss)
     const performed: AttackPerformedMessage = {
       type: MessageType.ATTACK_PERFORMED,
-      sourceId: player.entityId!,
+      sourceId: entityId,
       facing: msg.facing,
     };
     for (const p of this.players.values()) send(p.client, performed);
@@ -835,9 +842,9 @@ export class GameSession {
   ): void {
     const entityId = player.entityId!;
 
-    // Enforce cooldown
+    // Enforce cooldown (one-tick tolerance for client/server timing drift)
     const cd = this.world.getComponent<AttackCooldownComponent>(entityId, C.AttackCooldown);
-    if (cd && cd.remaining > 0) return;
+    if (cd && cd.remaining > TICK_MS / 1000) return;
     if (cd) cd.remaining = RANGED_COOLDOWN;
 
     const pos = this.world.getComponent<PositionComponent>(entityId, C.Position);
@@ -921,7 +928,7 @@ export class GameSession {
     if (this.wavePhase === 'prep') {
       this.prepTimer -= dt;
 
-      // Periodic drift correction — sync clients every WAVE_SYNC_INTERVAL
+      // Periodic drift correction - sync clients every WAVE_SYNC_INTERVAL
       this.waveSyncTimer += dt;
       if (this.waveSyncTimer >= GameSession.WAVE_SYNC_INTERVAL) {
         this.waveSyncTimer = 0;
@@ -929,7 +936,7 @@ export class GameSession {
       }
 
       if (this.prepTimer <= 0) {
-        // Prep ended — spawn portals and go active
+        // Prep ended - spawn portals and go active
         this.spawnPortals(this.currentWave);
         this.wavePhase = 'active';
 
@@ -963,7 +970,7 @@ export class GameSession {
       }
 
       if (!anyAlive) {
-        // Wave cleared — broadcast WAVE_END, start next wave prep
+        // Wave cleared - broadcast WAVE_END, start next wave prep
         const waveEnd: WaveEndMessage = {
           type: MessageType.WAVE_END,
           waveNumber: this.currentWave,
@@ -1014,7 +1021,7 @@ export class GameSession {
     console.log(`[Debug] Spawned ${spawned}/${n} enemies around player ${player.slot}`);
   }
 
-  /** Skip the wave prep timer — immediately spawn portals and go active. */
+  /** Skip the wave prep timer - immediately spawn portals and go active. */
   debugWaveSkip(send: (client: ConnectedClient, msg: object) => void): void {
     if (this.phase !== 'playing') return;
     if (this.wavePhase !== 'prep') return;
@@ -1269,7 +1276,22 @@ export class GameSession {
       this.prevSnapshot.set(snap.entityId, snap);
     }
 
-    return { type: MessageType.DELTA, tick: this.tick, entities: changed, removed };
+    // Count active portals for debug console
+    let portalCount = 0;
+    for (const _ of this.world.query(C.Portal, C.Health)) portalCount++;
+
+    return {
+      type: MessageType.DELTA,
+      tick: this.tick,
+      entities: changed,
+      removed,
+      serverStats: {
+        wave: this.currentWave,
+        enemyCount: this.enemyCount,
+        portalCount,
+        playerCount: this.players.size,
+      },
+    };
   }
 
   /** Build a reverse map of entityId → SessionPlayer (O(P), avoids O(N*P) lookups). */
@@ -1351,7 +1373,7 @@ export class GameSession {
     const hp = this.world.getComponent<HealthComponent>(entityId, C.Health);
     if (!hp || hp.current > 0) return;
 
-    // Solo: skip downed state — treat as party wipe (penalty progression)
+    // Solo: skip downed state - treat as party wipe (penalty progression)
     if (this.players.size <= 1) {
       this.world.addComponent(entityId, C.Downed, {
         bleedTimer: 0,
@@ -1392,7 +1414,7 @@ export class GameSession {
   /** Tick bleed timers and revive progress for all downed players. */
   private tickDownedPlayers(dt: number, send: SendFn): void {
     for (const id of this.world.query(C.Downed, C.Position)) {
-      // Skip dead players awaiting respawn — they keep Downed but don't tick
+      // Skip dead players awaiting respawn - they keep Downed but don't tick
       const spDown = this.findSessionPlayerByEntity(id);
       if (spDown && this.respawnTimers.has(spDown.client.id)) continue;
 
@@ -1412,7 +1434,7 @@ export class GameSession {
         const reviverDowned = this.world.hasComponent(downed.reviverId, C.Downed);
 
         if (!reviverPos || !myPos || reviverDowned) {
-          // Reviver invalid — cancel
+          // Reviver invalid - cancel
           downed.reviverId = -1;
           downed.reviveProgress = 0;
           this.broadcastReviveProgress(id, 0, -1, send);
@@ -1420,7 +1442,7 @@ export class GameSession {
           const rdx = reviverPos.x - myPos.x;
           const rdy = reviverPos.y - myPos.y;
           if (rdx * rdx + rdy * rdy > REVIVE_RANGE * REVIVE_RANGE) {
-            // Reviver moved out of range — cancel
+            // Reviver moved out of range - cancel
             downed.reviverId = -1;
             downed.reviveProgress = 0;
             this.broadcastReviveProgress(id, 0, -1, send);
@@ -1490,7 +1512,7 @@ export class GameSession {
       respawnTimer: RESPAWN_DELAY,
     };
     for (const p of this.players.values()) send(p.client, msg);
-    console.log(`[Death] Player ${sp.slot} died — respawn in ${RESPAWN_DELAY}s`);
+    console.log(`[Death] Player ${sp.slot} died - respawn in ${RESPAWN_DELAY}s`);
   }
 
   /** Tick respawn timers and respawn players when ready. */
@@ -1569,7 +1591,7 @@ export class GameSession {
     console.log(`[Wipe] Party wipe #${this.wipeCount} on wave ${this.currentWave}`);
 
     if (this.wipeCount >= 2) {
-      // 2nd wipe: game over — halt all death/respawn processing
+      // 2nd wipe: game over - halt all death/respawn processing
       this.gameOver = true;
       this.respawnTimers.clear();
       for (const sp of this.players.values()) {
@@ -1579,7 +1601,7 @@ export class GameSession {
       const msg: GameOverMessage = {
         type: MessageType.GAME_OVER,
         waveReached: this.currentWave,
-        reason: '2nd party wipe — run over',
+        reason: '2nd party wipe - run over',
         enemiesKilled: this.enemiesKilled,
         timePlayed: Math.round((Date.now() - this.startTime) / 1000),
       };

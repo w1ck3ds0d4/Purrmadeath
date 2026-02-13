@@ -6,7 +6,7 @@ import type { Chunk } from '@shared/world/Chunk';
 /**
  * TileRenderer draws chunks as Pixi.js Graphics objects.
  *
- * Each chunk is rendered once into one Graphics node on load — tiles of the
+ * Each chunk is rendered once into one Graphics node on load - tiles of the
  * same color are batched into a single fill call to minimise draw calls.
  *
  * Phase 1: flat solid colors.
@@ -42,7 +42,7 @@ export class TileRenderer {
 
   /**
    * Draw a chunk and add it to the world container.
-   * Idempotent — calling this for an already-rendered chunk is a no-op.
+   * Idempotent - calling this for an already-rendered chunk is a no-op.
    */
   addChunk(chunk: Chunk): void {
     const key = chunkKey(chunk.cx, chunk.cy);

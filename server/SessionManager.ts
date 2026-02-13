@@ -46,7 +46,7 @@ interface PendingReconnect {
 export class SessionManager {
   private session: GameSession | null = null;
 
-  /** displayName stored on HANDSHAKE — keyed by clientId. */
+  /** displayName stored on HANDSHAKE - keyed by clientId. */
   private displayNames = new Map<string, string>();
 
   /** IP → last-known display name (persists while server runs). */
@@ -287,7 +287,7 @@ export class SessionManager {
       return;
     }
 
-    console.log(`[Session] Game starting — ${this.session.playerCount} player(s)`);
+    console.log(`[Session] Game starting - ${this.session.playerCount} player(s)`);
     this.session.start((c, msg) => this.socket.send(c, msg));
   }
 
@@ -368,7 +368,7 @@ export class SessionManager {
     // hold their slot for RECONNECT_GRACE_MS to allow the same IP to rejoin.
     if (isDisconnect && this.session.isPlaying && !player.isHost) {
       this.session.suspendPlayer(client.id);
-      console.log(`[Session] ${player.displayName} disconnected — holding slot ${player.slot} for ${RECONNECT_GRACE_MS / 1000}s`);
+      console.log(`[Session] ${player.displayName} disconnected - holding slot ${player.slot} for ${RECONNECT_GRACE_MS / 1000}s`);
 
       const timer = setTimeout(() => {
         this.pendingReconnects.delete(client.ip);
@@ -402,8 +402,8 @@ export class SessionManager {
     console.log(`[Session] ${displayName} left (slot ${slot})`);
 
     if (isHost) {
-      // Host left — close the session for everyone immediately
-      console.log('[Session] Host left — closing session for all remaining players');
+      // Host left - close the session for everyone immediately
+      console.log('[Session] Host left - closing session for all remaining players');
       // Also clean up any pending reconnects
       for (const [, pending] of this.pendingReconnects) {
         clearTimeout(pending.timer);
@@ -434,7 +434,7 @@ export class SessionManager {
 
     // Destroy the session when it's empty (and no pending reconnects)
     if (this.session.playerCount === 0 && this.pendingReconnects.size === 0) {
-      console.log('[Session] Session empty — destroying');
+      console.log('[Session] Session empty - destroying');
       this.session = null;
       this.beacon.update({ code: '', playerCount: 0 });
     } else {

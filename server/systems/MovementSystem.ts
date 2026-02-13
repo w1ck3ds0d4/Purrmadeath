@@ -56,7 +56,7 @@ function circleAABBPush(
   if (distSq >= cr * cr) return null;
 
   if (distSq < 0.0001) {
-    // Circle center is inside the box — push along shortest axis
+    // Circle center is inside the box - push along shortest axis
     const overlapL = (cx - (bx - bHalf)) + cr;
     const overlapR = ((bx + bHalf) - cx) + cr;
     const overlapT = (cy - (by - bHalf)) + cr;
@@ -78,14 +78,19 @@ function circleAABBPush(
  *
  * Mirrors the client MovementSystem exactly so that client prediction stays
  * in sync with the server simulation. Uses WorldGenerator.getTile() directly
- * (no ChunkManager cache needed — server generates tiles on demand).
+ * (no ChunkManager cache needed - server generates tiles on demand).
  */
 export class MovementSystem {
+  /** Cached resource node positions - refreshed each update for solid-block collision. */
+  private resourceCache: PositionComponent[] = [];
+
   constructor(private readonly generator: WorldGenerator) {}
 
   update(world: World, dt: number): void {
+    // Cache resource nodes so overlapsAny can treat them as solid blocks
+    this.cacheResources(world);
     for (const id of world.query(C.Position, C.Velocity, C.Speed, C.PlayerInput)) {
-      // Skip downed entities — they cannot move
+      // Skip downed entities - they cannot move
       if (world.hasComponent(id, C.Downed)) continue;
 
       const pos   = world.getComponent<PositionComponent>(id, C.Position)!;
@@ -152,7 +157,7 @@ export class MovementSystem {
       }
     }
 
-    // Entity-entity separation — prevents stacking/overlapping
+    // Entity-entity separation - prevents stacking/overlapping
     this.separateEntities(world);
   }
 
@@ -162,6 +167,8 @@ export class MovementSystem {
     const bodies: { id: number; pos: PositionComponent; r: number; movable: boolean; square: boolean }[] = [];
     for (const id of world.query(C.Position, C.Faction)) {
       const faction = world.getComponent<FactionComponent>(id, C.Faction)!;
+      // Resource nodes are handled as solid blocks in overlapsAny - skip here
+      if (faction.type === 'resource') continue;
       const r = getEntityRadius(faction.type);
       if (r <= 0) continue;
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
@@ -185,7 +192,7 @@ export class MovementSystem {
             const box    = a.square ? a : b;
             const push   = circleAABBPush(circle.pos.x, circle.pos.y, circle.r, box.pos.x, box.pos.y, box.r);
             if (!push) continue;
-            // push points FROM box TO circle — apply to the circle entity
+            // push points FROM box TO circle - apply to the circle entity
             if (circle === a) {
               pushX = push.px;  pushY = push.py;   // push A away
             } else {
@@ -232,14 +239,33 @@ export class MovementSystem {
     // If all blocked, don't push (entity stays overlapping rather than going into a wall)
   }
 
+  /** Cache resource node positions for solid-block collision checks. */
+  private cacheResources(world: World): void {
+    this.resourceCache.length = 0;
+    for (const id of world.query(C.Position, C.Faction)) {
+      const f = world.getComponent<FactionComponent>(id, C.Faction)!;
+      if (f.type === 'resource') {
+        this.resourceCache.push(world.getComponent<PositionComponent>(id, C.Position)!);
+      }
+    }
+  }
+
   private overlapsAny(px: number, py: number): boolean {
     const r = PLAYER_RADIUS - 1;
-    return (
+    if (
       this.tileBlocksMovement(px - r, py - r) ||
       this.tileBlocksMovement(px + r, py - r) ||
       this.tileBlocksMovement(px - r, py + r) ||
       this.tileBlocksMovement(px + r, py + r)
-    );
+    ) return true;
+
+    // Resource nodes act as solid blocks (circle-vs-AABB)
+    for (const node of this.resourceCache) {
+      if (circleAABBPush(px, py, PLAYER_RADIUS, node.x, node.y, RESOURCE_NODE_RADIUS)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Blocks entity movement if a tile is not walkable (water, mountains, etc.).

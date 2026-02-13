@@ -1,5 +1,5 @@
 // ─── Tile IDs ─────────────────────────────────────────────────────────────────
-// Stored as Uint16 in chunk arrays — max 65 535 tile types.
+// Stored as Uint16 in chunk arrays - max 65 535 tile types.
 // Keep values stable across versions (saved worlds depend on them).
 
 export enum TileId {
@@ -29,7 +29,7 @@ export interface TileDef {
 }
 
 // ─── Registry ─────────────────────────────────────────────────────────────────
-// Indexed directly by TileId — O(1) lookup, no Map overhead.
+// Indexed directly by TileId - O(1) lookup, no Map overhead.
 // MUST remain in enum value order.
 
 export const TILE_DEFS: readonly TileDef[] = [

@@ -76,9 +76,15 @@ function circleAABBPush(
  * NOT called during reconciler replay to avoid stale-position divergence.
  */
 export class MovementSystem {
+  /** Cached resource node positions - refreshed each update for solid-block collision. */
+  private resourceCache: PositionComponent[] = [];
+
   constructor(private readonly chunks: ChunkManager) {}
 
   update(world: World, dt: number, localEntityId?: number | null): void {
+    // Cache resource nodes so overlapsAny can treat them as solid blocks
+    this.cacheResources(world);
+
     for (const id of world.query(C.Position, C.Velocity, C.Speed, C.PlayerInput)) {
       const pos   = world.getComponent<PositionComponent>(id, C.Position)!;
       const vel   = world.getComponent<VelocityComponent>(id, C.Velocity)!;
@@ -127,7 +133,7 @@ export class MovementSystem {
       }
     }
 
-    // Entity separation for local player — matches server-side pass
+    // Entity separation for local player - matches server-side pass
     if (localEntityId != null) {
       this.separateLocalPlayer(world, localEntityId);
     }
@@ -135,7 +141,7 @@ export class MovementSystem {
 
   /**
    * Push the local player away from overlapping entities.
-   * Only the local player is moved — other entities are positioned by the server.
+   * Only the local player is moved - other entities are positioned by the server.
    */
   private separateLocalPlayer(world: World, localId: number): void {
     const pos = world.getComponent<PositionComponent>(localId, C.Position);
@@ -145,6 +151,8 @@ export class MovementSystem {
       for (const otherId of world.query(C.Position, C.Faction)) {
         if (otherId === localId) continue;
         const faction = world.getComponent<FactionComponent>(otherId, C.Faction)!;
+        // Resource nodes are handled as solid blocks in overlapsAny - skip here
+        if (faction.type === 'resource') continue;
         const otherR = getEntityRadius(faction.type);
         if (otherR <= 0) continue;
 
@@ -153,7 +161,6 @@ export class MovementSystem {
         let pushX: number, pushY: number;
 
         if (isSquareEntity(faction.type)) {
-          // Circle (player) vs AABB (resource)
           const push = circleAABBPush(pos.x, pos.y, PLAYER_RADIUS, otherPos.x, otherPos.y, otherR);
           if (!push) continue;
           pushX = push.px;
@@ -172,7 +179,7 @@ export class MovementSystem {
         }
 
         // If the other entity is also movable (player/enemy), the server splits
-        // the push evenly — we only move our half. Static entities push us fully.
+        // the push evenly - we only move our half. Static entities push us fully.
         const otherMovable = faction.type === 'player' || faction.type === 'enemy';
         const scale = otherMovable ? 0.5 : 1;
 
@@ -195,18 +202,37 @@ export class MovementSystem {
     }
   }
 
+  /** Cache resource node positions for solid-block collision checks. */
+  private cacheResources(world: World): void {
+    this.resourceCache.length = 0;
+    for (const id of world.query(C.Position, C.Faction)) {
+      const f = world.getComponent<FactionComponent>(id, C.Faction)!;
+      if (f.type === 'resource') {
+        this.resourceCache.push(world.getComponent<PositionComponent>(id, C.Position)!);
+      }
+    }
+  }
+
   /**
-   * Returns true if the player circle centered at (px, py) overlaps any impassable tile.
-   * Checks the four corners of the AABB with a 1px inset to avoid edge-hugging.
+   * Returns true if the player circle centered at (px, py) overlaps any
+   * impassable tile OR any resource node AABB (treated as solid blocks).
    */
   private overlapsAny(px: number, py: number): boolean {
     const r = PLAYER_RADIUS - 1;
-    return (
+    if (
       this.tileBlocksMovement(px - r, py - r) ||
       this.tileBlocksMovement(px + r, py - r) ||
       this.tileBlocksMovement(px - r, py + r) ||
       this.tileBlocksMovement(px + r, py + r)
-    );
+    ) return true;
+
+    // Resource nodes act as solid blocks (circle-vs-AABB)
+    for (const node of this.resourceCache) {
+      if (circleAABBPush(px, py, PLAYER_RADIUS, node.x, node.y, RESOURCE_NODE_RADIUS)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Blocks entity movement if a tile is not walkable (water, mountains, etc.).

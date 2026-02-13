@@ -4,7 +4,7 @@ import { Application } from 'pixi.js';
  * Renderer owns the Pixi.js Application and the root stage.
  * All game layers (world, entities, UI) are added as children of stage.
  *
- * Phase 1: minimal setup — just canvas + ticker.
+ * Phase 1: minimal setup - just canvas + ticker.
  * Phase 2+: will expose layer containers (worldLayer, entityLayer, uiLayer).
  */
 export class Renderer {
@@ -38,7 +38,7 @@ export class Renderer {
   }
 
   /**
-   * The Pixi Ticker — drives the game's render loop.
+   * The Pixi Ticker - drives the game's render loop.
    * Register update callbacks with: renderer.ticker.add((ticker) => { ... })
    * ticker.deltaMS gives elapsed ms since last frame.
    */

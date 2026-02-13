@@ -1,6 +1,6 @@
 // ─── Loot table definitions ──────────────────────────────────────────────────
 // Each enemy type maps to a table of possible drops. The server rolls each
-// entry independently on death — an enemy can drop 0, 1, or several items.
+// entry independently on death - an enemy can drop 0, 1, or several items.
 
 export interface LootEntry {
   itemType: string;

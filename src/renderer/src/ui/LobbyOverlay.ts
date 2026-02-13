@@ -91,7 +91,7 @@ export class LobbyOverlay {
         btn.textContent = 'Copied!';
         btn.classList.add('copied');
         setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
-      }).catch(() => {/* clipboard denied — silently ignore */});
+      }).catch(() => {/* clipboard denied - silently ignore */});
     });
 
     item.appendChild(lbl);
@@ -114,7 +114,7 @@ export class LobbyOverlay {
         li.textContent = `P${i + 1}  ${slot.displayName}${slot.isHost ? ' (host)' : ''}`;
         li.classList.add('filled');
       } else {
-        li.textContent = `P${i + 1}  — waiting…`;
+        li.textContent = `P${i + 1}  - waiting…`;
         li.classList.add('empty');
       }
       this.playerList.appendChild(li);

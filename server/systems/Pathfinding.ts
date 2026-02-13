@@ -50,7 +50,7 @@ function keyToTy(key: number): number {
   return (key % 20001) - 10000;
 }
 
-/** Chebyshev distance — exact heuristic for 8-directional movement with diagonal cost √2. */
+/** Chebyshev distance - exact heuristic for 8-directional movement with diagonal cost √2. */
 function chebyshev(ax: number, ay: number, bx: number, by: number): number {
   const dx = Math.abs(bx - ax);
   const dy = Math.abs(by - ay);

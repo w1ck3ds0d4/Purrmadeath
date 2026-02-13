@@ -1,6 +1,6 @@
 // ─── Message type registry ───────────────────────────────────────────────────
 // Every WebSocket message carries a `type` field from this enum.
-// Add new types here as phases are implemented — never inline magic strings.
+// Add new types here as phases are implemented - never inline magic strings.
 
 export enum MessageType {
   // ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -29,7 +29,7 @@ export enum MessageType {
   PLAYER_JOINED = 'PLAYER_JOINED',
   /** Server → all: a player left the lobby or game */
   PLAYER_LEFT = 'PLAYER_LEFT',
-  /** Server → all remaining clients: host left — session is closed */
+  /** Server → all remaining clients: host left - session is closed */
   SESSION_CLOSED = 'SESSION_CLOSED',
   /** Server → all: full lobby state snapshot (slot list) */
   SESSION_STATE = 'SESSION_STATE',
@@ -136,7 +136,7 @@ export interface HandshakeAckMessage extends BaseMessage {
   clientId: string;
   /** Current server tick number (for clock sync). */
   serverTick: number;
-  /** Server build version — client compares to trigger auto-update on mismatch. */
+  /** Server build version - client compares to trigger auto-update on mismatch. */
   serverVersion: string;
   /** If the server recognises this IP, the display name last used by this player. */
   lastDisplayName?: string;
@@ -232,7 +232,7 @@ export interface EntitySnapshot {
   entityId: number;
   /** Slot index if this is a player entity. Absent for enemies. */
   slot?: number;
-  /** Faction — used by the client renderer to pick the visual. */
+  /** Faction - used by the client renderer to pick the visual. */
   faction?: 'player' | 'enemy' | 'portal' | 'resource' | 'item';
   x: number;
   y: number;
@@ -242,7 +242,7 @@ export interface EntitySnapshot {
   maxHp: number;
   /** Present only for 'resource' faction entities. */
   resourceType?: 'wood' | 'stone' | 'iron' | 'diamond';
-  /** Present only for 'item' faction entities — resource type or item ID. */
+  /** Present only for 'item' faction entities - resource type or item ID. */
   itemType?: string;
   /** Present only for 'item' faction entities. */
   itemQuantity?: number;
@@ -257,7 +257,7 @@ export interface SnapshotMessage extends BaseMessage {
   entities: EntitySnapshot[];
 }
 
-/** Per-tick delta — only changed entities. */
+/** Per-tick delta - only changed entities. */
 export interface DeltaMessage extends BaseMessage {
   type: typeof MessageType.DELTA;
   tick: number;
@@ -266,6 +266,8 @@ export interface DeltaMessage extends BaseMessage {
   entities: EntitySnapshot[];
   /** Entity IDs removed since last tick. */
   removed: number[];
+  /** Optional server-side stats for the debug console. */
+  serverStats?: { wave: number; enemyCount: number; portalCount: number; playerCount: number };
 }
 
 // ─── Input ────────────────────────────────────────────────────────────────────
@@ -298,7 +300,7 @@ export interface AttackMessage extends BaseMessage {
   t: number;
 }
 
-/** Server → all: a player swung (even on miss) — clients play the arc animation. */
+/** Server → all: a player swung (even on miss) - clients play the arc animation. */
 export interface AttackPerformedMessage extends BaseMessage {
   type: typeof MessageType.ATTACK_PERFORMED;
   /** Entity ID of the attacker. */
@@ -374,7 +376,7 @@ export interface ChatMessage extends BaseMessage {
   text: string;
 }
 
-/** Client → Server chat (no displayName/slot — server fills those). */
+/** Client → Server chat (no displayName/slot - server fills those). */
 export interface ChatSendMessage extends BaseMessage {
   type: typeof MessageType.CHAT;
   text: string;

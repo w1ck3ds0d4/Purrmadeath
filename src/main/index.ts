@@ -89,7 +89,7 @@ function startDiscoveryListener(): void {
         lastSeen: Date.now(),
       });
     } catch {
-      // malformed packet — ignore
+      // malformed packet - ignore
     }
   });
 
@@ -109,6 +109,9 @@ function startDiscoveryListener(): void {
     }
   }, 4_000);
 }
+
+// IPC: renderer requests update install
+ipcMain.handle('install-update', () => autoUpdater.quitAndInstall());
 
 // IPC: renderer → list of active sessions
 ipcMain.handle('discover-sessions', () => [...discoveredSessions.values()]);
@@ -176,8 +179,13 @@ app.whenReady().then(() => {
     startEmbeddedServer();
     startDiscoveryListener();
   } else {
-    // Check for updates silently — downloads in background, installs on next restart
-    autoUpdater.checkForUpdatesAndNotify();
+    autoUpdater.on('update-available', () => {
+      BrowserWindow.getAllWindows()[0]?.webContents.send('update-available');
+    });
+    autoUpdater.on('update-downloaded', () => {
+      BrowserWindow.getAllWindows()[0]?.webContents.send('update-downloaded');
+    });
+    autoUpdater.checkForUpdates();
   }
 
   createWindow();

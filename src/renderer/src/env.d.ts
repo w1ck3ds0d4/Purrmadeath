@@ -8,3 +8,14 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+interface Window {
+  electronAPI: {
+    platform: string;
+    discoverSessions: () => Promise<{ code: string; ip: string; port: number; playerCount: number; maxPlayers: number }[]>;
+    resolveSessionCode: (code: string) => Promise<{ ip: string; port: number } | null>;
+    onUpdateAvailable: (cb: () => void) => void;
+    onUpdateDownloaded: (cb: () => void) => void;
+    installUpdate: () => Promise<void>;
+  };
+}

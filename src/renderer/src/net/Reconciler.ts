@@ -9,7 +9,7 @@ import type { EntitySnapshot, DeltaMessage } from '@shared/protocol';
  *
  * 1. Each input frame is tagged with an incrementing `seq` number and stored
  *    in the `pendingInputs` buffer before being sent to the server.
- * 2. Every DELTA message includes `lastSeq` — the last input sequence number
+ * 2. Every DELTA message includes `lastSeq` - the last input sequence number
  *    the server successfully applied for this client.
  * 3. On receiving DELTA, we:
  *    a. Snap the local player position to the server-authoritative value.
@@ -29,14 +29,16 @@ export class Reconciler {
   /** Entity ID of the local player. Set by game.ts after spawn. */
   localEntityId: number | null = null;
 
-  /** Threshold (px) below which we skip correction entirely (rounding noise). */
-  private static readonly CORRECTION_THRESHOLD = 4;
+  /** Threshold (px) below which we skip correction entirely (rounding noise).
+   *  Set high enough to absorb the inherent divergence between per-frame client
+   *  prediction and per-tick server simulation (non-linear accel model). */
+  private static readonly CORRECTION_THRESHOLD = 8;
 
   /** Above this distance, hard-snap instead of blending (teleport / major desync). */
   private static readonly HARD_SNAP_THRESHOLD = 100;
 
   /** Visual offset that smooths out corrections over multiple render frames.
-   *  Applied to camera target only — physics position stays clean for prediction. */
+   *  Applied to camera target only - physics position stays clean for prediction. */
   smoothX = 0;
   smoothY = 0;
 
@@ -110,7 +112,7 @@ export class Reconciler {
 
     // Step 5: compute smoothing offset (difference between old visual and new physics)
     if (err >= Reconciler.HARD_SNAP_THRESHOLD) {
-      // Large desync (teleport) — no smoothing, snap immediately
+      // Large desync (teleport) - no smoothing, snap immediately
       this.smoothX = 0;
       this.smoothY = 0;
     } else {
@@ -140,7 +142,7 @@ export class Reconciler {
 
   /**
    * Apply a server entity snapshot to the world (for remote players / enemies).
-   * Skips the local player entity — that is handled by applyDelta.
+   * Skips the local player entity - that is handled by applyDelta.
    */
   applyRemote(world: World, snap: EntitySnapshot): void {
     if (snap.entityId === this.localEntityId) return;

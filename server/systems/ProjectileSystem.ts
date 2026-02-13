@@ -42,7 +42,7 @@ export class ProjectileSystem {
     const destroyed: number[] = [];
 
     const projectiles = world.query(C.Projectile, C.Position, C.Velocity);
-    // Query potential targets once (not per-projectile) — O(P+E) instead of O(P*E)
+    // Query potential targets once (not per-projectile) - O(P+E) instead of O(P*E)
     const targets = world.query(C.Position, C.Health);
 
     for (const projId of projectiles) {
@@ -61,7 +61,7 @@ export class ProjectileSystem {
       pos.x += vel.vx * dt;
       pos.y += vel.vy * dt;
 
-      // Wall collision (solid tiles only — projectiles fly over water)
+      // Wall collision (solid tiles only - projectiles fly over water)
       if (this.isSolidTile(pos.x, pos.y)) {
         destroyed.push(projId);
         continue;
@@ -86,7 +86,7 @@ export class ProjectileSystem {
         // Skip the owner entity (can't shoot yourself)
         if (targetId === proj.ownerId) continue;
 
-        // Skip downed players — they're already at 0 HP
+        // Skip downed players - they're already at 0 HP
         if (world.hasComponent(targetId, C.Downed)) continue;
 
         const tgtPos = world.getComponent<PositionComponent>(targetId, C.Position)!;
@@ -109,7 +109,7 @@ export class ProjectileSystem {
         if (def) damage = Math.max(0, Math.round((damage - def.flat) * (1 - def.percent)));
         hp.current = Math.max(0, hp.current - damage);
 
-        // Knockback — direction from projectile to target
+        // Knockback - direction from projectile to target
         let knockbackVx = 0;
         let knockbackVy = 0;
         if (RANGED_KNOCKBACK > 0 && dist > 0) {
@@ -126,7 +126,7 @@ export class ProjectileSystem {
         if (hp.current <= 0) deaths.push(targetId);
 
         hitSomething = true;
-        break; // No piercing — first hit destroys the projectile
+        break; // No piercing - first hit destroys the projectile
       }
 
       if (hitSomething) {

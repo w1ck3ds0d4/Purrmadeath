@@ -1,5 +1,5 @@
 // ─── Action enum ──────────────────────────────────────────────────────────────
-// Abstract intent — physical key → Action so rebinding and gamepad support
+// Abstract intent - physical key → Action so rebinding and gamepad support
 // require changes only to the DEFAULT_BINDINGS table, not any game system.
 
 export enum Action {
@@ -13,9 +13,6 @@ export enum Action {
   Pause,
   WeaponSlot1,
   WeaponSlot2,
-  DebugSpawnEnemies,
-  DebugWaveSkip,
-  DebugWavePause,
 }
 
 // One or more key strings per action (Set.has is O(1)).
@@ -24,15 +21,12 @@ const DEFAULT_BINDINGS: Readonly<Record<Action, readonly string[]>> = {
   [Action.MoveDown]:           ['s', 'ArrowDown'],
   [Action.MoveLeft]:           ['a', 'ArrowLeft'],
   [Action.MoveRight]:          ['d', 'ArrowRight'],
-  [Action.Interact]:           ['e', 'f'],
+  [Action.Interact]:           ['f'],
   [Action.Attack]:             ['MouseLeft'],
   [Action.Sprint]:             ['Shift'],
   [Action.Pause]:              ['Escape'],
   [Action.WeaponSlot1]:        ['1'],
   [Action.WeaponSlot2]:        ['2'],
-  [Action.DebugSpawnEnemies]:  ['F5'],
-  [Action.DebugWaveSkip]:      ['F6'],
-  [Action.DebugWavePause]:     ['F7'],
 };
 
 export class InputManager {

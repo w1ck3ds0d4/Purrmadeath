@@ -2,7 +2,7 @@
 // The World is the single source of truth for all game state.
 // Both the server (canonical) and client (predicted / reconciled) use the same class.
 //
-// Design: sparse-set via nested Maps — simple, serializable, good enough for
+// Design: sparse-set via nested Maps - simple, serializable, good enough for
 // up to ~5 000 entities. If profiling shows a bottleneck, migrate hot component
 // types to typed arrays; the public API stays the same.
 
@@ -57,7 +57,7 @@ export class World {
     return this.entities.has(id);
   }
 
-  /** All living entity IDs (read-only view — do not mutate). */
+  /** All living entity IDs (read-only view - do not mutate). */
   get allEntities(): ReadonlySet<EntityId> {
     return this.entities;
   }
@@ -95,7 +95,7 @@ export class World {
 
   /**
    * Return all entities that have ALL the listed component types.
-   * Returns a snapshot array — safe to iterate while destroying entities.
+   * Returns a snapshot array - safe to iterate while destroying entities.
    *
    * Example:
    *   for (const id of world.query('Position', 'Velocity')) {
@@ -142,7 +142,7 @@ export class World {
   }
 
   /**
-   * Apply a partial delta — only the entities/components that changed.
+   * Apply a partial delta - only the entities/components that changed.
    * Used for incremental server → client sync each tick.
    * Entities in the delta that don't exist yet are created automatically.
    */

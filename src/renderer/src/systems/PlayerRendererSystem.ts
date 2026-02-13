@@ -34,7 +34,7 @@ const ITEM_DROP_COLORS: Record<string, number> = {
 // Duration of the white hit-flash in seconds
 const HIT_FLASH_DURATION = 0.15;
 // Duration of the attack arc animation in seconds
-const ARC_DURATION = 0.22;
+const ARC_DURATION = 0.3;
 // Facing triangle dimensions (local player only)
 const TRI_DIST = PLAYER_RADIUS + 2; // center of triangle from entity center
 const TRI_SIZE = 6;                 // half-width of triangle base
@@ -124,6 +124,8 @@ export class PlayerRendererSystem {
     localEntityId: number | null = null,
     localFacing: number | null = null,
     dt = 0,
+    smoothX = 0,
+    smoothY = 0,
   ): void {
     // Collect all renderable entities: players, enemies, portals, resources, item drops
     const playerIds = new Set(world.query(C.Position, C.PlayerIndex));
@@ -227,16 +229,17 @@ export class PlayerRendererSystem {
         const rFlashT = Math.min(1, rFlash / HIT_FLASH_DURATION);
         const bodyColor = rFlashT > 0 ? lerpColor(colors.body, 0xffffff, rFlashT * 0.6) : colors.body;
 
-        // Outer body
-        gfx.circle(0, 0, rr);
+        // Outer body (square)
+        gfx.rect(-rr, -rr, rr * 2, rr * 2);
         gfx.fill({ color: bodyColor, alpha: 0.9 });
 
-        // Inner core
-        gfx.circle(0, 0, rr * 0.45);
+        // Inner core (square)
+        const cr = rr * 0.45;
+        gfx.rect(-cr, -cr, cr * 2, cr * 2);
         gfx.fill({ color: colors.core, alpha: 0.8 });
 
-        // Outline
-        gfx.circle(0, 0, rr);
+        // Outline (square)
+        gfx.rect(-rr, -rr, rr * 2, rr * 2);
         gfx.stroke({ color: 0x000000, alpha: 0.35, width: 1.5 });
 
         // Health bar (only show if damaged)
@@ -377,7 +380,13 @@ export class PlayerRendererSystem {
         }
       }
 
-      gfx.position.set(pos.x, pos.y);
+      // Apply smooth offset to local player sprite so corrections don't cause
+      // visible backward jerks (the camera already uses the same offset).
+      if (id === localEntityId) {
+        gfx.position.set(pos.x + smoothX, pos.y + smoothY);
+      } else {
+        gfx.position.set(pos.x, pos.y);
+      }
     }
   }
 

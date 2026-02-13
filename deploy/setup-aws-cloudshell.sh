@@ -33,7 +33,7 @@ echo "AMI: $AMI_ID"
 # ── Create key pair (saves .pem to CloudShell home) ──────────────────────────
 
 if aws ec2 describe-key-pairs --key-names "$KEY_NAME" --region "$REGION" >/dev/null 2>&1; then
-  echo "Key pair '$KEY_NAME' already exists — skipping creation."
+  echo "Key pair '$KEY_NAME' already exists - skipping creation."
 else
   echo "Creating key pair '$KEY_NAME'..."
   aws ec2 create-key-pair \
@@ -85,7 +85,7 @@ cat > /tmp/purrmadeath-userdata.sh <<'USERDATA'
 set -euo pipefail
 exec > >(tee /var/log/user-data.log) 2>&1
 
-echo "=== Purrmadeath EC2 init (Phase 1) — $(date) ==="
+echo "=== Purrmadeath EC2 init (Phase 1) - $(date) ==="
 
 dnf update -y
 dnf install -y git
@@ -180,7 +180,7 @@ FINISH
 
 chmod +x /opt/finish-setup.sh
 
-echo "=== Phase 1 complete — $(date) ==="
+echo "=== Phase 1 complete - $(date) ==="
 echo ""
 echo "Next steps:"
 echo "  1. Copy the deploy key above"

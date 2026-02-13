@@ -18,9 +18,9 @@ import {
  *
  * @param world       The ECS world to add the entity to.
  * @param generator   Used to look up tile walkability when finding the spawn point.
- * @param playerIndex Slot 0–3 — determines player color and HUD position.
+ * @param playerIndex Slot 0–3 - determines player color and HUD position.
  * @param spawnPos    Optional override position (world pixels). When provided, skips
- *                    the spiral search — the server uses this to pass canonical positions.
+ *                    the spiral search - the server uses this to pass canonical positions.
  * @returns The new entity ID.
  */
 export function spawnPlayer(

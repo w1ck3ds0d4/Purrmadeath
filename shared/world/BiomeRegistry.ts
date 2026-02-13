@@ -8,7 +8,7 @@ export enum BiomeId {
   Desert    = 2,
   Grassland = 3,
   Forest    = 4,
-  Highland  = 5, // cold uplands — tundra + stone
+  Highland  = 5, // cold uplands - tundra + stone
   Cave      = 6, // dark stone biome at mid-high elevations
   Mountain  = 7, // impassable peaks
 }

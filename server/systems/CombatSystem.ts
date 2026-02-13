@@ -8,7 +8,7 @@ import {
   KnockbackReceiverComponent,
   AttackCooldownComponent,
 } from '@shared/components';
-import { MELEE_RANGE, MELEE_ARC, MELEE_DAMAGE, MELEE_KNOCKBACK } from '@shared/constants';
+import { MELEE_RANGE, MELEE_ARC, MELEE_DAMAGE, MELEE_KNOCKBACK, TICK_MS } from '@shared/constants';
 
 export interface HitResult {
   sourceId: number;
@@ -28,13 +28,13 @@ export interface MeleeOverrides {
 /**
  * Server-authoritative combat system.
  *
- * processMeleeAttack — called when a player or enemy attacks.
+ * processMeleeAttack - called when a player or enemy attacks.
  *   - Enforces AttackCooldown (drops the request if still on cooldown).
  *   - Checks all targets in a 120° arc within range.
  *   - Applies damage (flat + percent Defense reduction) and knockback.
  *   - Returns hit results (for HIT broadcast) and dead entity IDs.
  *
- * update — called each tick to tick down cooldowns.
+ * update - called each tick to tick down cooldowns.
  */
 export class CombatSystem {
   /** Tick down all attack cooldowns. */
@@ -68,9 +68,9 @@ export class CombatSystem {
     const meleeDamage    = overrides?.damage    ?? MELEE_DAMAGE;
     const meleeKnockback = overrides?.knockback ?? MELEE_KNOCKBACK;
 
-    // Enforce cooldown
+    // Enforce cooldown (one-tick tolerance for client/server timing drift)
     const cd = world.getComponent<AttackCooldownComponent>(sourceId, C.AttackCooldown);
-    if (cd && cd.remaining > 0) return { hits, deaths };
+    if (cd && cd.remaining > TICK_MS / 1000) return { hits, deaths };
 
     const srcPos = world.getComponent<PositionComponent>(sourceId, C.Position);
     if (!srcPos) return { hits, deaths };
@@ -101,7 +101,7 @@ export class CombatSystem {
       const tgtFaction = world.getComponent<FactionComponent>(targetId, C.Faction);
       if (srcFaction && tgtFaction && srcFaction.type === tgtFaction.type) continue;
 
-      // Skip downed players — they're already at 0 HP
+      // Skip downed players - they're already at 0 HP
       if (world.hasComponent(targetId, C.Downed)) continue;
 
       // Enemies don't attack portals
@@ -113,7 +113,7 @@ export class CombatSystem {
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist > meleeRange || dist === 0) continue;
 
-      // Arc check — must be within ±60° of facing
+      // Arc check - must be within ±60° of facing
       const angleToTarget = Math.atan2(dy, dx);
       let diff = Math.abs(angleToTarget - facing);
       if (diff > Math.PI) diff = 2 * Math.PI - diff;
@@ -126,7 +126,7 @@ export class CombatSystem {
       if (def) dmg = Math.max(0, Math.round((dmg - def.flat) * (1 - def.percent)));
       hp.current = Math.max(0, hp.current - dmg);
 
-      // Knockback impulse — direction from attacker to target
+      // Knockback impulse - direction from attacker to target
       let knockbackVx = 0;
       let knockbackVy = 0;
       if (meleeKnockback > 0) {

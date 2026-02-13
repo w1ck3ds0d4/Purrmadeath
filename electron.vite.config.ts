@@ -27,7 +27,7 @@ export default defineConfig({
     },
   },
 
-  // --- Renderer process (browser context — Pixi.js, game logic) ---
+  // --- Renderer process (browser context - Pixi.js, game logic) ---
   renderer: {
     root: 'src/renderer',
     server: {

@@ -45,7 +45,8 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             cd /opt/purrmadeath
-            sudo -u purrmadeath git pull
+            sudo -u purrmadeath git fetch origin
+            sudo -u purrmadeath git reset --hard origin/main
             sudo -u purrmadeath npm install --include=dev
             sudo systemctl restart purrmadeath-server
             echo "=== Server updated ==="

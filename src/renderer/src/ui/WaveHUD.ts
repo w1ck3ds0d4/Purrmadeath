@@ -63,7 +63,7 @@ export class WaveHUD {
     this.render();
   }
 
-  /** Called when WAVE_TIMER_SYNC arrives — authoritative server correction. */
+  /** Called when WAVE_TIMER_SYNC arrives - authoritative server correction. */
   onTimerSync(waveNumber: number, remaining: number, paused: boolean): void {
     this.paused = paused;
     this.waveNumber = waveNumber;
@@ -75,7 +75,7 @@ export class WaveHUD {
     this.render();
   }
 
-  /** Tick timers — call each frame with frame delta. */
+  /** Tick timers - call each frame with frame delta. */
   update(dt: number): void {
     if (this.phase === 'prep') {
       if (!this.paused) this.prepTimer = Math.max(0, this.prepTimer - dt);

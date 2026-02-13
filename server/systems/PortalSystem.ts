@@ -9,7 +9,7 @@ export interface PortalSpawnRequest {
 
 /**
  * Ticks portal spawn timers and emits spawn requests.
- * Does NOT create enemy entities itself — GameSession handles that
+ * Does NOT create enemy entities itself - GameSession handles that
  * so it can reuse spawnEnemy() and broadcast correctly.
  */
 export class PortalSystem {

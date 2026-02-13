@@ -1,7 +1,7 @@
 /**
  * Camera controls the view into the game world.
  *
- * Normal mode: smoothly follows (targetX, targetY) — set by the player entity in Phase 2.
+ * Normal mode: smoothly follows (targetX, targetY) - set by the player entity in Phase 2.
  * Look-around mode (hold ALT): mouse movement shifts the view offset so players can
  *   scout ahead without moving. Releasing ALT eases the offset back to center.
  *
@@ -44,7 +44,7 @@ export class Camera {
    * Lerps position toward target and eases the look-around offset back to zero.
    */
   update(dt: number): void {
-    // Smooth follow — speed 8 feels responsive without being instant
+    // Smooth follow - speed 8 feels responsive without being instant
     const followSpeed = 8;
     const t = Math.min(followSpeed * dt, 1);
     this.x += (this.targetX - this.x) * t;

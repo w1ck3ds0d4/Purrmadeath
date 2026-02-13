@@ -1,5 +1,4 @@
-import { Container, Graphics, Text } from 'pixi.js';
-import { CHUNK_SIZE, TILE_SIZE } from '@shared/constants';
+import { CHUNK_SIZE, TILE_SIZE, TICK_RATE } from '@shared/constants';
 import type { Camera } from '../render/Camera';
 
 export interface NetStats {
@@ -8,63 +7,166 @@ export interface NetStats {
   msgsPerSec: number;
 }
 
+export interface ServerStats {
+  wave: number;
+  enemyCount: number;
+  portalCount: number;
+  playerCount: number;
+}
+
 export interface DebugInfo {
   camera: Camera;
   loadedChunks: number;
+  entityCount: number;
   biome: string;
   seed: number;
-  /** Present only when connected to a server. */
   net?: NetStats;
+  server?: ServerStats;
 }
 
+type CheatHandler = (cmd: string, args: string[]) => void;
+type ActiveView = 'core' | 'net' | 'server' | 'all' | 'logs' | 'help' | null;
+
+const MAX_LOG_ENTRIES = 100;
+
 /**
- * DebugOverlay renders a HUD panel with real-time diagnostic info.
- *
- * Hidden by default. Press F4 to toggle.
- * Always sits on top of the world (added last to stage).
+ * HTML-based debug console toggled with F4.
+ * Type commands like /core, /net, /server, /all, /logs, /help.
  */
 export class DebugOverlay {
-  private container: Container;
-  private label: Text;
-  private bg: Graphics;
+  private el: HTMLElement;
+  private statsEl: HTMLElement;
+  private inputEl: HTMLInputElement;
+  private visible = false;
+  private activeView: ActiveView = null;
+  private cheatHandler: CheatHandler | null = null;
 
   // FPS tracking
   private frameCount = 0;
   private elapsed = 0;
   private fps = 0;
 
-  constructor(stage: Container) {
-    this.container = new Container();
-    this.container.visible = false; // off by default — F4 to show
-    stage.addChild(this.container);
+  // Log buffer
+  private logEntries: string[] = [];
 
-    // Semi-transparent background panel for readability
-    this.bg = new Graphics();
-    this.container.addChild(this.bg);
+  constructor() {
+    this.el = document.createElement('div');
+    this.el.id = 'debug-console';
+    this.el.style.cssText = [
+      'position: absolute',
+      'top: 8px',
+      'left: 8px',
+      'z-index: 40',
+      'display: none',
+      'flex-direction: column',
+      'max-width: 420px',
+      'max-height: 50vh',
+      'pointer-events: auto',
+      'user-select: none',
+    ].join('; ');
 
-    this.label = new Text({
-      text: '',
-      style: {
-        fontSize: 12,
-        fill: 0x00ff88,
-        fontFamily: 'monospace',
-        lineHeight: 18,
-      },
+    // Stats output
+    this.statsEl = document.createElement('pre');
+    this.statsEl.style.cssText = [
+      'margin: 0',
+      'padding: 8px 10px',
+      'background: rgba(0, 0, 0, 0.75)',
+      'color: #00ff88',
+      'font-family: monospace',
+      'font-size: 11px',
+      'line-height: 16px',
+      'border-radius: 6px 6px 0 0',
+      'border: 1px solid rgba(0, 255, 136, 0.15)',
+      'border-bottom: none',
+      'overflow-y: auto',
+      'max-height: 40vh',
+      'white-space: pre-wrap',
+    ].join('; ');
+    this.el.appendChild(this.statsEl);
+
+    // Input row
+    const inputRow = document.createElement('div');
+    inputRow.style.cssText = [
+      'display: flex',
+      'align-items: center',
+      'background: rgba(0, 0, 0, 0.85)',
+      'border-radius: 0 0 6px 6px',
+      'border: 1px solid rgba(0, 255, 136, 0.15)',
+      'padding: 4px 8px',
+    ].join('; ');
+
+    const prompt = document.createElement('span');
+    prompt.textContent = '>';
+    prompt.style.cssText = 'color: #00ff88; font-family: monospace; font-size: 12px; margin-right: 6px;';
+    inputRow.appendChild(prompt);
+
+    this.inputEl = document.createElement('input');
+    this.inputEl.type = 'text';
+    this.inputEl.spellcheck = false;
+    this.inputEl.autocomplete = 'off';
+    this.inputEl.placeholder = 'type /help';
+    this.inputEl.style.cssText = [
+      'flex: 1',
+      'background: transparent',
+      'border: none',
+      'outline: none',
+      'color: #00ff88',
+      'font-family: monospace',
+      'font-size: 12px',
+      'caret-color: #00ff88',
+    ].join('; ');
+    this.inputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        this.executeCommand(this.inputEl.value.trim());
+        this.inputEl.value = '';
+      }
+      // Stop key events from propagating to game input while typing
+      e.stopPropagation();
     });
-    this.label.position.set(8, 6);
-    this.container.addChild(this.label);
+    inputRow.appendChild(this.inputEl);
+    this.el.appendChild(inputRow);
 
-    // F4 toggles visibility
+    document.getElementById('overlay')!.appendChild(this.el);
+
+    // F4 toggles console
     document.addEventListener('keydown', (e) => {
       if (e.key === 'F4') {
         e.preventDefault();
-        this.container.visible = !this.container.visible;
+        this.toggle();
       }
     });
   }
 
+  get isOpen(): boolean {
+    return this.visible;
+  }
+
+  onCheat(handler: CheatHandler): void {
+    this.cheatHandler = handler;
+  }
+
+  log(msg: string): void {
+    const time = new Date();
+    const ts = `${String(time.getHours()).padStart(2, '0')}:${String(time.getMinutes()).padStart(2, '0')}:${String(time.getSeconds()).padStart(2, '0')}`;
+    this.logEntries.push(`[${ts}] ${msg}`);
+    if (this.logEntries.length > MAX_LOG_ENTRIES) {
+      this.logEntries.shift();
+    }
+  }
+
+  toggle(): void {
+    this.visible = !this.visible;
+    this.el.style.display = this.visible ? 'flex' : 'none';
+    if (this.visible) {
+      this.inputEl.focus();
+    } else {
+      this.inputEl.blur();
+    }
+  }
+
   update(dt: number, info: DebugInfo): void {
-    // Always track FPS so it's accurate the moment the overlay is opened
+    // Always track FPS
     this.frameCount++;
     this.elapsed += dt;
     if (this.elapsed >= 0.5) {
@@ -73,48 +175,135 @@ export class DebugOverlay {
       this.elapsed = 0;
     }
 
-    if (!this.container.visible) return;
+    if (!this.visible || this.activeView === null) return;
 
-    const { camera, loadedChunks, biome, seed } = info;
-    const chunkPixels = CHUNK_SIZE * TILE_SIZE;
-    const cx = Math.floor(camera.x / chunkPixels);
-    const cy = Math.floor(camera.y / chunkPixels);
+    const lines: string[] = [];
 
-    const lines: string[] = [
-      `FPS:    ${this.fps}`,
-      `Pos:    (${Math.round(camera.x)}, ${Math.round(camera.y)})`,
-      `Chunk:  (${cx}, ${cy})`,
-      `Biome:  ${biome}`,
-      `Chunks: ${loadedChunks}`,
-      `Seed:   ${seed}`,
-    ];
-
-    if (info.net) {
-      const { rtt, packetLoss, msgsPerSec } = info.net;
+    if (this.activeView === 'core' || this.activeView === 'all') {
+      const { camera, loadedChunks, entityCount, biome, seed } = info;
+      const chunkPixels = CHUNK_SIZE * TILE_SIZE;
+      const cx = Math.floor(camera.x / chunkPixels);
+      const cy = Math.floor(camera.y / chunkPixels);
       lines.push(
-        ``,
-        `Ping:   ${rtt} ms`,
-        `Loss:   ${packetLoss}%`,
-        `Svr:    ${msgsPerSec} msg/s`,
+        '── Core ──',
+        `FPS:      ${this.fps}`,
+        `Entities: ${entityCount}`,
+        `Pos:      (${Math.round(camera.x)}, ${Math.round(camera.y)})`,
+        `Chunk:    (${cx}, ${cy})`,
+        `Biome:    ${biome}`,
+        `Chunks:   ${loadedChunks}`,
+        `Seed:     ${seed}`,
       );
     }
 
-    lines.push(
-      ``,
-      `── Shortcuts ──`,
-      `[F4]  Debug panel`,
-      `[F5]  Spawn enemies`,
-      `[F6]  Skip wave prep`,
-      `[F7]  Pause wave timer`,
-      `[Esc] Pause vote`,
-    );
+    if (this.activeView === 'net' || this.activeView === 'all') {
+      if (lines.length > 0) lines.push('');
+      if (info.net) {
+        const { rtt, packetLoss, msgsPerSec } = info.net;
+        lines.push(
+          '── Network ──',
+          `RTT:       ${rtt} ms`,
+          `Loss:      ${packetLoss}%`,
+          `Svr msg/s: ${msgsPerSec}`,
+          `Tick rate: ${TICK_RATE} Hz`,
+        );
+      } else {
+        lines.push('── Network ──', 'Not connected');
+      }
+    }
 
-    this.label.text = lines.join('\n');
+    if (this.activeView === 'server' || this.activeView === 'all') {
+      if (lines.length > 0) lines.push('');
+      if (info.server) {
+        const { wave, enemyCount, portalCount, playerCount } = info.server;
+        lines.push(
+          '── Server ──',
+          `Wave:     ${wave}`,
+          `Enemies:  ${enemyCount}`,
+          `Portals:  ${portalCount}`,
+          `Players:  ${playerCount}`,
+        );
+      } else {
+        lines.push('── Server ──', 'No active session');
+      }
+    }
 
-    // Resize the background to fit the text
-    const pad = 8;
-    this.bg.clear();
-    this.bg.rect(0, 0, this.label.width + pad * 2, this.label.height + pad + 6);
-    this.bg.fill({ color: 0x000000, alpha: 0.55 });
+    if (this.activeView === 'logs') {
+      lines.push('── Logs ──');
+      if (this.logEntries.length === 0) {
+        lines.push('(no log entries)');
+      } else {
+        const start = Math.max(0, this.logEntries.length - 30);
+        for (let i = start; i < this.logEntries.length; i++) {
+          lines.push(this.logEntries[i]);
+        }
+      }
+    }
+
+    if (this.activeView === 'help') {
+      lines.push(
+        '── Commands ──',
+        '/core       Core stats (FPS, pos, biome)',
+        '/net        Network stats (RTT, loss)',
+        '/server     Server stats (wave, enemies)',
+        '/all        Show everything',
+        '/logs       Game event log',
+        '/spawn [n]  Spawn n enemies (default 5)',
+        '/skipwave   Skip wave prep timer',
+        '/pausewave  Pause/resume wave timer',
+        '/clear      Close stats panel',
+        '/help       This help text',
+      );
+    }
+
+    this.statsEl.textContent = lines.join('\n');
+
+    // Auto-scroll for logs view
+    if (this.activeView === 'logs') {
+      this.statsEl.scrollTop = this.statsEl.scrollHeight;
+    }
+  }
+
+  private executeCommand(raw: string): void {
+    if (!raw) return;
+    if (!raw.startsWith('/')) raw = '/' + raw;
+    const parts = raw.split(/\s+/);
+    const cmd = parts[0].toLowerCase();
+    const args = parts.slice(1);
+
+    switch (cmd) {
+      case '/core':
+        this.activeView = 'core';
+        break;
+      case '/net':
+        this.activeView = 'net';
+        break;
+      case '/server':
+        this.activeView = 'server';
+        break;
+      case '/all':
+        this.activeView = 'all';
+        break;
+      case '/logs':
+        this.activeView = 'logs';
+        break;
+      case '/help':
+        this.activeView = 'help';
+        break;
+      case '/clear':
+        this.activeView = null;
+        this.statsEl.textContent = '';
+        break;
+      case '/spawn':
+      case '/skipwave':
+      case '/pausewave':
+        this.cheatHandler?.(cmd, args);
+        this.log(`Executed: ${raw}`);
+        break;
+      default:
+        this.log(`Unknown command: ${cmd}`);
+        this.activeView = 'logs';
+        break;
+    }
   }
 }

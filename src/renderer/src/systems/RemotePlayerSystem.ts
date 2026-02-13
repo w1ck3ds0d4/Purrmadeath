@@ -18,18 +18,21 @@ import type { SnapshotMessage, DeltaMessage, EntitySnapshot } from '@shared/prot
  * Remote entity positions are **interpolated** toward the server-reported target
  * so movement looks smooth at 60 fps even though the server sends updates at 20 TPS.
  *
- * The local player entity is skipped here — Reconciler handles it.
+ * The local player entity is skipped here - Reconciler handles it.
  */
 
-/** Speed of the lerp toward the server target. Higher = snappier, lower = smoother. */
-const INTERP_SPEED = 18;
+/** Speed of the lerp toward the extrapolated target. Higher = snappier, lower = smoother. */
+const INTERP_SPEED = 25;
 
 /** Hard-snap if entity is farther than this from its target (teleport / first spawn). */
 const SNAP_DIST = 200;
 
+/** Max seconds of velocity extrapolation - caps prediction to avoid overshooting on lag spikes. */
+const MAX_EXTRAP = 0.15;
+
 export class RemotePlayerSystem {
-  /** Server-reported target positions keyed by entity ID. */
-  private targets = new Map<number, { x: number; y: number }>();
+  /** Server-reported target positions + velocities keyed by entity ID. */
+  private targets = new Map<number, { x: number; y: number; vx: number; vy: number; age: number }>();
 
   constructor(private readonly localEntityId: () => number | null) {}
 
@@ -71,18 +74,24 @@ export class RemotePlayerSystem {
       const pos = world.getComponent<PositionComponent>(id, C.Position);
       if (!pos) continue;
 
-      const dx = target.x - pos.x;
-      const dy = target.y - pos.y;
+      // Advance age (time since last server update) for extrapolation
+      target.age += dt;
+
+      // Extrapolated position: predict where entity IS right now using velocity
+      const extrapTime = Math.min(target.age, MAX_EXTRAP);
+      const extX = target.x + target.vx * extrapTime;
+      const extY = target.y + target.vy * extrapTime;
+
+      const dx = extX - pos.x;
+      const dy = extY - pos.y;
       const dist = dx * dx + dy * dy;
 
       if (dist < 0.25) {
-        // Close enough — snap to avoid perpetual creep
-        pos.x = target.x;
-        pos.y = target.y;
+        pos.x = extX;
+        pos.y = extY;
       } else if (dist > SNAP_DIST * SNAP_DIST) {
-        // Too far — hard snap (teleport)
-        pos.x = target.x;
-        pos.y = target.y;
+        pos.x = extX;
+        pos.y = extY;
       } else {
         pos.x += dx * t;
         pos.y += dy * t;
@@ -98,8 +107,8 @@ export class RemotePlayerSystem {
   // ── Helpers ─────────────────────────────────────────────────────────────────
 
   private upsertEntity(world: World, snap: EntitySnapshot, hardSnap: boolean): void {
-    // Store the target position for interpolation
-    this.targets.set(snap.entityId, { x: snap.x, y: snap.y });
+    // Store target position + velocity for extrapolation
+    this.targets.set(snap.entityId, { x: snap.x, y: snap.y, vx: snap.vx, vy: snap.vy, age: 0 });
 
     if (!world.hasEntity(snap.entityId)) {
       world.createEntityWithId(snap.entityId);

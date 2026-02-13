@@ -5,7 +5,7 @@ import { TICK_MS } from '@shared/constants';
  *
  * Uses setTimeout with drift compensation so ticks don't accumulate latency
  * over time. If a tick takes longer than TICK_MS, the next tick fires immediately
- * (no catch-up spiral — we just accept the slowdown and log a warning).
+ * (no catch-up spiral - we just accept the slowdown and log a warning).
  */
 export class GameLoop {
   private running = false;
@@ -33,7 +33,9 @@ export class GameLoop {
     if (!this.running) return;
 
     const now = Date.now();
-    const dt = (now - this.lastTick) / 1_000; // seconds
+    // Fixed dt keeps movement math deterministic and aligned with client replay.
+    // Wall-clock drift is handled by the setTimeout compensation below.
+    const dt = TICK_MS / 1_000;
     this.lastTick = now;
     this.tickCount++;
 

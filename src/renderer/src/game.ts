@@ -14,8 +14,13 @@ import {
   PLAYER_STAMINA_REGEN,
   PLAYER_BASE_SPEED,
   MELEE_COOLDOWN,
+  MELEE_RANGE,
+  MELEE_ARC,
   RANGED_COOLDOWN,
+  ENEMY_RADIUS,
+  PROJECTILE_RADIUS,
   GAME_VERSION,
+  TICK_MS,
 } from '@shared/constants';
 import type {
   HandshakeAckMessage,
@@ -46,7 +51,7 @@ import type {
 } from '@shared/protocol';
 
 import { World } from '@shared/ecs/World';
-import { C, PositionComponent } from '@shared/components';
+import { C, PositionComponent, FactionComponent, HealthComponent } from '@shared/components';
 
 import { InputManager, Action } from './input/InputManager';
 import { GameStateManager, GameState } from './state/GameStateManager';
@@ -66,12 +71,14 @@ import { WaveHUD } from './ui/WaveHUD';
 import { ResourceHUD } from './ui/ResourceHUD';
 import { DeathOverlay } from './ui/DeathOverlay';
 import { GameOverOverlay } from './ui/GameOverOverlay';
+import { UpdateBanner } from './ui/UpdateBanner';
+import { ChatOverlay } from './ui/ChatOverlay';
 
 // Slow world pan behind menus (world pixels per millisecond)
 const BG_PAN_X = 0.05;
 const BG_PAN_Y = 0.025;
 
-// Weapon slot tables — indexed by selectedWeapon (0 = melee, 1 = ranged)
+// Weapon slot tables - indexed by selectedWeapon (0 = melee, 1 = ranged)
 const WEAPON_TYPES: readonly ('melee' | 'ranged')[] = ['melee', 'ranged'];
 const WEAPON_COOLDOWNS = [MELEE_COOLDOWN, RANGED_COOLDOWN] as const;
 
@@ -98,7 +105,7 @@ async function main(): Promise<void> {
   const projectileRenderer = new ProjectileRendererSystem(tileRenderer.worldContainer);
   const hud          = new HUD(renderer.stage);
   const weaponHotbar = new WeaponHotbar(renderer.stage);
-  const debug        = new DebugOverlay(renderer.stage);
+  const debug        = new DebugOverlay();
 
   // ── ECS world ───────────────────────────────────────────────────────────────
   const world = new World();
@@ -106,7 +113,7 @@ async function main(): Promise<void> {
   // ── Input ───────────────────────────────────────────────────────────────────
   const input = new InputManager();
 
-  // ── World generation — deferred until server seed arrives ──────────────────
+  // ── World generation - deferred until server seed arrives ──────────────────
   // Menu/lobby use a seed-0 generator for the animated background pan.
   const menuGenerator = new WorldGenerator(0);
   const menuChunks    = new ChunkManager(menuGenerator);
@@ -120,7 +127,7 @@ async function main(): Promise<void> {
   // ── Game systems ────────────────────────────────────────────────────────────
   const inputSystem   = new InputSystem(input);
   const staminaSystem = new StaminaSystem();
-  // MovementSystem depends on chunks — created when game starts
+  // MovementSystem depends on chunks - created when game starts
   let movementSystem: MovementSystem | null = null;
 
   // ── Multiplayer state ───────────────────────────────────────────────────────
@@ -150,6 +157,8 @@ async function main(): Promise<void> {
   let localDead     = false;
   let respawnTimer  = 0;
   let localGameOver = false;
+  let inputTickAccum = 0;
+  let lastServerStats: { wave: number; enemyCount: number; portalCount: number; playerCount: number } | undefined;
 
   document.addEventListener('mousemove', (e) => { mouseX = e.clientX; mouseY = e.clientY; });
 
@@ -165,6 +174,40 @@ async function main(): Promise<void> {
   const deathOverlay   = new DeathOverlay();
   const gameOverOverlay = new GameOverOverlay();
   gameOverOverlay.setOnMenu(() => stateMgr.transition(GameState.Menu));
+
+  const chatOverlay = new ChatOverlay();
+
+  const updateBanner = new UpdateBanner();
+  window.electronAPI?.onUpdateAvailable(() => updateBanner.showDownloading());
+  window.electronAPI?.onUpdateDownloaded(() => updateBanner.showReady());
+
+  // Wire in-game chat
+  chatOverlay.onSend((text) => net.send({ type: MessageType.CHAT, text }));
+
+  // Enter key opens chat during gameplay
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && stateMgr.current === GameState.Playing
+        && !chatOverlay.isOpen && !debug.isOpen
+        && !localDowned && !localDead && !localGameOver) {
+      e.preventDefault();
+      chatOverlay.show();
+    }
+  });
+
+  // Wire debug console cheat commands
+  debug.onCheat((cmd, args) => {
+    switch (cmd) {
+      case '/spawn':
+        net.send({ type: MessageType.DEBUG_SPAWN_ENEMIES, count: parseInt(args[0]) || 5 });
+        break;
+      case '/skipwave':
+        net.send({ type: MessageType.DEBUG_WAVE_SKIP });
+        break;
+      case '/pausewave':
+        net.send({ type: MessageType.DEBUG_WAVE_PAUSE });
+        break;
+    }
+  });
 
   // Configure dev/prod UI
   menuOverlay.setDevMode(isDev);
@@ -201,9 +244,10 @@ async function main(): Promise<void> {
     localGameOver = false;
     deathOverlay.hide();
     gameOverOverlay.hide();
+    chatOverlay.hide();
     resourceHUD.setResources(0, 0, 0, 0, 0);
     resourceHUD.hide();
-    // Transport stays alive — don't disconnect
+    // Transport stays alive - don't disconnect
     menuOverlay.setButtonsEnabled(transportReady);
     menuOverlay.setConnectionStatus(transportReady ? 'connected' : 'connecting');
   });
@@ -252,7 +296,7 @@ async function main(): Promise<void> {
   // ── Transport: HANDSHAKE_ACK (fires on each connect / reconnect) ──────────
   net.on(MessageType.HANDSHAKE_ACK, (msg) => {
     const ack = msg as HandshakeAckMessage;
-    console.log(`[Net] Connected — clientId: ${ack.clientId}, server v${ack.serverVersion}`);
+    console.log(`[Net] Connected - clientId: ${ack.clientId}, server v${ack.serverVersion}`);
 
     transportReady = true;
     menuOverlay.setConnectionStatus('connected');
@@ -282,10 +326,11 @@ async function main(): Promise<void> {
     transportReady = false;
     menuOverlay.setConnectionStatus('disconnected');
     menuOverlay.setButtonsEnabled(false);
+    debug.log('Connection lost');
 
     // If in a game session, return to menu (session state is lost)
     if (stateMgr.current !== GameState.Menu) {
-      console.warn('[Net] Connection lost — returning to menu');
+      console.warn('[Net] Connection lost - returning to menu');
       stateMgr.transition(GameState.Menu);
     }
   });
@@ -312,6 +357,7 @@ async function main(): Promise<void> {
     lobbyPlayers.push(pj.player);
     lobbyOverlay.updatePlayers(lobbyPlayers);
     lobbyOverlay.addChatMessage('→', `${pj.player.displayName} joined`);
+    debug.log(`Player joined: ${pj.player.displayName} (slot ${pj.player.slot})`);
   });
 
   net.on(MessageType.PLAYER_LEFT, (msg) => {
@@ -319,6 +365,7 @@ async function main(): Promise<void> {
     lobbyPlayers = lobbyPlayers.filter((p) => p.playerId !== pl.playerId);
     lobbyOverlay.updatePlayers(lobbyPlayers);
     lobbyOverlay.addChatMessage('←', `Player ${pl.slot + 1} left`);
+    debug.log(`Player left: slot ${pl.slot + 1}`);
   });
 
   net.on(MessageType.SNAPSHOT, (msg) => {
@@ -344,7 +391,7 @@ async function main(): Promise<void> {
       world.addComponent(localEntityId, C.Stamina,     { current: PLAYER_MAX_STAMINA, max: PLAYER_MAX_STAMINA, regenRate: PLAYER_STAMINA_REGEN, exhausted: false });
       world.addComponent(localEntityId, C.PlayerInput, { dx: 0, dy: 0, sprint: false });
 
-      // Snap camera — no lerp pop on first frame
+      // Snap camera - no lerp pop on first frame
       const pos = world.getComponent<PositionComponent>(localEntityId, C.Position)!;
       camera.x = pos.x; camera.y = pos.y;
       camera.targetX = pos.x; camera.targetY = pos.y;
@@ -357,9 +404,14 @@ async function main(): Promise<void> {
     if (stateMgr.current !== GameState.Playing) return;
     const delta = msg as DeltaMessage;
 
-    // Reconcile local player (snap-to-server + replay pending inputs)
+    // Capture server stats for debug console
+    if (delta.serverStats) lastServerStats = delta.serverStats;
+
+    // Reconcile local player (snap-to-server + replay pending inputs).
+    // Pass localEntityId so entity separation runs during replay - prevents
+    // walking through resource nodes when the reconciler replays movement.
     reconciler.applyDelta(world, delta, (replayDt) => {
-      movementSystem?.update(world, replayDt);
+      movementSystem?.update(world, replayDt, localEntityId ?? undefined);
     });
 
     // Apply remote entity updates
@@ -368,7 +420,7 @@ async function main(): Promise<void> {
 
   net.on(MessageType.ATTACK_PERFORMED, (msg) => {
     const ap = msg as AttackPerformedMessage;
-    // Skip local player — their arc is triggered immediately on input
+    // Skip local player - their arc is triggered immediately on input
     if (ap.sourceId !== localEntityId) {
       playerRenderer.notifyAttack(ap.sourceId, ap.facing);
     }
@@ -410,16 +462,20 @@ async function main(): Promise<void> {
   net.on(MessageType.CHAT, (msg) => {
     const chat = msg as ChatMessage;
     lobbyOverlay.addChatMessage(chat.displayName, chat.text);
+    chatOverlay.addMessage(chat.displayName, chat.slot, chat.text);
+    debug.log(`[Chat] ${chat.displayName}: ${chat.text}`);
   });
 
   net.on(MessageType.WAVE_START, (msg) => {
     const ws = msg as WaveStartMessage;
     waveHUD.onWaveStart(ws.waveNumber, ws.prepDuration);
+    debug.log(`Wave ${ws.waveNumber} started (prep: ${ws.prepDuration}s)`);
   });
 
   net.on(MessageType.WAVE_END, (msg) => {
     const we = msg as WaveEndMessage;
     waveHUD.onWaveEnd(we.waveNumber);
+    debug.log(`Wave ${we.waveNumber} cleared`);
   });
 
   net.on(MessageType.WAVE_TIMER_SYNC, (msg) => {
@@ -437,6 +493,7 @@ async function main(): Promise<void> {
     if (localGameOver) return;
     const pd = msg as PlayerDownedMessage;
     playerRenderer.notifyDowned(pd.entityId);
+    debug.log(`Player downed (entity ${pd.entityId})`);
     if (pd.entityId === localEntityId) {
       localDowned = true;
       deathOverlay.showDowned(pd.bleedTimer);
@@ -456,6 +513,7 @@ async function main(): Promise<void> {
     if (localGameOver) return;
     const pr = msg as PlayerRevivedMessage;
     playerRenderer.notifyRevived(pr.entityId);
+    debug.log(`Player revived (entity ${pr.entityId})`);
     if (pr.entityId === localEntityId) {
       localDowned = false;
       localDead   = false;
@@ -467,6 +525,7 @@ async function main(): Promise<void> {
     if (localGameOver) return;
     const pd = msg as PlayerDiedMessage;
     playerRenderer.notifyDeath(pd.entityId);
+    debug.log(`Player died (entity ${pd.entityId})`);
     if (pd.entityId === localEntityId) {
       localDowned = false;
       localDead   = true;
@@ -493,14 +552,16 @@ async function main(): Promise<void> {
   net.on(MessageType.PARTY_WIPE, (msg) => {
     if (localGameOver) return;
     const pw = msg as PartyWipeMessage;
+    debug.log(`Party wipe #${pw.wipeCount} - ${pw.outcome}`);
     if (pw.outcome === 'penalty') {
-      console.log(`[Game] Party wipe #${pw.wipeCount} — 25% resource penalty`);
+      console.log(`[Game] Party wipe #${pw.wipeCount} - 25% resource penalty`);
     }
   });
 
   net.on(MessageType.GAME_OVER, (msg) => {
     const go = msg as GameOverMessage;
-    console.log(`[Game] Game Over — reached wave ${go.waveReached}, reason: ${go.reason}`);
+    console.log(`[Game] Game Over - reached wave ${go.waveReached}, reason: ${go.reason}`);
+    debug.log(`Game Over - wave ${go.waveReached}, reason: ${go.reason}`);
     localGameOver = true;
     localDowned = false;
     localDead   = false;
@@ -516,6 +577,7 @@ async function main(): Promise<void> {
   net.on(MessageType.ERROR, (msg) => {
     const err = msg as unknown as { code: string; message: string };
     console.error(`[Net] Server error ${err.code}: ${err.message}`);
+    debug.log(`Error: ${err.code} - ${err.message}`);
     if (err.code === 'VERSION_MISMATCH') {
       menuOverlay.setConnectionStatus('disconnected');
       menuOverlay.setButtonsEnabled(false);
@@ -527,6 +589,7 @@ async function main(): Promise<void> {
   net.on(MessageType.SESSION_CLOSED, (msg) => {
     const closed = msg as unknown as { reason: string };
     console.warn(`[Net] Session closed: ${closed.reason}`);
+    debug.log(`Session closed: ${closed.reason}`);
     stateMgr.transition(GameState.Menu);
   });
 
@@ -571,7 +634,7 @@ async function main(): Promise<void> {
           if (isDev) {
             net.reconnectTo(`ws://${resolved.ip}:${SERVER_PORT}`);
           } else {
-            // In production, transport is fixed to the cloud server — just join with code
+            // In production, transport is fixed to the cloud server - just join with code
             joinSession('join', menuOverlay.displayName, value.toUpperCase());
           }
         })();
@@ -604,12 +667,12 @@ async function main(): Promise<void> {
 
   // ── Game loop ──────────────────────────────────────────────────────────────
   renderer.ticker.add((ticker) => {
-    const dt    = Math.min(ticker.deltaMS / 1000, 0.1); // cap at 100ms to prevent teleport on resume
+    const dt    = Math.min(ticker.deltaMS / 1000, 0.05); // cap at 50ms to reduce prediction divergence
     const state = stateMgr.current;
 
     // ESC: send pause vote to server (server decides when to pause/resume)
     if (input.isJustPressed(Action.Pause)) {
-      if (!localGameOver && (state === GameState.Playing || state === GameState.Paused)) {
+      if (!localGameOver && !chatOverlay.isOpen && (state === GameState.Playing || state === GameState.Paused)) {
         net.send({ type: MessageType.PAUSE_VOTE });
       }
     }
@@ -622,7 +685,7 @@ async function main(): Promise<void> {
 
     // Playing: local prediction + send input
     if (state === GameState.Playing && localEntityId !== null) {
-      const canAct = !localDowned && !localDead && !localGameOver;
+      const canAct = !localDowned && !localDead && !localGameOver && !chatOverlay.isOpen;
 
       // 1. Map keyboard → PlayerInput component (only local entity has it)
       if (canAct) inputSystem.update(world);
@@ -631,9 +694,16 @@ async function main(): Promise<void> {
       const inp = world.getComponent<{ dx: number; dy: number; sprint: boolean }>(localEntityId, C.PlayerInput)!;
       if (!canAct) { inp.dx = 0; inp.dy = 0; inp.sprint = false; }
 
-      // 3. Record for reconciliation + send to server
+      // 3. Record input every frame for accurate reconciler replay
       const seq = reconciler.recordInput(inp.dx, inp.dy, inp.sprint, dt);
-      net.send({ type: MessageType.INPUT, seq, dx: inp.dx, dy: inp.dy, sprint: inp.sprint, t: performance.now() });
+
+      // 4. Throttle network sends to match server tick rate (~30 Hz)
+      inputTickAccum += dt;
+      if (inputTickAccum >= TICK_MS / 1000) {
+        inputTickAccum -= TICK_MS / 1000;
+        if (inputTickAccum > TICK_MS / 1000) inputTickAccum = 0; // clamp after tab-away
+        net.send({ type: MessageType.INPUT, seq, dx: inp.dx, dy: inp.dy, sprint: inp.sprint, t: performance.now() });
+      }
 
       // 4. Predict locally + interpolate remote entities
       movementSystem?.update(world, dt, localEntityId);
@@ -641,7 +711,7 @@ async function main(): Promise<void> {
       remotePlayerSys.interpolate(world, dt);
       waveHUD.update(dt);
 
-      // 5. Render players — compute mouse-facing angle for local player
+      // 5. Render players - compute mouse-facing angle for local player
       const pos = world.getComponent<PositionComponent>(localEntityId, C.Position);
       let localFacing: number | null = null;
       if (pos) {
@@ -655,14 +725,32 @@ async function main(): Promise<void> {
       if (input.isJustPressed(Action.WeaponSlot1)) selectedWeapon = 0;
       if (input.isJustPressed(Action.WeaponSlot2)) selectedWeapon = 1;
 
-      // Attack: client-side cooldown mirrors server AttackCooldown so animation and
-      // damage are always in sync — no ghost swings during the cooldown window.
+      // Attack: client-side cooldown mirrors server AttackCooldown. Allow a small
+      // tolerance (one server tick) so the client doesn't silently miss an attack
+      // due to floating-point drift between variable-rate client and fixed-rate server.
       if (attackCooldown > 0) attackCooldown = Math.max(0, attackCooldown - dt);
-      if (canAct && input.isJustPressed(Action.Attack) && localFacing !== null && pos && attackCooldown <= 0) {
+      if (canAct && input.isJustPressed(Action.Attack) && localFacing !== null && pos && attackCooldown <= TICK_MS / 1000) {
         const attackType = WEAPON_TYPES[selectedWeapon];
         attackCooldown = WEAPON_COOLDOWNS[selectedWeapon];
         net.send({ type: MessageType.ATTACK, attackType, facing: localFacing, x: pos.x, y: pos.y, t: performance.now() });
-        if (attackType === 'melee') playerRenderer.notifyAttack(localEntityId!, localFacing);
+        if (attackType === 'melee') {
+          playerRenderer.notifyAttack(localEntityId!, localFacing);
+          // Client-side melee hit prediction — flash targets in arc immediately
+          const halfArc = MELEE_ARC / 2;
+          for (const targetId of world.query(C.Position, C.Health, C.Faction)) {
+            if (targetId === localEntityId) continue;
+            const tf = world.getComponent<FactionComponent>(targetId, C.Faction);
+            if (tf?.type === 'player') continue;
+            const tp = world.getComponent<PositionComponent>(targetId, C.Position)!;
+            const tdx = tp.x - pos.x;
+            const tdy = tp.y - pos.y;
+            const dist = Math.sqrt(tdx * tdx + tdy * tdy);
+            if (dist > MELEE_RANGE || dist === 0) continue;
+            let diff = Math.abs(Math.atan2(tdy, tdx) - localFacing);
+            if (diff > Math.PI) diff = 2 * Math.PI - diff;
+            if (diff <= halfArc) playerRenderer.notifyHit(targetId);
+          }
+        }
       }
 
       // E-interact: pick up nearby non-auto-pickup items (also initiates revive)
@@ -670,23 +758,32 @@ async function main(): Promise<void> {
         net.send({ type: MessageType.INTERACT, x: pos.x, y: pos.y, t: performance.now() });
       }
 
-      // Debug shortcuts
-      if (input.isJustPressed(Action.DebugSpawnEnemies)) {
-        net.send({ type: MessageType.DEBUG_SPAWN_ENEMIES });
-      }
-      if (input.isJustPressed(Action.DebugWaveSkip)) {
-        net.send({ type: MessageType.DEBUG_WAVE_SKIP });
-      }
-      if (input.isJustPressed(Action.DebugWavePause)) {
-        net.send({ type: MessageType.DEBUG_WAVE_PAUSE });
-      }
-
-      playerRenderer.update(world, localEntityId, localFacing, dt);
+      playerRenderer.update(world, localEntityId, localFacing, dt, reconciler.smoothX, reconciler.smoothY);
       deathOverlay.update(dt);
 
       // 6. Update and render projectiles
       const { width: sw, height: sh } = renderer.screen;
       projectileRenderer.update(dt);
+
+      // Client-side projectile hit prediction — flash enemies on overlap immediately
+      const projHits: number[] = [];
+      for (const [projId, proj] of projectileRenderer.getProjectiles()) {
+        for (const targetId of world.query(C.Position, C.Health, C.Faction)) {
+          const tf = world.getComponent<FactionComponent>(targetId, C.Faction);
+          if (!tf || tf.type === 'player') continue;
+          const tp = world.getComponent<PositionComponent>(targetId, C.Position)!;
+          const dx = tp.x - proj.x;
+          const dy = tp.y - proj.y;
+          const minDist = PROJECTILE_RADIUS + ENEMY_RADIUS;
+          if (dx * dx + dy * dy <= minDist * minDist) {
+            playerRenderer.notifyHit(targetId);
+            projHits.push(projId);
+            break;
+          }
+        }
+      }
+      for (const id of projHits) projectileRenderer.remove(id);
+
       projectileRenderer.render(camera.viewX, camera.viewY, camera.zoom, sw, sh);
 
       // 7. Camera follows local player (with smooth correction offset)
@@ -729,12 +826,12 @@ async function main(): Promise<void> {
     const tileY = Math.floor(camera.y / TILE_SIZE);
     const ag    = (isPlaying ? generator : menuGenerator) ?? menuGenerator;
     const biome = BIOME_DEFS[ag.getBiome(tileX, tileY)].name;
-    debug.update(dt, { camera, loadedChunks: tileRenderer.loadedChunkCount, biome, seed, net: net.stats });
+    debug.update(dt, { camera, loadedChunks: tileRenderer.loadedChunkCount, entityCount: world.allEntities.size, biome, seed, net: net.stats, server: lastServerStats });
 
     input.flush();
   });
 
-  console.log(`[Game] Ready — auto-connecting to ${serverIp}:${SERVER_PORT}. Press F4 for debug overlay.`);
+  console.log(`[Game] Ready - auto-connecting to ${serverIp}:${SERVER_PORT}. Press F4 for debug overlay.`);
 }
 
 main().catch((err) => {

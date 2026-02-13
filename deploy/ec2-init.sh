@@ -10,7 +10,7 @@
 set -euo pipefail
 exec > >(tee /var/log/user-data.log) 2>&1
 
-echo "=== Purrmadeath EC2 init (Phase 1) — $(date) ==="
+echo "=== Purrmadeath EC2 init (Phase 1) - $(date) ==="
 
 # ── System packages ──────────────────────────────────────────────────────────
 
@@ -94,7 +94,7 @@ FINISH
 
 chmod +x /opt/finish-setup.sh
 
-echo "=== Phase 1 complete — $(date) ==="
+echo "=== Phase 1 complete - $(date) ==="
 echo ""
 echo "Next steps:"
 echo "  1. Copy the deploy key above"

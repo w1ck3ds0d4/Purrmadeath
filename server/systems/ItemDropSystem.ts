@@ -20,7 +20,7 @@ export interface PickupResult {
  * Server-authoritative item drop system.
  *
  * Per tick:
- *   1. Countdown lifetime — mark expired drops for removal.
+ *   1. Countdown lifetime - mark expired drops for removal.
  *   2. Apply scatter velocity with friction decay.
  *   3. Auto-pickup: check overlap with player entities.
  */

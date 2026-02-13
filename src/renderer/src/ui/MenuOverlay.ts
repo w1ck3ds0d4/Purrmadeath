@@ -45,9 +45,9 @@ export class MenuOverlay {
     this.require('btn-resume').addEventListener('click', () => this.onResume?.());
     this.require('btn-quit').addEventListener('click',   () => this.onQuitToMenu?.());
 
-    // Settings stub — deferred to Phase 9
+    // Settings stub - deferred to Phase 9
     this.require('btn-settings').addEventListener('click', () => {
-      console.log('[Settings] Not implemented yet — Phase 9');
+      console.log('[Settings] Not implemented yet - Phase 9');
     });
   }
 

@@ -1,7 +1,7 @@
 /**
  * Small top-of-screen banner showing vote progress during pause/resume collection.
  *
- * Displays e.g. "Player1 wants to pause (1/3) — press ESC to agree"
+ * Displays e.g. "Player1 wants to pause (1/3) - press ESC to agree"
  * Purely DOM-based, appended to #overlay, same pattern as MenuOverlay/LobbyOverlay.
  */
 export class PauseBanner {
@@ -35,7 +35,7 @@ export class PauseBanner {
   show(direction: 'pause' | 'resume', voters: string[], required: number): void {
     const names = voters.join(', ');
     const verb = direction === 'pause' ? 'pause' : 'resume';
-    this.el.textContent = `${names} wants to ${verb} (${voters.length}/${required}) — press ESC to agree`;
+    this.el.textContent = `${names} wants to ${verb} (${voters.length}/${required}) - press ESC to agree`;
     this.el.style.display = 'block';
   }
 

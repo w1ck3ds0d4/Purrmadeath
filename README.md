@@ -1,6 +1,6 @@
 # Purrmadeath
 
-2D co-op roguelike survival — base building, procedural world, up to 4 players.
+2D co-op roguelike survival - base building, procedural world, up to 4 players.
 
 ---
 
@@ -10,7 +10,7 @@ Download the latest installer from the [Releases](https://github.com/WickedSoda/
 
 - One player clicks **Host Game** to create a session and receives an invite code
 - Other players enter the invite code and click **Join**
-- The game automatically connects to the production server on launch — no IP entry needed
+- The game automatically connects to the production server on launch - no IP entry needed
 
 ---
 
@@ -48,7 +48,7 @@ The installer is output to `dist/Purrmadeath Setup <version>.exe`.
 
 Update `"version"` in `package.json` and `GAME_VERSION` in `shared/constants.ts` to match (e.g. `1.1.0`).
 
-> The server uses `GAME_VERSION` to gate clients — bump both together so old clients are prompted to update.
+> The server uses `GAME_VERSION` to gate clients - bump both together so old clients are prompted to update.
 
 ### 3. Commit and push
 
@@ -73,7 +73,7 @@ SSH into the EC2 instance and pull the latest code:
 ```bash
 ssh -i purrmadeath-key.pem ec2-user@YOUR_ELASTIC_IP
 cd /opt/purrmadeath
-sudo -u purrmadeath git pull
+sudo -u purrmadeath git fetch origin && sudo -u purrmadeath git reset --hard origin/main
 sudo -u purrmadeath npm install --include=dev
 sudo systemctl restart purrmadeath-server
 sudo systemctl status purrmadeath-server
@@ -91,7 +91,7 @@ bash deploy/deploy.sh YOUR_ELASTIC_IP
 
 The game server runs on an EC2 `t3.micro` instance (`YOUR_INSTANCE_ID`) with Elastic IP `YOUR_ELASTIC_IP` in `eu-west-2`.
 
-**The Elastic IP is free only while the instance is running.** Stop the instance when not in use to save costs — the IP stays reserved and reassociates automatically on next start.
+**The Elastic IP is free only while the instance is running.** Stop the instance when not in use to save costs - the IP stays reserved and reassociates automatically on next start.
 
 ### Start the instance
 

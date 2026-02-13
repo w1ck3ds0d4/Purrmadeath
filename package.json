@@ -1,7 +1,7 @@
 {
   "name": "purrmadeath",
-  "version": "1.0.3",
-  "description": "2D co-op roguelike — base building, procedural world, up to 4 players",
+  "version": "1.0.4",
+  "description": "2D co-op roguelike - base building, procedural world, up to 4 players",
   "author": "WickedSoda",
   "private": true,
   "type": "module",
@@ -15,7 +15,10 @@
     "lint": "eslint src server shared --ext .ts",
     "typecheck": "tsc --noEmit",
     "build:win": "electron-vite build && electron-builder --win",
-    "publish": "electron-vite build && electron-builder --win --publish always"
+    "publish": "electron-vite build && electron-builder --win --publish always",
+    "aws:start": "node scripts/aws.mjs start",
+    "aws:stop": "node scripts/aws.mjs stop",
+    "aws:status": "node scripts/aws.mjs status"
   },
   "dependencies": {
     "electron-updater": "^6.8.3",

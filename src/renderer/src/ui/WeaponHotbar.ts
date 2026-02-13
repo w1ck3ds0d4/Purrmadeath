@@ -2,19 +2,27 @@ import { Container, Graphics, Text } from 'pixi.js';
 
 const SLOT_SIZE = 48;
 const SLOT_GAP  = 6;
-const PAD       = 14;
-const SLOT_COUNT = 2;
+const PAD       = 40;   // room below for health + stamina bars
+const SLOT_COUNT = 7;
 
 const SELECTED_BORDER = 0xe8c96a;  // gold accent (matches game title)
 const UNSELECTED_BORDER = 0xffffff;
 const SLOT_BG = 0x1a1a2a;
 const SLOT_BG_SELECTED = 0x2a2a3a;
+const LOCKED_BG = 0x111118;
 const COOLDOWN_OVERLAY = 0x000000;
 
-const WEAPON_LABELS = ['Sword', 'Bow'];
+// Slot labels - slots 0-1 are weapons, 2-4 abilities, 5 potion, 6 build hammer
+const SLOT_LABELS = ['Sword', 'Bow', 'Skill', 'Skill', 'Skill', 'Potion', 'Build'];
+const SLOT_KEYS   = ['1', '2', 'Q', 'E', 'R', '3', 'B'];
+const LOCKED_AFTER = 2; // slots >= this index are locked placeholders
+
+/** Total pixel width of the hotbar (exported so HUD bars can match). */
+export const HOTBAR_TOTAL_W = SLOT_COUNT * SLOT_SIZE + (SLOT_COUNT - 1) * SLOT_GAP;
+export const HOTBAR_PAD = PAD;
 
 /**
- * Pixi.js weapon hotbar — shows selectable weapon slots at bottom-center.
+ * Pixi.js weapon hotbar - shows selectable weapon slots at bottom-center.
  *
  * Rendering pattern matches HUD: screen-space Container on renderer.stage,
  * redrawn every frame via update().
@@ -31,13 +39,14 @@ export class WeaponHotbar {
     this.container.addChild(this.gfx);
 
     for (let i = 0; i < SLOT_COUNT; i++) {
+      const locked = i >= LOCKED_AFTER;
       const keyText = new Text({
-        text: `${i + 1}`,
-        style: { fontSize: 11, fill: 0x8a9ab0, fontFamily: 'monospace' },
+        text: SLOT_KEYS[i],
+        style: { fontSize: 11, fill: locked ? 0x3a3a4a : 0x8a9ab0, fontFamily: 'monospace' },
       });
       const labelText = new Text({
-        text: WEAPON_LABELS[i],
-        style: { fontSize: 12, fill: 0xd8e2ef, fontFamily: 'monospace' },
+        text: SLOT_LABELS[i],
+        style: { fontSize: 12, fill: locked ? 0x3a3a4a : 0xd8e2ef, fontFamily: 'monospace' },
       });
       this.keyTexts.push(keyText);
       this.labelTexts.push(labelText);
@@ -57,18 +66,22 @@ export class WeaponHotbar {
   ): void {
     this.gfx.clear();
 
-    const totalW = SLOT_COUNT * SLOT_SIZE + (SLOT_COUNT - 1) * SLOT_GAP;
-    const startX = (screenW - totalW) / 2;
+    const startX = (screenW - HOTBAR_TOTAL_W) / 2;
     const startY = screenH - PAD - SLOT_SIZE;
 
     for (let i = 0; i < SLOT_COUNT; i++) {
       const x = startX + i * (SLOT_SIZE + SLOT_GAP);
       const y = startY;
-      const isSelected = i === selected;
+      const locked = i >= LOCKED_AFTER;
+      const isSelected = !locked && i === selected;
 
       // Background
       this.gfx.rect(x, y, SLOT_SIZE, SLOT_SIZE);
-      this.gfx.fill({ color: isSelected ? SLOT_BG_SELECTED : SLOT_BG, alpha: 0.85 });
+      if (locked) {
+        this.gfx.fill({ color: LOCKED_BG, alpha: 0.7 });
+      } else {
+        this.gfx.fill({ color: isSelected ? SLOT_BG_SELECTED : SLOT_BG, alpha: 0.85 });
+      }
 
       // Cooldown overlay (only on selected slot, fills from top down)
       if (isSelected && cooldown > 0 && cooldownMax > 0) {
@@ -80,24 +93,32 @@ export class WeaponHotbar {
 
       // Border
       this.gfx.rect(x, y, SLOT_SIZE, SLOT_SIZE);
-      this.gfx.stroke({
-        color: isSelected ? SELECTED_BORDER : UNSELECTED_BORDER,
-        alpha: isSelected ? 0.9 : 0.15,
-        width: isSelected ? 2 : 1,
-      });
+      if (locked) {
+        this.gfx.stroke({ color: UNSELECTED_BORDER, alpha: 0.06, width: 1 });
+      } else {
+        this.gfx.stroke({
+          color: isSelected ? SELECTED_BORDER : UNSELECTED_BORDER,
+          alpha: isSelected ? 0.9 : 0.15,
+          width: isSelected ? 2 : 1,
+        });
+      }
 
       // Key number (top-left corner of slot)
       const kt = this.keyTexts[i];
       kt.position.set(x + 4, y + 2);
-      kt.style.fill = isSelected ? SELECTED_BORDER : 0x8a9ab0;
+      if (!locked) {
+        kt.style.fill = isSelected ? SELECTED_BORDER : 0x8a9ab0;
+      }
 
-      // Weapon label (centered in slot)
+      // Label (centered in slot)
       const lt = this.labelTexts[i];
       lt.position.set(
         x + (SLOT_SIZE - lt.width) / 2,
         y + (SLOT_SIZE - lt.height) / 2 + 4,
       );
-      lt.style.fill = isSelected ? 0xffffff : 0x8a9ab0;
+      if (!locked) {
+        lt.style.fill = isSelected ? 0xffffff : 0x8a9ab0;
+      }
     }
   }
 

@@ -15,7 +15,7 @@
 set -euo pipefail
 
 REGION="${1:-us-east-1}"
-INSTANCE_TYPE="t3.micro"        # 2 vCPU, 1 GB — plenty for 4 players @ 20 TPS
+INSTANCE_TYPE="t3.micro"        # 2 vCPU, 1 GB - plenty for 4 players @ 20 TPS
 KEY_NAME="purrmadeath-key"
 SG_NAME="purrmadeath-server-sg"
 AMI_SSM_PARAM="/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
@@ -39,7 +39,7 @@ echo "AMI: $AMI_ID"
 # ── Create key pair (saves .pem locally) ─────────────────────────────────────
 
 if aws ec2 describe-key-pairs --key-names "$KEY_NAME" --region "$REGION" >/dev/null 2>&1; then
-  echo "Key pair '$KEY_NAME' already exists — skipping creation."
+  echo "Key pair '$KEY_NAME' already exists - skipping creation."
 else
   echo "Creating key pair '$KEY_NAME'..."
   aws ec2 create-key-pair \
@@ -48,7 +48,7 @@ else
     --query "KeyMaterial" \
     --output text > "${KEY_NAME}.pem"
   chmod 400 "${KEY_NAME}.pem"
-  echo "Saved private key to ${KEY_NAME}.pem — keep this safe!"
+  echo "Saved private key to ${KEY_NAME}.pem - keep this safe!"
 fi
 
 # ── Create security group ────────────────────────────────────────────────────

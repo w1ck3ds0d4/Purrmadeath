@@ -1,5 +1,6 @@
 import { MessageType } from '@shared/protocol';
 import type { BaseMessage } from '@shared/protocol';
+import { PING_INTERVAL_MS } from '@shared/constants';
 
 type MessageHandler = (msg: BaseMessage) => void;
 
@@ -76,7 +77,7 @@ export class NetworkClient {
       console.log('[Net] Disconnected');
       this.stopPing();
       if (this.shouldReconnect) {
-        // Unexpected drop — notify the game before attempting reconnect
+        // Unexpected drop - notify the game before attempting reconnect
         this.dropHandler?.();
         // Only reconnect if the handler didn't call disconnect()
         if (this.shouldReconnect) {
@@ -88,7 +89,7 @@ export class NetworkClient {
     };
 
     this.ws.onerror = () => {
-      // onerror fires before onclose — the reconnect happens in onclose
+      // onerror fires before onclose - the reconnect happens in onclose
       console.warn('[Net] WebSocket error');
     };
   }
@@ -157,7 +158,7 @@ export class NetworkClient {
       this.pingWindow[this.pingWindowIdx] = false;
       this.pingTime = performance.now();
       this.send({ type: MessageType.PING });
-    }, 2_000);
+    }, PING_INTERVAL_MS);
   }
 
   private stopPing(): void {

@@ -14,7 +14,7 @@ export interface DiscoveryBeaconPayload {
   playerCount: number;
   /** Maximum players per session. */
   maxPlayers: number;
-  /** Protocol version — receivers should ignore beacons with mismatched versions. */
+  /** Protocol version - receivers should ignore beacons with mismatched versions. */
   v: number;
 }
 

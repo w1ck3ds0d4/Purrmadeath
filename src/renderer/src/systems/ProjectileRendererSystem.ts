@@ -35,6 +35,11 @@ export class ProjectileRendererSystem {
     this.projectiles.delete(id);
   }
 
+  /** Expose active projectiles for client-side hit prediction. */
+  getProjectiles(): Map<number, ProjectileVisual> {
+    return this.projectiles;
+  }
+
   /** Advance all projectile positions by dt seconds. */
   update(dt: number): void {
     for (const p of this.projectiles.values()) {
@@ -69,14 +74,14 @@ export class ProjectileRendererSystem {
       const dx = p.vx / speed;
       const dy = p.vy / speed;
 
-      // Trail line (behind the body) — world coordinates
+      // Trail line (behind the body) - world coordinates
       const tailX = p.x - dx * TRAIL_LEN;
       const tailY = p.y - dy * TRAIL_LEN;
       this.gfx.moveTo(tailX, tailY);
       this.gfx.lineTo(p.x, p.y);
       this.gfx.stroke({ color, alpha: 0.4, width: 2 });
 
-      // Body circle — world coordinates
+      // Body circle - world coordinates
       this.gfx.circle(p.x, p.y, PROJECTILE_RADIUS);
       this.gfx.fill({ color, alpha: 0.9 });
     }

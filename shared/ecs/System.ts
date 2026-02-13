@@ -2,7 +2,7 @@ import type { World } from './World';
 
 /**
  * A System processes entities that have specific components each tick or frame.
- * Systems must be stateless — all mutable state lives in components.
+ * Systems must be stateless - all mutable state lives in components.
  *
  * Example implementation:
  *   class MovementSystem implements System {
@@ -18,7 +18,7 @@ import type { World } from './World';
  *   }
  */
 export interface System {
-  /** Unique name — used for registration, ordering, and removal by name. */
+  /** Unique name - used for registration, ordering, and removal by name. */
   readonly name: string;
 
   /**

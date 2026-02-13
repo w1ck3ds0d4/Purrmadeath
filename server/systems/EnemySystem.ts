@@ -22,7 +22,7 @@ import { findPath, CachedPath } from './Pathfinding';
 export interface EnemyAttackResult {
   hits: HitResult[];
   deaths: number[];
-  /** Enemies that swung (for ATTACK_PERFORMED broadcast — fires even on miss). */
+  /** Enemies that swung (for ATTACK_PERFORMED broadcast - fires even on miss). */
   attackPerformed: { sourceId: number; facing: number }[];
 }
 
@@ -40,7 +40,7 @@ const REPLAN_DIST_THRESHOLD = 64; // 2 tiles
 const WAYPOINT_REACH = 16; // half a tile
 
 /**
- * Server-side enemy AI — runs each tick.
+ * Server-side enemy AI - runs each tick.
  *
  * For each enemy entity:
  *   - If a player is within ENEMY_MELEE_RANGE → stop, face target, melee attack.
@@ -79,7 +79,7 @@ export class EnemySystem {
       let nearestPos: PositionComponent | null = null;
 
       for (const pid of playerIds) {
-        // Skip downed players — enemies don't target them
+        // Skip downed players - enemies don't target them
         if (world.hasComponent(pid, C.Downed)) continue;
 
         const ppos = world.getComponent<PositionComponent>(pid, C.Position)!;
@@ -170,7 +170,7 @@ export class EnemySystem {
         // Reached waypoint, advance to next
         path.nextIndex++;
         if (path.nextIndex >= path.waypoints.length) {
-          // All waypoints consumed — chase directly
+          // All waypoints consumed - chase directly
           inp.dx = directLen > 0 ? directDx / directLen : 0;
           inp.dy = directLen > 0 ? directDy / directLen : 0;
         } else {
@@ -187,7 +187,7 @@ export class EnemySystem {
         inp.dy = wpDy / wpLen;
       }
     } else {
-      // No path found — fallback to direct chase
+      // No path found - fallback to direct chase
       inp.dx = directLen > 0 ? directDx / directLen : 0;
       inp.dy = directLen > 0 ? directDy / directLen : 0;
     }

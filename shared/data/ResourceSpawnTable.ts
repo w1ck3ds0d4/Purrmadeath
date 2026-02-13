@@ -29,7 +29,7 @@ export const RESOURCE_STATS: Record<ResourceType, ResourceStats> = {
 
 export interface ResourceSpawnEntry {
   resourceType: ResourceType;
-  /** Relative probability — higher = more common on this tile type. */
+  /** Relative probability - higher = more common on this tile type. */
   weight: number;
 }
 
@@ -52,10 +52,10 @@ export const RESOURCE_SPAWN_TABLE: Partial<Record<number, ResourceSpawnEntry[]>>
  * Higher values = denser resource coverage in that biome.
  */
 export const TILE_SPAWN_CHANCE: Partial<Record<number, number>> = {
-  [TileId.Sand]:   0.015,  // sparse — shore/desert have few resources
+  [TileId.Sand]:   0.015,  // sparse - shore/desert have few resources
   [TileId.Grass]:  0.02,
   [TileId.Dirt]:   0.02,
-  [TileId.Forest]: 0.06,   // dense — forests are full of trees
+  [TileId.Forest]: 0.06,   // dense - forests are full of trees
   [TileId.Stone]:  0.05,
   [TileId.Tundra]: 0.03,
   [TileId.Cave]:   0.04,

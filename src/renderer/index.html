@@ -10,12 +10,13 @@
       html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0f; }
       #game { width: 100%; height: 100%; display: block; }
 
-      /* ── Overlay container — sits above the canvas ─────────────────────── */
+      /* ── Overlay container - sits above the canvas ─────────────────────── */
       #overlay {
         position: absolute;
         inset: 0;
         z-index: 10;
         pointer-events: none; /* pass-through by default; buttons enable themselves */
+        user-select: none;
       }
 
       /* ── Shared screen style ────────────────────────────────────────────── */
@@ -100,7 +101,7 @@
         border-color: rgba(255, 255, 255, 0.18);
       }
 
-      /* ── Menu column — fixed-width wrapper so all items share the same width */
+      /* ── Menu column - fixed-width wrapper so all items share the same width */
       .menu-col {
         display: flex;
         flex-direction: column;
@@ -126,7 +127,7 @@
         align-items: stretch;
       }
 
-      /* Join button — shares menu-btn visuals but no margin and matches input font-size */
+      /* Join button - shares menu-btn visuals but no margin and matches input font-size */
       .join-menu-btn {
         font-family: 'Segoe UI', monospace;
         font-size: 15px;
@@ -340,7 +341,7 @@
     <!-- Pixi.js canvas is appended here -->
     <div id="game"></div>
 
-    <!-- HTML overlay for menus — world renders as an animated background -->
+    <!-- HTML overlay for menus - world renders as an animated background -->
     <div id="overlay">
 
       <!-- ── Main Menu ─────────────────────────────────────────────────────── -->
@@ -406,7 +407,7 @@
 
     </div>
 
-    <!-- Version label — bottom-right corner, always visible -->
+    <!-- Version label - bottom-right corner, always visible -->
     <div id="version-label" style="
       position: absolute;
       bottom: 12px;

@@ -4,13 +4,13 @@
 export const SERVER_PORT = 7777;
 
 /** How many ticks the server runs per second (authoritative game clock). */
-export const TICK_RATE = 20;
+export const TICK_RATE = 30;
 
 /** Milliseconds between server ticks. */
 export const TICK_MS = 1000 / TICK_RATE;
 
 /** Client sends a PING every N ms to keep the connection alive. */
-export const PING_INTERVAL_MS = 15_000;
+export const PING_INTERVAL_MS = 2_000;
 
 /** Server drops a client that hasn't responded within this window. */
 export const HEARTBEAT_TIMEOUT_MS = 60_000;
@@ -27,8 +27,8 @@ export const MAX_MESSAGES_PER_SECOND = 300;
 /** Hard cap on total WebSocket connections the server accepts (idle + in-game). */
 export const MAX_CONNECTIONS = 16;
 
-/** Semantic version string — compared in HANDSHAKE for version gating. */
-export const GAME_VERSION = '1.0.3';
+/** Semantic version string - compared in HANDSHAKE for version gating. */
+export const GAME_VERSION = '1.0.4';
 
 /** Milliseconds a disconnected player's slot is held before removal. */
 export const RECONNECT_GRACE_MS = 30_000;
@@ -71,10 +71,10 @@ export const PLAYER_STAMINA_REGEN = 15;
  * P1=blue · P2=red · P3=green · P4=yellow
  */
 export const PLAYER_COLORS: readonly number[] = [
-  0x4a90d9, // P1 — blue
-  0xe05252, // P2 — red
-  0x52c062, // P3 — green
-  0xe0a830, // P4 — yellow
+  0x4a90d9, // P1 - blue
+  0xe05252, // P2 - red
+  0x52c062, // P3 - green
+  0xe0a830, // P4 - yellow
 ];
 
 /** Speed multiplier applied while sprinting. */
@@ -121,7 +121,7 @@ export const MELEE_ARC = (2 * Math.PI) / 3;
 /** Base damage per melee hit (before defense reduction). */
 export const MELEE_DAMAGE = 15;
 /** Seconds between melee swings. */
-export const MELEE_COOLDOWN = 0.5;
+export const MELEE_COOLDOWN = 0.75;
 /** Knockback impulse speed applied to the struck entity (px/s). */
 export const MELEE_KNOCKBACK = 250;
 

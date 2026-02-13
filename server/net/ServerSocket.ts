@@ -130,7 +130,7 @@ export class ServerSocket {
 
     ws.on('message', (data) => {
       if (!this.checkRateLimit(client)) {
-        console.warn(`[Server] Client ${id} exceeded rate limit — disconnecting`);
+        console.warn(`[Server] Client ${id} exceeded rate limit - disconnecting`);
         ws.close(1008, 'Rate limit exceeded');
         this.removeClient(id, client);
         return;
@@ -243,7 +243,7 @@ export class ServerSocket {
     const now = Date.now();
     for (const [id, client] of this.clients) {
       if (now - client.lastPing > HEARTBEAT_TIMEOUT_MS) {
-        console.warn(`[Server] Client ${id} timed out — terminating`);
+        console.warn(`[Server] Client ${id} timed out - terminating`);
         client.ws.terminate();
         this.removeClient(id, client);
       }

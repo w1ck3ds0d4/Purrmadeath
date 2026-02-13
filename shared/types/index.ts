@@ -1,6 +1,6 @@
 // ─── Core primitives ──────────────────────────────────────────────────────────
 
-/** A unique entity ID — just a number. The ECS World assigns these. */
+/** A unique entity ID - just a number. The ECS World assigns these. */
 export type EntityId = number;
 
 /** 2D position or vector in world space (pixels). */
@@ -30,7 +30,7 @@ export enum Faction {
   Neutral = 'Neutral',
 }
 
-/** Biome IDs — each biome defines its own tile palette, spawn table, and boss. */
+/** Biome IDs - each biome defines its own tile palette, spawn table, and boss. */
 export enum BiomeId {
   Grassland = 'Grassland',
   Forest = 'Forest',
