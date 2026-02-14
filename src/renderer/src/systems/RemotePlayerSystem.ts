@@ -6,6 +6,7 @@ import {
   HealthComponent,
   ResourceNodeComponent,
   ItemDropComponent,
+  BuildingComponent,
 } from '@shared/components';
 import type { SnapshotMessage, DeltaMessage, EntitySnapshot } from '@shared/protocol';
 
@@ -137,6 +138,13 @@ export class RemotePlayerSystem {
           autoPickup: true,
           lifetime: 60,
         } as ItemDropComponent);
+      }
+      // Building metadata (for renderer type/color selection)
+      if (snap.buildingType) {
+        world.addComponent(snap.entityId, C.Building, {
+          buildingType: snap.buildingType,
+          permanent: snap.buildingType === 'campfire',
+        } as BuildingComponent);
       }
     } else {
       // Update velocity + health immediately; position is interpolated in interpolate()

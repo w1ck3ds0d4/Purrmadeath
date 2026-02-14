@@ -155,6 +155,12 @@ export class DebugOverlay {
     }
   }
 
+  hide(): void {
+    this.visible = false;
+    this.el.style.display = 'none';
+    this.inputEl.blur();
+  }
+
   toggle(): void {
     this.visible = !this.visible;
     this.el.style.display = this.visible ? 'flex' : 'none';

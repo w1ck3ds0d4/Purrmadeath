@@ -22,6 +22,8 @@ export const C = {
   ItemDrop:        'ItemDrop',
   Resources:       'Resources',
   Downed:          'Downed',
+  // ── Phase 5 ──────────────────────────────────────────────────────────────
+  Building:        'Building',
 } as const;
 
 // ─── Component interfaces ──────────────────────────────────────────────────────
@@ -90,7 +92,7 @@ export interface FacingComponent {
 
 /** Which team an entity belongs to. Determines targetting and rendering. */
 export interface FactionComponent {
-  type: 'player' | 'enemy' | 'portal' | 'resource' | 'item';
+  type: 'player' | 'enemy' | 'portal' | 'resource' | 'item' | 'building';
 }
 
 /** Tracks remaining cooldown before the entity can attack again. */
@@ -163,6 +165,17 @@ export interface ResourcesComponent {
 }
 
 // ── Phase 4.11 components ────────────────────────────────────────────────────
+
+// ── Phase 5 components ────────────────────────────────────────────────────
+
+export type BuildingType = 'campfire' | 'wall';
+
+/** Tags an entity as a player-built (or pre-placed) structure. */
+export interface BuildingComponent {
+  buildingType: BuildingType;
+  /** True = cannot be demolished by players (e.g. Campfire). */
+  permanent: boolean;
+}
 
 /** Marks a player as downed (HP reached 0). Present only while in downed state. */
 export interface DownedComponent {

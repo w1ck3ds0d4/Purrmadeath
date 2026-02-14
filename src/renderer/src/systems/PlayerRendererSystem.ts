@@ -8,8 +8,9 @@ import {
   HealthComponent,
   ResourceNodeComponent,
   ItemDropComponent,
+  BuildingComponent,
 } from '@shared/components';
-import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS } from '@shared/constants';
+import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, BUILDING_HALF_EXTENT } from '@shared/constants';
 
 // Enemy body color
 const ENEMY_COLOR = 0xcc3333;
@@ -30,6 +31,11 @@ const ITEM_DROP_COLORS: Record<string, number> = {
   iron:    0x8a5a3a,
   diamond: 0x44ccdd,
   gold:    0xe0c030,
+};
+// Building colors by type
+const BUILDING_COLORS: Record<string, { body: number; border: number }> = {
+  campfire: { body: 0xcc5500, border: 0xff8800 },
+  wall:     { body: 0x8a8a8a, border: 0xbbbbbb },
 };
 // Duration of the white hit-flash in seconds
 const HIT_FLASH_DURATION = 0.15;
@@ -134,14 +140,16 @@ export class PlayerRendererSystem {
     const portalIds   = new Set<number>();
     const resourceIds = new Set<number>();
     const itemIds     = new Set<number>();
+    const buildingIds = new Set<number>();
     for (const id of factionEntities) {
       const f = world.getComponent<FactionComponent>(id, C.Faction)!;
       if (f.type === 'enemy') enemyIds.add(id);
       else if (f.type === 'portal') portalIds.add(id);
       else if (f.type === 'resource') resourceIds.add(id);
       else if (f.type === 'item') itemIds.add(id);
+      else if (f.type === 'building') buildingIds.add(id);
     }
-    const living = new Set([...playerIds, ...enemyIds, ...portalIds, ...resourceIds, ...itemIds]);
+    const living = new Set([...playerIds, ...enemyIds, ...portalIds, ...resourceIds, ...itemIds, ...buildingIds]);
 
     // Remove sprites for entities that no longer exist; clean up all timers
     for (const [id, gfx] of this.sprites) {
@@ -253,6 +261,46 @@ export class PlayerRendererSystem {
           gfx.fill({ color: 0x222222, alpha: 0.8 });
           if (ratio > 0) {
             gfx.rect(-resBarW / 2, resBarY, resBarW * ratio, BAR_H);
+            gfx.fill({ color: barColor, alpha: 1 });
+          }
+        }
+
+      } else if (buildingIds.has(id)) {
+        // ── Building rendering ──────────────────────────────────────────────
+        const bldg = world.getComponent<BuildingComponent>(id, C.Building);
+        const bType = bldg?.buildingType ?? 'wall';
+        const bColors = BUILDING_COLORS[bType] ?? BUILDING_COLORS.wall;
+        const half = BUILDING_HALF_EXTENT;
+
+        const bFlash = this.hitTimers.get(id) ?? 0;
+        if (bFlash > 0) this.hitTimers.set(id, Math.max(0, bFlash - dt));
+        const bFlashT = Math.min(1, bFlash / HIT_FLASH_DURATION);
+        const bodyColor = bFlashT > 0 ? lerpColor(bColors.body, 0xffffff, bFlashT * 0.6) : bColors.body;
+
+        // Main body
+        gfx.rect(-half, -half, half * 2, half * 2);
+        gfx.fill({ color: bodyColor, alpha: 0.95 });
+
+        // Border
+        gfx.rect(-half, -half, half * 2, half * 2);
+        gfx.stroke({ color: bColors.border, alpha: 0.9, width: 2 });
+
+        // Campfire: inner flame icon
+        if (bType === 'campfire') {
+          gfx.circle(0, 0, 6);
+          gfx.fill({ color: 0xffcc00, alpha: 0.8 });
+        }
+
+        // Health bar (always visible for buildings)
+        if (hp && hp.max > 0) {
+          const ratio = Math.max(0, hp.current / hp.max);
+          const barColor = ratio > 0.5 ? 0x44cc44 : ratio > 0.25 ? 0xddaa22 : 0xcc3333;
+          const bBarW = half * 2 + 4;
+          const bBarY = -(half + 10);
+          gfx.rect(-bBarW / 2, bBarY, bBarW, BAR_H);
+          gfx.fill({ color: 0x222222, alpha: 0.8 });
+          if (ratio > 0) {
+            gfx.rect(-bBarW / 2, bBarY, bBarW * ratio, BAR_H);
             gfx.fill({ color: barColor, alpha: 1 });
           }
         }

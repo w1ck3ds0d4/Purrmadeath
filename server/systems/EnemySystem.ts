@@ -62,6 +62,13 @@ export class EnemySystem {
     const result: EnemyAttackResult = { hits: [], deaths: [], attackPerformed: [] };
     const playerIds = world.query(C.Position, C.PlayerIndex);
 
+    // Buildings are also valid targets for enemies
+    const buildingIds: number[] = [];
+    for (const bid of world.query(C.Position, C.Faction)) {
+      const f = world.getComponent<FactionComponent>(bid, C.Faction)!;
+      if (f.type === 'building') buildingIds.push(bid);
+    }
+
     // Clean stale paths for entities that no longer exist
     for (const id of this.paths.keys()) {
       if (!world.hasEntity(id)) this.paths.delete(id);
@@ -74,7 +81,7 @@ export class EnemySystem {
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
       const inp = world.getComponent<PlayerInputComponent>(id, C.PlayerInput)!;
 
-      // Find the nearest player within aggro range
+      // Find the nearest target (player or building) within aggro range
       let nearestDist = ENEMY_AGGRO_RANGE;
       let nearestPos: PositionComponent | null = null;
 
@@ -89,6 +96,18 @@ export class EnemySystem {
         if (dist < nearestDist) {
           nearestDist = dist;
           nearestPos = ppos;
+        }
+      }
+
+      // Also consider buildings as targets
+      for (const bid of buildingIds) {
+        const bpos = world.getComponent<PositionComponent>(bid, C.Position)!;
+        const ddx = bpos.x - pos.x;
+        const ddy = bpos.y - pos.y;
+        const dist = Math.sqrt(ddx * ddx + ddy * ddy);
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearestPos = bpos;
         }
       }
 

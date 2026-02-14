@@ -130,7 +130,7 @@ export const MELEE_KNOCKBACK = 250;
 /** Base damage per ranged hit (before defense reduction). */
 export const RANGED_DAMAGE = 10;
 /** Seconds between ranged shots. */
-export const RANGED_COOLDOWN = 0.8;
+export const RANGED_COOLDOWN = 0.5;
 /** Projectile travel speed in world pixels per second. */
 export const RANGED_SPEED = 400;
 /** Seconds before a projectile despawns (~500 px range at 400 px/s). */
@@ -241,3 +241,17 @@ export const MAX_ATTACK_POSITION_TOLERANCE = 80;
 /** Iterations of the entity-entity separation pass per tick.
  *  More iterations = better chain resolution, but costs O(n²) each. */
 export const ENTITY_SEPARATION_ITERATIONS = 2;
+
+// ─── Buildings (Phase 5) ────────────────────────────────────────────────
+
+/** Campfire HP. When it reaches 0 the run ends. */
+export const CAMPFIRE_MAX_HEALTH = 300;
+
+/** Wall HP. */
+export const WALL_MAX_HEALTH = 150;
+
+/** Half-extent of a building AABB in world pixels (1×1 tile = TILE_SIZE). */
+export const BUILDING_HALF_EXTENT = TILE_SIZE / 2; // 16px
+
+/** Wood cost to place a Wall. */
+export const WALL_COST_WOOD = 5;

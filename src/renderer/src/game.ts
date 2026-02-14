@@ -21,6 +21,8 @@ import {
   PROJECTILE_RADIUS,
   GAME_VERSION,
   TICK_MS,
+  WALL_COST_WOOD,
+  BUILDING_HALF_EXTENT,
 } from '@shared/constants';
 import type {
   HandshakeAckMessage,
@@ -47,11 +49,13 @@ import type {
   PlayerRespawnedMessage,
   PartyWipeMessage,
   GameOverMessage,
+  BuildConfirmMessage,
   LobbySlot,
 } from '@shared/protocol';
 
 import { World } from '@shared/ecs/World';
 import { C, PositionComponent, FactionComponent, HealthComponent } from '@shared/components';
+import { TILE_DEFS } from '@shared/world/TileRegistry';
 
 import { InputManager, Action } from './input/InputManager';
 import { GameStateManager, GameState } from './state/GameStateManager';
@@ -73,6 +77,8 @@ import { DeathOverlay } from './ui/DeathOverlay';
 import { GameOverOverlay } from './ui/GameOverOverlay';
 import { UpdateBanner } from './ui/UpdateBanner';
 import { ChatOverlay } from './ui/ChatOverlay';
+import { BuildModeOverlay } from './ui/BuildModeOverlay';
+import { BuildGhostRenderer } from './render/BuildGhostRenderer';
 
 // Slow world pan behind menus (world pixels per millisecond)
 const BG_PAN_X = 0.05;
@@ -160,6 +166,10 @@ async function main(): Promise<void> {
   let inputTickAccum = 0;
   let lastServerStats: { wave: number; enemyCount: number; portalCount: number; playerCount: number } | undefined;
 
+  // ── Build mode state ─────────────────────────────────────────────────────
+  let buildModeActive = false;
+  let localWood = 0;
+
   document.addEventListener('mousemove', (e) => { mouseX = e.clientX; mouseY = e.clientY; });
 
   // ── State machine ───────────────────────────────────────────────────────────
@@ -176,6 +186,8 @@ async function main(): Promise<void> {
   gameOverOverlay.setOnMenu(() => stateMgr.transition(GameState.Menu));
 
   const chatOverlay = new ChatOverlay();
+  const buildOverlay = new BuildModeOverlay();
+  const buildGhost   = new BuildGhostRenderer(tileRenderer.worldContainer);
 
   const updateBanner = new UpdateBanner();
   window.electronAPI?.onUpdateAvailable(() => updateBanner.showDownloading());
@@ -245,8 +257,13 @@ async function main(): Promise<void> {
     deathOverlay.hide();
     gameOverOverlay.hide();
     chatOverlay.hide();
+    debug.hide();
     resourceHUD.setResources(0, 0, 0, 0, 0);
     resourceHUD.hide();
+    buildModeActive = false;
+    localWood = 0;
+    buildOverlay.hide();
+    buildGhost.hide();
     // Transport stays alive - don't disconnect
     menuOverlay.setButtonsEnabled(transportReady);
     menuOverlay.setConnectionStatus(transportReady ? 'connected' : 'connecting');
@@ -486,6 +503,8 @@ async function main(): Promise<void> {
   net.on(MessageType.RESOURCE_UPDATE, (msg) => {
     const ru = msg as ResourceUpdateMessage;
     resourceHUD.setResources(ru.wood, ru.stone, ru.iron, ru.diamond, ru.gold);
+    localWood = ru.wood;
+    if (buildModeActive) buildOverlay.update(localWood);
   });
 
   // ── Death / respawn handlers ──────────────────────────────────────────────
@@ -496,6 +515,9 @@ async function main(): Promise<void> {
     debug.log(`Player downed (entity ${pd.entityId})`);
     if (pd.entityId === localEntityId) {
       localDowned = true;
+      buildModeActive = false;
+      buildOverlay.hide();
+      buildGhost.hide();
       deathOverlay.showDowned(pd.bleedTimer);
     }
   });
@@ -565,6 +587,9 @@ async function main(): Promise<void> {
     localGameOver = true;
     localDowned = false;
     localDead   = false;
+    buildModeActive = false;
+    buildOverlay.hide();
+    buildGhost.hide();
     deathOverlay.hide();
     gameOverOverlay.show({
       waveReached: go.waveReached,
@@ -572,6 +597,18 @@ async function main(): Promise<void> {
       timePlayed: go.timePlayed,
       reason: go.reason,
     });
+  });
+
+  // ── Building handlers ───────────────────────────────────────────────────
+  net.on(MessageType.BUILD_CONFIRM, (msg) => {
+    const bc = msg as BuildConfirmMessage;
+    if (!bc.success) {
+      debug.log(`Build failed: ${bc.reason ?? 'unknown'}`);
+    }
+  });
+
+  net.on(MessageType.CAMPFIRE_DESTROYED, () => {
+    debug.log('Campfire destroyed!');
   });
 
   net.on(MessageType.ERROR, (msg) => {
@@ -670,9 +707,13 @@ async function main(): Promise<void> {
     const dt    = Math.min(ticker.deltaMS / 1000, 0.05); // cap at 50ms to reduce prediction divergence
     const state = stateMgr.current;
 
-    // ESC: send pause vote to server (server decides when to pause/resume)
+    // ESC: close build mode first, otherwise send pause vote
     if (input.isJustPressed(Action.Pause)) {
-      if (!localGameOver && !chatOverlay.isOpen && (state === GameState.Playing || state === GameState.Paused)) {
+      if (buildModeActive && state === GameState.Playing) {
+        buildModeActive = false;
+        buildOverlay.hide();
+        buildGhost.hide();
+      } else if (!localGameOver && !chatOverlay.isOpen && (state === GameState.Playing || state === GameState.Paused)) {
         net.send({ type: MessageType.PAUSE_VOTE });
       }
     }
@@ -721,15 +762,69 @@ async function main(): Promise<void> {
         localFacing = Math.atan2(worldMouseY - pos.y, worldMouseX - pos.x);
       }
 
-      // Weapon switching (number keys)
-      if (input.isJustPressed(Action.WeaponSlot1)) selectedWeapon = 0;
-      if (input.isJustPressed(Action.WeaponSlot2)) selectedWeapon = 1;
+      // Weapon switching (number keys) — exit build mode when selecting a weapon
+      if (input.isJustPressed(Action.WeaponSlot1)) { selectedWeapon = 0; if (buildModeActive) { buildModeActive = false; buildOverlay.hide(); buildGhost.hide(); } }
+      if (input.isJustPressed(Action.WeaponSlot2)) { selectedWeapon = 1; if (buildModeActive) { buildModeActive = false; buildOverlay.hide(); buildGhost.hide(); } }
+
+      // B key: toggle build mode
+      if (canAct && input.isJustPressed(Action.BuildMode)) {
+        buildModeActive = !buildModeActive;
+        if (buildModeActive) {
+          buildOverlay.show();
+          buildOverlay.update(localWood);
+          buildGhost.show();
+        } else {
+          buildOverlay.hide();
+          buildGhost.hide();
+        }
+      }
+
+      // Build ghost update + placement
+      if (buildModeActive && pos) {
+        const { width: gw, height: gh } = renderer.screen;
+        const wmx = camera.viewX + (mouseX - gw / 2) / camera.zoom;
+        const wmy = camera.viewY + (mouseY - gh / 2) / camera.zoom;
+
+        // Check ghost validity: tile must be walkable and no existing building/resource at that tile
+        const ghostTileX = Math.floor(wmx / TILE_SIZE);
+        const ghostTileY = Math.floor(wmy / TILE_SIZE);
+        const ghostCenterX = ghostTileX * TILE_SIZE + TILE_SIZE / 2;
+        const ghostCenterY = ghostTileY * TILE_SIZE + TILE_SIZE / 2;
+
+        let ghostValid = localWood >= WALL_COST_WOOD;
+        // Check tile walkability
+        if (ghostValid && chunks) {
+          const tileId = chunks.getTile(ghostTileX, ghostTileY);
+          if (!(TILE_DEFS[tileId]?.walkable ?? false)) ghostValid = false;
+        }
+        // Check for existing buildings/resources at same tile
+        if (ghostValid) {
+          for (const eid of world.query(C.Position, C.Faction)) {
+            const ef = world.getComponent<FactionComponent>(eid, C.Faction);
+            if (ef?.type !== 'building' && ef?.type !== 'resource') continue;
+            const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
+            const dx = Math.abs(ep.x - ghostCenterX);
+            const dy = Math.abs(ep.y - ghostCenterY);
+            if (dx < BUILDING_HALF_EXTENT && dy < BUILDING_HALF_EXTENT) {
+              ghostValid = false;
+              break;
+            }
+          }
+        }
+
+        buildGhost.update(wmx, wmy, ghostValid);
+
+        // Left-click places building (stays in build mode for rapid placement)
+        if (input.isJustPressed(Action.Attack) && ghostValid) {
+          net.send({ type: MessageType.BUILD_PLACE, buildingType: 'wall', x: wmx, y: wmy });
+        }
+      }
 
       // Attack: client-side cooldown mirrors server AttackCooldown. Allow a small
       // tolerance (one server tick) so the client doesn't silently miss an attack
       // due to floating-point drift between variable-rate client and fixed-rate server.
       if (attackCooldown > 0) attackCooldown = Math.max(0, attackCooldown - dt);
-      if (canAct && input.isJustPressed(Action.Attack) && localFacing !== null && pos && attackCooldown <= TICK_MS / 1000) {
+      if (canAct && !buildModeActive && input.isJustPressed(Action.Attack) && localFacing !== null && pos && attackCooldown <= TICK_MS / 1000) {
         const attackType = WEAPON_TYPES[selectedWeapon];
         attackCooldown = WEAPON_COOLDOWNS[selectedWeapon];
         net.send({ type: MessageType.ATTACK, attackType, facing: localFacing, x: pos.x, y: pos.y, t: performance.now() });
@@ -770,7 +865,7 @@ async function main(): Promise<void> {
       for (const [projId, proj] of projectileRenderer.getProjectiles()) {
         for (const targetId of world.query(C.Position, C.Health, C.Faction)) {
           const tf = world.getComponent<FactionComponent>(targetId, C.Faction);
-          if (!tf || tf.type === 'player' || tf.type === 'resource') continue;
+          if (!tf || tf.type === 'player' || tf.type === 'resource' || tf.type === 'item' || tf.type === 'building') continue;
           const tp = world.getComponent<PositionComponent>(targetId, C.Position)!;
           const dx = tp.x - proj.x;
           const dy = tp.y - proj.y;
@@ -819,7 +914,7 @@ async function main(): Promise<void> {
 
     if (state === GameState.Playing) {
       hud.update(world, width, height);
-      weaponHotbar.update(selectedWeapon, attackCooldown, WEAPON_COOLDOWNS[selectedWeapon], width, height);
+      weaponHotbar.update(selectedWeapon, attackCooldown, WEAPON_COOLDOWNS[selectedWeapon], width, height, buildModeActive);
     }
 
     const tileX = Math.floor(camera.x / TILE_SIZE);

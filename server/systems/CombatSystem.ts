@@ -107,8 +107,13 @@ export class CombatSystem {
       // Enemies don't attack portals
       if (srcFaction?.type === 'enemy' && tgtFaction?.type === 'portal') continue;
 
-      // Resource nodes are not damageable
-      if (tgtFaction?.type === 'resource') continue;
+      // Item drops are not damageable
+      if (tgtFaction?.type === 'item') continue;
+      // Enemies can't damage resource nodes (only players can harvest them)
+      if (srcFaction?.type === 'enemy' && tgtFaction?.type === 'resource') continue;
+
+      // Player attacks don't damage own buildings (no friendly fire on structures)
+      if (srcFaction?.type === 'player' && tgtFaction?.type === 'building') continue;
 
       const tgtPos = world.getComponent<PositionComponent>(targetId, C.Position)!;
       const dx = tgtPos.x - attackX;

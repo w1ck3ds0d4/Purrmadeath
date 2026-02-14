@@ -15,7 +15,7 @@ const COOLDOWN_OVERLAY = 0x000000;
 // Slot labels - slots 0-1 are weapons, 2-4 abilities, 5 potion, 6 build hammer
 const SLOT_LABELS = ['Sword', 'Bow', 'Skill', 'Skill', 'Skill', 'Potion', 'Build'];
 const SLOT_KEYS   = ['1', '2', 'Q', 'E', 'R', '3', 'B'];
-const LOCKED_AFTER = 2; // slots >= this index are locked placeholders
+const UNLOCKED_SLOTS = new Set([0, 1, 6]); // weapon slots + build hammer
 
 /** Total pixel width of the hotbar (exported so HUD bars can match). */
 export const HOTBAR_TOTAL_W = SLOT_COUNT * SLOT_SIZE + (SLOT_COUNT - 1) * SLOT_GAP;
@@ -39,7 +39,7 @@ export class WeaponHotbar {
     this.container.addChild(this.gfx);
 
     for (let i = 0; i < SLOT_COUNT; i++) {
-      const locked = i >= LOCKED_AFTER;
+      const locked = !UNLOCKED_SLOTS.has(i);
       const keyText = new Text({
         text: SLOT_KEYS[i],
         style: { fontSize: 11, fill: locked ? 0x3a3a4a : 0x8a9ab0, fontFamily: 'monospace' },
@@ -63,6 +63,7 @@ export class WeaponHotbar {
     cooldownMax: number,
     screenW: number,
     screenH: number,
+    buildModeActive = false,
   ): void {
     this.gfx.clear();
 
@@ -72,8 +73,8 @@ export class WeaponHotbar {
     for (let i = 0; i < SLOT_COUNT; i++) {
       const x = startX + i * (SLOT_SIZE + SLOT_GAP);
       const y = startY;
-      const locked = i >= LOCKED_AFTER;
-      const isSelected = !locked && i === selected;
+      const locked = !UNLOCKED_SLOTS.has(i);
+      const isSelected = !locked && (i === 6 ? buildModeActive : i === selected);
 
       // Background
       this.gfx.rect(x, y, SLOT_SIZE, SLOT_SIZE);

@@ -105,6 +105,16 @@ export enum MessageType {
   /** Server → all: authoritative wave timer sync (pause/resume + drift correction). */
   WAVE_TIMER_SYNC = 'WAVE_TIMER_SYNC',
 
+  // ── Buildings (Phase 5) ──────────────────────────────────────────────────
+  /** Client → Server: player attempts to place a building. */
+  BUILD_PLACE = 'BUILD_PLACE',
+  /** Server → placing client: placement confirmed or rejected. */
+  BUILD_CONFIRM = 'BUILD_CONFIRM',
+  /** Server → all: a building entity was destroyed. */
+  BUILD_DESTROYED = 'BUILD_DESTROYED',
+  /** Server → all: the campfire was destroyed — run ends. */
+  CAMPFIRE_DESTROYED = 'CAMPFIRE_DESTROYED',
+
   // ── Debug ─────────────────────────────────────────────────────────────────
   /** Client → Server: spawn a wave of enemies around the sender (dev tool). */
   DEBUG_SPAWN_ENEMIES = 'DEBUG_SPAWN_ENEMIES',
@@ -233,7 +243,7 @@ export interface EntitySnapshot {
   /** Slot index if this is a player entity. Absent for enemies. */
   slot?: number;
   /** Faction - used by the client renderer to pick the visual. */
-  faction?: 'player' | 'enemy' | 'portal' | 'resource' | 'item';
+  faction?: 'player' | 'enemy' | 'portal' | 'resource' | 'item' | 'building';
   x: number;
   y: number;
   vx: number;
@@ -248,6 +258,8 @@ export interface EntitySnapshot {
   itemQuantity?: number;
   /** True if this player entity is in the downed state. */
   downed?: boolean;
+  /** Present only for 'building' faction entities. */
+  buildingType?: import('./components').BuildingType;
 }
 
 /** Full world snapshot sent on game start or player rejoin. */
@@ -503,6 +515,35 @@ export interface GameOverMessage extends BaseMessage {
   timePlayed: number; // seconds
 }
 
+// ─── Buildings (Phase 5) ──────────────────────────────────────────────────────
+
+/** Client → Server: player attempts to place a building. */
+export interface BuildPlaceMessage extends BaseMessage {
+  type: typeof MessageType.BUILD_PLACE;
+  buildingType: import('./components').BuildingType;
+  /** World-pixel position (server will grid-snap). */
+  x: number;
+  y: number;
+}
+
+/** Server → placing client: placement confirmed or rejected. */
+export interface BuildConfirmMessage extends BaseMessage {
+  type: typeof MessageType.BUILD_CONFIRM;
+  success: boolean;
+  reason?: string;
+}
+
+/** Server → all: a building entity was destroyed. */
+export interface BuildDestroyedMessage extends BaseMessage {
+  type: typeof MessageType.BUILD_DESTROYED;
+  entityId: number;
+}
+
+/** Server → all: the campfire was destroyed — run ends. */
+export interface CampfireDestroyedMessage extends BaseMessage {
+  type: typeof MessageType.CAMPFIRE_DESTROYED;
+}
+
 // ─── Union ────────────────────────────────────────────────────────────────────
 
 export type AnyMessage =
@@ -544,4 +585,8 @@ export type AnyMessage =
   | PlayerRespawnedMessage
   | PartyWipeMessage
   | GameOverMessage
+  | BuildPlaceMessage
+  | BuildConfirmMessage
+  | BuildDestroyedMessage
+  | CampfireDestroyedMessage
   | BaseMessage;

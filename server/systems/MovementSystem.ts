@@ -16,6 +16,7 @@ import {
   PORTAL_RADIUS,
   RESOURCE_NODE_RADIUS,
   ENTITY_SEPARATION_ITERATIONS,
+  BUILDING_HALF_EXTENT,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
@@ -83,12 +84,15 @@ function circleAABBPush(
 export class MovementSystem {
   /** Cached resource node positions - refreshed each update for solid-block collision. */
   private resourceCache: PositionComponent[] = [];
+  /** Cached building positions - refreshed each update for solid-block collision. */
+  private buildingCache: PositionComponent[] = [];
 
   constructor(private readonly generator: WorldGenerator) {}
 
   update(world: World, dt: number): void {
-    // Cache resource nodes so overlapsAny can treat them as solid blocks
+    // Cache solid entities so overlapsAny can treat them as solid blocks
     this.cacheResources(world);
+    this.cacheBuildings(world);
     for (const id of world.query(C.Position, C.Velocity, C.Speed, C.PlayerInput)) {
       // Skip downed entities - they cannot move
       if (world.hasComponent(id, C.Downed)) continue;
@@ -166,9 +170,10 @@ export class MovementSystem {
     // Collect all solid entities
     const bodies: { id: number; pos: PositionComponent; r: number; movable: boolean; square: boolean }[] = [];
     for (const id of world.query(C.Position, C.Faction)) {
+      if (world.hasComponent(id, C.Projectile)) continue; // projectiles aren't solid bodies
       const faction = world.getComponent<FactionComponent>(id, C.Faction)!;
-      // Resource nodes are handled as solid blocks in overlapsAny - skip here
-      if (faction.type === 'resource') continue;
+      // Resource nodes and buildings are handled as solid blocks in overlapsAny - skip here
+      if (faction.type === 'resource' || faction.type === 'building') continue;
       const r = getEntityRadius(faction.type);
       if (r <= 0) continue;
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
@@ -250,6 +255,17 @@ export class MovementSystem {
     }
   }
 
+  /** Cache building positions for solid-block collision checks. */
+  private cacheBuildings(world: World): void {
+    this.buildingCache.length = 0;
+    for (const id of world.query(C.Position, C.Faction)) {
+      const f = world.getComponent<FactionComponent>(id, C.Faction)!;
+      if (f.type === 'building') {
+        this.buildingCache.push(world.getComponent<PositionComponent>(id, C.Position)!);
+      }
+    }
+  }
+
   private overlapsAny(px: number, py: number): boolean {
     const r = PLAYER_RADIUS - 1;
     if (
@@ -262,6 +278,12 @@ export class MovementSystem {
     // Resource nodes act as solid blocks (circle-vs-AABB)
     for (const node of this.resourceCache) {
       if (circleAABBPush(px, py, PLAYER_RADIUS, node.x, node.y, RESOURCE_NODE_RADIUS)) {
+        return true;
+      }
+    }
+    // Buildings act as solid blocks (circle-vs-AABB)
+    for (const bldg of this.buildingCache) {
+      if (circleAABBPush(px, py, PLAYER_RADIUS, bldg.x, bldg.y, BUILDING_HALF_EXTENT)) {
         return true;
       }
     }

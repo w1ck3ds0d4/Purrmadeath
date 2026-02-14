@@ -83,8 +83,13 @@ export class ProjectileSystem {
         // Enemy projectiles don't hit portals
         if (projFaction?.type === 'enemy' && tgtFaction?.type === 'portal') continue;
 
-        // Resource nodes are not damageable
-        if (tgtFaction?.type === 'resource') continue;
+        // Item drops are not damageable
+        if (tgtFaction?.type === 'item') continue;
+        // Enemy projectiles can't damage resource nodes (only players can harvest them)
+        if (projFaction?.type === 'enemy' && tgtFaction?.type === 'resource') continue;
+
+        // Player projectiles don't damage own buildings (no friendly fire on structures)
+        if (projFaction?.type === 'player' && tgtFaction?.type === 'building') continue;
 
         // Skip the owner entity (can't shoot yourself)
         if (targetId === proj.ownerId) continue;

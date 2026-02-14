@@ -19,6 +19,7 @@ import type {
   PlayerLeftMessage,
   SessionClosedMessage,
   ChatMessage,
+  BuildPlaceMessage,
 } from '@shared/protocol';
 import { GAME_VERSION, RECONNECT_GRACE_MS } from '@shared/constants';
 
@@ -73,6 +74,7 @@ export class SessionManager {
     socket.on(MessageType.INPUT,          (c, m) => this.onInput(c, m as InputMessage));
     socket.on(MessageType.ATTACK,               (c, m) => this.onAttack(c, m as AttackMessage));
     socket.on(MessageType.INTERACT,             (c, m) => this.onInteract(c, m as InteractMessage));
+    socket.on(MessageType.BUILD_PLACE,          (c, m) => this.onBuildPlace(c, m as BuildPlaceMessage));
     socket.on(MessageType.DEBUG_SPAWN_ENEMIES,  (c, m) => this.onDebugAction(c, () => this.onDebugSpawnEnemies(c, m as DebugSpawnEnemiesMessage)));
     socket.on(MessageType.DEBUG_WAVE_SKIP,     (c) => this.onDebugAction(c, () => this.session?.debugWaveSkip((cl, msg) => this.socket.send(cl, msg))));
     socket.on(MessageType.DEBUG_WAVE_PAUSE,    (c) => this.onDebugAction(c, () => this.session?.debugWavePause((cl, msg) => this.socket.send(cl, msg))));
@@ -301,6 +303,10 @@ export class SessionManager {
 
   private onInteract(client: ConnectedClient, msg: InteractMessage): void {
     this.session?.handleInteract(client.id, msg, (c, m) => this.socket.send(c, m));
+  }
+
+  private onBuildPlace(client: ConnectedClient, msg: BuildPlaceMessage): void {
+    this.session?.handleBuildPlace(client.id, msg, (c, m) => this.socket.send(c, m));
   }
 
   /** Host-only guard for debug commands. */

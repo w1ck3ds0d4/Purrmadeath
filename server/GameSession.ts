@@ -14,8 +14,9 @@ import {
   ResourcesComponent,
   ItemDropComponent,
   DownedComponent,
+  BuildingComponent,
 } from '@shared/components';
-import type { ResourceType } from '@shared/components';
+import type { ResourceType, BuildingType } from '@shared/components';
 import {
   TILE_SIZE,
   PLAYER_RADIUS,
@@ -52,6 +53,11 @@ import {
   WIPE_1_RESOURCE_LOSS_PERCENT,
   MAX_ATTACK_POSITION_TOLERANCE,
   TICK_MS,
+  CAMPFIRE_MAX_HEALTH,
+  WALL_MAX_HEALTH,
+  WALL_COST_WOOD,
+  BUILDING_HALF_EXTENT,
+  RESOURCE_NODE_RADIUS,
 } from '@shared/constants';
 import { RESOURCE_STATS, RESOURCE_SPAWN_TABLE, TILE_SPAWN_CHANCE } from '@shared/data/ResourceSpawnTable';
 import { LOOT_TABLES } from '@shared/data/LootTables';
@@ -83,6 +89,10 @@ import type {
   PlayerRespawnedMessage,
   PartyWipeMessage,
   GameOverMessage,
+  BuildPlaceMessage,
+  BuildConfirmMessage,
+  BuildDestroyedMessage,
+  CampfireDestroyedMessage,
 } from '@shared/protocol';
 import { ItemDropSystem, PickupResult } from './systems/ItemDropSystem';
 import type { ConnectedClient } from './net/ServerSocket';
@@ -178,6 +188,9 @@ export class GameSession {
   private wipeCount = 0;
   /** True after GAME_OVER is sent - stops all death/respawn/wave processing. */
   private gameOver = false;
+
+  /** Entity ID of the campfire (set on game start). -1 = no campfire. */
+  private campfireEntityId = -1;
 
   // ── Run stats ──────────────────────────────────────────────────────────────
   private enemiesKilled = 0;
@@ -321,14 +334,16 @@ export class GameSession {
     this.startTime = Date.now();
     this.enemiesKilled = 0;
 
-    // Find a single walkable origin and spread players around it
+    // Find a single walkable origin and spread players around it.
+    // Players form a ring around the campfire (offset from origin centre)
+    // so nobody spawns inside the campfire.
     const origin = findSpawnPoint(this.generator);
     this.spawnOrigin = origin;
-    const OFFSET = 40; // pixels apart
+    const OFFSET = 48; // pixels from centre — clears campfire AABB + player radius
     const offsets = [
-      { dx:  0,      dy:  0 },
-      { dx:  OFFSET, dy:  0 },
-      { dx:  0,      dy:  OFFSET },
+      { dx: -OFFSET, dy: -OFFSET },
+      { dx:  OFFSET, dy: -OFFSET },
+      { dx: -OFFSET, dy:  OFFSET },
       { dx:  OFFSET, dy:  OFFSET },
     ];
 
@@ -347,6 +362,37 @@ export class GameSession {
         { x: sx, y: sy },
       );
       this.playerEntityIds.add(player.entityId);
+    }
+
+    // Spawn campfire at the centre of the spawn area
+    this.campfireEntityId = this.spawnBuilding(
+      origin.x, origin.y,
+      'campfire',
+      CAMPFIRE_MAX_HEALTH,
+      true,
+    );
+
+    // Pre-generate resources around spawn so they're in the first SNAPSHOT
+    const pcx = Math.floor(origin.x / (TILE_SIZE * CHUNK_SIZE));
+    const pcy = Math.floor(origin.y / (TILE_SIZE * CHUNK_SIZE));
+    const R = GameSession.RESOURCE_GEN_RADIUS;
+    for (let cx = pcx - R; cx <= pcx + R; cx++) {
+      for (let cy = pcy - R; cy <= pcy + R; cy++) {
+        const key = `${cx},${cy}`;
+        this.processedChunks.add(key);
+        this.generateResourcesForChunk(cx, cy);
+      }
+    }
+
+    // Nudge any player whose offset landed on an invalid position
+    for (const player of this.players.values()) {
+      if (!player.entityId) continue;
+      const pos = this.world.getComponent<PositionComponent>(player.entityId, C.Position);
+      if (!pos) continue;
+      const safe = this.findSafeSpawnNear(pos.x, pos.y);
+      pos.x = safe.x;
+      pos.y = safe.y;
+      spawnPositions[player.slot] = [safe.x, safe.y];
     }
 
     // Begin wave 1 prep countdown
@@ -387,6 +433,57 @@ export class GameSession {
     const ty = Math.floor(wy / TILE_SIZE);
     const tileId = this.generator.getTile(tx, ty);
     return TILE_DEFS[tileId]?.walkable ?? false;
+  }
+
+  /**
+   * Find a safe spawn position near (wx, wy) that is walkable and doesn't
+   * overlap any existing resource node or building. Spirals outward tile-by-tile.
+   */
+  private findSafeSpawnNear(wx: number, wy: number): { x: number; y: number } {
+    if (this.isSpawnClear(wx, wy)) return { x: wx, y: wy };
+    const startTx = Math.floor(wx / TILE_SIZE);
+    const startTy = Math.floor(wy / TILE_SIZE);
+    for (let r = 1; r < 20; r++) {
+      for (let dx = -r; dx <= r; dx++) {
+        for (let dy = -r; dy <= r; dy++) {
+          if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+          const cx = (startTx + dx) * TILE_SIZE + TILE_SIZE / 2;
+          const cy = (startTy + dy) * TILE_SIZE + TILE_SIZE / 2;
+          if (this.isSpawnClear(cx, cy)) return { x: cx, y: cy };
+        }
+      }
+    }
+    return { x: wx, y: wy }; // fallback
+  }
+
+  /** True if position is walkable and doesn't overlap any resource/building entity. */
+  private isSpawnClear(wx: number, wy: number): boolean {
+    if (!this.isWalkable(wx, wy)) return false;
+    for (const id of this.world.query(C.Position, C.Faction)) {
+      const f = this.world.getComponent<FactionComponent>(id, C.Faction)!;
+      if (f.type !== 'resource' && f.type !== 'building') continue;
+      const p = this.world.getComponent<PositionComponent>(id, C.Position)!;
+      const dx = Math.abs(p.x - wx);
+      const dy = Math.abs(p.y - wy);
+      if (dx < PLAYER_RADIUS + RESOURCE_NODE_RADIUS && dy < PLAYER_RADIUS + RESOURCE_NODE_RADIUS) return false;
+    }
+    return true;
+  }
+
+  /** Create a building entity at (x, y). Returns the entity ID. */
+  private spawnBuilding(
+    x: number, y: number,
+    buildingType: BuildingType,
+    maxHp: number,
+    permanent: boolean,
+  ): number {
+    const id = this.world.createEntity();
+    this.world.addComponent(id, C.Position,  { x, y });
+    this.world.addComponent(id, C.Velocity,  { vx: 0, vy: 0 });
+    this.world.addComponent(id, C.Health,    { current: maxHp, max: maxHp });
+    this.world.addComponent(id, C.Faction,   { type: 'building' });
+    this.world.addComponent(id, C.Building,  { buildingType, permanent } as BuildingComponent);
+    return id;
   }
 
   /** Create a portal entity at (x, y) for the given wave. */
@@ -535,6 +632,12 @@ export class GameSession {
 
         const wx = tx * TILE_SIZE + TILE_SIZE / 2;
         const wy = ty * TILE_SIZE + TILE_SIZE / 2;
+
+        // Don't spawn resource nodes too close to the campfire/spawn origin
+        const dxO = wx - this.spawnOrigin.x;
+        const dyO = wy - this.spawnOrigin.y;
+        if (dxO * dxO + dyO * dyO < 80 * 80) continue;
+
         this.spawnResourceNode(wx, wy, picked);
         spawned++;
       }
@@ -728,6 +831,79 @@ export class GameSession {
     }
   }
 
+  // ── Building Placement (Phase 5) ───────────────────────────────────────────
+
+  /**
+   * Called when a client sends BUILD_PLACE to place a building.
+   */
+  handleBuildPlace(
+    clientId: string,
+    msg: BuildPlaceMessage,
+    send: SendFn,
+  ): void {
+    if (this.phase !== 'playing' || this.paused || this.gameOver) return;
+    const player = this.players.get(clientId);
+    if (!player || player.entityId === null) return;
+    if (this.world.hasComponent(player.entityId, C.Downed)) return;
+    if (this.respawnTimers.has(clientId)) return;
+    if (!Number.isFinite(msg.x) || !Number.isFinite(msg.y)) return;
+
+    // Validate building type
+    if (msg.buildingType !== 'wall') {
+      send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'unknown_type' } as BuildConfirmMessage);
+      return;
+    }
+
+    // Grid-snap to tile centre
+    const tileX = Math.floor(msg.x / TILE_SIZE);
+    const tileY = Math.floor(msg.y / TILE_SIZE);
+    const snapX = tileX * TILE_SIZE + TILE_SIZE / 2;
+    const snapY = tileY * TILE_SIZE + TILE_SIZE / 2;
+
+    // Must be on a walkable tile
+    if (!this.isWalkable(snapX, snapY)) {
+      send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'not_walkable' } as BuildConfirmMessage);
+      return;
+    }
+
+    // Must not collide with existing buildings or resources
+    if (this.footprintCollides(snapX, snapY)) {
+      send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'blocked' } as BuildConfirmMessage);
+      return;
+    }
+
+    // Validate resources
+    const res = this.world.getComponent<ResourcesComponent>(player.entityId, C.Resources);
+    if (!res || res.wood < WALL_COST_WOOD) {
+      send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'insufficient_resources' } as BuildConfirmMessage);
+      return;
+    }
+
+    // Deduct cost
+    res.wood -= WALL_COST_WOOD;
+    const resUpdate: ResourceUpdateMessage = {
+      type: MessageType.RESOURCE_UPDATE,
+      wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold,
+    };
+    send(player.client, resUpdate);
+
+    // Spawn the wall
+    this.spawnBuilding(snapX, snapY, 'wall', WALL_MAX_HEALTH, false);
+    send(player.client, { type: MessageType.BUILD_CONFIRM, success: true } as BuildConfirmMessage);
+  }
+
+  /** Returns true if a 1×1-tile building footprint at (cx, cy) overlaps an existing entity. */
+  private footprintCollides(cx: number, cy: number): boolean {
+    const half = BUILDING_HALF_EXTENT;
+    for (const id of this.world.query(C.Position, C.Faction)) {
+      const f = this.world.getComponent<FactionComponent>(id, C.Faction)!;
+      if (f.type !== 'building' && f.type !== 'resource') continue;
+      const pos = this.world.getComponent<PositionComponent>(id, C.Position)!;
+      if (Math.abs(pos.x - cx) < half * 2 && Math.abs(pos.y - cy) < half * 2) return true;
+    }
+    return false;
+  }
+
   /**
    * Called when a client presses E to interact with a nearby non-auto-pickup item.
    */
@@ -914,6 +1090,33 @@ export class GameSession {
         this.spawnLootDrops(deadId);
         this.enemyCount--;
         this.enemiesKilled++;
+      }
+
+      // Building → broadcast destruction, check campfire game-over
+      if (faction?.type === 'building' && send) {
+        const destroyedMsg: BuildDestroyedMessage = {
+          type: MessageType.BUILD_DESTROYED,
+          entityId: deadId,
+        };
+        for (const p of this.players.values()) send(p.client, destroyedMsg);
+
+        if (deadId === this.campfireEntityId && !this.gameOver) {
+          this.gameOver = true;
+          const campfireMsg: CampfireDestroyedMessage = {
+            type: MessageType.CAMPFIRE_DESTROYED,
+          };
+          for (const p of this.players.values()) send(p.client, campfireMsg);
+
+          const timePlayed = Math.floor((Date.now() - this.startTime) / 1000);
+          const gameOverMsg: GameOverMessage = {
+            type: MessageType.GAME_OVER,
+            waveReached: this.currentWave,
+            reason: 'campfire_destroyed',
+            enemiesKilled: this.enemiesKilled,
+            timePlayed,
+          };
+          for (const p of this.players.values()) send(p.client, gameOverMsg);
+        }
       }
 
       this.world.destroyEntity(deadId);
@@ -1339,6 +1542,10 @@ export class GameSession {
         snap.itemQuantity = drop.quantity;
       }
 
+      // Building metadata
+      const bldg = this.world.getComponent<BuildingComponent>(id, C.Building);
+      if (bldg) snap.buildingType = bldg.buildingType;
+
       // Downed state
       if (this.world.hasComponent(id, C.Downed)) snap.downed = true;
 
@@ -1354,7 +1561,8 @@ export class GameSession {
       prev.hp !== curr.hp ||
       prev.downed !== curr.downed ||
       prev.resourceType !== curr.resourceType ||
-      prev.itemType !== curr.itemType
+      prev.itemType !== curr.itemType ||
+      prev.buildingType !== curr.buildingType
     );
   }
 
@@ -1537,11 +1745,12 @@ export class GameSession {
     if (hp) { hp.current = hp.max; }
 
     const pos = this.world.getComponent<PositionComponent>(sp.entityId, C.Position);
+    const OFFSET = 48;
     const offsets = [
-      { dx: 0, dy: 0 }, { dx: 40, dy: 0 },
-      { dx: 0, dy: 40 }, { dx: 40, dy: 40 },
+      { dx: -OFFSET, dy: -OFFSET }, { dx:  OFFSET, dy: -OFFSET },
+      { dx: -OFFSET, dy:  OFFSET }, { dx:  OFFSET, dy:  OFFSET },
     ];
-    const off = offsets[sp.slot] ?? { dx: 0, dy: 0 };
+    const off = offsets[sp.slot] ?? { dx: -OFFSET, dy: -OFFSET };
     if (pos) {
       pos.x = this.spawnOrigin.x + off.dx;
       pos.y = this.spawnOrigin.y + off.dy;
