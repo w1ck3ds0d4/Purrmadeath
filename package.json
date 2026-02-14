@@ -55,6 +55,9 @@
       "oneClick": true,
       "allowToChangeInstallationDirectory": false
     },
+    "releaseInfo": {
+      "releaseName": "Purrmadeath v${version}"
+    },
     "publish": {
       "provider": "github",
       "owner": "WickedSoda",

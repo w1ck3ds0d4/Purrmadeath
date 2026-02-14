@@ -740,7 +740,7 @@ async function main(): Promise<void> {
           for (const targetId of world.query(C.Position, C.Health, C.Faction)) {
             if (targetId === localEntityId) continue;
             const tf = world.getComponent<FactionComponent>(targetId, C.Faction);
-            if (tf?.type === 'player') continue;
+            if (tf?.type === 'player' || tf?.type === 'resource') continue;
             const tp = world.getComponent<PositionComponent>(targetId, C.Position)!;
             const tdx = tp.x - pos.x;
             const tdy = tp.y - pos.y;
@@ -770,7 +770,7 @@ async function main(): Promise<void> {
       for (const [projId, proj] of projectileRenderer.getProjectiles()) {
         for (const targetId of world.query(C.Position, C.Health, C.Faction)) {
           const tf = world.getComponent<FactionComponent>(targetId, C.Faction);
-          if (!tf || tf.type === 'player') continue;
+          if (!tf || tf.type === 'player' || tf.type === 'resource') continue;
           const tp = world.getComponent<PositionComponent>(targetId, C.Position)!;
           const dx = tp.x - proj.x;
           const dy = tp.y - proj.y;

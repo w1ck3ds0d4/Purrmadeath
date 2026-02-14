@@ -83,6 +83,9 @@ export class ProjectileSystem {
         // Enemy projectiles don't hit portals
         if (projFaction?.type === 'enemy' && tgtFaction?.type === 'portal') continue;
 
+        // Resource nodes are not damageable
+        if (tgtFaction?.type === 'resource') continue;
+
         // Skip the owner entity (can't shoot yourself)
         if (targetId === proj.ownerId) continue;
 

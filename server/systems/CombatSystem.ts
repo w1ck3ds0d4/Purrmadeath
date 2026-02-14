@@ -107,6 +107,9 @@ export class CombatSystem {
       // Enemies don't attack portals
       if (srcFaction?.type === 'enemy' && tgtFaction?.type === 'portal') continue;
 
+      // Resource nodes are not damageable
+      if (tgtFaction?.type === 'resource') continue;
+
       const tgtPos = world.getComponent<PositionComponent>(targetId, C.Position)!;
       const dx = tgtPos.x - attackX;
       const dy = tgtPos.y - attackY;
