@@ -56,8 +56,17 @@ import {
   CAMPFIRE_MAX_HEALTH,
   WALL_MAX_HEALTH,
   WALL_COST_WOOD,
-  BUILDING_HALF_EXTENT,
   RESOURCE_NODE_RADIUS,
+  WAREHOUSE_MAX_HEALTH,
+  LUMBERMILL_MAX_HEALTH,
+  MINE_MAX_HEALTH,
+  FARM_MAX_HEALTH,
+  WAREHOUSE_DEPOSIT_RADIUS,
+  DEMOLISH_REFUND_PERCENT,
+  BUILDING_COSTS,
+  BUILDING_SIZES,
+  buildingHalfExtent,
+  snapBuildingPosition,
 } from '@shared/constants';
 import { RESOURCE_STATS, RESOURCE_SPAWN_TABLE, TILE_SPAWN_CHANCE } from '@shared/data/ResourceSpawnTable';
 import { LOOT_TABLES } from '@shared/data/LootTables';
@@ -93,6 +102,8 @@ import type {
   BuildConfirmMessage,
   BuildDestroyedMessage,
   CampfireDestroyedMessage,
+  BuildDemolishMessage,
+  WarehouseUpdateMessage,
 } from '@shared/protocol';
 import { ItemDropSystem, PickupResult } from './systems/ItemDropSystem';
 import type { ConnectedClient } from './net/ServerSocket';
@@ -191,6 +202,9 @@ export class GameSession {
 
   /** Entity ID of the campfire (set on game start). -1 = no campfire. */
   private campfireEntityId = -1;
+
+  private warehouseIds = new Set<number>();
+  private warehousePool = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0 };
 
   // ── Run stats ──────────────────────────────────────────────────────────────
   private enemiesKilled = 0;
@@ -339,7 +353,7 @@ export class GameSession {
     // so nobody spawns inside the campfire.
     const origin = findSpawnPoint(this.generator);
     this.spawnOrigin = origin;
-    const OFFSET = 48; // pixels from centre — clears campfire AABB + player radius
+    const OFFSET = 72; // pixels from centre — clears campfire AABB + player radius
     const offsets = [
       { dx: -OFFSET, dy: -OFFSET },
       { dx:  OFFSET, dy: -OFFSET },
@@ -636,7 +650,7 @@ export class GameSession {
         // Don't spawn resource nodes too close to the campfire/spawn origin
         const dxO = wx - this.spawnOrigin.x;
         const dyO = wy - this.spawnOrigin.y;
-        if (dxO * dxO + dyO * dyO < 80 * 80) continue;
+        if (dxO * dxO + dyO * dyO < 120 * 120) continue;
 
         this.spawnResourceNode(wx, wy, picked);
         spawned++;
@@ -849,57 +863,228 @@ export class GameSession {
     if (!Number.isFinite(msg.x) || !Number.isFinite(msg.y)) return;
 
     // Validate building type
-    if (msg.buildingType !== 'wall') {
+    if (!BUILDING_COSTS[msg.buildingType]) {
       send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'unknown_type' } as BuildConfirmMessage);
       return;
     }
 
-    // Grid-snap to tile centre
-    const tileX = Math.floor(msg.x / TILE_SIZE);
-    const tileY = Math.floor(msg.y / TILE_SIZE);
-    const snapX = tileX * TILE_SIZE + TILE_SIZE / 2;
-    const snapY = tileY * TILE_SIZE + TILE_SIZE / 2;
+    // Grid-snap to correct position for building size
+    const { x: snapX, y: snapY } = snapBuildingPosition(msg.x, msg.y, msg.buildingType);
 
-    // Must be on a walkable tile
-    if (!this.isWalkable(snapX, snapY)) {
-      send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'not_walkable' } as BuildConfirmMessage);
-      return;
+    // Must be on walkable tiles (check ALL tiles in footprint)
+    const tileCount = BUILDING_SIZES[msg.buildingType] ?? 1;
+    const half = buildingHalfExtent(msg.buildingType);
+    const startTX = Math.floor((snapX - half) / TILE_SIZE);
+    const startTY = Math.floor((snapY - half) / TILE_SIZE);
+    for (let dy = 0; dy < tileCount; dy++) {
+      for (let dx = 0; dx < tileCount; dx++) {
+        const tx = startTX + dx;
+        const ty = startTY + dy;
+        const tileId = this.generator.getTile(tx, ty);
+        if (!(TILE_DEFS[tileId]?.walkable ?? false)) {
+          send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'not_walkable' } as BuildConfirmMessage);
+          return;
+        }
+      }
     }
 
     // Must not collide with existing buildings or resources
-    if (this.footprintCollides(snapX, snapY)) {
+    if (this.footprintCollides(snapX, snapY, msg.buildingType)) {
       send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'blocked' } as BuildConfirmMessage);
       return;
     }
 
-    // Validate resources
-    const res = this.world.getComponent<ResourcesComponent>(player.entityId, C.Resources);
-    if (!res || res.wood < WALL_COST_WOOD) {
+    // Validate and deduct resources
+    if (!this.deductBuildingCost(msg.buildingType, player, send)) {
       send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'insufficient_resources' } as BuildConfirmMessage);
       return;
     }
 
-    // Deduct cost
-    res.wood -= WALL_COST_WOOD;
-    const resUpdate: ResourceUpdateMessage = {
-      type: MessageType.RESOURCE_UPDATE,
-      wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold,
+    // Spawn the building
+    const HP_MAP: Record<string, number> = {
+      campfire: CAMPFIRE_MAX_HEALTH, wall: WALL_MAX_HEALTH, warehouse: WAREHOUSE_MAX_HEALTH,
+      lumbermill: LUMBERMILL_MAX_HEALTH, mine: MINE_MAX_HEALTH, farm: FARM_MAX_HEALTH,
     };
-    send(player.client, resUpdate);
+    const maxHp = HP_MAP[msg.buildingType] ?? WALL_MAX_HEALTH;
+    const id = this.spawnBuilding(snapX, snapY, msg.buildingType, maxHp, false);
 
-    // Spawn the wall
-    this.spawnBuilding(snapX, snapY, 'wall', WALL_MAX_HEALTH, false);
+    if (msg.buildingType === 'warehouse') {
+      this.warehouseIds.add(id);
+      this.broadcastWarehouseUpdate(send);
+    }
+
     send(player.client, { type: MessageType.BUILD_CONFIRM, success: true } as BuildConfirmMessage);
   }
 
-  /** Returns true if a 1×1-tile building footprint at (cx, cy) overlaps an existing entity. */
-  private footprintCollides(cx: number, cy: number): boolean {
-    const half = BUILDING_HALF_EXTENT;
+  private deductBuildingCost(buildingType: string, player: any, send: SendFn): boolean {
+    const costs = BUILDING_COSTS[buildingType] ?? {};
+    if (this.warehouseIds.size > 0) {
+      for (const [res, amount] of Object.entries(costs)) {
+        if ((this.warehousePool as Record<string, number>)[res] < amount!) return false;
+      }
+      for (const [res, amount] of Object.entries(costs)) {
+        (this.warehousePool as Record<string, number>)[res] -= amount!;
+      }
+      this.broadcastWarehouseUpdate(send);
+      return true;
+    } else {
+      const res = this.world.getComponent<any>(player.entityId, C.Resources);
+      if (!res) return false;
+      for (const [key, amount] of Object.entries(costs)) {
+        if ((res as Record<string, number>)[key] < amount!) return false;
+      }
+      for (const [key, amount] of Object.entries(costs)) {
+        (res as Record<string, number>)[key] -= amount!;
+      }
+      const resUpdate = {
+        type: MessageType.RESOURCE_UPDATE,
+        wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold,
+      };
+      send(player.client, resUpdate);
+      return true;
+    }
+  }
+
+  private broadcastWarehouseUpdate(send: SendFn): void {
+    const msg = {
+      type: MessageType.WAREHOUSE_UPDATE,
+      ...this.warehousePool,
+      exists: this.warehouseIds.size > 0,
+    };
+    for (const p of this.players.values()) send(p.client, msg);
+  }
+
+  handleBuildDemolish(clientId: string, msg: BuildDemolishMessage, send: SendFn): void {
+    if (this.phase !== 'playing' || this.paused || this.gameOver) return;
+    const player = this.players.get(clientId);
+    if (!player || player.entityId === null) return;
+    if (this.world.hasComponent(player.entityId, C.Downed)) return;
+    if (this.respawnTimers.has(clientId)) return;
+    if (!Number.isFinite(msg.x) || !Number.isFinite(msg.y)) return;
+
+    let targetId = -1;
+    let bldg: BuildingComponent | undefined;
+    for (const id of this.world.query(C.Position, C.Building)) {
+      const pos = this.world.getComponent<PositionComponent>(id, C.Position)!;
+      const b = this.world.getComponent<BuildingComponent>(id, C.Building)!;
+      const bHalf = buildingHalfExtent(b.buildingType);
+      if (Math.abs(msg.x - pos.x) < bHalf && Math.abs(msg.y - pos.y) < bHalf) {
+        bldg = b;
+        targetId = id;
+        break;
+      }
+    }
+    if (targetId === -1 || !bldg) {
+      send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'no_building' } as BuildConfirmMessage);
+      return;
+    }
+    if (bldg.permanent) {
+      send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'permanent' } as BuildConfirmMessage);
+      return;
+    }
+
+    const costs = BUILDING_COSTS[bldg.buildingType] ?? {};
+    const isDemolingWarehouse = this.warehouseIds.has(targetId);
+
+    if (this.warehouseIds.size > 0 && !(isDemolingWarehouse && this.warehouseIds.size === 1)) {
+      for (const [res, amount] of Object.entries(costs)) {
+        const refund = Math.floor(amount! * DEMOLISH_REFUND_PERCENT);
+        (this.warehousePool as Record<string, number>)[res] += refund;
+      }
+      this.broadcastWarehouseUpdate(send);
+    } else {
+      const res = this.world.getComponent<any>(player.entityId, C.Resources);
+      if (res) {
+        for (const [key, amount] of Object.entries(costs)) {
+          const refund = Math.floor(amount! * DEMOLISH_REFUND_PERCENT);
+          (res as unknown as Record<string, number>)[key] += refund;
+        }
+        send(player.client, {
+          type: MessageType.RESOURCE_UPDATE,
+          wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold,
+        });
+      }
+    }
+
+    if (isDemolingWarehouse) {
+      this.warehouseIds.delete(targetId);
+      if (this.warehouseIds.size === 0) {
+        this.warehousePool = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0 };
+      }
+      this.broadcastWarehouseUpdate(send);
+    }
+
+    this.world.destroyEntity(targetId);
+    for (const p of this.players.values()) {
+      send(p.client, { type: MessageType.BUILD_DESTROYED, entityId: targetId } as any);
+    }
+    send(player.client, { type: MessageType.BUILD_CONFIRM, success: true } as BuildConfirmMessage);
+  }
+
+  /** Each tick, auto-deposit personal resources into the warehouse pool for players near any warehouse. */
+  private tickWarehouseDeposit(send: SendFn): void {
+    if (this.warehouseIds.size === 0) return;
+
+    // Collect warehouse positions
+    const whPositions: PositionComponent[] = [];
+    for (const wid of this.warehouseIds) {
+      const pos = this.world.getComponent<PositionComponent>(wid, C.Position);
+      if (pos) whPositions.push(pos);
+    }
+    if (whPositions.length === 0) return;
+
+    const r2 = WAREHOUSE_DEPOSIT_RADIUS * WAREHOUSE_DEPOSIT_RADIUS;
+
+    for (const p of this.players.values()) {
+      if (p.entityId === null) continue;
+      const pPos = this.world.getComponent<PositionComponent>(p.entityId, C.Position);
+      if (!pPos) continue;
+
+      // Check proximity to any warehouse
+      let near = false;
+      for (const wPos of whPositions) {
+        const dx = pPos.x - wPos.x;
+        const dy = pPos.y - wPos.y;
+        if (dx * dx + dy * dy <= r2) { near = true; break; }
+      }
+      if (!near) continue;
+
+      const res = this.world.getComponent<ResourcesComponent>(p.entityId, C.Resources);
+      if (!res) continue;
+
+      let transferred = false;
+      for (const key of ['wood', 'stone', 'iron', 'diamond', 'gold'] as const) {
+        if (res[key] > 0) {
+          (this.warehousePool as Record<string, number>)[key] += res[key];
+          res[key] = 0;
+          transferred = true;
+        }
+      }
+      if (transferred) {
+        send(p.client, {
+          type: MessageType.RESOURCE_UPDATE,
+          wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold,
+        });
+        this.broadcastWarehouseUpdate(send);
+      }
+    }
+  }
+
+  /** Returns true if a building footprint at (cx, cy) overlaps an existing entity. */
+  private footprintCollides(cx: number, cy: number, buildingType: string): boolean {
+    const newHalf = buildingHalfExtent(buildingType);
     for (const id of this.world.query(C.Position, C.Faction)) {
       const f = this.world.getComponent<FactionComponent>(id, C.Faction)!;
       if (f.type !== 'building' && f.type !== 'resource') continue;
       const pos = this.world.getComponent<PositionComponent>(id, C.Position)!;
-      if (Math.abs(pos.x - cx) < half * 2 && Math.abs(pos.y - cy) < half * 2) return true;
+      let existingHalf: number;
+      if (f.type === 'building') {
+        const b = this.world.getComponent<BuildingComponent>(id, C.Building);
+        existingHalf = buildingHalfExtent(b?.buildingType ?? 'wall');
+      } else {
+        existingHalf = RESOURCE_NODE_RADIUS;
+      }
+      if (Math.abs(pos.x - cx) < newHalf + existingHalf && Math.abs(pos.y - cy) < newHalf + existingHalf) return true;
     }
     return false;
   }
@@ -1435,6 +1620,9 @@ export class GameSession {
       this.tickRespawnTimers(dt, send);
     }
 
+    // ── Warehouse auto-deposit ─────────────────────────────────────────────
+    this.tickWarehouseDeposit(send);
+
     // ── Wave state machine ────────────────────────────────────────────────────
     if (!this.gameOver) this.tickWave(dt, send);
 
@@ -1745,7 +1933,7 @@ export class GameSession {
     if (hp) { hp.current = hp.max; }
 
     const pos = this.world.getComponent<PositionComponent>(sp.entityId, C.Position);
-    const OFFSET = 48;
+    const OFFSET = 72;
     const offsets = [
       { dx: -OFFSET, dy: -OFFSET }, { dx:  OFFSET, dy: -OFFSET },
       { dx: -OFFSET, dy:  OFFSET }, { dx:  OFFSET, dy:  OFFSET },

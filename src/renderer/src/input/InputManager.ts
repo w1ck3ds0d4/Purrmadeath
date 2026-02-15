@@ -14,6 +14,7 @@ export enum Action {
   WeaponSlot1,
   WeaponSlot2,
   BuildMode,
+  Demolish,
 }
 
 // One or more key strings per action (Set.has is O(1)).
@@ -29,11 +30,13 @@ const DEFAULT_BINDINGS: Readonly<Record<Action, readonly string[]>> = {
   [Action.WeaponSlot1]:        ['1'],
   [Action.WeaponSlot2]:        ['2'],
   [Action.BuildMode]:          ['b'],
+  [Action.Demolish]:           ['MouseRight'],
 };
 
 export class InputManager {
   private held           = new Set<string>();
   private justPressedSet = new Set<string>();
+  scrollDelta = 0;
 
   constructor() {
     document.addEventListener('keydown', (e) => {
@@ -59,6 +62,7 @@ export class InputManager {
       else if (e.button === 2) this.held.delete('MouseRight');
     });
     document.addEventListener('contextmenu', (e) => e.preventDefault());
+    document.addEventListener('wheel', (e) => { this.scrollDelta += e.deltaY; });
   }
 
   /** True while the key(s) for this action are held down. */
@@ -74,5 +78,6 @@ export class InputManager {
   /** Call at the end of each frame to clear just-pressed state. */
   flush(): void {
     this.justPressedSet.clear();
+    this.scrollDelta = 0;
   }
 }

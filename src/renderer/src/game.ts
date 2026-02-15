@@ -10,6 +10,7 @@ import { MessageType } from '@shared/protocol';
 import {
   SERVER_PORT,
   TILE_SIZE,
+  CHUNK_SIZE,
   PLAYER_MAX_STAMINA,
   PLAYER_STAMINA_REGEN,
   PLAYER_BASE_SPEED,
@@ -19,10 +20,14 @@ import {
   RANGED_COOLDOWN,
   ENEMY_RADIUS,
   PROJECTILE_RADIUS,
+  RESOURCE_NODE_RADIUS,
   GAME_VERSION,
   TICK_MS,
-  WALL_COST_WOOD,
-  BUILDING_HALF_EXTENT,
+  BUILDING_COSTS,
+  BUILDING_SIZES,
+  PLACEABLE_BUILDINGS,
+  buildingHalfExtent,
+  snapBuildingPosition,
 } from '@shared/constants';
 import type {
   HandshakeAckMessage,
@@ -50,12 +55,13 @@ import type {
   PartyWipeMessage,
   GameOverMessage,
   BuildConfirmMessage,
+  WarehouseUpdateMessage,
   LobbySlot,
 } from '@shared/protocol';
 
 import { World } from '@shared/ecs/World';
-import { C, PositionComponent, FactionComponent, HealthComponent } from '@shared/components';
-import { TILE_DEFS } from '@shared/world/TileRegistry';
+import { C, PositionComponent, FactionComponent, HealthComponent, BuildingComponent } from '@shared/components';
+import { TILE_DEFS, TileId } from '@shared/world/TileRegistry';
 
 import { InputManager, Action } from './input/InputManager';
 import { GameStateManager, GameState } from './state/GameStateManager';
@@ -79,6 +85,7 @@ import { UpdateBanner } from './ui/UpdateBanner';
 import { ChatOverlay } from './ui/ChatOverlay';
 import { BuildModeOverlay } from './ui/BuildModeOverlay';
 import { BuildGhostRenderer } from './render/BuildGhostRenderer';
+import { WarehouseHUD } from './ui/WarehouseHUD';
 
 // Slow world pan behind menus (world pixels per millisecond)
 const BG_PAN_X = 0.05;
@@ -168,7 +175,14 @@ async function main(): Promise<void> {
 
   // ── Build mode state ─────────────────────────────────────────────────────
   let buildModeActive = false;
-  let localWood = 0;
+  let selectedBuildingIdx = 0;
+  let localResources: Record<string, number> = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0 };
+  let warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0 };
+  let warehouseExists = false;
+  /** World positions of campfires — used for client-side stone floor tile overrides. */
+  const campfirePositions: { x: number; y: number }[] = [];
+  /** Chunk keys where campfire stone tile overrides have been applied. */
+  const campfireOverrideApplied = new Set<string>();
 
   document.addEventListener('mousemove', (e) => { mouseX = e.clientX; mouseY = e.clientY; });
 
@@ -188,6 +202,7 @@ async function main(): Promise<void> {
   const chatOverlay = new ChatOverlay();
   const buildOverlay = new BuildModeOverlay();
   const buildGhost   = new BuildGhostRenderer(tileRenderer.worldContainer);
+  const warehouseHUD = new WarehouseHUD();
 
   const updateBanner = new UpdateBanner();
   window.electronAPI?.onUpdateAvailable(() => updateBanner.showDownloading());
@@ -261,9 +276,15 @@ async function main(): Promise<void> {
     resourceHUD.setResources(0, 0, 0, 0, 0);
     resourceHUD.hide();
     buildModeActive = false;
-    localWood = 0;
+    selectedBuildingIdx = 0;
+    localResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0 };
+    warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0 };
+    warehouseExists = false;
+    campfirePositions.length = 0;
+    campfireOverrideApplied.clear();
     buildOverlay.hide();
     buildGhost.hide();
+    warehouseHUD.hide();
     // Transport stays alive - don't disconnect
     menuOverlay.setButtonsEnabled(transportReady);
     menuOverlay.setConnectionStatus(transportReady ? 'connected' : 'connecting');
@@ -414,6 +435,15 @@ async function main(): Promise<void> {
       camera.targetX = pos.x; camera.targetY = pos.y;
     }
 
+    // Track campfire positions for client-side stone floor tile overrides
+    campfirePositions.length = 0;
+    campfireOverrideApplied.clear();
+    for (const e of snap.entities) {
+      if (e.buildingType === 'campfire') {
+        campfirePositions.push({ x: e.x, y: e.y });
+      }
+    }
+
     stateMgr.transition(GameState.Playing);
   });
 
@@ -503,8 +533,30 @@ async function main(): Promise<void> {
   net.on(MessageType.RESOURCE_UPDATE, (msg) => {
     const ru = msg as ResourceUpdateMessage;
     resourceHUD.setResources(ru.wood, ru.stone, ru.iron, ru.diamond, ru.gold);
-    localWood = ru.wood;
-    if (buildModeActive) buildOverlay.update(localWood);
+    localResources = { wood: ru.wood, stone: ru.stone, iron: ru.iron, diamond: ru.diamond, gold: ru.gold };
+    if (buildModeActive) {
+      const currentBuilding = PLACEABLE_BUILDINGS[selectedBuildingIdx];
+      const available = warehouseExists ? warehouseResources as unknown as Record<string, number> : localResources;
+      buildOverlay.update(currentBuilding, available);
+    }
+  });
+
+  net.on(MessageType.WAREHOUSE_UPDATE, (msg) => {
+    const wu = msg as WarehouseUpdateMessage;
+    warehouseResources = { wood: wu.wood, stone: wu.stone, iron: wu.iron, diamond: wu.diamond, gold: wu.gold };
+    warehouseExists = wu.exists;
+    if (warehouseExists) {
+      warehouseHUD.update(warehouseResources);
+      warehouseHUD.show();
+    } else {
+      warehouseHUD.hide();
+    }
+    // Refresh build overlay with new available resources
+    if (buildModeActive) {
+      const currentBuilding = PLACEABLE_BUILDINGS[selectedBuildingIdx];
+      const available = warehouseExists ? warehouseResources as unknown as Record<string, number> : localResources;
+      buildOverlay.update(currentBuilding, available);
+    }
   });
 
   // ── Death / respawn handlers ──────────────────────────────────────────────
@@ -770,8 +822,10 @@ async function main(): Promise<void> {
       if (canAct && input.isJustPressed(Action.BuildMode)) {
         buildModeActive = !buildModeActive;
         if (buildModeActive) {
+          const currentBuilding = PLACEABLE_BUILDINGS[selectedBuildingIdx];
+          const available = warehouseExists ? warehouseResources as unknown as Record<string, number> : localResources;
           buildOverlay.show();
-          buildOverlay.update(localWood);
+          buildOverlay.update(currentBuilding, available);
           buildGhost.show();
         } else {
           buildOverlay.hide();
@@ -779,44 +833,79 @@ async function main(): Promise<void> {
         }
       }
 
-      // Build ghost update + placement
+      // Scroll wheel cycles building type in build mode
+      if (buildModeActive && input.scrollDelta !== 0) {
+        const dir = input.scrollDelta > 0 ? 1 : -1;
+        selectedBuildingIdx = (selectedBuildingIdx + dir + PLACEABLE_BUILDINGS.length) % PLACEABLE_BUILDINGS.length;
+        const currentBuilding = PLACEABLE_BUILDINGS[selectedBuildingIdx];
+        const available = warehouseExists ? warehouseResources as unknown as Record<string, number> : localResources;
+        buildOverlay.update(currentBuilding, available);
+      }
+
+      // Build ghost update + placement + demolish
       if (buildModeActive && pos) {
         const { width: gw, height: gh } = renderer.screen;
         const wmx = camera.viewX + (mouseX - gw / 2) / camera.zoom;
         const wmy = camera.viewY + (mouseY - gh / 2) / camera.zoom;
+        const currentBuilding = PLACEABLE_BUILDINGS[selectedBuildingIdx];
 
-        // Check ghost validity: tile must be walkable and no existing building/resource at that tile
-        const ghostTileX = Math.floor(wmx / TILE_SIZE);
-        const ghostTileY = Math.floor(wmy / TILE_SIZE);
-        const ghostCenterX = ghostTileX * TILE_SIZE + TILE_SIZE / 2;
-        const ghostCenterY = ghostTileY * TILE_SIZE + TILE_SIZE / 2;
+        // Snap to grid using variable-size snapping
+        const { x: snapX, y: snapY } = snapBuildingPosition(wmx, wmy, currentBuilding);
+        const newHalf = buildingHalfExtent(currentBuilding);
+        const tiles = BUILDING_SIZES[currentBuilding] ?? 1;
 
-        let ghostValid = localWood >= WALL_COST_WOOD;
-        // Check tile walkability
-        if (ghostValid && chunks) {
-          const tileId = chunks.getTile(ghostTileX, ghostTileY);
-          if (!(TILE_DEFS[tileId]?.walkable ?? false)) ghostValid = false;
+        // Check cost affordability
+        const costs = BUILDING_COSTS[currentBuilding] ?? {};
+        const available = warehouseExists ? warehouseResources as unknown as Record<string, number> : localResources;
+        let ghostValid = true;
+        for (const [res, amount] of Object.entries(costs)) {
+          if ((available[res] ?? 0) < amount!) { ghostValid = false; break; }
         }
-        // Check for existing buildings/resources at same tile
-        if (ghostValid) {
-          for (const eid of world.query(C.Position, C.Faction)) {
-            const ef = world.getComponent<FactionComponent>(eid, C.Faction);
-            if (ef?.type !== 'building' && ef?.type !== 'resource') continue;
-            const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
-            const dx = Math.abs(ep.x - ghostCenterX);
-            const dy = Math.abs(ep.y - ghostCenterY);
-            if (dx < BUILDING_HALF_EXTENT && dy < BUILDING_HALF_EXTENT) {
-              ghostValid = false;
-              break;
+
+        // Multi-tile walkability check
+        if (ghostValid && chunks) {
+          const startTX = Math.floor((snapX - newHalf) / TILE_SIZE);
+          const startTY = Math.floor((snapY - newHalf) / TILE_SIZE);
+          for (let ty = 0; ty < tiles && ghostValid; ty++) {
+            for (let tx = 0; tx < tiles && ghostValid; tx++) {
+              const tileId = chunks.getTile(startTX + tx, startTY + ty);
+              if (!(TILE_DEFS[tileId]?.walkable ?? false)) ghostValid = false;
             }
           }
         }
 
-        buildGhost.update(wmx, wmy, ghostValid);
+        // Variable-size overlap check against existing buildings and resources
+        if (ghostValid) {
+          for (const eid of world.query(C.Position, C.Faction)) {
+            const ef = world.getComponent<FactionComponent>(eid, C.Faction);
+            if (ef?.type === 'building') {
+              const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
+              const bComp = world.getComponent<BuildingComponent>(eid, C.Building);
+              const existHalf = bComp ? buildingHalfExtent(bComp.buildingType) : 16;
+              if (Math.abs(ep.x - snapX) < newHalf + existHalf && Math.abs(ep.y - snapY) < newHalf + existHalf) {
+                ghostValid = false;
+                break;
+              }
+            } else if (ef?.type === 'resource') {
+              const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
+              if (Math.abs(ep.x - snapX) < newHalf + RESOURCE_NODE_RADIUS && Math.abs(ep.y - snapY) < newHalf + RESOURCE_NODE_RADIUS) {
+                ghostValid = false;
+                break;
+              }
+            }
+          }
+        }
+
+        buildGhost.update(wmx, wmy, ghostValid, currentBuilding);
 
         // Left-click places building (stays in build mode for rapid placement)
         if (input.isJustPressed(Action.Attack) && ghostValid) {
-          net.send({ type: MessageType.BUILD_PLACE, buildingType: 'wall', x: wmx, y: wmy });
+          net.send({ type: MessageType.BUILD_PLACE, buildingType: currentBuilding, x: wmx, y: wmy });
+        }
+
+        // Right-click demolishes building at cursor
+        if (input.isJustPressed(Action.Demolish)) {
+          net.send({ type: MessageType.BUILD_DEMOLISH, x: wmx, y: wmy });
         }
       }
 
@@ -900,13 +989,48 @@ async function main(): Promise<void> {
     if (activeChunks && activeGen) {
       const visible = activeChunks.getVisibleCoords(camera.viewX, camera.viewY, width, height, camera.zoom);
       for (const { cx, cy } of visible) {
-        tileRenderer.addChunk(activeChunks.getOrGenerate(cx, cy));
+        const chunk = activeChunks.getOrGenerate(cx, cy);
+        tileRenderer.addChunk(chunk);
         if (!isPlaying) menuStreamedKeys.add(`${cx},${cy}`);
+
+        // Campfire stone floor tile overrides (client-side cosmetic)
+        if (isPlaying && campfirePositions.length > 0) {
+          const key = `${cx},${cy}`;
+          if (!campfireOverrideApplied.has(key)) {
+            let modified = false;
+            for (const cf of campfirePositions) {
+              // The 8 surrounding tiles of the campfire center become stone
+              const cfTileX = Math.floor(cf.x / TILE_SIZE);
+              const cfTileY = Math.floor(cf.y / TILE_SIZE);
+              for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                  if (dx === 0 && dy === 0) continue; // skip center (campfire sits there)
+                  const wtx = cfTileX + dx;
+                  const wty = cfTileY + dy;
+                  const tcx = Math.floor(wtx / CHUNK_SIZE);
+                  const tcy = Math.floor(wty / CHUNK_SIZE);
+                  if (tcx === cx && tcy === cy) {
+                    const localTX = ((wtx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+                    const localTY = ((wty % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+                    chunk.setTile(localTX, localTY, TileId.Stone);
+                    modified = true;
+                  }
+                }
+              }
+            }
+            if (modified) {
+              tileRenderer.removeChunk(cx, cy);
+              tileRenderer.addChunk(chunk);
+            }
+            campfireOverrideApplied.add(key);
+          }
+        }
       }
       const evicted = activeChunks.evictDistant(camera.viewX, camera.viewY);
       for (const { cx, cy } of evicted) {
         tileRenderer.removeChunk(cx, cy);
         if (!isPlaying) menuStreamedKeys.delete(`${cx},${cy}`);
+        campfireOverrideApplied.delete(`${cx},${cy}`);
       }
     }
 

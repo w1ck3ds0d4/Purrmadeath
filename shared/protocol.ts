@@ -114,6 +114,10 @@ export enum MessageType {
   BUILD_DESTROYED = 'BUILD_DESTROYED',
   /** Server → all: the campfire was destroyed — run ends. */
   CAMPFIRE_DESTROYED = 'CAMPFIRE_DESTROYED',
+  /** Client → Server: player attempts to demolish a building. */
+  BUILD_DEMOLISH = 'BUILD_DEMOLISH',
+  /** Server → All: warehouse shared resource pool update. */
+  WAREHOUSE_UPDATE = 'WAREHOUSE_UPDATE',
 
   // ── Debug ─────────────────────────────────────────────────────────────────
   /** Client → Server: spawn a wave of enemies around the sender (dev tool). */
@@ -544,6 +548,24 @@ export interface CampfireDestroyedMessage extends BaseMessage {
   type: typeof MessageType.CAMPFIRE_DESTROYED;
 }
 
+/** Client → Server: player attempts to demolish a building. */
+export interface BuildDemolishMessage extends BaseMessage {
+  type: typeof MessageType.BUILD_DEMOLISH;
+  x: number;
+  y: number;
+}
+
+/** Server → All: warehouse shared resource pool update. */
+export interface WarehouseUpdateMessage extends BaseMessage {
+  type: typeof MessageType.WAREHOUSE_UPDATE;
+  wood: number;
+  stone: number;
+  iron: number;
+  diamond: number;
+  gold: number;
+  exists: boolean;
+}
+
 // ─── Union ────────────────────────────────────────────────────────────────────
 
 export type AnyMessage =
@@ -589,4 +611,6 @@ export type AnyMessage =
   | BuildConfirmMessage
   | BuildDestroyedMessage
   | CampfireDestroyedMessage
+  | BuildDemolishMessage
+  | WarehouseUpdateMessage
   | BaseMessage;

@@ -7,6 +7,7 @@ import {
   PlayerInputComponent,
   KnockbackReceiverComponent,
   FactionComponent,
+  BuildingComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -16,7 +17,7 @@ import {
   PORTAL_RADIUS,
   RESOURCE_NODE_RADIUS,
   ENTITY_SEPARATION_ITERATIONS,
-  BUILDING_HALF_EXTENT,
+  buildingHalfExtent,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
@@ -85,7 +86,7 @@ export class MovementSystem {
   /** Cached resource node positions - refreshed each update for solid-block collision. */
   private resourceCache: PositionComponent[] = [];
   /** Cached building positions - refreshed each update for solid-block collision. */
-  private buildingCache: PositionComponent[] = [];
+  private buildingCache: { x: number; y: number; halfExtent: number }[] = [];
 
   constructor(private readonly generator: WorldGenerator) {}
 
@@ -261,7 +262,10 @@ export class MovementSystem {
     for (const id of world.query(C.Position, C.Faction)) {
       const f = world.getComponent<FactionComponent>(id, C.Faction)!;
       if (f.type === 'building') {
-        this.buildingCache.push(world.getComponent<PositionComponent>(id, C.Position)!);
+        const pos = world.getComponent<PositionComponent>(id, C.Position)!;
+        const bldg = world.getComponent<BuildingComponent>(id, C.Building);
+        const type = bldg?.buildingType ?? 'wall';
+        this.buildingCache.push({ x: pos.x, y: pos.y, halfExtent: buildingHalfExtent(type) });
       }
     }
   }
@@ -283,7 +287,7 @@ export class MovementSystem {
     }
     // Buildings act as solid blocks (circle-vs-AABB)
     for (const bldg of this.buildingCache) {
-      if (circleAABBPush(px, py, PLAYER_RADIUS, bldg.x, bldg.y, BUILDING_HALF_EXTENT)) {
+      if (circleAABBPush(px, py, PLAYER_RADIUS, bldg.x, bldg.y, bldg.halfExtent)) {
         return true;
       }
     }

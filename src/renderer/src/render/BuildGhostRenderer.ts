@@ -1,5 +1,5 @@
 import { Container, Graphics } from 'pixi.js';
-import { TILE_SIZE, BUILDING_HALF_EXTENT } from '@shared/constants';
+import { snapBuildingPosition, buildingHalfExtent } from '@shared/constants';
 
 const VALID_COLOR   = 0x44cc66;
 const INVALID_COLOR = 0xcc4444;
@@ -32,23 +32,15 @@ export class BuildGhostRenderer {
     this.gfx.visible = false;
   }
 
-  /**
-   * Update ghost position and validity color.
-   * @param worldMouseX - Mouse position in world coordinates.
-   * @param worldMouseY - Mouse position in world coordinates.
-   * @param canPlace - Whether the tile is a valid placement target.
-   */
-  update(worldMouseX: number, worldMouseY: number, canPlace: boolean): void {
+  update(worldMouseX: number, worldMouseY: number, canPlace: boolean, buildingType: string): void {
     if (!this.visible) return;
 
-    // Snap to tile center
-    const tileX = Math.floor(worldMouseX / TILE_SIZE);
-    const tileY = Math.floor(worldMouseY / TILE_SIZE);
-    this.snapX = tileX * TILE_SIZE + TILE_SIZE / 2;
-    this.snapY = tileY * TILE_SIZE + TILE_SIZE / 2;
+    const { x, y } = snapBuildingPosition(worldMouseX, worldMouseY, buildingType);
+    this.snapX = x;
+    this.snapY = y;
 
     const color = canPlace ? VALID_COLOR : INVALID_COLOR;
-    const half = BUILDING_HALF_EXTENT;
+    const half = buildingHalfExtent(buildingType);
 
     this.gfx.clear();
     this.gfx.rect(this.snapX - half, this.snapY - half, half * 2, half * 2);

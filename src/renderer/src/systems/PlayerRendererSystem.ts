@@ -10,7 +10,7 @@ import {
   ItemDropComponent,
   BuildingComponent,
 } from '@shared/components';
-import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, BUILDING_HALF_EXTENT } from '@shared/constants';
+import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, buildingHalfExtent } from '@shared/constants';
 
 // Enemy body color
 const ENEMY_COLOR = 0xcc3333;
@@ -34,8 +34,12 @@ const ITEM_DROP_COLORS: Record<string, number> = {
 };
 // Building colors by type
 const BUILDING_COLORS: Record<string, { body: number; border: number }> = {
-  campfire: { body: 0xcc5500, border: 0xff8800 },
-  wall:     { body: 0x8a8a8a, border: 0xbbbbbb },
+  campfire:   { body: 0xcc5500, border: 0xff8800 },
+  wall:       { body: 0x8a8a8a, border: 0xbbbbbb },
+  warehouse:  { body: 0x8a6a3a, border: 0xc49a4a },
+  lumbermill: { body: 0x5a8a3a, border: 0x7aaa5a },
+  mine:       { body: 0x6a6a7a, border: 0x9a9aaa },
+  farm:       { body: 0x8aaa4a, border: 0xaacc6a },
 };
 // Duration of the white hit-flash in seconds
 const HIT_FLASH_DURATION = 0.15;
@@ -270,37 +274,94 @@ export class PlayerRendererSystem {
         const bldg = world.getComponent<BuildingComponent>(id, C.Building);
         const bType = bldg?.buildingType ?? 'wall';
         const bColors = BUILDING_COLORS[bType] ?? BUILDING_COLORS.wall;
-        const half = BUILDING_HALF_EXTENT;
+        const half = buildingHalfExtent(bType);
 
         const bFlash = this.hitTimers.get(id) ?? 0;
         if (bFlash > 0) this.hitTimers.set(id, Math.max(0, bFlash - dt));
         const bFlashT = Math.min(1, bFlash / HIT_FLASH_DURATION);
         const bodyColor = bFlashT > 0 ? lerpColor(bColors.body, 0xffffff, bFlashT * 0.6) : bColors.body;
+        const borderColor = bFlashT > 0 ? lerpColor(bColors.border, 0xffffff, bFlashT * 0.4) : bColors.border;
 
-        // Main body
-        gfx.rect(-half, -half, half * 2, half * 2);
-        gfx.fill({ color: bodyColor, alpha: 0.95 });
+        // Thick border width scales with building size
+        const borderW = bType === 'wall' ? 2.5 : 4;
 
-        // Border
-        gfx.rect(-half, -half, half * 2, half * 2);
-        gfx.stroke({ color: bColors.border, alpha: 0.9, width: 2 });
-
-        // Campfire: inner flame icon
         if (bType === 'campfire') {
-          gfx.circle(0, 0, 6);
-          gfx.fill({ color: 0xffcc00, alpha: 0.8 });
+          // Campfire 3×3: grey stone surround + orange center tile
+          const tileHalf = 16; // TILE_SIZE / 2
+
+          // Grey stone outer fill (entire 3×3)
+          const stoneColor = bFlashT > 0 ? lerpColor(0x7a7a82, 0xffffff, bFlashT * 0.4) : 0x7a7a82;
+          gfx.rect(-half, -half, half * 2, half * 2);
+          gfx.fill({ color: stoneColor, alpha: 0.95 });
+
+          // Orange center tile (1×1 in the middle)
+          gfx.rect(-tileHalf, -tileHalf, tileHalf * 2, tileHalf * 2);
+          gfx.fill({ color: bodyColor, alpha: 0.95 });
+
+          // Outer border (entire 3×3) — thin black
+          gfx.rect(-half, -half, half * 2, half * 2);
+          gfx.stroke({ color: 0x000000, alpha: 0.6, width: 1.5 });
+
+          // Center tile border
+          gfx.rect(-tileHalf, -tileHalf, tileHalf * 2, tileHalf * 2);
+          gfx.stroke({ color: 0xff6600, alpha: 0.7, width: 2 });
+
+          // Flame icon in center
+          gfx.circle(0, 0, 5);
+          gfx.fill({ color: 0xffcc00, alpha: 0.85 });
+        } else {
+          // All other buildings: solid color fill + border
+          gfx.rect(-half, -half, half * 2, half * 2);
+          gfx.fill({ color: bodyColor, alpha: 0.95 });
+
+          gfx.rect(-half, -half, half * 2, half * 2);
+          gfx.stroke({ color: borderColor, alpha: 0.95, width: borderW });
         }
 
-        // Health bar (always visible for buildings)
-        if (hp && hp.max > 0) {
+        // Warehouse: inner crate outline + cross
+        if (bType === 'warehouse') {
+          const ih = 10;
+          gfx.rect(-ih, -ih, ih * 2, ih * 2);
+          gfx.stroke({ color: 0xffeedd, alpha: 0.6, width: 2 });
+          gfx.moveTo(-ih, 0); gfx.lineTo(ih, 0);
+          gfx.moveTo(0, -ih); gfx.lineTo(0, ih);
+          gfx.stroke({ color: 0xffeedd, alpha: 0.4, width: 1.5 });
+        }
+
+        // Lumbermill: X cross
+        if (bType === 'lumbermill') {
+          const ih = 8;
+          gfx.moveTo(-ih, -ih); gfx.lineTo(ih, ih);
+          gfx.moveTo(ih, -ih); gfx.lineTo(-ih, ih);
+          gfx.stroke({ color: 0xddeedd, alpha: 0.8, width: 2.5 });
+        }
+
+        // Mine: triangle
+        if (bType === 'mine') {
+          const ih = 8;
+          gfx.poly([0, -ih, ih, ih, -ih, ih]);
+          gfx.stroke({ color: 0xccccdd, alpha: 0.8, width: 2 });
+        }
+
+        // Farm: wheat vertical lines
+        if (bType === 'farm') {
+          const ih = 8;
+          for (let lx = -ih + 3; lx <= ih - 3; lx += 5) {
+            gfx.moveTo(lx, -ih); gfx.lineTo(lx, ih);
+          }
+          gfx.stroke({ color: 0xeedd66, alpha: 0.7, width: 1.5 });
+        }
+
+        // Health bar (only visible when damaged)
+        if (hp && hp.max > 0 && hp.current < hp.max) {
           const ratio = Math.max(0, hp.current / hp.max);
           const barColor = ratio > 0.5 ? 0x44cc44 : ratio > 0.25 ? 0xddaa22 : 0xcc3333;
-          const bBarW = half * 2 + 4;
-          const bBarY = -(half + 10);
-          gfx.rect(-bBarW / 2, bBarY, bBarW, BAR_H);
+          const bBarW = Math.min(half * 2, 36);
+          const bBarY = -(half + 8);
+          gfx.rect(-bBarW / 2, bBarY, bBarW, 3);
           gfx.fill({ color: 0x222222, alpha: 0.8 });
           if (ratio > 0) {
-            gfx.rect(-bBarW / 2, bBarY, bBarW * ratio, BAR_H);
+            gfx.rect(-bBarW / 2, bBarY, bBarW * ratio, 3);
             gfx.fill({ color: barColor, alpha: 1 });
           }
         }

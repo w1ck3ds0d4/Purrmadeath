@@ -168,7 +168,7 @@ export interface ResourcesComponent {
 
 // ── Phase 5 components ────────────────────────────────────────────────────
 
-export type BuildingType = 'campfire' | 'wall';
+export type BuildingType = 'campfire' | 'wall' | 'warehouse' | 'lumbermill' | 'mine' | 'farm';
 
 /** Tags an entity as a player-built (or pre-placed) structure. */
 export interface BuildingComponent {

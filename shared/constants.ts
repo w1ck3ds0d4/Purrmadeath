@@ -121,7 +121,7 @@ export const MELEE_ARC = (2 * Math.PI) / 3;
 /** Base damage per melee hit (before defense reduction). */
 export const MELEE_DAMAGE = 15;
 /** Seconds between melee swings. */
-export const MELEE_COOLDOWN = 0.75;
+export const MELEE_COOLDOWN = 0;
 /** Knockback impulse speed applied to the struck entity (px/s). */
 export const MELEE_KNOCKBACK = 250;
 
@@ -130,7 +130,7 @@ export const MELEE_KNOCKBACK = 250;
 /** Base damage per ranged hit (before defense reduction). */
 export const RANGED_DAMAGE = 10;
 /** Seconds between ranged shots. */
-export const RANGED_COOLDOWN = 0.5;
+export const RANGED_COOLDOWN = 0;
 /** Projectile travel speed in world pixels per second. */
 export const RANGED_SPEED = 400;
 /** Seconds before a projectile despawns (~500 px range at 400 px/s). */
@@ -250,8 +250,63 @@ export const CAMPFIRE_MAX_HEALTH = 300;
 /** Wall HP. */
 export const WALL_MAX_HEALTH = 150;
 
-/** Half-extent of a building AABB in world pixels (1×1 tile = TILE_SIZE). */
+/** Half-extent of a 1×1 building AABB in world pixels (legacy default). */
 export const BUILDING_HALF_EXTENT = TILE_SIZE / 2; // 16px
+
+/** Tile dimensions per building type (tiles along each edge). */
+export const BUILDING_SIZES: Record<string, number> = {
+  wall: 1, campfire: 3, warehouse: 3, lumbermill: 2, mine: 2, farm: 2,
+};
+
+/** Half-extent in world pixels for a building of the given type. */
+export function buildingHalfExtent(type: string): number {
+  return ((BUILDING_SIZES[type] ?? 1) * TILE_SIZE) / 2;
+}
+
+/**
+ * Snap a world-pixel coordinate to the correct grid position for a building.
+ * Odd-tile buildings align to tile centers; even-tile buildings align to tile corners.
+ */
+export function snapBuildingPosition(wx: number, wy: number, type: string): { x: number; y: number } {
+  const tiles = BUILDING_SIZES[type] ?? 1;
+  if (tiles % 2 === 1) {
+    return { x: Math.floor(wx / TILE_SIZE) * TILE_SIZE + TILE_SIZE / 2,
+             y: Math.floor(wy / TILE_SIZE) * TILE_SIZE + TILE_SIZE / 2 };
+  } else {
+    return { x: Math.round(wx / TILE_SIZE) * TILE_SIZE,
+             y: Math.round(wy / TILE_SIZE) * TILE_SIZE };
+  }
+}
 
 /** Wood cost to place a Wall. */
 export const WALL_COST_WOOD = 5;
+
+/** Warehouse HP. */
+export const WAREHOUSE_MAX_HEALTH = 200;
+
+/** Lumbermill HP. */
+export const LUMBERMILL_MAX_HEALTH = 180;
+
+/** Mine HP. */
+export const MINE_MAX_HEALTH = 180;
+
+/** Farm HP. */
+export const FARM_MAX_HEALTH = 150;
+
+/** Radius (px) for auto-depositing player resources into the warehouse. */
+export const WAREHOUSE_DEPOSIT_RADIUS = 80;
+
+/** Fraction of original cost refunded when demolishing a building. */
+export const DEMOLISH_REFUND_PERCENT = 0.5;
+
+/** Per-building-type resource costs for placement. */
+export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'iron' | 'diamond', number>>> = {
+  wall:       { wood: 5 },
+  warehouse:  { wood: 10, stone: 5 },
+  lumbermill: { wood: 15, stone: 5 },
+  mine:       { wood: 10, stone: 10 },
+  farm:       { wood: 10 },
+};
+
+/** Ordered list of building types the player can cycle through in build mode. */
+export const PLACEABLE_BUILDINGS: string[] = ['wall', 'warehouse', 'lumbermill', 'mine', 'farm'];
