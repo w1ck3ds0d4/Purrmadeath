@@ -918,31 +918,39 @@ export class GameSession {
 
   private deductBuildingCost(buildingType: string, player: any, send: SendFn): boolean {
     const costs = BUILDING_COSTS[buildingType] ?? {};
-    if (this.warehouseIds.size > 0) {
-      for (const [res, amount] of Object.entries(costs)) {
-        if ((this.warehousePool as Record<string, number>)[res] < amount!) return false;
-      }
-      for (const [res, amount] of Object.entries(costs)) {
-        (this.warehousePool as Record<string, number>)[res] -= amount!;
-      }
-      this.broadcastWarehouseUpdate(send);
-      return true;
-    } else {
-      const res = this.world.getComponent<any>(player.entityId, C.Resources);
-      if (!res) return false;
-      for (const [key, amount] of Object.entries(costs)) {
-        if ((res as Record<string, number>)[key] < amount!) return false;
-      }
-      for (const [key, amount] of Object.entries(costs)) {
-        (res as Record<string, number>)[key] -= amount!;
-      }
-      const resUpdate = {
-        type: MessageType.RESOURCE_UPDATE,
-        wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold,
-      };
-      send(player.client, resUpdate);
-      return true;
+    const playerRes = this.world.getComponent<any>(player.entityId, C.Resources);
+    if (!playerRes) return false;
+
+    const hasWarehouse = this.warehouseIds.size > 0;
+    const wPool = this.warehousePool as Record<string, number>;
+    const pPool = playerRes as Record<string, number>;
+
+    // Check combined availability (warehouse + player inventory)
+    for (const [res, amount] of Object.entries(costs)) {
+      const total = (hasWarehouse ? (wPool[res] ?? 0) : 0) + (pPool[res] ?? 0);
+      if (total < amount!) return false;
     }
+
+    // Deduct: warehouse first, then player inventory for the remainder
+    let drewFromWarehouse = false;
+    let drewFromPlayer = false;
+    for (const [res, amount] of Object.entries(costs)) {
+      let remaining = amount!;
+      if (hasWarehouse) {
+        const fromW = Math.min(remaining, wPool[res] ?? 0);
+        if (fromW > 0) { wPool[res] -= fromW; remaining -= fromW; drewFromWarehouse = true; }
+      }
+      if (remaining > 0) { pPool[res] -= remaining; drewFromPlayer = true; }
+    }
+
+    if (drewFromWarehouse) this.broadcastWarehouseUpdate(send);
+    if (drewFromPlayer) {
+      send(player.client, {
+        type: MessageType.RESOURCE_UPDATE,
+        wood: playerRes.wood, stone: playerRes.stone, iron: playerRes.iron, diamond: playerRes.diamond, gold: playerRes.gold,
+      });
+    }
+    return true;
   }
 
   private broadcastWarehouseUpdate(send: SendFn): void {
@@ -1277,13 +1285,22 @@ export class GameSession {
         this.enemiesKilled++;
       }
 
-      // Building → broadcast destruction, check campfire game-over
+      // Building → broadcast destruction, clean up warehouse, check campfire game-over
       if (faction?.type === 'building' && send) {
         const destroyedMsg: BuildDestroyedMessage = {
           type: MessageType.BUILD_DESTROYED,
           entityId: deadId,
         };
         for (const p of this.players.values()) send(p.client, destroyedMsg);
+
+        // Warehouse destroyed → remove from pool and notify clients
+        if (this.warehouseIds.has(deadId)) {
+          this.warehouseIds.delete(deadId);
+          if (this.warehouseIds.size === 0) {
+            this.warehousePool = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0 };
+          }
+          this.broadcastWarehouseUpdate(send);
+        }
 
         if (deadId === this.campfireEntityId && !this.gameOver) {
           this.gameOver = true;

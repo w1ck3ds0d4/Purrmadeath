@@ -7,8 +7,9 @@ import {
   FactionComponent,
   KnockbackReceiverComponent,
   AttackCooldownComponent,
+  BuildingComponent,
 } from '@shared/components';
-import { MELEE_RANGE, MELEE_ARC, MELEE_DAMAGE, MELEE_KNOCKBACK, TICK_MS } from '@shared/constants';
+import { MELEE_RANGE, MELEE_ARC, MELEE_DAMAGE, MELEE_KNOCKBACK, TICK_MS, PLAYER_RADIUS, ENEMY_RADIUS, buildingHalfExtent } from '@shared/constants';
 
 export interface HitResult {
   sourceId: number;
@@ -119,13 +120,21 @@ export class CombatSystem {
       const dx = tgtPos.x - attackX;
       const dy = tgtPos.y - attackY;
       const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist > meleeRange || dist === 0) continue;
+      // Account for target size — hit if target edge is within range
+      let tgtRadius: number;
+      const bldgComp = world.getComponent<BuildingComponent>(targetId, C.Building);
+      if (bldgComp) tgtRadius = buildingHalfExtent(bldgComp.buildingType);
+      else if (world.getComponent(targetId, C.PlayerIndex)) tgtRadius = PLAYER_RADIUS;
+      else tgtRadius = ENEMY_RADIUS;
+      if (dist > meleeRange + tgtRadius || dist === 0) continue;
 
-      // Arc check - must be within ±60° of facing
-      const angleToTarget = Math.atan2(dy, dx);
-      let diff = Math.abs(angleToTarget - facing);
-      if (diff > Math.PI) diff = 2 * Math.PI - diff;
-      if (diff > halfArc) continue;
+      // Arc check - must be within ±60° of facing (skip for buildings — large area targets)
+      if (!bldgComp) {
+        const angleToTarget = Math.atan2(dy, dx);
+        let diff = Math.abs(angleToTarget - facing);
+        if (diff > Math.PI) diff = 2 * Math.PI - diff;
+        if (diff > halfArc) continue;
+      }
 
       // Damage with defense reduction
       const hp  = world.getComponent<HealthComponent>(targetId, C.Health)!;

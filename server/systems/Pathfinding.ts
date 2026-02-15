@@ -36,7 +36,7 @@ const SQRT2 = Math.SQRT2;
  * Pack tile coords into a single integer key for Map lookups.
  * Supports ±10000 tile range (well beyond any practical gameplay area).
  */
-function tileKey(tx: number, ty: number): number {
+export function tileKey(tx: number, ty: number): number {
   return (tx + 10000) * 20001 + (ty + 10000);
 }
 
@@ -68,6 +68,7 @@ export function findPath(
   generator: WorldGenerator,
   sx: number, sy: number,
   gx: number, gy: number,
+  blockedTiles?: Set<number>,
 ): Waypoint[] | null {
   const startTx = Math.floor(sx / TILE_SIZE);
   const startTy = Math.floor(sy / TILE_SIZE);
@@ -77,8 +78,9 @@ export function findPath(
   // Trivial case: same tile
   if (startTx === goalTx && startTy === goalTy) return [{ x: gx, y: gy }];
 
-  // If goal tile is unwalkable, bail (no partial paths)
+  // If goal tile is unwalkable or blocked by a building, bail (no partial paths)
   if (!(TILE_DEFS[generator.getTile(goalTx, goalTy)]?.walkable ?? false)) return null;
+  if (blockedTiles?.has(tileKey(goalTx, goalTy))) return null;
 
   // Distance too large for efficient search
   if (Math.max(Math.abs(goalTx - startTx), Math.abs(goalTy - startTy)) > MAX_SEARCH_TILES) {
@@ -127,8 +129,9 @@ export function findPath(
 
       if (closed.has(nKey)) continue;
 
-      // Walkability check
+      // Walkability check (tiles + building entities)
       if (!(TILE_DEFS[generator.getTile(nx, ny)]?.walkable ?? false)) continue;
+      if (blockedTiles?.has(nKey)) continue;
 
       // For diagonal moves, both adjacent cardinal tiles must be walkable
       // (prevents corner-cutting through walls)

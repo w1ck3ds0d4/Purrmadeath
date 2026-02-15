@@ -15,6 +15,7 @@ import {
   PROJECTILE_RADIUS,
   PLAYER_RADIUS,
   ENEMY_RADIUS,
+  RESOURCE_NODE_RADIUS,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
@@ -33,6 +34,17 @@ export interface ProjectileTickResult {
  * Runs each tick: moves projectiles, checks wall and entity collisions,
  * applies damage + knockback on hit.
  */
+/** Squared distance from point (px,py) to the closest point on segment (ax,ay)→(bx,by). */
+function segPointDist2(ax: number, ay: number, bx: number, by: number, px: number, py: number): number {
+  const dx = bx - ax, dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) { const ex = px - ax, ey = py - ay; return ex * ex + ey * ey; }
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
+  const cx = ax + t * dx, cy = ay + t * dy;
+  const ex = px - cx, ey = py - cy;
+  return ex * ex + ey * ey;
+}
+
 export class ProjectileSystem {
   constructor(private readonly generator: WorldGenerator) {}
 
@@ -57,6 +69,9 @@ export class ProjectileSystem {
         continue;
       }
 
+      // Remember old position for swept collision
+      const oldX = pos.x, oldY = pos.y;
+
       // Move
       pos.x += vel.vx * dt;
       pos.y += vel.vy * dt;
@@ -67,7 +82,7 @@ export class ProjectileSystem {
         continue;
       }
 
-      // Entity collision
+      // Entity collision (swept: check along old→new segment)
       const projFaction = world.getComponent<FactionComponent>(projId, C.Faction);
       let hitSomething = false;
 
@@ -98,28 +113,38 @@ export class ProjectileSystem {
         if (world.hasComponent(targetId, C.Downed)) continue;
 
         const tgtPos = world.getComponent<PositionComponent>(targetId, C.Position)!;
-        const dx = tgtPos.x - pos.x;
-        const dy = tgtPos.y - pos.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
 
-        // Target radius: players are bigger than enemies
-        const tgtRadius = world.getComponent(targetId, C.PlayerIndex)
-          ? PLAYER_RADIUS
-          : ENEMY_RADIUS;
+        // Target radius varies by entity type
+        const isResource = tgtFaction?.type === 'resource';
+        const tgtRadius = isResource
+          ? RESOURCE_NODE_RADIUS
+          : world.getComponent(targetId, C.PlayerIndex)
+            ? PLAYER_RADIUS
+            : ENEMY_RADIUS;
         const collisionDist = PROJECTILE_RADIUS + tgtRadius;
 
-        if (dist > collisionDist) continue;
+        // Swept collision: closest point on path segment to target center
+        const d2 = segPointDist2(oldX, oldY, pos.x, pos.y, tgtPos.x, tgtPos.y);
+        if (d2 > collisionDist * collisionDist) continue;
 
-        // Apply damage with defense reduction
+        // Apply damage with defense reduction (resource nodes always take 1 damage)
         const hp  = world.getComponent<HealthComponent>(targetId, C.Health)!;
-        const def = world.getComponent<DefenseComponent>(targetId, C.Defense);
-        let damage = proj.damage;
-        if (def) damage = Math.max(0, Math.round((damage - def.flat) * (1 - def.percent)));
+        let damage: number;
+        if (isResource) {
+          damage = 1;
+        } else {
+          const def = world.getComponent<DefenseComponent>(targetId, C.Defense);
+          damage = proj.damage;
+          if (def) damage = Math.max(0, Math.round((damage - def.flat) * (1 - def.percent)));
+        }
         hp.current = Math.max(0, hp.current - damage);
 
         // Knockback - direction from projectile to target
         let knockbackVx = 0;
         let knockbackVy = 0;
+        const dx = tgtPos.x - pos.x;
+        const dy = tgtPos.y - pos.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
         if (RANGED_KNOCKBACK > 0 && dist > 0) {
           knockbackVx = (dx / dist) * RANGED_KNOCKBACK;
           knockbackVy = (dy / dist) * RANGED_KNOCKBACK;

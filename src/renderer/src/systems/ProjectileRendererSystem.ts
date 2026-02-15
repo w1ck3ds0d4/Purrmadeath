@@ -24,6 +24,7 @@ export class ProjectileRendererSystem {
 
   constructor(parent: Container) {
     this.gfx = new Graphics();
+    this.gfx.zIndex = 10; // render above entities/buildings
     parent.addChild(this.gfx);
   }
 

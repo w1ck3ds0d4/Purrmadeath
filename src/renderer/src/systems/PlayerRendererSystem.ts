@@ -10,7 +10,7 @@ import {
   ItemDropComponent,
   BuildingComponent,
 } from '@shared/components';
-import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, buildingHalfExtent } from '@shared/constants';
+import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, ENEMY_MELEE_RANGE, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, buildingHalfExtent } from '@shared/constants';
 
 // Enemy body color
 const ENEMY_COLOR = 0xcc3333;
@@ -79,8 +79,14 @@ export class PlayerRendererSystem {
   private attackArcs  = new Map<EntityId, { facing: number; elapsed: number }>();
   private downedEntities = new Set<EntityId>();
   private reviveProgress = new Map<EntityId, number>(); // entityId → 0..1
+  /** Dedicated layer for all health bars — renders above entities/buildings. */
+  private healthBarGfx: Graphics;
 
-  constructor(private readonly worldContainer: Container) {}
+  constructor(private readonly worldContainer: Container) {
+    this.healthBarGfx = new Graphics();
+    this.healthBarGfx.zIndex = 9; // above entities, below projectiles (10)
+    this.worldContainer.addChild(this.healthBarGfx);
+  }
 
   /** Triggers a 150ms white flash on the struck entity. */
   notifyHit(entityId: EntityId): void {
@@ -214,20 +220,6 @@ export class PlayerRendererSystem {
         gfx.circle(0, 0, pr);
         gfx.stroke({ color: 0xcc66ff, alpha: 0.6 * pulse, width: 2 });
 
-        // Health bar (wider than enemy bar since portals are larger)
-        if (hp && hp.max > 0) {
-          const portalBarW = pr * 2 + 8;
-          const portalBarY = -(pr + 12);
-          const ratio    = Math.max(0, hp.current / hp.max);
-          const barColor = ratio > 0.5 ? 0x44cc44 : ratio > 0.25 ? 0xddaa22 : 0xcc3333;
-
-          gfx.rect(-portalBarW / 2, portalBarY, portalBarW, BAR_H);
-          gfx.fill({ color: 0x222222, alpha: 0.8 });
-          if (ratio > 0) {
-            gfx.rect(-portalBarW / 2, portalBarY, portalBarW * ratio, BAR_H);
-            gfx.fill({ color: barColor, alpha: 1 });
-          }
-        }
       } else if (isResource) {
         // ── Resource node rendering ──────────────────────────────────────────
         const rn = world.getComponent<ResourceNodeComponent>(id, C.ResourceNode);
@@ -254,20 +246,6 @@ export class PlayerRendererSystem {
         gfx.rect(-rr, -rr, rr * 2, rr * 2);
         gfx.stroke({ color: 0x000000, alpha: 0.35, width: 1.5 });
 
-        // Health bar (only show if damaged)
-        if (hp && hp.max > 0 && hp.current < hp.max) {
-          const ratio    = Math.max(0, hp.current / hp.max);
-          const barColor = ratio > 0.5 ? 0x44cc44 : ratio > 0.25 ? 0xddaa22 : 0xcc3333;
-          const resBarW = rr * 2 + 4;
-          const resBarY = -(rr + 10);
-
-          gfx.rect(-resBarW / 2, resBarY, resBarW, BAR_H);
-          gfx.fill({ color: 0x222222, alpha: 0.8 });
-          if (ratio > 0) {
-            gfx.rect(-resBarW / 2, resBarY, resBarW * ratio, BAR_H);
-            gfx.fill({ color: barColor, alpha: 1 });
-          }
-        }
 
       } else if (buildingIds.has(id)) {
         // ── Building rendering ──────────────────────────────────────────────
@@ -285,37 +263,25 @@ export class PlayerRendererSystem {
         // Thick border width scales with building size
         const borderW = bType === 'wall' ? 2.5 : 4;
 
-        if (bType === 'campfire') {
-          // Campfire 3×3: grey stone surround + orange center tile
-          const tileHalf = 16; // TILE_SIZE / 2
-
-          // Grey stone outer fill (entire 3×3)
-          const stoneColor = bFlashT > 0 ? lerpColor(0x7a7a82, 0xffffff, bFlashT * 0.4) : 0x7a7a82;
+        if (bType === 'wall') {
+          // Walls: fill the whole tile, colored border
           gfx.rect(-half, -half, half * 2, half * 2);
-          gfx.fill({ color: stoneColor, alpha: 0.95 });
-
-          // Orange center tile (1×1 in the middle)
-          gfx.rect(-tileHalf, -tileHalf, tileHalf * 2, tileHalf * 2);
           gfx.fill({ color: bodyColor, alpha: 0.95 });
-
-          // Outer border (entire 3×3) — thin black
           gfx.rect(-half, -half, half * 2, half * 2);
-          gfx.stroke({ color: 0x000000, alpha: 0.6, width: 1.5 });
+          gfx.stroke({ color: 0x000000, alpha: 0.75, width: 1.5 });
+        } else {
+          // All other buildings: inset padding + black border
+          const pad = 3;
+          gfx.rect(-half + pad, -half + pad, (half - pad) * 2, (half - pad) * 2);
+          gfx.fill({ color: bodyColor, alpha: 0.95 });
+          gfx.rect(-half + pad, -half + pad, (half - pad) * 2, (half - pad) * 2);
+          gfx.stroke({ color: 0x000000, alpha: 0.75, width: 1.5 });
+        }
 
-          // Center tile border
-          gfx.rect(-tileHalf, -tileHalf, tileHalf * 2, tileHalf * 2);
-          gfx.stroke({ color: 0xff6600, alpha: 0.7, width: 2 });
-
-          // Flame icon in center
+        // Campfire: flame icon
+        if (bType === 'campfire') {
           gfx.circle(0, 0, 5);
           gfx.fill({ color: 0xffcc00, alpha: 0.85 });
-        } else {
-          // All other buildings: solid color fill + border
-          gfx.rect(-half, -half, half * 2, half * 2);
-          gfx.fill({ color: bodyColor, alpha: 0.95 });
-
-          gfx.rect(-half, -half, half * 2, half * 2);
-          gfx.stroke({ color: borderColor, alpha: 0.95, width: borderW });
         }
 
         // Warehouse: inner crate outline + cross
@@ -352,19 +318,6 @@ export class PlayerRendererSystem {
           gfx.stroke({ color: 0xeedd66, alpha: 0.7, width: 1.5 });
         }
 
-        // Health bar (only visible when damaged)
-        if (hp && hp.max > 0 && hp.current < hp.max) {
-          const ratio = Math.max(0, hp.current / hp.max);
-          const barColor = ratio > 0.5 ? 0x44cc44 : ratio > 0.25 ? 0xddaa22 : 0xcc3333;
-          const bBarW = Math.min(half * 2, 36);
-          const bBarY = -(half + 8);
-          gfx.rect(-bBarW / 2, bBarY, bBarW, 3);
-          gfx.fill({ color: 0x222222, alpha: 0.8 });
-          if (ratio > 0) {
-            gfx.rect(-bBarW / 2, bBarY, bBarW * ratio, 3);
-            gfx.fill({ color: barColor, alpha: 1 });
-          }
-        }
 
       } else if (isItem) {
         // ── Item drop rendering ──────────────────────────────────────────────
@@ -416,14 +369,16 @@ export class PlayerRendererSystem {
           const startA   = arc.facing - halfArc;
           const endA     = arc.facing + halfArc;
           const STEPS    = 10;
+          const arcRange = isEnemy ? ENEMY_MELEE_RANGE : MELEE_RANGE;
+          const arcColor = isEnemy ? 0xff6666 : 0xffffaa;
 
           const pts: number[] = [0, 0];
           for (let i = 0; i <= STEPS; i++) {
             const a = startA + (endA - startA) * (i / STEPS);
-            pts.push(Math.cos(a) * MELEE_RANGE, Math.sin(a) * MELEE_RANGE);
+            pts.push(Math.cos(a) * arcRange, Math.sin(a) * arcRange);
           }
           gfx.poly(pts);
-          gfx.fill({ color: 0xffffaa, alpha: arcAlpha });
+          gfx.fill({ color: arcColor, alpha: arcAlpha });
         }
 
         // ── Body ────────────────────────────────────────────────────────────────
@@ -474,19 +429,6 @@ export class PlayerRendererSystem {
           gfx.fill({ color: 0xffffff, alpha: 0.85 });
         }
 
-        // ── Enemy health bar ────────────────────────────────────────────────────
-
-        if (isEnemy && hp && hp.max > 0) {
-          const ratio    = Math.max(0, hp.current / hp.max);
-          const barColor = ratio > 0.5 ? 0x44cc44 : ratio > 0.25 ? 0xddaa22 : 0xcc3333;
-
-          gfx.rect(-BAR_W / 2, BAR_Y, BAR_W, BAR_H);
-          gfx.fill({ color: 0x222222, alpha: 0.8 });
-          if (ratio > 0) {
-            gfx.rect(-BAR_W / 2, BAR_Y, BAR_W * ratio, BAR_H);
-            gfx.fill({ color: barColor, alpha: 1 });
-          }
-        }
       }
 
       // Apply smooth offset to local player sprite so corrections don't cause
@@ -495,6 +437,62 @@ export class PlayerRendererSystem {
         gfx.position.set(pos.x + smoothX, pos.y + smoothY);
       } else {
         gfx.position.set(pos.x, pos.y);
+      }
+    }
+
+    // ── Health bar overlay pass (renders above all entities/buildings) ────────
+    const hb = this.healthBarGfx;
+    hb.clear();
+
+    for (const id of living) {
+      const pos = world.getComponent<PositionComponent>(id, C.Position)!;
+      const hp  = world.getComponent<HealthComponent>(id, C.Health);
+      if (!hp || hp.max <= 0) continue;
+
+      const isEnemy    = enemyIds.has(id);
+      const isPortal   = portalIds.has(id);
+      const isResource = resourceIds.has(id);
+      const isBuilding = buildingIds.has(id);
+
+      // Determine bar parameters per entity type
+      let barW: number, barH: number, barY: number, alwaysShow: boolean;
+      let wx: number, wy: number;
+
+      if (id === localEntityId) {
+        wx = pos.x + smoothX;
+        wy = pos.y + smoothY;
+      } else {
+        wx = pos.x;
+        wy = pos.y;
+      }
+
+      if (isPortal) {
+        const pr = PORTAL_RADIUS;
+        barW = pr * 2 + 8; barH = BAR_H; barY = -(pr + 12); alwaysShow = true;
+      } else if (isResource) {
+        const rr = RESOURCE_NODE_RADIUS;
+        barW = rr * 2 + 4; barH = BAR_H; barY = -(rr + 10); alwaysShow = false;
+      } else if (isBuilding) {
+        const bldg = world.getComponent<BuildingComponent>(id, C.Building);
+        const half = buildingHalfExtent(bldg?.buildingType ?? 'wall');
+        barW = Math.min(half * 2, 36); barH = 3; barY = -(half + 8); alwaysShow = false;
+      } else if (isEnemy) {
+        barW = BAR_W; barH = BAR_H; barY = BAR_Y; alwaysShow = true;
+      } else {
+        continue; // players don't show health bars (HUD instead)
+      }
+
+      // Only-when-damaged check
+      if (!alwaysShow && hp.current >= hp.max) continue;
+
+      const ratio    = Math.max(0, hp.current / hp.max);
+      const barColor = ratio > 0.5 ? 0x44cc44 : ratio > 0.25 ? 0xddaa22 : 0xcc3333;
+
+      hb.rect(wx - barW / 2, wy + barY, barW, barH);
+      hb.fill({ color: 0x222222, alpha: 0.8 });
+      if (ratio > 0) {
+        hb.rect(wx - barW / 2, wy + barY, barW * ratio, barH);
+        hb.fill({ color: barColor, alpha: 1 });
       }
     }
   }
@@ -510,5 +508,6 @@ export class PlayerRendererSystem {
     this.attackArcs.clear();
     this.downedEntities.clear();
     this.reviveProgress.clear();
+    this.healthBarGfx.clear();
   }
 }

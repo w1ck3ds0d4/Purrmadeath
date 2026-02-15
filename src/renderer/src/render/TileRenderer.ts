@@ -29,6 +29,7 @@ export class TileRenderer {
 
   constructor(stage: Container) {
     this.worldContainer = new Container();
+    this.worldContainer.sortableChildren = true;
     // Insert at index 0 so the world is always below the HUD
     stage.addChildAt(this.worldContainer, 0);
 

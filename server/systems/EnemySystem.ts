@@ -6,6 +6,7 @@ import {
   PlayerInputComponent,
   AttackCooldownComponent,
   FacingComponent,
+  BuildingComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -13,11 +14,12 @@ import {
   ENEMY_MELEE_RANGE,
   ENEMY_MELEE_DAMAGE,
   ENEMY_MELEE_KNOCKBACK,
+  buildingHalfExtent,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
 import { CombatSystem, HitResult } from './CombatSystem';
-import { findPath, CachedPath } from './Pathfinding';
+import { findPath, CachedPath, tileKey } from './Pathfinding';
 
 export interface EnemyAttackResult {
   hits: HitResult[];
@@ -52,6 +54,12 @@ const WAYPOINT_REACH = 16; // half a tile
  */
 export class EnemySystem {
   private paths = new Map<number, CachedPath>();
+  /** Tiles occupied by building entities — used to block pathfinding. */
+  private buildingBlockedTiles = new Set<number>();
+  /** Per-building tile keys (for excluding target building from blocked set). */
+  private buildingTilesMap = new Map<number, number[]>();
+  /** Cached building positions for break-through checks. */
+  private buildingEntities: { x: number; y: number; half: number }[] = [];
 
   constructor(
     private readonly combat: CombatSystem,
@@ -62,11 +70,42 @@ export class EnemySystem {
     const result: EnemyAttackResult = { hits: [], deaths: [], attackPerformed: [] };
     const playerIds = world.query(C.Position, C.PlayerIndex);
 
-    // Buildings are also valid targets for enemies
-    const buildingIds: number[] = [];
+    // Categorize buildings by priority: campfire > walls > other buildings
+    const campfireIds: number[] = [];
+    const wallIds: number[] = [];
+    const otherBuildingIds: number[] = [];
     for (const bid of world.query(C.Position, C.Faction)) {
       const f = world.getComponent<FactionComponent>(bid, C.Faction)!;
-      if (f.type === 'building') buildingIds.push(bid);
+      if (f.type !== 'building') continue;
+      const bldg = world.getComponent<BuildingComponent>(bid, C.Building);
+      if (!bldg) continue;
+      if (bldg.buildingType === 'campfire') campfireIds.push(bid);
+      else if (bldg.buildingType === 'wall') wallIds.push(bid);
+      else otherBuildingIds.push(bid);
+    }
+
+    // Compute building-blocked tiles for pathfinding (so enemies navigate around buildings)
+    this.buildingBlockedTiles.clear();
+    this.buildingTilesMap.clear();
+    this.buildingEntities = [];
+    for (const bid of world.query(C.Position, C.Building)) {
+      const bpos = world.getComponent<PositionComponent>(bid, C.Position)!;
+      const bldg = world.getComponent<BuildingComponent>(bid, C.Building)!;
+      const half = buildingHalfExtent(bldg.buildingType);
+      this.buildingEntities.push({ x: bpos.x, y: bpos.y, half });
+      const tiles: number[] = [];
+      const minTx = Math.floor((bpos.x - half) / TILE_SIZE);
+      const maxTx = Math.floor((bpos.x + half - 1) / TILE_SIZE);
+      const minTy = Math.floor((bpos.y - half) / TILE_SIZE);
+      const maxTy = Math.floor((bpos.y + half - 1) / TILE_SIZE);
+      for (let tx = minTx; tx <= maxTx; tx++) {
+        for (let ty = minTy; ty <= maxTy; ty++) {
+          const tk = tileKey(tx, ty);
+          tiles.push(tk);
+          this.buildingBlockedTiles.add(tk);
+        }
+      }
+      this.buildingTilesMap.set(bid, tiles);
     }
 
     // Clean stale paths for entities that no longer exist
@@ -81,52 +120,118 @@ export class EnemySystem {
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
       const inp = world.getComponent<PlayerInputComponent>(id, C.PlayerInput)!;
 
-      // Find the nearest target (player or building) within aggro range
-      let nearestDist = ENEMY_AGGRO_RANGE;
-      let nearestPos: PositionComponent | null = null;
+      // Priority targeting: campfire > players > walls > other buildings
+      let targetPos: { x: number; y: number } | null = null;
+      let navPos: { x: number; y: number } | null = null;
+      let targetDist = Infinity;
+      let targetHalfExtent = 0; // >0 for buildings (used for edge-based melee check)
+      let targetEntityId: number | null = null; // building entity to exclude from pathfinding
 
+      // Margin to push nav point outside building collision so pathfinder can reach it
+      const NAV_MARGIN = 14; // ~ENEMY_RADIUS + buffer
+
+      const tryBuildings = (ids: number[], maxRange: number) => {
+        let best: { id: number; pos: PositionComponent; nav: { x: number; y: number }; dist: number; half: number } | null = null;
+        for (const bid of ids) {
+          const bpos = world.getComponent<PositionComponent>(bid, C.Position)!;
+          const bldg = world.getComponent<BuildingComponent>(bid, C.Building);
+          const bHalf = bldg ? buildingHalfExtent(bldg.buildingType) : 16;
+          const edx = Math.max(0, Math.abs(bpos.x - pos.x) - bHalf);
+          const edy = Math.max(0, Math.abs(bpos.y - pos.y) - bHalf);
+          const edgeDist = Math.sqrt(edx * edx + edy * edy);
+          if (edgeDist < maxRange && (!best || edgeDist < best.dist)) {
+            // Closest point on AABB edge, then push outward so it's on a walkable tile
+            const cx = Math.max(bpos.x - bHalf, Math.min(bpos.x + bHalf, pos.x));
+            const cy = Math.max(bpos.y - bHalf, Math.min(bpos.y + bHalf, pos.y));
+            const pdx = cx - bpos.x, pdy = cy - bpos.y;
+            const pLen = Math.sqrt(pdx * pdx + pdy * pdy);
+            const nx = pLen > 0 ? cx + (pdx / pLen) * NAV_MARGIN : cx + NAV_MARGIN;
+            const ny = pLen > 0 ? cy + (pdy / pLen) * NAV_MARGIN : cy;
+            best = { id: bid, pos: bpos, nav: { x: nx, y: ny }, dist: edgeDist, half: bHalf };
+          }
+        }
+        return best;
+      };
+
+      // 1. Campfire (always the global objective — no range limit)
+      const campfire = tryBuildings(campfireIds, Infinity);
+      if (campfire) {
+        targetPos = campfire.pos;
+        navPos = campfire.nav;
+        targetDist = campfire.dist;
+        targetHalfExtent = campfire.half;
+        targetEntityId = campfire.id;
+      }
+
+      // 2. Nearby players override campfire (distraction — only if very close)
+      const PLAYER_DISTRACT_RANGE = ENEMY_MELEE_RANGE * 2;
+      let closestPlayer: { pos: PositionComponent; dist: number } | null = null;
       for (const pid of playerIds) {
-        // Skip downed players - enemies don't target them
         if (world.hasComponent(pid, C.Downed)) continue;
-
         const ppos = world.getComponent<PositionComponent>(pid, C.Position)!;
         const ddx = ppos.x - pos.x;
         const ddy = ppos.y - pos.y;
         const dist = Math.sqrt(ddx * ddx + ddy * ddy);
-        if (dist < nearestDist) {
-          nearestDist = dist;
-          nearestPos = ppos;
+        if (dist < ENEMY_AGGRO_RANGE && (!closestPlayer || dist < closestPlayer.dist)) {
+          closestPlayer = { pos: ppos, dist };
+        }
+      }
+      if (closestPlayer && (closestPlayer.dist < PLAYER_DISTRACT_RANGE || !targetPos)) {
+        // Only distract from a building target if the enemy has line of sight to the player
+        // (prevents enemies getting stuck when the campfire is between them and the player)
+        if (!targetPos || this.isDirectPathClear(pos.x, pos.y, closestPlayer.pos.x, closestPlayer.pos.y)) {
+          targetPos = closestPlayer.pos;
+          navPos = closestPlayer.pos;
+          targetDist = closestPlayer.dist;
+          targetHalfExtent = 0;
+          targetEntityId = null;
         }
       }
 
-      // Also consider buildings as targets
-      for (const bid of buildingIds) {
-        const bpos = world.getComponent<PositionComponent>(bid, C.Position)!;
-        const ddx = bpos.x - pos.x;
-        const ddy = bpos.y - pos.y;
-        const dist = Math.sqrt(ddx * ddx + ddy * ddy);
-        if (dist < nearestDist) {
-          nearestDist = dist;
-          nearestPos = bpos;
-        }
+      // 3. Walls (only if nothing else found)
+      if (!targetPos) {
+        const wall = tryBuildings(wallIds, ENEMY_AGGRO_RANGE);
+        if (wall) { targetPos = wall.pos; navPos = wall.nav; targetDist = wall.dist; targetHalfExtent = wall.half; targetEntityId = wall.id; }
       }
 
-      if (nearestPos) {
-        const ddx = nearestPos.x - pos.x;
-        const ddy = nearestPos.y - pos.y;
-        const len = Math.sqrt(ddx * ddx + ddy * ddy);
+      // 4. Other buildings (lowest priority)
+      if (!targetPos) {
+        const other = tryBuildings(otherBuildingIds, ENEMY_AGGRO_RANGE);
+        if (other) { targetPos = other.pos; navPos = other.nav; targetDist = other.dist; targetHalfExtent = other.half; targetEntityId = other.id; }
+      }
 
-        if (len <= ENEMY_MELEE_RANGE) {
-          // In melee range: stop moving, face target, attack
-          inp.dx = 0;
-          inp.dy = 0;
+      if (targetPos && navPos) {
+        // For buildings: use edge distance for melee check (not center distance)
+        let meleeCheckDist: number;
+        if (targetHalfExtent > 0) {
+          const edx = Math.max(0, Math.abs(targetPos.x - pos.x) - targetHalfExtent);
+          const edy = Math.max(0, Math.abs(targetPos.y - pos.y) - targetHalfExtent);
+          meleeCheckDist = Math.sqrt(edx * edx + edy * edy);
+        } else {
+          const ddx = targetPos.x - pos.x, ddy = targetPos.y - pos.y;
+          meleeCheckDist = Math.sqrt(ddx * ddx + ddy * ddy);
+        }
+
+        if (meleeCheckDist <= ENEMY_MELEE_RANGE) {
+          // In melee range: face target center, attack
+          if (targetHalfExtent > 0) {
+            // Buildings: keep closing distance — building collision stops naturally at surface
+            const tdx = targetPos.x - pos.x;
+            const tdy = targetPos.y - pos.y;
+            const tlen = Math.sqrt(tdx * tdx + tdy * tdy);
+            inp.dx = tlen > 0 ? tdx / tlen : 0;
+            inp.dy = tlen > 0 ? tdy / tlen : 0;
+          } else {
+            // Players: stop at melee range
+            inp.dx = 0;
+            inp.dy = 0;
+          }
           this.paths.delete(id);
 
-          const facing = Math.atan2(ddy, ddx);
+          const facing = Math.atan2(targetPos.y - pos.y, targetPos.x - pos.x);
           const facingComp = world.getComponent<FacingComponent>(id, C.Facing);
           if (facingComp) facingComp.angle = facing;
 
-          // Check cooldown before attack to detect swings
           const cd = world.getComponent<AttackCooldownComponent>(id, C.AttackCooldown);
           const cdBefore = cd?.remaining ?? 0;
 
@@ -134,7 +239,6 @@ export class EnemySystem {
             world, id, facing, undefined, ENEMY_OVERRIDES,
           );
 
-          // Detect if a swing occurred (cooldown went from 0 → max)
           const didSwing = cd && cdBefore <= 0 && cd.remaining > 0;
           if (didSwing) {
             result.attackPerformed.push({ sourceId: id, facing });
@@ -143,8 +247,42 @@ export class EnemySystem {
           result.hits.push(...hits);
           result.deaths.push(...deaths);
         } else {
-          // Out of melee range: navigate toward player
-          this.navigateToward(id, pos, nearestPos, inp, dt, len, ddx, ddy);
+          // Navigate toward the nav point (outside building for buildings, center for players)
+          const ddx = navPos.x - pos.x, ddy = navPos.y - pos.y;
+          const len = Math.sqrt(ddx * ddx + ddy * ddy);
+
+          // Temporarily exclude target building tiles so pathfinding doesn't treat
+          // the target as an obstacle (enemies should path around OTHER buildings, not the target)
+          const excludedTiles = targetEntityId !== null ? this.buildingTilesMap.get(targetEntityId) : undefined;
+          if (excludedTiles) for (const tk of excludedTiles) this.buildingBlockedTiles.delete(tk);
+
+          this.navigateToward(id, pos, navPos as PositionComponent, inp, dt, len, ddx, ddy);
+
+          // Restore excluded tiles
+          if (excludedTiles) for (const tk of excludedTiles) this.buildingBlockedTiles.add(tk);
+
+          // Attack any building within melee range while navigating (break through obstacles)
+          const blocking = this.findBlockingBuilding(pos);
+          if (blocking) {
+            const facing = Math.atan2(blocking.y - pos.y, blocking.x - pos.x);
+            const facingComp = world.getComponent<FacingComponent>(id, C.Facing);
+            if (facingComp) facingComp.angle = facing;
+
+            const cd = world.getComponent<AttackCooldownComponent>(id, C.AttackCooldown);
+            const cdBefore = cd?.remaining ?? 0;
+
+            const { hits, deaths } = this.combat.processMeleeAttack(
+              world, id, facing, undefined, ENEMY_OVERRIDES,
+            );
+
+            const didSwing = cd && cdBefore <= 0 && cd.remaining > 0;
+            if (didSwing) {
+              result.attackPerformed.push({ sourceId: id, facing });
+            }
+
+            result.hits.push(...hits);
+            result.deaths.push(...deaths);
+          }
         }
       } else {
         inp.dx = 0;
@@ -157,7 +295,10 @@ export class EnemySystem {
     return result;
   }
 
-  /** Set dx/dy to navigate toward the target, using A* if line of sight is blocked. */
+  /**
+   * Set dx/dy to navigate toward the target, using A* if line of sight is blocked.
+   * Returns true if a valid path was found, false if falling back to direct chase.
+   */
   private navigateToward(
     id: number,
     pos: PositionComponent,
@@ -167,16 +308,16 @@ export class EnemySystem {
     directLen: number,
     directDx: number,
     directDy: number,
-  ): void {
-    // If direct line is clear, chase directly (faster than pathfinding)
+  ): boolean {
+    // If direct line is clear (tiles + buildings), chase directly
     if (this.isDirectPathClear(pos.x, pos.y, target.x, target.y)) {
       inp.dx = directLen > 0 ? directDx / directLen : 0;
       inp.dy = directLen > 0 ? directDy / directLen : 0;
       this.paths.delete(id);
-      return;
+      return true;
     }
 
-    // Use cached path or compute a new one
+    // Use cached path or compute a new one (building-aware)
     const path = this.getOrComputePath(id, pos, target, dt);
 
     if (path && path.nextIndex < path.waypoints.length) {
@@ -205,11 +346,13 @@ export class EnemySystem {
         inp.dx = wpDx / wpLen;
         inp.dy = wpDy / wpLen;
       }
-    } else {
-      // No path found - fallback to direct chase
-      inp.dx = directLen > 0 ? directDx / directLen : 0;
-      inp.dy = directLen > 0 ? directDy / directLen : 0;
+      return true;
     }
+
+    // No path found - fallback to direct chase
+    inp.dx = directLen > 0 ? directDx / directLen : 0;
+    inp.dy = directLen > 0 ? directDy / directLen : 0;
+    return false;
   }
 
   private getOrComputePath(
@@ -231,8 +374,8 @@ export class EnemySystem {
       }
     }
 
-    // Compute new path
-    const waypoints = findPath(this.generator, pos.x, pos.y, target.x, target.y);
+    // Compute new path (with building-blocked tiles)
+    const waypoints = findPath(this.generator, pos.x, pos.y, target.x, target.y, this.buildingBlockedTiles);
     if (!waypoints || waypoints.length === 0) {
       this.paths.delete(enemyId);
       return null;
@@ -250,7 +393,7 @@ export class EnemySystem {
     return cached;
   }
 
-  /** Simple ray-march check: are all tiles between start and end walkable? */
+  /** Simple ray-march check: are all tiles between start and end walkable and not blocked by buildings? */
   private isDirectPathClear(sx: number, sy: number, ex: number, ey: number): boolean {
     const dx = ex - sx;
     const dy = ey - sy;
@@ -264,7 +407,22 @@ export class EnemySystem {
       const tx = Math.floor(wx / TILE_SIZE);
       const ty = Math.floor(wy / TILE_SIZE);
       if (!(TILE_DEFS[this.generator.getTile(tx, ty)]?.walkable ?? false)) return false;
+      if (this.buildingBlockedTiles.has(tileKey(tx, ty))) return false;
     }
     return true;
+  }
+
+  /** Find the nearest building within melee range to break through. */
+  private findBlockingBuilding(pos: PositionComponent): { x: number; y: number } | null {
+    let closest: { x: number; y: number; dist: number } | null = null;
+    for (const b of this.buildingEntities) {
+      const edx = Math.max(0, Math.abs(b.x - pos.x) - b.half);
+      const edy = Math.max(0, Math.abs(b.y - pos.y) - b.half);
+      const edgeDist = Math.sqrt(edx * edx + edy * edy);
+      if (edgeDist <= ENEMY_MELEE_RANGE && (!closest || edgeDist < closest.dist)) {
+        closest = { x: b.x, y: b.y, dist: edgeDist };
+      }
+    }
+    return closest;
   }
 }
