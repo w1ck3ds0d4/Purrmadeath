@@ -7,6 +7,7 @@ import {
   ResourceNodeComponent,
   ItemDropComponent,
   BuildingComponent,
+  ProductionComponent,
 } from '@shared/components';
 import type { SnapshotMessage, DeltaMessage, EntitySnapshot } from '@shared/protocol';
 
@@ -146,12 +147,38 @@ export class RemotePlayerSystem {
           permanent: snap.buildingType === 'campfire',
         } as BuildingComponent);
       }
+      // Production building stored resources (for renderer tag display)
+      if (snap.productionStored !== undefined && snap.productionResource) {
+        world.addComponent(snap.entityId, C.Production, {
+          resourceType: snap.productionResource,
+          interval: 0, timer: 0, amount: 0,
+          stored: snap.productionStored,
+          maxStored: snap.productionMax ?? 0,
+        } as ProductionComponent);
+      }
     } else {
       // Update velocity + health immediately; position is interpolated in interpolate()
       const vel = world.getComponent<VelocityComponent>(snap.entityId, C.Velocity);
       const hp  = world.getComponent<HealthComponent>(snap.entityId, C.Health);
       if (vel) { vel.vx = snap.vx; vel.vy = snap.vy; }
       if (hp)  { hp.current = snap.hp; hp.max = snap.maxHp; }
+
+      // Update production stored amount
+      if (snap.productionStored !== undefined) {
+        let prod = world.getComponent<ProductionComponent>(snap.entityId, C.Production);
+        if (!prod && snap.productionResource) {
+          // Component wasn't created yet (entity existed before production was added)
+          world.addComponent(snap.entityId, C.Production, {
+            resourceType: snap.productionResource,
+            interval: 0, timer: 0, amount: 0,
+            stored: snap.productionStored,
+            maxStored: snap.productionMax ?? 0,
+          } as ProductionComponent);
+        } else if (prod) {
+          prod.stored = snap.productionStored;
+          if (snap.productionMax !== undefined) prod.maxStored = snap.productionMax;
+        }
+      }
 
       // On full snapshot (rejoin), hard-snap position
       if (hardSnap) {

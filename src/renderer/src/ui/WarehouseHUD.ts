@@ -4,6 +4,7 @@ const RES_COLORS: Record<string, string> = {
   iron: '#b08060',
   diamond: '#44ccdd',
   gold: '#e8c96a',
+  food: '#44aa44',
 };
 
 /**
@@ -49,7 +50,7 @@ export class WarehouseHUD {
   show(): void { this.el.style.display = 'block'; }
   hide(): void { this.el.style.display = 'none'; }
 
-  update(resources: { wood: number; stone: number; iron: number; diamond: number; gold: number }): void {
+  update(resources: { wood: number; stone: number; iron: number; diamond: number; gold: number; food: number }): void {
     const parts: string[] = [];
     for (const [key, val] of Object.entries(resources)) {
       if (key === 'gold') continue; // skip gold in display for now

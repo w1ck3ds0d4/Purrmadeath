@@ -126,6 +126,8 @@ export enum MessageType {
   DEBUG_WAVE_SKIP = 'DEBUG_WAVE_SKIP',
   /** Client → Server: pause/resume the wave timer (dev tool). */
   DEBUG_WAVE_PAUSE = 'DEBUG_WAVE_PAUSE',
+  /** Client → Server: give resources to the sender (dev tool). */
+  DEBUG_GIVE_RESOURCES = 'DEBUG_GIVE_RESOURCES',
 }
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
@@ -264,6 +266,12 @@ export interface EntitySnapshot {
   downed?: boolean;
   /** Present only for 'building' faction entities. */
   buildingType?: import('./components').BuildingType;
+  /** Stored resource count for production buildings (lumbermill/mine/farm). */
+  productionStored?: number;
+  /** Max stored capacity for production buildings. */
+  productionMax?: number;
+  /** Resource type produced by production buildings. */
+  productionResource?: string;
 }
 
 /** Full world snapshot sent on game start or player rejoin. */
@@ -427,6 +435,7 @@ export interface ResourceUpdateMessage extends BaseMessage {
   iron: number;
   diamond: number;
   gold: number;
+  food: number;
 }
 
 /** Client → Server: player pressed E to interact/pick up nearby item. */
@@ -563,6 +572,7 @@ export interface WarehouseUpdateMessage extends BaseMessage {
   iron: number;
   diamond: number;
   gold: number;
+  food: number;
   exists: boolean;
 }
 

@@ -14,6 +14,7 @@ export class DeathOverlay {
   private respawnTimer = 0;
   private reviveProgress = 0;
   private state: 'hidden' | 'downed' | 'reviving' | 'dead' = 'hidden';
+  private solo = false;
 
   constructor() {
     this.el = document.createElement('div');
@@ -49,10 +50,11 @@ export class DeathOverlay {
     document.getElementById('overlay')!.appendChild(this.el);
   }
 
-  showDowned(bleedTimer: number): void {
+  showDowned(bleedTimer: number, solo = false): void {
     this.state = 'downed';
     this.bleedTimer = bleedTimer;
     this.reviveProgress = 0;
+    this.solo = solo;
     this.el.style.display = 'block';
     this.render();
   }
@@ -91,9 +93,15 @@ export class DeathOverlay {
   private render(): void {
     switch (this.state) {
       case 'downed':
-        this.statusEl.textContent = 'YOU ARE DOWNED';
-        this.timerEl.textContent = `Bleed-out in ${Math.ceil(this.bleedTimer)}s`;
-        this.subEl.textContent = 'A teammate can revive you';
+        if (this.solo) {
+          this.statusEl.textContent = 'RESPAWNING';
+          this.timerEl.textContent = `${Math.ceil(this.bleedTimer)}s`;
+          this.subEl.textContent = '';
+        } else {
+          this.statusEl.textContent = 'YOU ARE DOWNED';
+          this.timerEl.textContent = `Bleed-out in ${Math.ceil(this.bleedTimer)}s`;
+          this.subEl.textContent = 'A teammate can revive you';
+        }
         break;
       case 'reviving':
         this.statusEl.textContent = 'BEING REVIVED';

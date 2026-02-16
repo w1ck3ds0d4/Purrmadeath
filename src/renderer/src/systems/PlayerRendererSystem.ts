@@ -1,4 +1,4 @@
-import { Container, Graphics } from 'pixi.js';
+import { Container, Graphics, Text } from 'pixi.js';
 import { World, EntityId } from '@shared/ecs/World';
 import {
   C,
@@ -9,6 +9,7 @@ import {
   ResourceNodeComponent,
   ItemDropComponent,
   BuildingComponent,
+  ProductionComponent,
 } from '@shared/components';
 import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, ENEMY_MELEE_RANGE, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, buildingHalfExtent } from '@shared/constants';
 
@@ -34,12 +35,22 @@ const ITEM_DROP_COLORS: Record<string, number> = {
 };
 // Building colors by type
 const BUILDING_COLORS: Record<string, { body: number; border: number }> = {
-  campfire:   { body: 0xcc5500, border: 0xff8800 },
-  wall:       { body: 0x8a8a8a, border: 0xbbbbbb },
-  warehouse:  { body: 0x8a6a3a, border: 0xc49a4a },
-  lumbermill: { body: 0x5a8a3a, border: 0x7aaa5a },
-  mine:       { body: 0x6a6a7a, border: 0x9a9aaa },
-  farm:       { body: 0x8aaa4a, border: 0xaacc6a },
+  campfire:       { body: 0xcc5500, border: 0xff8800 },
+  wall:           { body: 0x8a8a8a, border: 0xbbbbbb },
+  warehouse:      { body: 0x8a6a3a, border: 0xc49a4a },
+  lumbermill:     { body: 0x5a8a3a, border: 0x7aaa5a },
+  mine:           { body: 0x6a6a7a, border: 0x9a9aaa },
+  farm:           { body: 0x8aaa4a, border: 0xaacc6a },
+  arrow_turret:   { body: 0x7a7a9a, border: 0xaaaacc },
+  cannon_turret:  { body: 0x5a5a6a, border: 0x8888aa },
+  spike_trap:     { body: 0x8a3a3a, border: 0xcc5555 },
+  bridge:         { body: 0x8a6a3a, border: 0xaa8a5a },
+};
+// Production resource tag colors
+const PRODUCTION_TAG_COLORS: Record<string, number> = {
+  wood:  0x8a6a3a,
+  stone: 0x888888,
+  food:  0x44aa44,
 };
 // Duration of the white hit-flash in seconds
 const HIT_FLASH_DURATION = 0.15;
@@ -81,11 +92,18 @@ export class PlayerRendererSystem {
   private reviveProgress = new Map<EntityId, number>(); // entityId → 0..1
   /** Dedicated layer for all health bars — renders above entities/buildings. */
   private healthBarGfx: Graphics;
+  /** Production building resource tags (Text objects managed per-entity). */
+  private productionTags = new Map<EntityId, { bg: Graphics; text: Text }>();
+  private tagContainer: Container;
 
   constructor(private readonly worldContainer: Container) {
     this.healthBarGfx = new Graphics();
     this.healthBarGfx.zIndex = 9; // above entities, below projectiles (10)
     this.worldContainer.addChild(this.healthBarGfx);
+
+    this.tagContainer = new Container();
+    this.tagContainer.zIndex = 9;
+    this.worldContainer.addChild(this.tagContainer);
   }
 
   /** Triggers a 150ms white flash on the struck entity. */
@@ -318,6 +336,52 @@ export class PlayerRendererSystem {
           gfx.stroke({ color: 0xeedd66, alpha: 0.7, width: 1.5 });
         }
 
+        // Arrow turret: crosshair icon
+        if (bType === 'arrow_turret') {
+          const ih = 6;
+          gfx.circle(0, 0, ih);
+          gfx.stroke({ color: 0xddddef, alpha: 0.8, width: 1.5 });
+          gfx.moveTo(-ih - 2, 0); gfx.lineTo(ih + 2, 0);
+          gfx.moveTo(0, -ih - 2); gfx.lineTo(0, ih + 2);
+          gfx.stroke({ color: 0xddddef, alpha: 0.6, width: 1.5 });
+        }
+
+        // Cannon turret: circle + filled dot
+        if (bType === 'cannon_turret') {
+          const ih = 8;
+          gfx.circle(0, 0, ih);
+          gfx.stroke({ color: 0xccccdd, alpha: 0.7, width: 2 });
+          gfx.circle(0, 0, 3);
+          gfx.fill({ color: 0xccccdd, alpha: 0.9 });
+        }
+
+        // Spike trap: small triangle spikes in a grid pattern
+        if (bType === 'spike_trap') {
+          const s = 4; // spike half-width
+          const h = 5; // spike height
+          // 3x3 grid of upward-pointing triangles
+          for (let row = -1; row <= 1; row++) {
+            for (let col = -1; col <= 1; col++) {
+              const cx = col * (s * 2 + 1);
+              const cy = row * (h + 2) + 1;
+              gfx.poly([cx, cy - h, cx + s, cy + 1, cx - s, cy + 1]);
+              gfx.fill({ color: 0xddaaaa, alpha: 0.9 });
+              gfx.poly([cx, cy - h, cx + s, cy + 1, cx - s, cy + 1]);
+              gfx.stroke({ color: 0xff6666, alpha: 0.8, width: 1 });
+            }
+          }
+          gfx.zIndex = -5; // above tiles (-10), below entities (0)
+        }
+
+        // Bridge: horizontal plank lines
+        if (bType === 'bridge') {
+          const ih = 6;
+          for (let ly = -ih + 2; ly <= ih - 2; ly += 4) {
+            gfx.moveTo(-ih, ly); gfx.lineTo(ih, ly);
+          }
+          gfx.stroke({ color: 0xddcc99, alpha: 0.8, width: 2 });
+          gfx.zIndex = -11; // below tiles (-10)
+        }
 
       } else if (isItem) {
         // ── Item drop rendering ──────────────────────────────────────────────
@@ -495,6 +559,62 @@ export class PlayerRendererSystem {
         hb.fill({ color: barColor, alpha: 1 });
       }
     }
+
+    // ── Production building resource tags ────────────────────────────────────
+    const activeProductionIds = new Set<EntityId>();
+
+    for (const id of living) {
+      const prod = world.getComponent<ProductionComponent>(id, C.Production);
+      if (!prod || prod.stored <= 0) continue;
+
+      activeProductionIds.add(id);
+      const pos = world.getComponent<PositionComponent>(id, C.Position)!;
+      const bldg = world.getComponent<BuildingComponent>(id, C.Building);
+      const half = buildingHalfExtent(bldg?.buildingType ?? 'wall');
+      const tagColor = PRODUCTION_TAG_COLORS[prod.resourceType] ?? 0xaaaaaa;
+
+      let tag = this.productionTags.get(id);
+      if (!tag) {
+        const bg = new Graphics();
+        const text = new Text({
+          text: '',
+          style: { fontSize: 10, fill: 0xffffff, fontFamily: 'monospace', fontWeight: 'bold' },
+        });
+        text.anchor.set(0.5, 0.5);
+        this.tagContainer.addChild(bg);
+        this.tagContainer.addChild(text);
+        tag = { bg, text };
+        this.productionTags.set(id, tag);
+      }
+
+      const label = `${prod.stored}/${prod.maxStored}`;
+      tag.text.text = label;
+      // Position above the building, above the HP bar
+      const tagY = pos.y - (half + 18);
+      const tagW = Math.max(24, tag.text.width + 20);
+      const tagH = 14;
+
+      tag.bg.clear();
+      // Background pill
+      tag.bg.roundRect(pos.x - tagW / 2, tagY - tagH / 2, tagW, tagH, 4);
+      tag.bg.fill({ color: 0x111111, alpha: 0.75 });
+      // Resource color dot
+      tag.bg.circle(pos.x - tagW / 2 + 7, tagY, 3);
+      tag.bg.fill({ color: tagColor, alpha: 1 });
+
+      tag.text.position.set(pos.x + 5, tagY);
+    }
+
+    // Remove tags for entities that no longer have stored resources
+    for (const [id, tag] of this.productionTags) {
+      if (!activeProductionIds.has(id)) {
+        this.tagContainer.removeChild(tag.bg);
+        this.tagContainer.removeChild(tag.text);
+        tag.bg.destroy();
+        tag.text.destroy();
+        this.productionTags.delete(id);
+      }
+    }
   }
 
   /** Destroy all entity graphics (call on quit to menu or world reset). */
@@ -509,5 +629,12 @@ export class PlayerRendererSystem {
     this.downedEntities.clear();
     this.reviveProgress.clear();
     this.healthBarGfx.clear();
+    for (const [, tag] of this.productionTags) {
+      this.tagContainer.removeChild(tag.bg);
+      this.tagContainer.removeChild(tag.text);
+      tag.bg.destroy();
+      tag.text.destroy();
+    }
+    this.productionTags.clear();
   }
 }

@@ -24,6 +24,10 @@ export const C = {
   Downed:          'Downed',
   // ── Phase 5 ──────────────────────────────────────────────────────────────
   Building:        'Building',
+  Production:      'Production',
+  Turret:          'Turret',
+  SpikeTrap:       'SpikeTrap',
+  Bridge:          'Bridge',
 } as const;
 
 // ─── Component interfaces ──────────────────────────────────────────────────────
@@ -162,13 +166,15 @@ export interface ResourcesComponent {
   iron: number;
   diamond: number;
   gold: number;
+  food: number;
 }
 
 // ── Phase 4.11 components ────────────────────────────────────────────────────
 
 // ── Phase 5 components ────────────────────────────────────────────────────
 
-export type BuildingType = 'campfire' | 'wall' | 'warehouse' | 'lumbermill' | 'mine' | 'farm';
+export type BuildingType = 'campfire' | 'wall' | 'warehouse' | 'lumbermill' | 'mine' | 'farm'
+  | 'arrow_turret' | 'cannon_turret' | 'spike_trap' | 'bridge';
 
 /** Tags an entity as a player-built (or pre-placed) structure. */
 export interface BuildingComponent {
@@ -185,4 +191,56 @@ export interface DownedComponent {
   reviveProgress: number;
   /** Entity ID of the teammate currently reviving, or -1 if none. */
   reviverId: number;
+}
+
+// ── Production & Defense buildings ──────────────────────────────────────────
+
+/** Passive resource generator attached to lumbermill, mine, or farm. */
+export interface ProductionComponent {
+  /** Which resource this building generates. */
+  resourceType: 'wood' | 'stone' | 'food';
+  /** Seconds between each production tick. */
+  interval: number;
+  /** Accumulator — counts up toward `interval`. */
+  timer: number;
+  /** Amount produced per tick. */
+  amount: number;
+  /** Resources stored locally (collected with F if no warehouse). */
+  stored: number;
+  /** Max resources this building can store locally. */
+  maxStored: number;
+}
+
+/** Auto-targeting turret that fires projectiles at nearby enemies. */
+export interface TurretComponent {
+  /** Max targeting range in world pixels. */
+  range: number;
+  /** Seconds between shots. */
+  cooldown: number;
+  /** Current cooldown remaining. */
+  cooldownTimer: number;
+  /** Damage per projectile. */
+  damage: number;
+  /** Projectile speed in px/s. */
+  projectileSpeed: number;
+}
+
+/** Damages enemies that walk over it; takes self-damage each trigger. */
+export interface SpikeTrapComponent {
+  /** Damage dealt to enemies per trigger. */
+  damage: number;
+  /** Seconds between triggers on the same enemy. */
+  cooldown: number;
+  /** Damage the trap takes each time it triggers. */
+  selfDamage: number;
+  /** Per-enemy cooldown tracking: entityId → seconds remaining. */
+  enemyCooldowns: Map<number, number>;
+}
+
+/** Marks a building as a bridge tile (placed on water, makes tile walkable). */
+export interface BridgeComponent {
+  /** Tile X coordinate this bridge occupies. */
+  tileX: number;
+  /** Tile Y coordinate this bridge occupies. */
+  tileY: number;
 }

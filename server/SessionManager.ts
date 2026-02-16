@@ -80,6 +80,7 @@ export class SessionManager {
     socket.on(MessageType.DEBUG_SPAWN_ENEMIES,  (c, m) => this.onDebugAction(c, () => this.onDebugSpawnEnemies(c, m as DebugSpawnEnemiesMessage)));
     socket.on(MessageType.DEBUG_WAVE_SKIP,     (c) => this.onDebugAction(c, () => this.session?.debugWaveSkip((cl, msg) => this.socket.send(cl, msg))));
     socket.on(MessageType.DEBUG_WAVE_PAUSE,    (c) => this.onDebugAction(c, () => this.session?.debugWavePause((cl, msg) => this.socket.send(cl, msg))));
+    socket.on(MessageType.DEBUG_GIVE_RESOURCES, (c) => this.onDebugAction(c, () => this.session?.debugGiveResources(c.id, (cl, msg) => this.socket.send(cl, msg))));
     socket.on(MessageType.CHAT,                 (c, m) => this.onChat(c, m as ChatSendMessage));
     socket.on(MessageType.PAUSE_VOTE,            (c) => this.onPauseVote(c));
     socket.onDisconnect((c) => this.onDisconnect(c));

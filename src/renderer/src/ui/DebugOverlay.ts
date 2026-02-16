@@ -303,6 +303,7 @@ export class DebugOverlay {
       case '/spawn':
       case '/skipwave':
       case '/pausewave':
+      case '/give':
         this.cheatHandler?.(cmd, args);
         this.log(`Executed: ${raw}`);
         break;

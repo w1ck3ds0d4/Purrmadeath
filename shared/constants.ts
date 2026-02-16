@@ -256,6 +256,7 @@ export const BUILDING_HALF_EXTENT = TILE_SIZE / 2; // 16px
 /** Tile dimensions per building type (tiles along each edge). */
 export const BUILDING_SIZES: Record<string, number> = {
   wall: 1, campfire: 3, warehouse: 3, lumbermill: 2, mine: 2, farm: 2,
+  arrow_turret: 1, cannon_turret: 2, spike_trap: 1, bridge: 1,
 };
 
 /** Half-extent in world pixels for a building of the given type. */
@@ -293,6 +294,18 @@ export const MINE_MAX_HEALTH = 180;
 /** Farm HP. */
 export const FARM_MAX_HEALTH = 150;
 
+/** Arrow turret HP. */
+export const ARROW_TURRET_MAX_HEALTH = 100;
+
+/** Cannon turret HP. */
+export const CANNON_TURRET_MAX_HEALTH = 200;
+
+/** Spike trap HP (breaks after repeated use). */
+export const SPIKE_TRAP_MAX_HEALTH = 50;
+
+/** Bridge HP (effectively invulnerable). */
+export const BRIDGE_MAX_HEALTH = 999;
+
 /** Radius (px) for auto-depositing player resources into the warehouse. */
 export const WAREHOUSE_DEPOSIT_RADIUS = 80;
 
@@ -301,12 +314,63 @@ export const DEMOLISH_REFUND_PERCENT = 0.5;
 
 /** Per-building-type resource costs for placement. */
 export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'iron' | 'diamond', number>>> = {
-  wall:       { wood: 5 },
-  warehouse:  { wood: 10, stone: 5 },
-  lumbermill: { wood: 15, stone: 5 },
-  mine:       { wood: 10, stone: 10 },
-  farm:       { wood: 10 },
+  wall:           { wood: 5 },
+  warehouse:      { wood: 10, stone: 5 },
+  lumbermill:     { wood: 15, stone: 5 },
+  mine:           { wood: 10, stone: 10 },
+  farm:           { wood: 10 },
+  arrow_turret:   { stone: 5, iron: 5 },
+  cannon_turret:  { stone: 10, iron: 10, diamond: 2 },
+  spike_trap:     { wood: 3, iron: 2 },
+  bridge:         { wood: 5, stone: 2 },
 };
 
 /** Ordered list of building types the player can cycle through in build mode. */
-export const PLACEABLE_BUILDINGS: string[] = ['wall', 'warehouse', 'lumbermill', 'mine', 'farm'];
+export const PLACEABLE_BUILDINGS: string[] = [
+  'wall', 'warehouse', 'lumbermill', 'mine', 'farm',
+  'arrow_turret', 'cannon_turret', 'spike_trap', 'bridge',
+];
+
+// ─── Production Buildings ──────────────────────────────────────────────────
+
+/** Seconds between lumbermill production ticks. */
+export const LUMBERMILL_PRODUCTION_INTERVAL = 10;
+/** Seconds between mine production ticks. */
+export const MINE_PRODUCTION_INTERVAL = 15;
+/** Seconds between farm production ticks. */
+export const FARM_PRODUCTION_INTERVAL = 8;
+/** Amount produced per tick (all production buildings). */
+export const PRODUCTION_AMOUNT = 1;
+/** Max resources a production building can store locally. */
+export const PRODUCTION_MAX_STORED = 10;
+
+// ─── Arrow Turret ──────────────────────────────────────────────────────────
+
+/** Targeting range for arrow turrets (px). */
+export const ARROW_TURRET_RANGE = 200;
+/** Seconds between arrow turret shots. */
+export const ARROW_TURRET_COOLDOWN = 2;
+/** Damage per arrow turret projectile. */
+export const ARROW_TURRET_DAMAGE = 8;
+/** Arrow turret projectile speed (px/s). */
+export const ARROW_TURRET_PROJ_SPEED = 350;
+
+// ─── Cannon Turret ─────────────────────────────────────────────────────────
+
+/** Targeting range for cannon turrets (px). */
+export const CANNON_TURRET_RANGE = 300;
+/** Seconds between cannon turret shots. */
+export const CANNON_TURRET_COOLDOWN = 4;
+/** Damage per cannon turret projectile. */
+export const CANNON_TURRET_DAMAGE = 25;
+/** Cannon turret projectile speed (px/s). */
+export const CANNON_TURRET_PROJ_SPEED = 250;
+
+// ─── Spike Trap ────────────────────────────────────────────────────────────
+
+/** Damage dealt to entities walking over a spike trap. */
+export const SPIKE_TRAP_DAMAGE = 5;
+/** Seconds between spike trap triggers on the same entity. */
+export const SPIKE_TRAP_COOLDOWN = 1;
+/** Damage the spike trap takes each time it triggers. */
+export const SPIKE_TRAP_SELF_DAMAGE = 1;

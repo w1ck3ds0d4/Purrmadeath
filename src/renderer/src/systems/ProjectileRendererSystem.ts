@@ -67,7 +67,8 @@ export class ProjectileRendererSystem {
       if (p.x < cameraX - halfW - margin || p.x > cameraX + halfW + margin ||
           p.y < cameraY - halfH - margin || p.y > cameraY + halfH + margin) continue;
 
-      const color = PLAYER_COLORS[p.ownerSlot] ?? 0xffffff;
+      // Turret projectiles (ownerSlot = -1) use a distinct gray/blue color
+      const color = p.ownerSlot === -1 ? 0x9999bb : (PLAYER_COLORS[p.ownerSlot] ?? 0xffffff);
       const speed = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
       if (speed === 0) continue;
 

@@ -60,6 +60,8 @@ export class EnemySystem {
   private buildingTilesMap = new Map<number, number[]>();
   /** Cached building positions for break-through checks. */
   private buildingEntities: { x: number; y: number; half: number }[] = [];
+  /** Bridge tiles that override unwalkable terrain for pathfinding. */
+  private bridgeTiles = new Set<number>();
 
   constructor(
     private readonly combat: CombatSystem,
@@ -79,6 +81,8 @@ export class EnemySystem {
       if (f.type !== 'building') continue;
       const bldg = world.getComponent<BuildingComponent>(bid, C.Building);
       if (!bldg) continue;
+      // Skip bridges and spike traps — enemies don't target them
+      if (bldg.buildingType === 'bridge' || bldg.buildingType === 'spike_trap') continue;
       if (bldg.buildingType === 'campfire') campfireIds.push(bid);
       else if (bldg.buildingType === 'wall') wallIds.push(bid);
       else otherBuildingIds.push(bid);
@@ -88,10 +92,22 @@ export class EnemySystem {
     this.buildingBlockedTiles.clear();
     this.buildingTilesMap.clear();
     this.buildingEntities = [];
+    this.bridgeTiles.clear();
     for (const bid of world.query(C.Position, C.Building)) {
       const bpos = world.getComponent<PositionComponent>(bid, C.Position)!;
       const bldg = world.getComponent<BuildingComponent>(bid, C.Building)!;
       const half = buildingHalfExtent(bldg.buildingType);
+
+      // Bridges are walkable, not blocked — track them separately
+      if (bldg.buildingType === 'bridge') {
+        const tx = Math.floor(bpos.x / TILE_SIZE);
+        const ty = Math.floor(bpos.y / TILE_SIZE);
+        this.bridgeTiles.add(tileKey(tx, ty));
+        continue;
+      }
+      // Spike traps are not solid obstacles for pathfinding
+      if (bldg.buildingType === 'spike_trap') continue;
+
       this.buildingEntities.push({ x: bpos.x, y: bpos.y, half });
       const tiles: number[] = [];
       const minTx = Math.floor((bpos.x - half) / TILE_SIZE);
@@ -375,7 +391,7 @@ export class EnemySystem {
     }
 
     // Compute new path (with building-blocked tiles)
-    const waypoints = findPath(this.generator, pos.x, pos.y, target.x, target.y, this.buildingBlockedTiles);
+    const waypoints = findPath(this.generator, pos.x, pos.y, target.x, target.y, this.buildingBlockedTiles, this.bridgeTiles);
     if (!waypoints || waypoints.length === 0) {
       this.paths.delete(enemyId);
       return null;
@@ -406,8 +422,10 @@ export class EnemySystem {
       const wy = sy + dy * t;
       const tx = Math.floor(wx / TILE_SIZE);
       const ty = Math.floor(wy / TILE_SIZE);
-      if (!(TILE_DEFS[this.generator.getTile(tx, ty)]?.walkable ?? false)) return false;
-      if (this.buildingBlockedTiles.has(tileKey(tx, ty))) return false;
+      const tk = tileKey(tx, ty);
+      // Bridge tiles override unwalkable terrain
+      if (!this.bridgeTiles.has(tk) && !(TILE_DEFS[this.generator.getTile(tx, ty)]?.walkable ?? false)) return false;
+      if (this.buildingBlockedTiles.has(tk)) return false;
     }
     return true;
   }

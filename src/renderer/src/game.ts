@@ -175,8 +175,8 @@ async function main(): Promise<void> {
   // ── Build mode state ─────────────────────────────────────────────────────
   let buildModeActive = false;
   let selectedBuildingIdx = 0;
-  let localResources: Record<string, number> = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0 };
-  let warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0 };
+  let localResources: Record<string, number> = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
+  let warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
   let warehouseExists = false;
 
   /** Warehouse + player inventory combined (for build cost checks). */
@@ -242,6 +242,9 @@ async function main(): Promise<void> {
       case '/pausewave':
         net.send({ type: MessageType.DEBUG_WAVE_PAUSE });
         break;
+      case '/give':
+        net.send({ type: MessageType.DEBUG_GIVE_RESOURCES });
+        break;
     }
   });
 
@@ -282,12 +285,12 @@ async function main(): Promise<void> {
     gameOverOverlay.hide();
     chatOverlay.hide();
     debug.hide();
-    resourceHUD.setResources(0, 0, 0, 0, 0);
+    resourceHUD.setResources(0, 0, 0, 0, 0, 0);
     resourceHUD.hide();
     buildModeActive = false;
     selectedBuildingIdx = 0;
-    localResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0 };
-    warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0 };
+    localResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
+    warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
     warehouseExists = false;
     buildOverlay.hide();
     buildGhost.hide();
@@ -530,8 +533,8 @@ async function main(): Promise<void> {
 
   net.on(MessageType.RESOURCE_UPDATE, (msg) => {
     const ru = msg as ResourceUpdateMessage;
-    resourceHUD.setResources(ru.wood, ru.stone, ru.iron, ru.diamond, ru.gold);
-    localResources = { wood: ru.wood, stone: ru.stone, iron: ru.iron, diamond: ru.diamond, gold: ru.gold };
+    resourceHUD.setResources(ru.wood, ru.stone, ru.iron, ru.diamond, ru.gold, ru.food);
+    localResources = { wood: ru.wood, stone: ru.stone, iron: ru.iron, diamond: ru.diamond, gold: ru.gold, food: ru.food };
     if (buildModeActive) {
       const currentBuilding = PLACEABLE_BUILDINGS[selectedBuildingIdx];
       buildOverlay.update(currentBuilding, combinedResources());
@@ -540,7 +543,7 @@ async function main(): Promise<void> {
 
   net.on(MessageType.WAREHOUSE_UPDATE, (msg) => {
     const wu = msg as WarehouseUpdateMessage;
-    warehouseResources = { wood: wu.wood, stone: wu.stone, iron: wu.iron, diamond: wu.diamond, gold: wu.gold };
+    warehouseResources = { wood: wu.wood, stone: wu.stone, iron: wu.iron, diamond: wu.diamond, gold: wu.gold, food: wu.food };
     warehouseExists = wu.exists;
     if (warehouseExists) {
       warehouseHUD.update(warehouseResources);
@@ -566,7 +569,7 @@ async function main(): Promise<void> {
       buildModeActive = false;
       buildOverlay.hide();
       buildGhost.hide();
-      deathOverlay.showDowned(pd.bleedTimer);
+      deathOverlay.showDowned(pd.bleedTimer, !isMultiplayer);
     }
   });
 
@@ -795,6 +798,19 @@ async function main(): Promise<void> {
       }
 
       // 4. Predict locally + interpolate remote entities
+      // Populate bridge tiles from world entities for movement walkability
+      if (movementSystem) {
+        movementSystem.bridgeTiles.clear();
+        for (const bid of world.query(C.Position, C.Building)) {
+          const bldg = world.getComponent<BuildingComponent>(bid, C.Building);
+          if (bldg?.buildingType === 'bridge') {
+            const bpos = world.getComponent<PositionComponent>(bid, C.Position)!;
+            const tx = Math.floor(bpos.x / TILE_SIZE);
+            const ty = Math.floor(bpos.y / TILE_SIZE);
+            movementSystem.bridgeTiles.add(`${tx},${ty}`);
+          }
+        }
+      }
       movementSystem?.update(world, dt, localEntityId);
       staminaSystem.update(world, dt);
       remotePlayerSys.interpolate(world, dt);
@@ -857,14 +873,21 @@ async function main(): Promise<void> {
           if (total < amount!) { ghostValid = false; break; }
         }
 
-        // Multi-tile walkability check
+        // Multi-tile walkability check (bridges: inverted — must be on water)
+        const isBridgeGhost = currentBuilding === 'bridge';
         if (ghostValid && chunks) {
           const startTX = Math.floor((snapX - newHalf) / TILE_SIZE);
           const startTY = Math.floor((snapY - newHalf) / TILE_SIZE);
           for (let ty = 0; ty < tiles && ghostValid; ty++) {
             for (let tx = 0; tx < tiles && ghostValid; tx++) {
               const tileId = chunks.getTile(startTX + tx, startTY + ty);
-              if (!(TILE_DEFS[tileId]?.walkable ?? false)) ghostValid = false;
+              const walkable = TILE_DEFS[tileId]?.walkable ?? false;
+              if (isBridgeGhost) {
+                // Bridge must be placed on non-walkable (water) tiles
+                if (walkable) ghostValid = false;
+              } else {
+                if (!walkable) ghostValid = false;
+              }
             }
           }
         }

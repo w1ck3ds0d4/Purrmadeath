@@ -113,6 +113,12 @@ export class CombatSystem {
       // Enemies can't damage resource nodes (only players can harvest them)
       if (srcFaction?.type === 'enemy' && tgtFaction?.type === 'resource') continue;
 
+      // Bridges are invulnerable to enemies
+      if (srcFaction?.type === 'enemy' && tgtFaction?.type === 'building') {
+        const bldg = world.getComponent<BuildingComponent>(targetId, C.Building);
+        if (bldg?.buildingType === 'bridge') continue;
+      }
+
       // Player attacks don't damage own buildings (no friendly fire on structures)
       if (srcFaction?.type === 'player' && tgtFaction?.type === 'building') continue;
 

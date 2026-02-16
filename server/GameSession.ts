@@ -15,6 +15,10 @@ import {
   ItemDropComponent,
   DownedComponent,
   BuildingComponent,
+  ProductionComponent,
+  TurretComponent,
+  SpikeTrapComponent,
+  BridgeComponent,
 } from '@shared/components';
 import type { ResourceType, BuildingType } from '@shared/components';
 import {
@@ -67,6 +71,27 @@ import {
   BUILDING_SIZES,
   buildingHalfExtent,
   snapBuildingPosition,
+  ARROW_TURRET_MAX_HEALTH,
+  CANNON_TURRET_MAX_HEALTH,
+  SPIKE_TRAP_MAX_HEALTH,
+  BRIDGE_MAX_HEALTH,
+  LUMBERMILL_PRODUCTION_INTERVAL,
+  MINE_PRODUCTION_INTERVAL,
+  FARM_PRODUCTION_INTERVAL,
+  PRODUCTION_AMOUNT,
+  PRODUCTION_MAX_STORED,
+  ARROW_TURRET_RANGE,
+  ARROW_TURRET_COOLDOWN,
+  ARROW_TURRET_DAMAGE,
+  ARROW_TURRET_PROJ_SPEED,
+  CANNON_TURRET_RANGE,
+  CANNON_TURRET_COOLDOWN,
+  CANNON_TURRET_DAMAGE,
+  CANNON_TURRET_PROJ_SPEED,
+  SPIKE_TRAP_DAMAGE,
+  SPIKE_TRAP_COOLDOWN,
+  SPIKE_TRAP_SELF_DAMAGE,
+  ENEMY_RADIUS,
 } from '@shared/constants';
 import { RESOURCE_STATS, RESOURCE_SPAWN_TABLE, TILE_SPAWN_CHANCE } from '@shared/data/ResourceSpawnTable';
 import { LOOT_TABLES } from '@shared/data/LootTables';
@@ -204,7 +229,9 @@ export class GameSession {
   private campfireEntityId = -1;
 
   private warehouseIds = new Set<number>();
-  private warehousePool = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0 };
+  private warehousePool = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
+  /** Bridge tile positions: "tileX,tileY" → entityId. */
+  private bridgePositions = new Map<string, number>();
 
   // ── Run stats ──────────────────────────────────────────────────────────────
   private enemiesKilled = 0;
@@ -742,6 +769,7 @@ export class GameSession {
     else if (itemType === 'iron') res.iron += quantity;
     else if (itemType === 'diamond') res.diamond += quantity;
     else if (itemType === 'gold') res.gold += quantity;
+    else if (itemType === 'food') res.food += quantity;
 
     const update: ResourceUpdateMessage = {
       type: MessageType.RESOURCE_UPDATE,
@@ -750,6 +778,7 @@ export class GameSession {
       iron: res.iron,
       diamond: res.diamond,
       gold: res.gold,
+      food: res.food,
     };
     send(target.client, update);
   }
@@ -871,17 +900,25 @@ export class GameSession {
     // Grid-snap to correct position for building size
     const { x: snapX, y: snapY } = snapBuildingPosition(msg.x, msg.y, msg.buildingType);
 
-    // Must be on walkable tiles (check ALL tiles in footprint)
+    // Tile validation: bridges require non-walkable tiles (water); all others require walkable tiles
     const tileCount = BUILDING_SIZES[msg.buildingType] ?? 1;
     const half = buildingHalfExtent(msg.buildingType);
     const startTX = Math.floor((snapX - half) / TILE_SIZE);
     const startTY = Math.floor((snapY - half) / TILE_SIZE);
+    const isBridge = msg.buildingType === 'bridge';
     for (let dy = 0; dy < tileCount; dy++) {
       for (let dx = 0; dx < tileCount; dx++) {
         const tx = startTX + dx;
         const ty = startTY + dy;
         const tileId = this.generator.getTile(tx, ty);
-        if (!(TILE_DEFS[tileId]?.walkable ?? false)) {
+        const walkable = TILE_DEFS[tileId]?.walkable ?? false;
+        if (isBridge) {
+          // Bridge must be placed on non-walkable (water) tiles, and not on existing bridges
+          if (walkable || this.bridgePositions.has(`${tx},${ty}`)) {
+            send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'not_water' } as BuildConfirmMessage);
+            return;
+          }
+        } else if (!walkable) {
           send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'not_walkable' } as BuildConfirmMessage);
           return;
         }
@@ -904,6 +941,8 @@ export class GameSession {
     const HP_MAP: Record<string, number> = {
       campfire: CAMPFIRE_MAX_HEALTH, wall: WALL_MAX_HEALTH, warehouse: WAREHOUSE_MAX_HEALTH,
       lumbermill: LUMBERMILL_MAX_HEALTH, mine: MINE_MAX_HEALTH, farm: FARM_MAX_HEALTH,
+      arrow_turret: ARROW_TURRET_MAX_HEALTH, cannon_turret: CANNON_TURRET_MAX_HEALTH,
+      spike_trap: SPIKE_TRAP_MAX_HEALTH, bridge: BRIDGE_MAX_HEALTH,
     };
     const maxHp = HP_MAP[msg.buildingType] ?? WALL_MAX_HEALTH;
     const id = this.spawnBuilding(snapX, snapY, msg.buildingType, maxHp, false);
@@ -911,6 +950,46 @@ export class GameSession {
     if (msg.buildingType === 'warehouse') {
       this.warehouseIds.add(id);
       this.broadcastWarehouseUpdate(send);
+    }
+
+    // Attach special components for new building types
+    if (msg.buildingType === 'lumbermill') {
+      this.world.addComponent(id, C.Production, {
+        resourceType: 'wood', interval: LUMBERMILL_PRODUCTION_INTERVAL,
+        timer: 0, amount: PRODUCTION_AMOUNT, stored: 0, maxStored: PRODUCTION_MAX_STORED,
+      } as ProductionComponent);
+    } else if (msg.buildingType === 'mine') {
+      this.world.addComponent(id, C.Production, {
+        resourceType: 'stone', interval: MINE_PRODUCTION_INTERVAL,
+        timer: 0, amount: PRODUCTION_AMOUNT, stored: 0, maxStored: PRODUCTION_MAX_STORED,
+      } as ProductionComponent);
+    } else if (msg.buildingType === 'farm') {
+      this.world.addComponent(id, C.Production, {
+        resourceType: 'food', interval: FARM_PRODUCTION_INTERVAL,
+        timer: 0, amount: PRODUCTION_AMOUNT, stored: 0, maxStored: PRODUCTION_MAX_STORED,
+      } as ProductionComponent);
+    } else if (msg.buildingType === 'arrow_turret') {
+      this.world.addComponent(id, C.Turret, {
+        range: ARROW_TURRET_RANGE, cooldown: ARROW_TURRET_COOLDOWN,
+        cooldownTimer: 0, damage: ARROW_TURRET_DAMAGE, projectileSpeed: ARROW_TURRET_PROJ_SPEED,
+      } as TurretComponent);
+    } else if (msg.buildingType === 'cannon_turret') {
+      this.world.addComponent(id, C.Turret, {
+        range: CANNON_TURRET_RANGE, cooldown: CANNON_TURRET_COOLDOWN,
+        cooldownTimer: 0, damage: CANNON_TURRET_DAMAGE, projectileSpeed: CANNON_TURRET_PROJ_SPEED,
+      } as TurretComponent);
+    } else if (msg.buildingType === 'spike_trap') {
+      this.world.addComponent(id, C.SpikeTrap, {
+        damage: SPIKE_TRAP_DAMAGE, cooldown: SPIKE_TRAP_COOLDOWN,
+        selfDamage: SPIKE_TRAP_SELF_DAMAGE, enemyCooldowns: new Map(),
+      } as SpikeTrapComponent);
+    } else if (msg.buildingType === 'bridge') {
+      const tileX = Math.floor(snapX / TILE_SIZE);
+      const tileY = Math.floor(snapY / TILE_SIZE);
+      this.world.addComponent(id, C.Bridge, { tileX, tileY } as BridgeComponent);
+      this.bridgePositions.set(`${tileX},${tileY}`, id);
+      // Update movement system bridge tiles
+      this.movement.bridgeTiles.add(`${tileX},${tileY}`);
     }
 
     send(player.client, { type: MessageType.BUILD_CONFIRM, success: true } as BuildConfirmMessage);
@@ -947,7 +1026,7 @@ export class GameSession {
     if (drewFromPlayer) {
       send(player.client, {
         type: MessageType.RESOURCE_UPDATE,
-        wood: playerRes.wood, stone: playerRes.stone, iron: playerRes.iron, diamond: playerRes.diamond, gold: playerRes.gold,
+        wood: playerRes.wood, stone: playerRes.stone, iron: playerRes.iron, diamond: playerRes.diamond, gold: playerRes.gold, food: playerRes.food,
       });
     }
     return true;
@@ -1009,7 +1088,7 @@ export class GameSession {
         }
         send(player.client, {
           type: MessageType.RESOURCE_UPDATE,
-          wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold,
+          wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold, food: res.food,
         });
       }
     }
@@ -1017,16 +1096,29 @@ export class GameSession {
     if (isDemolingWarehouse) {
       this.warehouseIds.delete(targetId);
       if (this.warehouseIds.size === 0) {
-        this.warehousePool = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0 };
+        this.warehousePool = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
       }
       this.broadcastWarehouseUpdate(send);
     }
+
+    // Clean up bridge tile when demolished
+    this.cleanupBridge(targetId);
 
     this.world.destroyEntity(targetId);
     for (const p of this.players.values()) {
       send(p.client, { type: MessageType.BUILD_DESTROYED, entityId: targetId } as any);
     }
     send(player.client, { type: MessageType.BUILD_CONFIRM, success: true } as BuildConfirmMessage);
+  }
+
+  /** Remove bridge from bridgePositions and movement bridgeTiles when destroyed/demolished. */
+  private cleanupBridge(entityId: number): void {
+    const bridge = this.world.getComponent<BridgeComponent>(entityId, C.Bridge);
+    if (bridge) {
+      const key = `${bridge.tileX},${bridge.tileY}`;
+      this.bridgePositions.delete(key);
+      this.movement.bridgeTiles.delete(key);
+    }
   }
 
   /** Each tick, auto-deposit personal resources into the warehouse pool for players near any warehouse. */
@@ -1061,7 +1153,7 @@ export class GameSession {
       if (!res) continue;
 
       let transferred = false;
-      for (const key of ['wood', 'stone', 'iron', 'diamond', 'gold'] as const) {
+      for (const key of ['wood', 'stone', 'iron', 'diamond', 'gold', 'food'] as const) {
         if (res[key] > 0) {
           (this.warehousePool as Record<string, number>)[key] += res[key];
           res[key] = 0;
@@ -1071,11 +1163,159 @@ export class GameSession {
       if (transferred) {
         send(p.client, {
           type: MessageType.RESOURCE_UPDATE,
-          wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold,
+          wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold, food: res.food,
         });
         this.broadcastWarehouseUpdate(send);
       }
     }
+  }
+
+  /** Tick production buildings: accumulate resources and deposit to warehouse or store locally. */
+  private tickProduction(_dt: number, _send: SendFn): void {
+    for (const id of this.world.query(C.Production, C.Position)) {
+      const prod = this.world.getComponent<ProductionComponent>(id, C.Production)!;
+      prod.timer += _dt;
+      if (prod.timer < prod.interval) continue;
+      prod.timer -= prod.interval;
+
+      // Always accumulate locally — NPCs (future) will transport to warehouse
+      prod.stored = Math.min(prod.stored + prod.amount, prod.maxStored);
+    }
+  }
+
+  /** Tick turrets: find nearest enemy in range and fire projectiles. */
+  private tickTurrets(dt: number, send: SendFn): void {
+    for (const id of this.world.query(C.Turret, C.Position)) {
+      const turret = this.world.getComponent<TurretComponent>(id, C.Turret)!;
+      turret.cooldownTimer -= dt;
+      if (turret.cooldownTimer > 0) continue;
+
+      const tpos = this.world.getComponent<PositionComponent>(id, C.Position)!;
+      const bldg = this.world.getComponent<BuildingComponent>(id, C.Building);
+      const halfExt = buildingHalfExtent(bldg?.buildingType ?? 'arrow_turret');
+
+      // Find nearest enemy in range
+      let bestId = -1;
+      let bestDist = turret.range * turret.range;
+      for (const eid of this.world.query(C.Position, C.Faction)) {
+        const ef = this.world.getComponent<FactionComponent>(eid, C.Faction)!;
+        if (ef.type !== 'enemy') continue;
+        const epos = this.world.getComponent<PositionComponent>(eid, C.Position)!;
+        const dx = epos.x - tpos.x;
+        const dy = epos.y - tpos.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < bestDist) { bestDist = d2; bestId = eid; }
+      }
+
+      if (bestId < 0) continue;
+      turret.cooldownTimer = turret.cooldown;
+
+      // Spawn projectile aimed at target
+      const epos = this.world.getComponent<PositionComponent>(bestId, C.Position)!;
+      const dx = epos.x - tpos.x;
+      const dy = epos.y - tpos.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 0.01) continue;
+      const nx = dx / dist;
+      const ny = dy / dist;
+
+      // Offset spawn outside building AABB
+      const spawnOffset = halfExt + PROJECTILE_RADIUS + 2;
+      const px = tpos.x + nx * spawnOffset;
+      const py = tpos.y + ny * spawnOffset;
+
+      const projId = this.world.createEntity();
+      this.world.addComponent(projId, C.Position,   { x: px, y: py });
+      this.world.addComponent(projId, C.Velocity,   { vx: nx * turret.projectileSpeed, vy: ny * turret.projectileSpeed });
+      this.world.addComponent(projId, C.Projectile, { ownerId: id, damage: turret.damage, lifetime: RANGED_LIFETIME });
+      this.world.addComponent(projId, C.Faction,     { type: 'player' });
+
+      const spawnMsg: ProjectileSpawnMessage = {
+        type: MessageType.PROJECTILE_SPAWN,
+        projectileId: projId,
+        x: px, y: py,
+        vx: nx * turret.projectileSpeed, vy: ny * turret.projectileSpeed,
+        ownerSlot: -1, // turret indicator
+      };
+      for (const p of this.players.values()) send(p.client, spawnMsg);
+    }
+  }
+
+  /** Tick spike traps: damage enemies walking over them and take self-damage. */
+  private tickSpikeTraps(dt: number, send: SendFn): void {
+    const trapDeaths: number[] = [];
+    const entityDeaths: number[] = [];
+    const attackerMap = new Map<number, number>();
+
+    for (const id of this.world.query(C.SpikeTrap, C.Position, C.Health)) {
+      const trap = this.world.getComponent<SpikeTrapComponent>(id, C.SpikeTrap)!;
+      const tpos = this.world.getComponent<PositionComponent>(id, C.Position)!;
+      const thp = this.world.getComponent<HealthComponent>(id, C.Health)!;
+      const trapHalf = buildingHalfExtent('spike_trap');
+      let trapDestroyed = false;
+
+      // Tick per-entity cooldowns
+      for (const [eid, remaining] of trap.enemyCooldowns) {
+        if (remaining > 0) trap.enemyCooldowns.set(eid, remaining - dt);
+      }
+
+      // Check all enemies and players for overlap
+      for (const eid of this.world.query(C.Position, C.Health, C.Faction)) {
+        const ef = this.world.getComponent<FactionComponent>(eid, C.Faction)!;
+        if (ef.type !== 'enemy' && ef.type !== 'player') continue;
+        // Skip downed players
+        if (this.world.hasComponent(eid, C.Downed)) continue;
+
+        const epos = this.world.getComponent<PositionComponent>(eid, C.Position)!;
+        const entityRadius = ef.type === 'player' ? PLAYER_RADIUS : ENEMY_RADIUS;
+
+        // AABB overlap: trapHalf + entity radius
+        const edx = Math.abs(epos.x - tpos.x);
+        const edy = Math.abs(epos.y - tpos.y);
+        if (edx > trapHalf + entityRadius || edy > trapHalf + entityRadius) continue;
+
+        // Check cooldown
+        const cd = trap.enemyCooldowns.get(eid) ?? 0;
+        if (cd > 0) continue;
+
+        // Deal damage
+        const ehp = this.world.getComponent<HealthComponent>(eid, C.Health);
+        if (!ehp) continue;
+        ehp.current = Math.max(0, ehp.current - trap.damage);
+        trap.enemyCooldowns.set(eid, trap.cooldown);
+
+        // Broadcast hit
+        const hitMsg: HitMessage = {
+          type: MessageType.HIT,
+          sourceId: id, targetId: eid,
+          damage: trap.damage, knockbackVx: 0, knockbackVy: 0,
+        };
+        for (const p of this.players.values()) send(p.client, hitMsg);
+
+        if (ehp.current <= 0) {
+          entityDeaths.push(eid);
+          attackerMap.set(eid, id);
+        }
+
+        // Self-damage
+        thp.current -= trap.selfDamage;
+        if (thp.current <= 0) {
+          trapDeaths.push(id);
+          trapDestroyed = true;
+          break;
+        }
+      }
+
+      if (trapDestroyed) continue;
+
+      // Clean stale entity cooldowns
+      for (const eid of trap.enemyCooldowns.keys()) {
+        if (!this.world.hasEntity(eid)) trap.enemyCooldowns.delete(eid);
+      }
+    }
+
+    if (entityDeaths.length > 0) this.destroyDeadEntities(entityDeaths, attackerMap, send);
+    if (trapDeaths.length > 0) this.destroyDeadEntities(trapDeaths, undefined, send);
   }
 
   /** Returns true if a building footprint at (cx, cy) overlaps an existing entity. */
@@ -1137,8 +1377,26 @@ export class GameSession {
       }
     }
 
+    // Check for nearby production buildings with stored resources (F-key collection)
+    // Use building half-extent + interact radius so you can collect from the edge
+    for (const bid of this.world.query(C.Production, C.Position)) {
+      const prod = this.world.getComponent<ProductionComponent>(bid, C.Production)!;
+      if (prod.stored <= 0) continue;
+      const bldg = this.world.getComponent<BuildingComponent>(bid, C.Building);
+      const half = buildingHalfExtent(bldg?.buildingType ?? 'wall');
+      const collectDist = half + ITEM_DROP_INTERACT_RADIUS;
+      const bpos = this.world.getComponent<PositionComponent>(bid, C.Position)!;
+      const bdx = bpos.x - playerPos.x;
+      const bdy = bpos.y - playerPos.y;
+      if (bdx * bdx + bdy * bdy <= collectDist * collectDist) {
+        this.creditResources(player.entityId, prod.resourceType, prod.stored, send);
+        prod.stored = 0;
+        return;
+      }
+    }
+
     // Find nearest non-auto-pickup ItemDrop within interact radius
-    const r2 = ITEM_DROP_INTERACT_RADIUS * ITEM_DROP_INTERACT_RADIUS;
+    const interactR2 = ITEM_DROP_INTERACT_RADIUS * ITEM_DROP_INTERACT_RADIUS;
     let bestId = -1;
     let bestDist = Infinity;
 
@@ -1150,7 +1408,7 @@ export class GameSession {
       const dx = dpos.x - playerPos.x;
       const dy = dpos.y - playerPos.y;
       const d2 = dx * dx + dy * dy;
-      if (d2 <= r2 && d2 < bestDist) {
+      if (d2 <= interactR2 && d2 < bestDist) {
         bestDist = d2;
         bestId = id;
       }
@@ -1297,10 +1555,13 @@ export class GameSession {
         if (this.warehouseIds.has(deadId)) {
           this.warehouseIds.delete(deadId);
           if (this.warehouseIds.size === 0) {
-            this.warehousePool = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0 };
+            this.warehousePool = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
           }
           this.broadcastWarehouseUpdate(send);
         }
+
+        // Bridge destroyed → remove from bridge tiles
+        this.cleanupBridge(deadId);
 
         if (deadId === this.campfireEntityId && !this.gameOver) {
           this.gameOver = true;
@@ -1444,6 +1705,17 @@ export class GameSession {
     this.wavePaused = !this.wavePaused;
     this.broadcastWaveTimerSync(send);
     console.log(`[Debug] Wave timer ${this.wavePaused ? 'PAUSED' : 'RESUMED'}`);
+  }
+
+  debugGiveResources(clientId: string, send: (client: ConnectedClient, msg: object) => void): void {
+    if (this.phase !== 'playing') return;
+    const player = this.players.get(clientId);
+    if (!player || player.entityId === null) return;
+    const amount = 100;
+    for (const res of ['wood', 'stone', 'iron', 'diamond', 'gold', 'food'] as const) {
+      this.creditResources(player.entityId, res, amount, send);
+    }
+    console.log(`[Debug] Gave +${amount} of all resources to ${clientId}`);
   }
 
   /** Send authoritative wave timer state to all clients. */
@@ -1640,6 +1912,11 @@ export class GameSession {
     // ── Warehouse auto-deposit ─────────────────────────────────────────────
     this.tickWarehouseDeposit(send);
 
+    // ── Production, turrets, spike traps ────────────────────────────────────
+    this.tickProduction(dt, send);
+    if (!this.gameOver) this.tickTurrets(dt, send);
+    if (!this.gameOver) this.tickSpikeTraps(dt, send);
+
     // ── Wave state machine ────────────────────────────────────────────────────
     if (!this.gameOver) this.tickWave(dt, send);
 
@@ -1751,6 +2028,14 @@ export class GameSession {
       const bldg = this.world.getComponent<BuildingComponent>(id, C.Building);
       if (bldg) snap.buildingType = bldg.buildingType;
 
+      // Production building stored resources
+      const prod = this.world.getComponent<ProductionComponent>(id, C.Production);
+      if (prod) {
+        snap.productionStored = prod.stored;
+        snap.productionMax = prod.maxStored;
+        snap.productionResource = prod.resourceType;
+      }
+
       // Downed state
       if (this.world.hasComponent(id, C.Downed)) snap.downed = true;
 
@@ -1767,7 +2052,8 @@ export class GameSession {
       prev.downed !== curr.downed ||
       prev.resourceType !== curr.resourceType ||
       prev.itemType !== curr.itemType ||
-      prev.buildingType !== curr.buildingType
+      prev.buildingType !== curr.buildingType ||
+      prev.productionStored !== curr.productionStored
     );
   }
 
@@ -1786,20 +2072,23 @@ export class GameSession {
     const hp = this.world.getComponent<HealthComponent>(entityId, C.Health);
     if (!hp || hp.current > 0) return;
 
-    // Solo: skip downed state - treat as party wipe (penalty progression)
-    if (this.players.size <= 1) {
+    const isSolo = this.players.size <= 1;
+
+    // Solo 2nd death: immediate game over (no timer)
+    if (isSolo && this.wipeCount >= 1) {
       this.world.addComponent(entityId, C.Downed, {
-        bleedTimer: 0,
-        reviveProgress: 0,
-        reviverId: -1,
+        bleedTimer: 0, reviveProgress: 0, reviverId: -1,
       });
       this.handlePartyWipe(send);
       return;
     }
 
-    // Co-op: enter downed state
+    // Solo 1st death: 15s respawn timer
+    // Co-op: 30s bleed-out, teammates can revive
+    const bleedTime = isSolo ? 15 : DOWNED_BLEED_TIME;
+
     this.world.addComponent(entityId, C.Downed, {
-      bleedTimer: DOWNED_BLEED_TIME,
+      bleedTimer: bleedTime,
       reviveProgress: 0,
       reviverId: -1,
     });
@@ -1813,13 +2102,13 @@ export class GameSession {
       type: MessageType.PLAYER_DOWNED,
       entityId,
       slot: sp?.slot ?? -1,
-      bleedTimer: DOWNED_BLEED_TIME,
+      bleedTimer: bleedTime,
     };
     for (const p of this.players.values()) send(p.client, msg);
-    console.log(`[Death] Player ${sp?.slot ?? '?'} downed (${DOWNED_BLEED_TIME}s bleed-out)`);
+    console.log(`[Death] Player ${sp?.slot ?? '?'} downed (${bleedTime}s ${isSolo ? 'respawn' : 'bleed-out'})`);
 
-    // Check if ALL players are now downed/dead → party wipe
-    if (this.countAlivePlayers() === 0) {
+    // Co-op: check if ALL players are now downed/dead → party wipe
+    if (!isSolo && this.countAlivePlayers() === 0) {
       this.handlePartyWipe(send);
     }
   }
@@ -1836,7 +2125,12 @@ export class GameSession {
       // Tick bleed-out timer
       downed.bleedTimer -= dt;
       if (downed.bleedTimer <= 0) {
-        this.handlePlayerDeath(id, send);
+        // Solo: party wipe handles penalty + instant respawn
+        if (this.players.size <= 1) {
+          this.handlePartyWipe(send);
+        } else {
+          this.handlePlayerDeath(id, send);
+        }
         continue;
       }
 
@@ -2037,7 +2331,7 @@ export class GameSession {
       const res = this.world.getComponent<ResourcesComponent>(sp.entityId, C.Resources);
       if (!res) continue;
 
-      for (const key of ['wood', 'stone', 'iron', 'diamond', 'gold'] as const) {
+      for (const key of ['wood', 'stone', 'iron', 'diamond', 'gold', 'food'] as const) {
         const loss = Math.floor(res[key] * WIPE_1_RESOURCE_LOSS_PERCENT);
         if (loss > 0) {
           res[key] -= loss;
@@ -2055,7 +2349,7 @@ export class GameSession {
       const update: ResourceUpdateMessage = {
         type: MessageType.RESOURCE_UPDATE,
         wood: res.wood, stone: res.stone, iron: res.iron,
-        diamond: res.diamond, gold: res.gold,
+        diamond: res.diamond, gold: res.gold, food: res.food,
       };
       send(sp.client, update);
     }

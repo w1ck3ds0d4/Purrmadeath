@@ -7,7 +7,7 @@
 export class ResourceHUD {
   private el: HTMLElement;
 
-  private resources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0 };
+  private resources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
 
   private static readonly ITEMS: { key: keyof ResourceHUD['resources']; color: string; label: string }[] = [
     { key: 'wood',    color: '#8a6a3a', label: 'Wood' },
@@ -15,6 +15,7 @@ export class ResourceHUD {
     { key: 'iron',    color: '#8a5a3a', label: 'Iron' },
     { key: 'diamond', color: '#44ccdd', label: 'Diamond' },
     { key: 'gold',    color: '#e0c030', label: 'Gold' },
+    { key: 'food',    color: '#44aa44', label: 'Food' },
   ];
 
   constructor() {
@@ -42,8 +43,8 @@ export class ResourceHUD {
   }
 
   /** Update resource counts from RESOURCE_UPDATE. */
-  setResources(wood: number, stone: number, iron: number, diamond: number, gold: number): void {
-    this.resources = { wood, stone, iron, diamond, gold };
+  setResources(wood: number, stone: number, iron: number, diamond: number, gold: number, food: number): void {
+    this.resources = { wood, stone, iron, diamond, gold, food };
     this.render();
   }
 

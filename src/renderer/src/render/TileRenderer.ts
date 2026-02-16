@@ -33,9 +33,9 @@ export class TileRenderer {
     // Insert at index 0 so the world is always below the HUD
     stage.addChildAt(this.worldContainer, 0);
 
-    // Tile sub-container sits at index 0 inside worldContainer.
-    // Entity Graphics added by other systems go at index 1+ and are drawn on top.
+    // Tile sub-container sits below entities/buildings in the z-order.
     this.tilesContainer = new Container();
+    this.tilesContainer.zIndex = -10;
     this.worldContainer.addChild(this.tilesContainer);
   }
 

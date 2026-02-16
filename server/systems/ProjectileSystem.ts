@@ -8,6 +8,7 @@ import {
   FactionComponent,
   KnockbackReceiverComponent,
   ProjectileComponent,
+  BuildingComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -102,6 +103,12 @@ export class ProjectileSystem {
         if (tgtFaction?.type === 'item') continue;
         // Enemy projectiles can't damage resource nodes (only players can harvest them)
         if (projFaction?.type === 'enemy' && tgtFaction?.type === 'resource') continue;
+
+        // Bridges are invulnerable to enemy projectiles
+        if (projFaction?.type === 'enemy' && tgtFaction?.type === 'building') {
+          const bldg = world.getComponent<BuildingComponent>(targetId, C.Building);
+          if (bldg?.buildingType === 'bridge') continue;
+        }
 
         // Player projectiles don't damage own buildings (no friendly fire on structures)
         if (projFaction?.type === 'player' && tgtFaction?.type === 'building') continue;

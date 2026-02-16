@@ -82,6 +82,8 @@ export class MovementSystem {
   private resourceCache: PositionComponent[] = [];
   /** Cached building positions - refreshed each update for solid-block collision. */
   private buildingCache: { x: number; y: number; halfExtent: number }[] = [];
+  /** Bridge tile keys ("tileX,tileY") that override unwalkable terrain. Populated by game.ts. */
+  bridgeTiles = new Set<string>();
 
   constructor(private readonly chunks: ChunkManager) {}
 
@@ -225,9 +227,11 @@ export class MovementSystem {
     for (const id of world.query(C.Position, C.Faction)) {
       const f = world.getComponent<FactionComponent>(id, C.Faction)!;
       if (f.type === 'building') {
-        const pos = world.getComponent<PositionComponent>(id, C.Position)!;
         const bldg = world.getComponent<BuildingComponent>(id, C.Building);
         const type = bldg?.buildingType ?? 'wall';
+        // Bridges and spike traps are not solid collision obstacles
+        if (type === 'bridge' || type === 'spike_trap') continue;
+        const pos = world.getComponent<PositionComponent>(id, C.Position)!;
         this.buildingCache.push({ x: pos.x, y: pos.y, halfExtent: buildingHalfExtent(type) });
       }
     }
@@ -262,10 +266,13 @@ export class MovementSystem {
   }
 
   /** Blocks entity movement if a tile is not walkable (water, mountains, etc.).
-   *  Projectiles use a separate solid-only check so they fly over water. */
+   *  Projectiles use a separate solid-only check so they fly over water.
+   *  Bridge tiles override unwalkable terrain. */
   private tileBlocksMovement(wx: number, wy: number): boolean {
     const tx = Math.floor(wx / TILE_SIZE);
     const ty = Math.floor(wy / TILE_SIZE);
+    // Bridge overrides unwalkable terrain
+    if (this.bridgeTiles.has(`${tx},${ty}`)) return false;
     const tileId = this.chunks.getTile(tx, ty);
     return !(TILE_DEFS[tileId]?.walkable ?? false);
   }

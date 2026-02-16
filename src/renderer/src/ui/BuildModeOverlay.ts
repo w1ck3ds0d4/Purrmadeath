@@ -5,6 +5,7 @@ const RES_COLORS: Record<string, string> = {
   stone: '#999',
   iron: '#b08060',
   diamond: '#44ccdd',
+  food: '#44aa44',
 };
 
 export class BuildModeOverlay {
@@ -51,7 +52,7 @@ export class BuildModeOverlay {
   hide(): void { this.el.style.display = 'none'; }
 
   update(buildingType: string, available: Record<string, number>): void {
-    this.titleEl.textContent = buildingType.charAt(0).toUpperCase() + buildingType.slice(1);
+    this.titleEl.textContent = buildingType.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
     const costs = BUILDING_COSTS[buildingType] ?? {};
     const parts: string[] = [];
     for (const [res, amount] of Object.entries(costs)) {
