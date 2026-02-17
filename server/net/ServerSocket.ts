@@ -92,11 +92,11 @@ export class ServerSocket {
       ?? req.socket.remoteAddress
       ?? 'unknown';
 
-    // ── Per-IP limit (production: 1 connection per IP) ──────────────────────
+    // ── Per-IP limit (production: max 4 connections per IP) ─────────────────
     if (IS_PRODUCTION) {
       const existing = this.ipConnections.get(ip);
-      if (existing && existing.size > 0) {
-        ws.close(1008, 'Already connected from this IP');
+      if (existing && existing.size >= 4) {
+        ws.close(1008, 'Too many connections from this IP');
         return;
       }
     }
