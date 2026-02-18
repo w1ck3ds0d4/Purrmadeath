@@ -709,25 +709,19 @@ async function main(): Promise<void> {
         return;
       }
 
-      // LAN code resolution via Electron IPC
-      const isCode = electronAPI && /^[A-Za-z]{4}$/.test(value);
-      if (isCode) {
+      // LAN code resolution via Electron IPC (dev only)
+      const isLanCode = isDev && electronAPI && /^[A-Za-z]{4}$/.test(value);
+      if (isLanCode) {
         void (async () => {
           const resolved = await electronAPI!.resolveSessionCode(value.toUpperCase());
           if (!resolved) {
             console.warn(`[Game] Session code "${value.toUpperCase()}" not found on LAN`);
             return;
           }
-          // In dev, redirect transport to the resolved LAN IP
-          if (isDev) {
-            net.reconnectTo(`ws://${resolved.ip}:${SERVER_PORT}`);
-          } else {
-            // In production, transport is fixed to the cloud server - just join with code
-            joinSession('join', menuOverlay.displayName, value.toUpperCase());
-          }
+          net.reconnectTo(`ws://${resolved.ip}:${SERVER_PORT}`);
         })();
       } else {
-        // Production: treat value as an invite code
+        // Production (or non-LAN): send invite code directly to the server
         joinSession('join', menuOverlay.displayName, value.toUpperCase());
       }
     },
