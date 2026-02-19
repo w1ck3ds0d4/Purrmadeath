@@ -120,6 +120,7 @@ export class DebugOverlay {
         e.preventDefault();
         this.executeCommand(this.inputEl.value.trim());
         this.inputEl.value = '';
+        this.inputEl.blur();
       }
       // Stop key events from propagating to game input while typing
       e.stopPropagation();

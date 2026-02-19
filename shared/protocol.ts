@@ -116,6 +116,16 @@ export enum MessageType {
   CAMPFIRE_DESTROYED = 'CAMPFIRE_DESTROYED',
   /** Client → Server: player attempts to demolish a building. */
   BUILD_DEMOLISH = 'BUILD_DEMOLISH',
+  /** Client → Server: player attempts to upgrade a building. */
+  BUILD_UPGRADE = 'BUILD_UPGRADE',
+  /** Server → placing client: upgrade confirmed or rejected. */
+  BUILD_UPGRADE_CONFIRM = 'BUILD_UPGRADE_CONFIRM',
+  /** Client → Server: player attempts to repair a building. */
+  BUILD_REPAIR = 'BUILD_REPAIR',
+  /** Server → placing client: repair confirmed or rejected. */
+  BUILD_REPAIR_CONFIRM = 'BUILD_REPAIR_CONFIRM',
+  /** Server → all: cannon turret AOE explosion visual. */
+  AOE_EXPLOSION = 'AOE_EXPLOSION',
   /** Server → All: warehouse shared resource pool update. */
   WAREHOUSE_UPDATE = 'WAREHOUSE_UPDATE',
 
@@ -272,6 +282,10 @@ export interface EntitySnapshot {
   productionMax?: number;
   /** Resource type produced by production buildings. */
   productionResource?: string;
+  /** Enemy variant type (melee or ranger). Only present for enemy faction. */
+  enemyVariant?: import('./components').EnemyVariantType;
+  /** Building upgrade level (1 = base). Only present for building faction. */
+  upgradeLevel?: number;
 }
 
 /** Full world snapshot sent on game start or player rejoin. */
@@ -557,11 +571,47 @@ export interface CampfireDestroyedMessage extends BaseMessage {
   type: typeof MessageType.CAMPFIRE_DESTROYED;
 }
 
-/** Client → Server: player attempts to demolish a building. */
+/** Client → Server: player attempts to demolish a building (by entity ID). */
 export interface BuildDemolishMessage extends BaseMessage {
   type: typeof MessageType.BUILD_DEMOLISH;
+  entityId: number;
+}
+
+/** Client → Server: player attempts to upgrade a building. */
+export interface BuildUpgradeMessage extends BaseMessage {
+  type: typeof MessageType.BUILD_UPGRADE;
+  entityId: number;
+}
+
+/** Server → placing client: upgrade confirmed or rejected. */
+export interface BuildUpgradeConfirmMessage extends BaseMessage {
+  type: typeof MessageType.BUILD_UPGRADE_CONFIRM;
+  success: boolean;
+  entityId?: number;
+  newLevel?: number;
+  reason?: string;
+}
+
+/** Client → Server: player attempts to repair a building. */
+export interface BuildRepairMessage extends BaseMessage {
+  type: typeof MessageType.BUILD_REPAIR;
+  entityId: number;
+}
+
+/** Server → placing client: repair confirmed or rejected. */
+export interface BuildRepairConfirmMessage extends BaseMessage {
+  type: typeof MessageType.BUILD_REPAIR_CONFIRM;
+  success: boolean;
+  entityId?: number;
+  reason?: string;
+}
+
+/** Server → all: cannon turret AOE explosion at impact point. */
+export interface AoeExplosionMessage extends BaseMessage {
+  type: typeof MessageType.AOE_EXPLOSION;
   x: number;
   y: number;
+  radius: number;
 }
 
 /** Server → All: warehouse shared resource pool update. */
@@ -622,5 +672,10 @@ export type AnyMessage =
   | BuildDestroyedMessage
   | CampfireDestroyedMessage
   | BuildDemolishMessage
+  | BuildUpgradeMessage
+  | BuildUpgradeConfirmMessage
+  | BuildRepairMessage
+  | BuildRepairConfirmMessage
+  | AoeExplosionMessage
   | WarehouseUpdateMessage
   | BaseMessage;

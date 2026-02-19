@@ -27,6 +27,10 @@ import {
   PLACEABLE_BUILDINGS,
   buildingHalfExtent,
   snapBuildingPosition,
+  PLAYER_RADIUS,
+  BUILDING_MAX_LEVEL,
+  getUpgradeCost,
+  getRepairCost,
 } from '@shared/constants';
 import type {
   HandshakeAckMessage,
@@ -54,12 +58,15 @@ import type {
   PartyWipeMessage,
   GameOverMessage,
   BuildConfirmMessage,
+  BuildUpgradeConfirmMessage,
+  BuildRepairConfirmMessage,
+  AoeExplosionMessage,
   WarehouseUpdateMessage,
   LobbySlot,
 } from '@shared/protocol';
 
 import { World } from '@shared/ecs/World';
-import { C, PositionComponent, FactionComponent, HealthComponent, BuildingComponent } from '@shared/components';
+import { C, PositionComponent, FactionComponent, HealthComponent, BuildingComponent, type BuildingType } from '@shared/components';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 
 import { InputManager, Action } from './input/InputManager';
@@ -175,6 +182,7 @@ async function main(): Promise<void> {
   // ── Build mode state ─────────────────────────────────────────────────────
   let buildModeActive = false;
   let selectedBuildingIdx = 0;
+  let selectedBuildingId: number | null = null;
   let localResources: Record<string, number> = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
   let warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
   let warehouseExists = false;
@@ -288,6 +296,7 @@ async function main(): Promise<void> {
     resourceHUD.setResources(0, 0, 0, 0, 0, 0);
     resourceHUD.hide();
     buildModeActive = false;
+    selectedBuildingId = null;
     selectedBuildingIdx = 0;
     localResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
     warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
@@ -509,8 +518,11 @@ async function main(): Promise<void> {
 
   net.on(MessageType.CHAT, (msg) => {
     const chat = msg as ChatMessage;
-    lobbyOverlay.addChatMessage(chat.displayName, chat.text);
-    chatOverlay.addMessage(chat.displayName, chat.slot, chat.text);
+    if (stateMgr.current === GameState.Lobby) {
+      lobbyOverlay.addChatMessage(chat.displayName, chat.text);
+    } else {
+      chatOverlay.addMessage(chat.displayName, chat.slot, chat.text);
+    }
     debug.log(`[Chat] ${chat.displayName}: ${chat.text}`);
   });
 
@@ -567,6 +579,7 @@ async function main(): Promise<void> {
     if (pd.entityId === localEntityId) {
       localDowned = true;
       buildModeActive = false;
+      selectedBuildingId = null;
       buildOverlay.hide();
       buildGhost.hide();
       deathOverlay.showDowned(pd.bleedTimer, !isMultiplayer);
@@ -639,6 +652,7 @@ async function main(): Promise<void> {
     localDowned = false;
     localDead   = false;
     buildModeActive = false;
+    selectedBuildingId = null;
     buildOverlay.hide();
     buildGhost.hide();
     deathOverlay.hide();
@@ -656,6 +670,45 @@ async function main(): Promise<void> {
     if (!bc.success) {
       debug.log(`Build failed: ${bc.reason ?? 'unknown'}`);
     }
+  });
+
+  net.on(MessageType.BUILD_UPGRADE_CONFIRM, (msg) => {
+    const uc = msg as BuildUpgradeConfirmMessage;
+    if (uc.success && uc.entityId !== undefined) {
+      debug.log(`Upgraded to level ${uc.newLevel}`);
+      // Refresh selection overlay
+      if (selectedBuildingId === uc.entityId) {
+        const bComp = world.getComponent<BuildingComponent>(uc.entityId, C.Building);
+        const hp = world.getComponent<HealthComponent>(uc.entityId, C.Health);
+        if (bComp) {
+          buildOverlay.updateSelection(bComp.buildingType, bComp.upgradeLevel, combinedResources(), hp?.current, hp?.max);
+        }
+      }
+    } else if (!uc.success) {
+      debug.log(`Upgrade failed: ${uc.reason ?? 'unknown'}`);
+    }
+  });
+
+  net.on(MessageType.BUILD_REPAIR_CONFIRM, (msg) => {
+    const rc = msg as BuildRepairConfirmMessage;
+    if (rc.success && rc.entityId !== undefined) {
+      debug.log('Building repaired');
+      // Refresh selection overlay
+      if (selectedBuildingId === rc.entityId) {
+        const bComp = world.getComponent<BuildingComponent>(rc.entityId, C.Building);
+        const hp = world.getComponent<HealthComponent>(rc.entityId, C.Health);
+        if (bComp) {
+          buildOverlay.updateSelection(bComp.buildingType, bComp.upgradeLevel, combinedResources(), hp?.current, hp?.max);
+        }
+      }
+    } else if (!rc.success) {
+      debug.log(`Repair failed: ${rc.reason ?? 'unknown'}`);
+    }
+  });
+
+  net.on(MessageType.AOE_EXPLOSION, (msg) => {
+    const aoe = msg as AoeExplosionMessage;
+    projectileRenderer.addExplosion(aoe.x, aoe.y, aoe.radius);
   });
 
   net.on(MessageType.CAMPFIRE_DESTROYED, () => {
@@ -756,6 +809,7 @@ async function main(): Promise<void> {
     if (input.isJustPressed(Action.Pause)) {
       if (buildModeActive && state === GameState.Playing) {
         buildModeActive = false;
+        selectedBuildingId = null;
         buildOverlay.hide();
         buildGhost.hide();
       } else if (!localGameOver && !chatOverlay.isOpen && (state === GameState.Playing || state === GameState.Paused)) {
@@ -821,12 +875,13 @@ async function main(): Promise<void> {
       }
 
       // Weapon switching (number keys) — exit build mode when selecting a weapon
-      if (input.isJustPressed(Action.WeaponSlot1)) { selectedWeapon = 0; if (buildModeActive) { buildModeActive = false; buildOverlay.hide(); buildGhost.hide(); } }
-      if (input.isJustPressed(Action.WeaponSlot2)) { selectedWeapon = 1; if (buildModeActive) { buildModeActive = false; buildOverlay.hide(); buildGhost.hide(); } }
+      if (input.isJustPressed(Action.WeaponSlot1)) { selectedWeapon = 0; if (buildModeActive) { buildModeActive = false; selectedBuildingId = null; buildOverlay.hide(); buildGhost.hide(); } }
+      if (input.isJustPressed(Action.WeaponSlot2)) { selectedWeapon = 1; if (buildModeActive) { buildModeActive = false; selectedBuildingId = null; buildOverlay.hide(); buildGhost.hide(); } }
 
       // B key: toggle build mode
       if (canAct && input.isJustPressed(Action.BuildMode)) {
         buildModeActive = !buildModeActive;
+        selectedBuildingId = null;
         if (buildModeActive) {
           const currentBuilding = PLACEABLE_BUILDINGS[selectedBuildingIdx];
           buildOverlay.show();
@@ -838,10 +893,11 @@ async function main(): Promise<void> {
         }
       }
 
-      // Scroll wheel cycles building type in build mode
+      // Scroll wheel cycles building type in build mode (deselects any selected building)
       if (buildModeActive && input.scrollDelta !== 0) {
         const dir = input.scrollDelta > 0 ? 1 : -1;
         selectedBuildingIdx = (selectedBuildingIdx + dir + PLACEABLE_BUILDINGS.length) % PLACEABLE_BUILDINGS.length;
+        selectedBuildingId = null;
         const currentBuilding = PLACEABLE_BUILDINGS[selectedBuildingIdx];
         buildOverlay.update(currentBuilding, combinedResources());
       }
@@ -886,12 +942,12 @@ async function main(): Promise<void> {
           }
         }
 
-        // Variable-size overlap check against existing buildings and resources
+        // Variable-size overlap check against existing buildings, resources, players, and enemies
         if (ghostValid) {
           for (const eid of world.query(C.Position, C.Faction)) {
             const ef = world.getComponent<FactionComponent>(eid, C.Faction);
+            const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
             if (ef?.type === 'building') {
-              const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
               const bComp = world.getComponent<BuildingComponent>(eid, C.Building);
               const existHalf = bComp ? buildingHalfExtent(bComp.buildingType) : 16;
               if (Math.abs(ep.x - snapX) < newHalf + existHalf && Math.abs(ep.y - snapY) < newHalf + existHalf) {
@@ -899,8 +955,13 @@ async function main(): Promise<void> {
                 break;
               }
             } else if (ef?.type === 'resource') {
-              const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
               if (Math.abs(ep.x - snapX) < newHalf + RESOURCE_NODE_RADIUS && Math.abs(ep.y - snapY) < newHalf + RESOURCE_NODE_RADIUS) {
+                ghostValid = false;
+                break;
+              }
+            } else if (ef?.type === 'player' || ef?.type === 'enemy') {
+              const entRadius = ef.type === 'player' ? PLAYER_RADIUS : ENEMY_RADIUS;
+              if (Math.abs(ep.x - snapX) < newHalf + entRadius && Math.abs(ep.y - snapY) < newHalf + entRadius) {
                 ghostValid = false;
                 break;
               }
@@ -910,14 +971,57 @@ async function main(): Promise<void> {
 
         buildGhost.update(wmx, wmy, ghostValid, currentBuilding);
 
-        // Left-click places building (stays in build mode for rapid placement)
-        if (input.isJustPressed(Action.Attack) && ghostValid) {
-          net.send({ type: MessageType.BUILD_PLACE, buildingType: currentBuilding, x: wmx, y: wmy });
+        // Left-click: try selecting an existing building first, else place new building
+        if (input.isJustPressed(Action.Attack)) {
+          // Check if clicking on an existing building
+          let clickedBuilding: number | null = null;
+          for (const eid of world.query(C.Position, C.Building)) {
+            const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
+            const bComp = world.getComponent<BuildingComponent>(eid, C.Building)!;
+            const bHalf = buildingHalfExtent(bComp.buildingType);
+            if (Math.abs(wmx - ep.x) < bHalf && Math.abs(wmy - ep.y) < bHalf) {
+              clickedBuilding = eid;
+              break;
+            }
+          }
+          if (clickedBuilding !== null) {
+            selectedBuildingId = clickedBuilding;
+            const bComp = world.getComponent<BuildingComponent>(clickedBuilding, C.Building)!;
+            const hp = world.getComponent<HealthComponent>(clickedBuilding, C.Health);
+            buildOverlay.updateSelection(
+              bComp.buildingType,
+              bComp.upgradeLevel,
+              combinedResources(),
+              hp?.current,
+              hp?.max,
+            );
+          } else if (ghostValid) {
+            net.send({ type: MessageType.BUILD_PLACE, buildingType: currentBuilding, x: wmx, y: wmy });
+            selectedBuildingId = null;
+          }
         }
 
-        // Right-click demolishes building at cursor
-        if (input.isJustPressed(Action.Demolish)) {
-          net.send({ type: MessageType.BUILD_DEMOLISH, x: wmx, y: wmy });
+        // X key: demolish selected building
+        if (input.isJustPressed(Action.Demolish) && selectedBuildingId !== null) {
+          net.send({ type: MessageType.BUILD_DEMOLISH, entityId: selectedBuildingId });
+          selectedBuildingId = null;
+          buildOverlay.update(PLACEABLE_BUILDINGS[selectedBuildingIdx], combinedResources());
+        }
+
+        // V key: upgrade selected building
+        if (input.isJustPressed(Action.Upgrade) && selectedBuildingId !== null) {
+          net.send({ type: MessageType.BUILD_UPGRADE, entityId: selectedBuildingId });
+        }
+
+        // R key: repair selected building
+        if (input.isJustPressed(Action.Repair) && selectedBuildingId !== null) {
+          net.send({ type: MessageType.BUILD_REPAIR, entityId: selectedBuildingId });
+        }
+
+        // Deselect if the selected building no longer exists
+        if (selectedBuildingId !== null && !world.hasEntity(selectedBuildingId)) {
+          selectedBuildingId = null;
+          buildOverlay.update(PLACEABLE_BUILDINGS[selectedBuildingIdx], combinedResources());
         }
       }
 
@@ -954,6 +1058,7 @@ async function main(): Promise<void> {
         net.send({ type: MessageType.INTERACT, x: pos.x, y: pos.y, t: performance.now() });
       }
 
+      playerRenderer.selectedBuildingId = selectedBuildingId;
       playerRenderer.update(world, localEntityId, localFacing, dt, reconciler.smoothX, reconciler.smoothY);
       deathOverlay.update(dt);
 

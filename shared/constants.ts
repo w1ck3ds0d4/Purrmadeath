@@ -72,7 +72,7 @@ export const PLAYER_STAMINA_REGEN = 15;
  */
 export const PLAYER_COLORS: readonly number[] = [
   0x4a90d9, // P1 - blue
-  0xe05252, // P2 - red
+  0x9944cc, // P2 - purple
   0x52c062, // P3 - green
   0xe0a830, // P4 - yellow
 ];
@@ -111,6 +111,29 @@ export const ENEMY_MELEE_COOLDOWN = 1.0;
 
 /** Knockback impulse applied to a player struck by an enemy (px/s). */
 export const ENEMY_MELEE_KNOCKBACK = 200;
+
+// ─── Enemy ranger variant ───────────────────────────────────────────────────
+
+/** Chance (0–1) for a spawned enemy to be a ranger instead of melee. */
+export const ENEMY_RANGER_SPAWN_CHANCE = 0.3;
+
+/** Ranger firing range in world pixels. */
+export const ENEMY_RANGER_RANGE = 200;
+
+/** Seconds between ranger shots. */
+export const ENEMY_RANGER_COOLDOWN = 2.0;
+
+/** Damage per ranger projectile. */
+export const ENEMY_RANGER_DAMAGE = 8;
+
+/** Ranger projectile speed (px/s). */
+export const ENEMY_RANGER_PROJECTILE_SPEED = 300;
+
+/** Ranger base movement speed — slightly slower than melee. */
+export const ENEMY_RANGER_SPEED = 60;
+
+/** Ranger health — slightly less than melee. */
+export const ENEMY_RANGER_HEALTH = 30;
 
 // ─── Melee combat ─────────────────────────────────────────────────────────────
 
@@ -374,3 +397,87 @@ export const SPIKE_TRAP_DAMAGE = 5;
 export const SPIKE_TRAP_COOLDOWN = 1;
 /** Damage the spike trap takes each time it triggers. */
 export const SPIKE_TRAP_SELF_DAMAGE = 1;
+
+// ─── Cannon AOE ──────────────────────────────────────────────────────────────
+
+/** Base AOE explosion radius for cannon turret projectiles (px). */
+export const CANNON_AOE_BASE_RADIUS = 100;
+
+// ─── Building Upgrades ──────────────────────────────────────────────────────
+
+import type { BuildingType } from './components';
+
+/** Max upgrade level per building type. */
+export const BUILDING_MAX_LEVEL: Record<BuildingType, number> = {
+  campfire: 5, bridge: 1,
+  wall: 3, warehouse: 3, lumbermill: 3, mine: 3, farm: 3,
+  arrow_turret: 3, cannon_turret: 3, spike_trap: 3,
+};
+
+/** Cost multiplier for each upgrade level (index 0 = level 2, index 1 = level 3, etc.). */
+export const UPGRADE_COST_MULTIPLIERS = [1.5, 2.5, 3.5, 4.5];
+
+// Stat multipliers indexed by (level - 1). Level 1 = index 0 = 1.0 (base).
+/** HP multiplier per level (campfire uses all 5, others use first 3). */
+export const UPGRADE_HP_MULT        = [1, 1.5, 2.0, 2.5, 3.0];
+/** Production interval multiplier (lower = faster). */
+export const UPGRADE_PROD_INTERVAL  = [1, 0.75, 0.5];
+/** Production max stored multiplier. */
+export const UPGRADE_PROD_MAX       = [1, 1.5, 2];
+/** Arrow turret cooldown multiplier (lower = faster fire rate). */
+export const UPGRADE_ARROW_CD       = [1, 0.8, 0.6];
+/** Arrow turret damage multiplier. */
+export const UPGRADE_ARROW_DMG      = [1, 1.25, 1.5];
+/** Cannon turret cooldown multiplier. */
+export const UPGRADE_CANNON_CD      = [1, 0.8, 0.6];
+/** Cannon turret damage multiplier. */
+export const UPGRADE_CANNON_DMG     = [1, 1.4, 1.8];
+/** Cannon AOE radius per level (absolute values in px). */
+export const UPGRADE_CANNON_AOE     = [100, 200, 400];
+/** Spike trap damage multiplier. */
+export const UPGRADE_TRAP_DMG       = [1, 1.5, 2.0];
+
+/**
+ * Returns the resource cost to upgrade a building from its current level to the next,
+ * or null if the building is at max level.
+ */
+export function getUpgradeCost(
+  buildingType: BuildingType,
+  currentLevel: number,
+): Partial<Record<'wood' | 'stone' | 'iron' | 'diamond', number>> | null {
+  const maxLevel = BUILDING_MAX_LEVEL[buildingType];
+  if (currentLevel >= maxLevel) return null;
+  const baseCost = BUILDING_COSTS[buildingType];
+  if (!baseCost) return null;
+  const mult = UPGRADE_COST_MULTIPLIERS[currentLevel - 1]; // level 1→2 uses index 0
+  const cost: Partial<Record<'wood' | 'stone' | 'iron' | 'diamond', number>> = {};
+  for (const [res, amount] of Object.entries(baseCost)) {
+    cost[res as 'wood' | 'stone' | 'iron' | 'diamond'] = Math.ceil((amount as number) * mult);
+  }
+  return cost;
+}
+
+/**
+ * Returns the resource cost to fully repair a building, proportional to missing HP.
+ * Returns null if the building is at full HP.
+ */
+export function getRepairCost(
+  buildingType: BuildingType,
+  missingHp: number,
+  maxHp: number,
+): Partial<Record<'wood' | 'stone' | 'iron' | 'diamond', number>> | null {
+  if (missingHp <= 0) return null;
+  const baseCost = BUILDING_COSTS[buildingType];
+  if (!baseCost) return null;
+  const fraction = missingHp / maxHp;
+  const cost: Partial<Record<'wood' | 'stone' | 'iron' | 'diamond', number>> = {};
+  let hasAnyCost = false;
+  for (const [res, amount] of Object.entries(baseCost)) {
+    const val = Math.ceil((amount as number) * fraction);
+    if (val > 0) {
+      cost[res as 'wood' | 'stone' | 'iron' | 'diamond'] = val;
+      hasAnyCost = true;
+    }
+  }
+  return hasAnyCost ? cost : null;
+}

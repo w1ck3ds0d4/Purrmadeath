@@ -10,6 +10,14 @@ interface ProjectileVisual {
 }
 
 const TRAIL_LEN = 10; // pixels behind the body
+const EXPLOSION_DURATION = 0.3; // seconds
+
+interface Explosion {
+  x: number;
+  y: number;
+  radius: number;
+  elapsed: number;
+}
 
 /**
  * Client-side projectile renderer.
@@ -21,6 +29,7 @@ const TRAIL_LEN = 10; // pixels behind the body
 export class ProjectileRendererSystem {
   private gfx: Graphics;
   private projectiles = new Map<number, ProjectileVisual>();
+  private explosions: Explosion[] = [];
 
   constructor(parent: Container) {
     this.gfx = new Graphics();
@@ -41,11 +50,23 @@ export class ProjectileRendererSystem {
     return this.projectiles;
   }
 
+  /** Register a cannon AOE explosion for rendering. */
+  addExplosion(x: number, y: number, radius: number): void {
+    this.explosions.push({ x, y, radius, elapsed: 0 });
+  }
+
   /** Advance all projectile positions by dt seconds. */
   update(dt: number): void {
     for (const p of this.projectiles.values()) {
       p.x += p.vx * dt;
       p.y += p.vy * dt;
+    }
+    // Tick explosions
+    for (let i = this.explosions.length - 1; i >= 0; i--) {
+      this.explosions[i].elapsed += dt;
+      if (this.explosions[i].elapsed >= EXPLOSION_DURATION) {
+        this.explosions.splice(i, 1);
+      }
     }
   }
 
@@ -67,8 +88,10 @@ export class ProjectileRendererSystem {
       if (p.x < cameraX - halfW - margin || p.x > cameraX + halfW + margin ||
           p.y < cameraY - halfH - margin || p.y > cameraY + halfH + margin) continue;
 
-      // Turret projectiles (ownerSlot = -1) use a distinct gray/blue color
-      const color = p.ownerSlot === -1 ? 0x9999bb : (PLAYER_COLORS[p.ownerSlot] ?? 0xffffff);
+      // Turret projectiles (ownerSlot = -1) gray/blue, ranger enemy projectiles (ownerSlot = -2) purple
+      const color = p.ownerSlot === -1 ? 0x9999bb
+        : p.ownerSlot === -2 ? 0xdd7722
+        : (PLAYER_COLORS[p.ownerSlot] ?? 0xffffff);
       const speed = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
       if (speed === 0) continue;
 
@@ -87,10 +110,26 @@ export class ProjectileRendererSystem {
       this.gfx.circle(p.x, p.y, PROJECTILE_RADIUS);
       this.gfx.fill({ color, alpha: 0.9 });
     }
+
+    // Draw AOE explosions
+    for (const exp of this.explosions) {
+      const t = exp.elapsed / EXPLOSION_DURATION; // 0→1
+      const currentRadius = exp.radius * (0.3 + 0.7 * t);
+      const alpha = (1 - t) * 0.5;
+      // Outer ring
+      this.gfx.circle(exp.x, exp.y, currentRadius);
+      this.gfx.fill({ color: 0xff8800, alpha: alpha * 0.3 });
+      this.gfx.circle(exp.x, exp.y, currentRadius);
+      this.gfx.stroke({ color: 0xffaa33, alpha, width: 2 });
+      // Inner flash
+      this.gfx.circle(exp.x, exp.y, currentRadius * 0.4);
+      this.gfx.fill({ color: 0xffdd66, alpha: alpha * 0.6 });
+    }
   }
 
   destroy(): void {
     this.projectiles.clear();
+    this.explosions.length = 0;
     this.gfx.clear();
   }
 }

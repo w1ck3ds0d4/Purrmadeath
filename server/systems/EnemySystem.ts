@@ -7,6 +7,7 @@ import {
   AttackCooldownComponent,
   FacingComponent,
   BuildingComponent,
+  EnemyVariantComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -14,6 +15,8 @@ import {
   ENEMY_MELEE_RANGE,
   ENEMY_MELEE_DAMAGE,
   ENEMY_MELEE_KNOCKBACK,
+  ENEMY_RANGER_RANGE,
+  RESOURCE_NODE_RADIUS,
   buildingHalfExtent,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
@@ -26,6 +29,8 @@ export interface EnemyAttackResult {
   deaths: number[];
   /** Enemies that swung (for ATTACK_PERFORMED broadcast - fires even on miss). */
   attackPerformed: { sourceId: number; facing: number }[];
+  /** Rangers that want to fire a projectile (spawned by GameSession). */
+  rangedAttacks: { sourceId: number; x: number; y: number; facing: number }[];
 }
 
 const ENEMY_OVERRIDES = {
@@ -69,7 +74,7 @@ export class EnemySystem {
   ) {}
 
   update(world: World, dt: number): EnemyAttackResult {
-    const result: EnemyAttackResult = { hits: [], deaths: [], attackPerformed: [] };
+    const result: EnemyAttackResult = { hits: [], deaths: [], attackPerformed: [], rangedAttacks: [] };
     const playerIds = world.query(C.Position, C.PlayerIndex);
 
     // Categorize buildings by priority: campfire > walls > other buildings
@@ -122,6 +127,23 @@ export class EnemySystem {
         }
       }
       this.buildingTilesMap.set(bid, tiles);
+    }
+
+    // Block tiles occupied by resource nodes so enemies path around them
+    for (const rid of world.query(C.Position, C.Faction)) {
+      const rf = world.getComponent<FactionComponent>(rid, C.Faction)!;
+      if (rf.type !== 'resource') continue;
+      const rpos = world.getComponent<PositionComponent>(rid, C.Position)!;
+      const rHalf = RESOURCE_NODE_RADIUS;
+      const rMinTx = Math.floor((rpos.x - rHalf) / TILE_SIZE);
+      const rMaxTx = Math.floor((rpos.x + rHalf - 1) / TILE_SIZE);
+      const rMinTy = Math.floor((rpos.y - rHalf) / TILE_SIZE);
+      const rMaxTy = Math.floor((rpos.y + rHalf - 1) / TILE_SIZE);
+      for (let tx = rMinTx; tx <= rMaxTx; tx++) {
+        for (let ty = rMinTy; ty <= rMaxTy; ty++) {
+          this.buildingBlockedTiles.add(tileKey(tx, ty));
+        }
+      }
     }
 
     // Clean stale paths for entities that no longer exist
@@ -217,6 +239,9 @@ export class EnemySystem {
       }
 
       if (targetPos && navPos) {
+        const ev = world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant);
+        const isRanger = ev?.variant === 'ranger';
+
         // For buildings: use edge distance for melee check (not center distance)
         let meleeCheckDist: number;
         if (targetHalfExtent > 0) {
@@ -228,7 +253,25 @@ export class EnemySystem {
           meleeCheckDist = Math.sqrt(ddx * ddx + ddy * ddy);
         }
 
-        if (meleeCheckDist <= ENEMY_MELEE_RANGE) {
+        // Ranger ranged attack: fire at non-building targets within range
+        const rangerCanShoot = isRanger && targetHalfExtent === 0 && meleeCheckDist <= ENEMY_RANGER_RANGE && meleeCheckDist > ENEMY_MELEE_RANGE;
+
+        if (rangerCanShoot) {
+          // Stop and fire
+          inp.dx = 0;
+          inp.dy = 0;
+          this.paths.delete(id);
+
+          const facing = Math.atan2(targetPos.y - pos.y, targetPos.x - pos.x);
+          const facingComp = world.getComponent<FacingComponent>(id, C.Facing);
+          if (facingComp) facingComp.angle = facing;
+
+          const cd = world.getComponent<AttackCooldownComponent>(id, C.AttackCooldown);
+          if (cd && cd.remaining <= 0) {
+            cd.remaining = cd.max;
+            result.rangedAttacks.push({ sourceId: id, x: pos.x, y: pos.y, facing });
+          }
+        } else if (meleeCheckDist <= ENEMY_MELEE_RANGE) {
           // In melee range: face target center, attack
           if (targetHalfExtent > 0) {
             // Buildings: keep closing distance — building collision stops naturally at surface

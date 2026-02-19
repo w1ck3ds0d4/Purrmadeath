@@ -8,6 +8,7 @@ import {
   ItemDropComponent,
   BuildingComponent,
   ProductionComponent,
+  EnemyVariantComponent,
 } from '@shared/components';
 import type { SnapshotMessage, DeltaMessage, EntitySnapshot } from '@shared/protocol';
 
@@ -145,7 +146,12 @@ export class RemotePlayerSystem {
         world.addComponent(snap.entityId, C.Building, {
           buildingType: snap.buildingType,
           permanent: snap.buildingType === 'campfire',
+          upgradeLevel: snap.upgradeLevel ?? 1,
         } as BuildingComponent);
+      }
+      // Enemy variant (for renderer color differentiation)
+      if (snap.enemyVariant) {
+        world.addComponent(snap.entityId, C.EnemyVariant, { variant: snap.enemyVariant } as EnemyVariantComponent);
       }
       // Production building stored resources (for renderer tag display)
       if (snap.productionStored !== undefined && snap.productionResource) {
@@ -162,6 +168,12 @@ export class RemotePlayerSystem {
       const hp  = world.getComponent<HealthComponent>(snap.entityId, C.Health);
       if (vel) { vel.vx = snap.vx; vel.vy = snap.vy; }
       if (hp)  { hp.current = snap.hp; hp.max = snap.maxHp; }
+
+      // Update building upgrade level
+      if (snap.upgradeLevel !== undefined) {
+        const bldg = world.getComponent<BuildingComponent>(snap.entityId, C.Building);
+        if (bldg) bldg.upgradeLevel = snap.upgradeLevel;
+      }
 
       // Update production stored amount
       if (snap.productionStored !== undefined) {

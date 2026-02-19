@@ -22,6 +22,7 @@ export const C = {
   ItemDrop:        'ItemDrop',
   Resources:       'Resources',
   Downed:          'Downed',
+  EnemyVariant:    'EnemyVariant',
   // ── Phase 5 ──────────────────────────────────────────────────────────────
   Building:        'Building',
   Production:      'Production',
@@ -135,6 +136,8 @@ export interface ProjectileComponent {
   damage: number;
   /** Seconds remaining before the projectile is destroyed. */
   lifetime: number;
+  /** If set, projectile deals AOE damage on hit within this radius (cannon turret). */
+  aoeRadius?: number;
 }
 
 // ── Phase 4.8+ components ─────────────────────────────────────────────────────
@@ -181,6 +184,8 @@ export interface BuildingComponent {
   buildingType: BuildingType;
   /** True = cannot be demolished by players (e.g. Campfire). */
   permanent: boolean;
+  /** Upgrade tier: 1 = base, up to BUILDING_MAX_LEVEL[type]. */
+  upgradeLevel: number;
 }
 
 /** Marks a player as downed (HP reached 0). Present only while in downed state. */
@@ -243,4 +248,13 @@ export interface BridgeComponent {
   tileX: number;
   /** Tile Y coordinate this bridge occupies. */
   tileY: number;
+}
+
+// ── Enemy variants ──────────────────────────────────────────────────────────
+
+export type EnemyVariantType = 'melee' | 'ranger';
+
+/** Tags an enemy with its variant type (melee or ranger). */
+export interface EnemyVariantComponent {
+  variant: EnemyVariantType;
 }

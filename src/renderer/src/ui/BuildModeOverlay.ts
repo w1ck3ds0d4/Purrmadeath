@@ -1,4 +1,5 @@
-import { BUILDING_COSTS } from '@shared/constants';
+import { BUILDING_COSTS, BUILDING_MAX_LEVEL, getUpgradeCost, getRepairCost } from '@shared/constants';
+import type { BuildingType } from '@shared/components';
 
 const RES_COLORS: Record<string, string> = {
   wood: '#8a6a3a',
@@ -42,7 +43,7 @@ export class BuildModeOverlay {
 
     const hint = document.createElement('div');
     hint.style.cssText = 'font-size: 11px; color: #6a7a8a;';
-    hint.textContent = 'Scroll to change \u00B7 B to exit \u00B7 Right-click to demolish';
+    hint.textContent = 'Scroll to change \u00B7 B to exit \u00B7 Click to select \u00B7 X demolish \u00B7 V upgrade \u00B7 G repair';
     this.el.appendChild(hint);
 
     document.getElementById('overlay')!.appendChild(this.el);
@@ -63,5 +64,47 @@ export class BuildModeOverlay {
       parts.push(`<span style="color:${color}">${amount}</span> <span style="color:${resColor}">${res.charAt(0).toUpperCase() + res.slice(1)}</span>`);
     }
     this.costEl.innerHTML = parts.length > 0 ? `Cost: ${parts.join('&nbsp;&nbsp;')}` : 'Free';
+  }
+
+  /** Show info for a selected existing building (name + level + upgrade/repair cost). */
+  updateSelection(buildingType: string, level: number, available: Record<string, number>, currentHp?: number, maxHp?: number): void {
+    const name = buildingType.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    this.titleEl.textContent = `${name}  Lv.${level}`;
+
+    const lines: string[] = [];
+
+    // Upgrade cost line
+    const maxLevel = BUILDING_MAX_LEVEL[buildingType as BuildingType] ?? 1;
+    if (level >= maxLevel) {
+      lines.push('<span style="color: #8a8a9a">Max Level</span>');
+    } else {
+      const upgCost = getUpgradeCost(buildingType as BuildingType, level);
+      if (upgCost) {
+        lines.push('Upgrade: ' + this.formatCost(upgCost, available));
+      }
+    }
+
+    // Repair cost line (only if damaged)
+    if (currentHp !== undefined && maxHp !== undefined && currentHp < maxHp) {
+      const missingHp = maxHp - currentHp;
+      const repCost = getRepairCost(buildingType as BuildingType, missingHp, maxHp);
+      if (repCost) {
+        lines.push('Repair: ' + this.formatCost(repCost, available));
+      }
+    }
+
+    this.costEl.innerHTML = lines.join('<br>');
+  }
+
+  private formatCost(cost: Partial<Record<string, number>>, available: Record<string, number>): string {
+    const parts: string[] = [];
+    for (const [res, amount] of Object.entries(cost)) {
+      const have = available[res] ?? 0;
+      const canAfford = have >= (amount as number);
+      const color = canAfford ? '#8ade8a' : '#de5050';
+      const resColor = RES_COLORS[res] ?? '#ccc';
+      parts.push(`<span style="color:${color}">${amount}</span> <span style="color:${resColor}">${res.charAt(0).toUpperCase() + res.slice(1)}</span>`);
+    }
+    return parts.length > 0 ? parts.join('&nbsp;&nbsp;') : 'Free';
   }
 }

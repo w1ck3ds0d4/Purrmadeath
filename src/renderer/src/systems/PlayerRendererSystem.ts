@@ -10,11 +10,13 @@ import {
   ItemDropComponent,
   BuildingComponent,
   ProductionComponent,
+  EnemyVariantComponent,
 } from '@shared/components';
 import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, ENEMY_MELEE_RANGE, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, buildingHalfExtent } from '@shared/constants';
 
-// Enemy body color
+// Enemy body colors
 const ENEMY_COLOR = 0xcc3333;
+const ENEMY_RANGER_COLOR = 0xdd7722;
 // Portal colors
 const PORTAL_OUTER_COLOR = 0x9933ff;
 const PORTAL_CORE_COLOR  = 0x6600cc;
@@ -90,6 +92,8 @@ export class PlayerRendererSystem {
   private attackArcs  = new Map<EntityId, { facing: number; elapsed: number }>();
   private downedEntities = new Set<EntityId>();
   private reviveProgress = new Map<EntityId, number>(); // entityId → 0..1
+  /** Currently selected building entity ID (for highlight rendering). */
+  selectedBuildingId: number | null = null;
   /** Dedicated layer for all health bars — renders above entities/buildings. */
   private healthBarGfx: Graphics;
   /** Production building resource tags (Text objects managed per-entity). */
@@ -383,6 +387,27 @@ export class PlayerRendererSystem {
           gfx.zIndex = -11; // below tiles (-10)
         }
 
+        // Selection highlight: pulsing yellow border
+        if (this.selectedBuildingId === id) {
+          const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 300);
+          gfx.rect(-half - 2, -half - 2, (half + 2) * 2, (half + 2) * 2);
+          gfx.stroke({ color: 0xffdd44, alpha: 0.5 + 0.4 * pulse, width: 2.5 });
+        }
+
+        // Upgrade level pips (small diamonds below building for level 2+)
+        const upgradeLevel = bldg?.upgradeLevel ?? 1;
+        if (upgradeLevel > 1) {
+          const pipY = half + 6;
+          const pipSpacing = 8;
+          const totalW = (upgradeLevel - 1) * pipSpacing;
+          const startX = -totalW / 2;
+          for (let i = 0; i < upgradeLevel; i++) {
+            const px = startX + i * pipSpacing;
+            gfx.poly([px, pipY - 3, px + 3, pipY, px, pipY + 3, px - 3, pipY]);
+            gfx.fill({ color: 0xffdd44, alpha: 0.9 });
+          }
+        }
+
       } else if (isItem) {
         // ── Item drop rendering ──────────────────────────────────────────────
         const drop = world.getComponent<ItemDropComponent>(id, C.ItemDrop);
@@ -418,8 +443,9 @@ export class PlayerRendererSystem {
           if (arc.elapsed >= ARC_DURATION) this.attackArcs.delete(id);
         }
 
+        const ev = isEnemy ? world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant) : undefined;
         const baseColor = isEnemy
-          ? ENEMY_COLOR
+          ? (ev?.variant === 'ranger' ? ENEMY_RANGER_COLOR : ENEMY_COLOR)
           : (PLAYER_COLORS[pIdx?.index ?? 0] ?? PLAYER_COLORS[0]);
         const color = flashT > 0 ? lerpColor(baseColor, 0xffffff, flashT * 0.6) : baseColor;
         const r = PLAYER_RADIUS;

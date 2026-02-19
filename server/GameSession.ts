@@ -19,8 +19,9 @@ import {
   TurretComponent,
   SpikeTrapComponent,
   BridgeComponent,
+  EnemyVariantComponent,
 } from '@shared/components';
-import type { ResourceType, BuildingType } from '@shared/components';
+import type { ResourceType, BuildingType, EnemyVariantType } from '@shared/components';
 import {
   TILE_SIZE,
   PLAYER_RADIUS,
@@ -92,6 +93,26 @@ import {
   SPIKE_TRAP_COOLDOWN,
   SPIKE_TRAP_SELF_DAMAGE,
   ENEMY_RADIUS,
+  ENEMY_RANGER_SPAWN_CHANCE,
+  ENEMY_RANGER_RANGE,
+  ENEMY_RANGER_COOLDOWN,
+  ENEMY_RANGER_DAMAGE,
+  ENEMY_RANGER_PROJECTILE_SPEED,
+  ENEMY_RANGER_SPEED,
+  ENEMY_RANGER_HEALTH,
+  BUILDING_MAX_LEVEL,
+  UPGRADE_HP_MULT,
+  UPGRADE_PROD_INTERVAL,
+  UPGRADE_PROD_MAX,
+  UPGRADE_ARROW_CD,
+  UPGRADE_ARROW_DMG,
+  UPGRADE_CANNON_CD,
+  UPGRADE_CANNON_DMG,
+  UPGRADE_CANNON_AOE,
+  UPGRADE_TRAP_DMG,
+  CANNON_AOE_BASE_RADIUS,
+  getUpgradeCost,
+  getRepairCost,
 } from '@shared/constants';
 import { RESOURCE_STATS, RESOURCE_SPAWN_TABLE, TILE_SPAWN_CHANCE } from '@shared/data/ResourceSpawnTable';
 import { LOOT_TABLES } from '@shared/data/LootTables';
@@ -128,6 +149,11 @@ import type {
   BuildDestroyedMessage,
   CampfireDestroyedMessage,
   BuildDemolishMessage,
+  BuildUpgradeMessage,
+  BuildUpgradeConfirmMessage,
+  BuildRepairMessage,
+  BuildRepairConfirmMessage,
+  AoeExplosionMessage,
   WarehouseUpdateMessage,
 } from '@shared/protocol';
 import { ItemDropSystem, PickupResult } from './systems/ItemDropSystem';
@@ -523,7 +549,7 @@ export class GameSession {
     this.world.addComponent(id, C.Velocity,  { vx: 0, vy: 0 });
     this.world.addComponent(id, C.Health,    { current: maxHp, max: maxHp });
     this.world.addComponent(id, C.Faction,   { type: 'building' });
-    this.world.addComponent(id, C.Building,  { buildingType, permanent } as BuildingComponent);
+    this.world.addComponent(id, C.Building,  { buildingType, permanent, upgradeLevel: 1 } as BuildingComponent);
     return id;
   }
 
@@ -785,16 +811,30 @@ export class GameSession {
 
   private spawnEnemy(x: number, y: number): number | null {
     if (this.enemyCount >= GameSession.MAX_ENEMIES) return null;
+
+    const isRanger = Math.random() < ENEMY_RANGER_SPAWN_CHANCE;
+    const variant: EnemyVariantType = isRanger ? 'ranger' : 'melee';
+
     const id = this.world.createEntity();
     this.world.addComponent(id, C.Position,          { x, y });
     this.world.addComponent(id, C.Velocity,          { vx: 0, vy: 0 });
-    this.world.addComponent(id, C.Health,            { current: ENEMY_MAX_HEALTH, max: ENEMY_MAX_HEALTH });
-    this.world.addComponent(id, C.Speed,             { base: ENEMY_BASE_SPEED, multiplier: 1 });
+    this.world.addComponent(id, C.Health, {
+      current: isRanger ? ENEMY_RANGER_HEALTH : ENEMY_MAX_HEALTH,
+      max: isRanger ? ENEMY_RANGER_HEALTH : ENEMY_MAX_HEALTH,
+    });
+    this.world.addComponent(id, C.Speed, {
+      base: isRanger ? ENEMY_RANGER_SPEED : ENEMY_BASE_SPEED,
+      multiplier: 1,
+    });
     this.world.addComponent(id, C.PlayerInput,       { dx: 0, dy: 0, sprint: false });
     this.world.addComponent(id, C.Faction,           { type: 'enemy' });
     this.world.addComponent(id, C.Facing,            { angle: 0 });
-    this.world.addComponent(id, C.AttackCooldown,    { remaining: 0, max: ENEMY_MELEE_COOLDOWN });
+    this.world.addComponent(id, C.AttackCooldown, {
+      remaining: 0,
+      max: isRanger ? ENEMY_RANGER_COOLDOWN : ENEMY_MELEE_COOLDOWN,
+    });
     this.world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
+    this.world.addComponent(id, C.EnemyVariant,      { variant });
     this.enemyCount++;
     return id;
   }
@@ -995,8 +1035,8 @@ export class GameSession {
     send(player.client, { type: MessageType.BUILD_CONFIRM, success: true } as BuildConfirmMessage);
   }
 
-  private deductBuildingCost(buildingType: string, player: any, send: SendFn): boolean {
-    const costs = BUILDING_COSTS[buildingType] ?? {};
+  private deductBuildingCost(buildingType: string, player: any, send: SendFn, costOverride?: Partial<Record<string, number>>): boolean {
+    const costs = costOverride ?? BUILDING_COSTS[buildingType] ?? {};
     const playerRes = this.world.getComponent<any>(player.entityId, C.Resources);
     if (!playerRes) return false;
 
@@ -1047,21 +1087,15 @@ export class GameSession {
     if (!player || player.entityId === null) return;
     if (this.world.hasComponent(player.entityId, C.Downed)) return;
     if (this.respawnTimers.has(clientId)) return;
-    if (!Number.isFinite(msg.x) || !Number.isFinite(msg.y)) return;
 
-    let targetId = -1;
-    let bldg: BuildingComponent | undefined;
-    for (const id of this.world.query(C.Position, C.Building)) {
-      const pos = this.world.getComponent<PositionComponent>(id, C.Position)!;
-      const b = this.world.getComponent<BuildingComponent>(id, C.Building)!;
-      const bHalf = buildingHalfExtent(b.buildingType);
-      if (Math.abs(msg.x - pos.x) < bHalf && Math.abs(msg.y - pos.y) < bHalf) {
-        bldg = b;
-        targetId = id;
-        break;
-      }
+    const targetId = msg.entityId;
+    if (!Number.isFinite(targetId)) return;
+    if (!this.world.hasEntity(targetId)) {
+      send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'no_building' } as BuildConfirmMessage);
+      return;
     }
-    if (targetId === -1 || !bldg) {
+    const bldg = this.world.getComponent<BuildingComponent>(targetId, C.Building);
+    if (!bldg) {
       send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'no_building' } as BuildConfirmMessage);
       return;
     }
@@ -1070,20 +1104,35 @@ export class GameSession {
       return;
     }
 
-    const costs = BUILDING_COSTS[bldg.buildingType] ?? {};
+    // Calculate total invested cost (base + all upgrade costs) for refund
+    const baseCosts = BUILDING_COSTS[bldg.buildingType] ?? {};
+    const totalCosts: Record<string, number> = {};
+    for (const [res, amount] of Object.entries(baseCosts)) {
+      totalCosts[res] = amount!;
+    }
+    // Add upgrade costs for each level above 1
+    for (let lvl = 1; lvl < bldg.upgradeLevel; lvl++) {
+      const upgCost = getUpgradeCost(bldg.buildingType, lvl);
+      if (upgCost) {
+        for (const [res, amount] of Object.entries(upgCost)) {
+          totalCosts[res] = (totalCosts[res] ?? 0) + (amount as number);
+        }
+      }
+    }
+
     const isDemolingWarehouse = this.warehouseIds.has(targetId);
 
     if (this.warehouseIds.size > 0 && !(isDemolingWarehouse && this.warehouseIds.size === 1)) {
-      for (const [res, amount] of Object.entries(costs)) {
-        const refund = Math.floor(amount! * DEMOLISH_REFUND_PERCENT);
+      for (const [res, amount] of Object.entries(totalCosts)) {
+        const refund = Math.floor(amount * DEMOLISH_REFUND_PERCENT);
         (this.warehousePool as Record<string, number>)[res] += refund;
       }
       this.broadcastWarehouseUpdate(send);
     } else {
       const res = this.world.getComponent<any>(player.entityId, C.Resources);
       if (res) {
-        for (const [key, amount] of Object.entries(costs)) {
-          const refund = Math.floor(amount! * DEMOLISH_REFUND_PERCENT);
+        for (const [key, amount] of Object.entries(totalCosts)) {
+          const refund = Math.floor(amount * DEMOLISH_REFUND_PERCENT);
           (res as unknown as Record<string, number>)[key] += refund;
         }
         send(player.client, {
@@ -1109,6 +1158,142 @@ export class GameSession {
       send(p.client, { type: MessageType.BUILD_DESTROYED, entityId: targetId } as any);
     }
     send(player.client, { type: MessageType.BUILD_CONFIRM, success: true } as BuildConfirmMessage);
+  }
+
+  handleBuildUpgrade(clientId: string, msg: BuildUpgradeMessage, send: SendFn): void {
+    if (this.phase !== 'playing' || this.paused || this.gameOver) return;
+    const player = this.players.get(clientId);
+    if (!player || player.entityId === null) return;
+    if (this.world.hasComponent(player.entityId, C.Downed)) return;
+    if (this.respawnTimers.has(clientId)) return;
+
+    const targetId = msg.entityId;
+    if (!Number.isFinite(targetId)) return;
+    if (!this.world.hasEntity(targetId)) {
+      send(player.client, { type: MessageType.BUILD_UPGRADE_CONFIRM, success: false, reason: 'no_building' } as BuildUpgradeConfirmMessage);
+      return;
+    }
+    const bldg = this.world.getComponent<BuildingComponent>(targetId, C.Building);
+    if (!bldg) {
+      send(player.client, { type: MessageType.BUILD_UPGRADE_CONFIRM, success: false, reason: 'no_building' } as BuildUpgradeConfirmMessage);
+      return;
+    }
+
+    const maxLevel = BUILDING_MAX_LEVEL[bldg.buildingType] ?? 1;
+    if (bldg.upgradeLevel >= maxLevel) {
+      send(player.client, { type: MessageType.BUILD_UPGRADE_CONFIRM, success: false, reason: 'max_level' } as BuildUpgradeConfirmMessage);
+      return;
+    }
+
+    const cost = getUpgradeCost(bldg.buildingType, bldg.upgradeLevel);
+    if (!cost) {
+      send(player.client, { type: MessageType.BUILD_UPGRADE_CONFIRM, success: false, reason: 'max_level' } as BuildUpgradeConfirmMessage);
+      return;
+    }
+
+    if (!this.deductBuildingCost(bldg.buildingType, player, send, cost as Partial<Record<string, number>>)) {
+      send(player.client, { type: MessageType.BUILD_UPGRADE_CONFIRM, success: false, reason: 'insufficient_resources' } as BuildUpgradeConfirmMessage);
+      return;
+    }
+
+    // Upgrade the building
+    const oldLevel = bldg.upgradeLevel;
+    bldg.upgradeLevel = oldLevel + 1;
+    const newLevel = bldg.upgradeLevel;
+    const lvlIdx = newLevel - 1; // 0-based index into multiplier arrays
+
+    // Scale HP: increase max and heal the gained amount
+    const hp = this.world.getComponent<HealthComponent>(targetId, C.Health)!;
+    const baseMaxHp = hp.max / UPGRADE_HP_MULT[oldLevel - 1];
+    const newMaxHp = Math.round(baseMaxHp * UPGRADE_HP_MULT[lvlIdx]);
+    const hpGain = newMaxHp - hp.max;
+    hp.max = newMaxHp;
+    hp.current = Math.min(hp.max, hp.current + hpGain);
+
+    // Scale production buildings
+    const prod = this.world.getComponent<ProductionComponent>(targetId, C.Production);
+    if (prod && lvlIdx < UPGRADE_PROD_INTERVAL.length) {
+      const baseInterval = prod.interval / UPGRADE_PROD_INTERVAL[oldLevel - 1];
+      prod.interval = baseInterval * UPGRADE_PROD_INTERVAL[lvlIdx];
+      const baseMax = prod.maxStored / UPGRADE_PROD_MAX[oldLevel - 1];
+      prod.maxStored = Math.round(baseMax * UPGRADE_PROD_MAX[lvlIdx]);
+    }
+
+    // Scale turrets
+    const turret = this.world.getComponent<TurretComponent>(targetId, C.Turret);
+    if (turret && lvlIdx < UPGRADE_ARROW_CD.length) {
+      if (bldg.buildingType === 'arrow_turret') {
+        const baseCd = turret.cooldown / UPGRADE_ARROW_CD[oldLevel - 1];
+        turret.cooldown = baseCd * UPGRADE_ARROW_CD[lvlIdx];
+        const baseDmg = turret.damage / UPGRADE_ARROW_DMG[oldLevel - 1];
+        turret.damage = Math.round(baseDmg * UPGRADE_ARROW_DMG[lvlIdx]);
+      } else if (bldg.buildingType === 'cannon_turret') {
+        const baseCd = turret.cooldown / UPGRADE_CANNON_CD[oldLevel - 1];
+        turret.cooldown = baseCd * UPGRADE_CANNON_CD[lvlIdx];
+        const baseDmg = turret.damage / UPGRADE_CANNON_DMG[oldLevel - 1];
+        turret.damage = Math.round(baseDmg * UPGRADE_CANNON_DMG[lvlIdx]);
+      }
+      turret.cooldownTimer = 0; // reset cooldown so upgraded turret fires immediately
+    }
+
+    // Scale spike trap damage
+    const trap = this.world.getComponent<SpikeTrapComponent>(targetId, C.SpikeTrap);
+    if (trap && lvlIdx < UPGRADE_TRAP_DMG.length) {
+      const baseDmg = trap.damage / UPGRADE_TRAP_DMG[oldLevel - 1];
+      trap.damage = Math.round(baseDmg * UPGRADE_TRAP_DMG[lvlIdx]);
+    }
+
+    send(player.client, {
+      type: MessageType.BUILD_UPGRADE_CONFIRM,
+      success: true,
+      entityId: targetId,
+      newLevel,
+    } as BuildUpgradeConfirmMessage);
+  }
+
+  handleBuildRepair(clientId: string, msg: BuildRepairMessage, send: SendFn): void {
+    if (this.phase !== 'playing' || this.paused || this.gameOver) return;
+    const player = this.players.get(clientId);
+    if (!player || player.entityId === null) return;
+    if (this.world.hasComponent(player.entityId, C.Downed)) return;
+    if (this.respawnTimers.has(clientId)) return;
+
+    const targetId = msg.entityId;
+    if (!Number.isFinite(targetId)) return;
+    if (!this.world.hasEntity(targetId)) {
+      send(player.client, { type: MessageType.BUILD_REPAIR_CONFIRM, success: false, reason: 'no_building' } as BuildRepairConfirmMessage);
+      return;
+    }
+    const bldg = this.world.getComponent<BuildingComponent>(targetId, C.Building);
+    if (!bldg) {
+      send(player.client, { type: MessageType.BUILD_REPAIR_CONFIRM, success: false, reason: 'no_building' } as BuildRepairConfirmMessage);
+      return;
+    }
+    const hp = this.world.getComponent<HealthComponent>(targetId, C.Health);
+    if (!hp || hp.current >= hp.max) {
+      send(player.client, { type: MessageType.BUILD_REPAIR_CONFIRM, success: false, reason: 'full_hp' } as BuildRepairConfirmMessage);
+      return;
+    }
+
+    const missingHp = hp.max - hp.current;
+    const cost = getRepairCost(bldg.buildingType, missingHp, hp.max);
+    if (!cost) {
+      send(player.client, { type: MessageType.BUILD_REPAIR_CONFIRM, success: false, reason: 'full_hp' } as BuildRepairConfirmMessage);
+      return;
+    }
+
+    if (!this.deductBuildingCost(bldg.buildingType, player, send, cost as Partial<Record<string, number>>)) {
+      send(player.client, { type: MessageType.BUILD_REPAIR_CONFIRM, success: false, reason: 'insufficient_resources' } as BuildRepairConfirmMessage);
+      return;
+    }
+
+    hp.current = hp.max;
+
+    send(player.client, {
+      type: MessageType.BUILD_REPAIR_CONFIRM,
+      success: true,
+      entityId: targetId,
+    } as BuildRepairConfirmMessage);
   }
 
   /** Remove bridge from bridgePositions and movement bridgeTiles when destroyed/demolished. */
@@ -1227,7 +1412,13 @@ export class GameSession {
       const projId = this.world.createEntity();
       this.world.addComponent(projId, C.Position,   { x: px, y: py });
       this.world.addComponent(projId, C.Velocity,   { vx: nx * turret.projectileSpeed, vy: ny * turret.projectileSpeed });
-      this.world.addComponent(projId, C.Projectile, { ownerId: id, damage: turret.damage, lifetime: RANGED_LIFETIME });
+      const projComp: any = { ownerId: id, damage: turret.damage, lifetime: RANGED_LIFETIME };
+      // Cannon turrets get AOE radius based on upgrade level
+      if (bldg?.buildingType === 'cannon_turret') {
+        const lvlIdx = (bldg.upgradeLevel ?? 1) - 1;
+        projComp.aoeRadius = UPGRADE_CANNON_AOE[lvlIdx] ?? CANNON_AOE_BASE_RADIUS;
+      }
+      this.world.addComponent(projId, C.Projectile, projComp);
       this.world.addComponent(projId, C.Faction,     { type: 'player' });
 
       const spawnMsg: ProjectileSpawnMessage = {
@@ -1318,19 +1509,25 @@ export class GameSession {
     if (trapDeaths.length > 0) this.destroyDeadEntities(trapDeaths, undefined, send);
   }
 
-  /** Returns true if a building footprint at (cx, cy) overlaps an existing entity. */
+  /** Returns true if a building footprint at (cx, cy) overlaps an existing entity (buildings, resources, players, enemies). */
   private footprintCollides(cx: number, cy: number, buildingType: string): boolean {
     const newHalf = buildingHalfExtent(buildingType);
     for (const id of this.world.query(C.Position, C.Faction)) {
       const f = this.world.getComponent<FactionComponent>(id, C.Faction)!;
-      if (f.type !== 'building' && f.type !== 'resource') continue;
       const pos = this.world.getComponent<PositionComponent>(id, C.Position)!;
       let existingHalf: number;
       if (f.type === 'building') {
         const b = this.world.getComponent<BuildingComponent>(id, C.Building);
         existingHalf = buildingHalfExtent(b?.buildingType ?? 'wall');
-      } else {
+      } else if (f.type === 'resource') {
         existingHalf = RESOURCE_NODE_RADIUS;
+      } else if (f.type === 'player') {
+        if (this.world.hasComponent(id, C.Downed)) continue; // ignore downed players
+        existingHalf = PLAYER_RADIUS;
+      } else if (f.type === 'enemy') {
+        existingHalf = ENEMY_RADIUS;
+      } else {
+        continue; // skip portals, items, etc.
       }
       if (Math.abs(pos.x - cx) < newHalf + existingHalf && Math.abs(pos.y - cy) < newHalf + existingHalf) return true;
     }
@@ -1518,7 +1715,10 @@ export class GameSession {
     attackerMap?: Map<number, number>,
     send?: SendFn,
   ): void {
+    const processed = new Set<number>();
     for (const deadId of deaths) {
+      if (processed.has(deadId)) continue;
+      processed.add(deadId);
       // Player death → downed state (don't destroy the entity)
       if (this.playerEntityIds.has(deadId)) {
         if (send) this.checkPlayerDowned(deadId, send);
@@ -1865,6 +2065,31 @@ export class GameSession {
       for (const p of this.players.values()) send(p.client, hitMsg);
     }
 
+    // Spawn ranger projectiles
+    for (const ra of enemyResult.rangedAttacks) {
+      const dirX = Math.cos(ra.facing);
+      const dirY = Math.sin(ra.facing);
+      const offset = ENEMY_RADIUS + PROJECTILE_RADIUS + 2;
+      const spawnX = ra.x + dirX * offset;
+      const spawnY = ra.y + dirY * offset;
+      const vx = dirX * ENEMY_RANGER_PROJECTILE_SPEED;
+      const vy = dirY * ENEMY_RANGER_PROJECTILE_SPEED;
+
+      const projId = this.world.createEntity();
+      this.world.addComponent(projId, C.Position,   { x: spawnX, y: spawnY });
+      this.world.addComponent(projId, C.Velocity,   { vx, vy });
+      this.world.addComponent(projId, C.Projectile, { ownerId: ra.sourceId, damage: ENEMY_RANGER_DAMAGE, lifetime: RANGED_LIFETIME });
+      this.world.addComponent(projId, C.Faction,    { type: 'enemy' });
+
+      const spawn: ProjectileSpawnMessage = {
+        type: MessageType.PROJECTILE_SPAWN,
+        projectileId: projId,
+        x: spawnX, y: spawnY, vx, vy,
+        ownerSlot: -2, // ranger enemy indicator for client rendering
+      };
+      for (const p of this.players.values()) send(p.client, spawn);
+    }
+
     // Destroy dead entities (players enter downed state, others are removed)
     this.destroyDeadEntities(enemyResult.deaths, undefined, send);
 
@@ -1883,6 +2108,12 @@ export class GameSession {
       };
       for (const p of this.players.values()) send(p.client, removeMsg);
       this.world.destroyEntity(projId);
+    }
+
+    // Broadcast AOE explosions to clients
+    for (const aoe of projResult.aoeExplosions) {
+      const aoeMsg: AoeExplosionMessage = { type: MessageType.AOE_EXPLOSION, x: aoe.x, y: aoe.y, radius: aoe.radius };
+      for (const p of this.players.values()) send(p.client, aoeMsg);
     }
 
     // Build attacker map for projectile kills (sourceId = projectile owner)
@@ -2026,7 +2257,10 @@ export class GameSession {
 
       // Building metadata
       const bldg = this.world.getComponent<BuildingComponent>(id, C.Building);
-      if (bldg) snap.buildingType = bldg.buildingType;
+      if (bldg) {
+        snap.buildingType = bldg.buildingType;
+        snap.upgradeLevel = bldg.upgradeLevel;
+      }
 
       // Production building stored resources
       const prod = this.world.getComponent<ProductionComponent>(id, C.Production);
@@ -2035,6 +2269,10 @@ export class GameSession {
         snap.productionMax = prod.maxStored;
         snap.productionResource = prod.resourceType;
       }
+
+      // Enemy variant
+      const ev = this.world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant);
+      if (ev) snap.enemyVariant = ev.variant;
 
       // Downed state
       if (this.world.hasComponent(id, C.Downed)) snap.downed = true;
@@ -2053,6 +2291,7 @@ export class GameSession {
       prev.resourceType !== curr.resourceType ||
       prev.itemType !== curr.itemType ||
       prev.buildingType !== curr.buildingType ||
+      prev.upgradeLevel !== curr.upgradeLevel ||
       prev.productionStored !== curr.productionStored
     );
   }

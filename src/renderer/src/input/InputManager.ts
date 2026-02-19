@@ -15,6 +15,8 @@ export enum Action {
   WeaponSlot2,
   BuildMode,
   Demolish,
+  Upgrade,
+  Repair,
 }
 
 // One or more key strings per action (Set.has is O(1)).
@@ -30,7 +32,9 @@ const DEFAULT_BINDINGS: Readonly<Record<Action, readonly string[]>> = {
   [Action.WeaponSlot1]:        ['1'],
   [Action.WeaponSlot2]:        ['2'],
   [Action.BuildMode]:          ['b'],
-  [Action.Demolish]:           ['MouseRight'],
+  [Action.Demolish]:           ['x'],
+  [Action.Upgrade]:            ['v'],
+  [Action.Repair]:             ['g'],
 };
 
 export class InputManager {
