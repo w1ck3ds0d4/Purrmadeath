@@ -6,6 +6,9 @@
  *
  * Purely DOM-based, appended to #overlay, same pattern as PauseBanner.
  */
+/** Top offset: below minimap (220px) + padding (12px) + coords row (~20px) + gaps */
+const WAVE_HUD_TOP = 258;
+
 export class WaveHUD {
   private el: HTMLElement;
   private prepTimer = 0;
@@ -22,12 +25,14 @@ export class WaveHUD {
     this.el.id = 'wave-hud';
     this.el.style.cssText = [
       'position: absolute',
-      'top: 16px',
-      'right: 16px',
+      `top: ${WAVE_HUD_TOP}px`,
+      'right: 12px',
       'z-index: 20',
       'background: rgba(4, 4, 10, 0.75)',
       'backdrop-filter: blur(4px)',
       'border: 1px solid rgba(255, 255, 255, 0.14)',
+      'width: 220px',
+      'box-sizing: border-box',
       'padding: 10px 20px',
       "font-family: 'Segoe UI', monospace",
       'font-size: 15px',
@@ -35,7 +40,7 @@ export class WaveHUD {
       'letter-spacing: 1px',
       'pointer-events: none',
       'display: none',
-      'text-align: right',
+      'text-align: center',
       'white-space: nowrap',
     ].join('; ');
     document.getElementById('overlay')!.appendChild(this.el);

@@ -129,6 +129,16 @@ export enum MessageType {
   /** Server → All: warehouse shared resource pool update. */
   WAREHOUSE_UPDATE = 'WAREHOUSE_UPDATE',
 
+  // ── Save Slots ──────────────────────────────────────────────────────────────
+  /** Client → Server: request save slot info for the current player. */
+  SAVE_SLOTS_REQUEST = 'SAVE_SLOTS_REQUEST',
+  /** Server → Client: save slot info response. */
+  SAVE_SLOTS_RESPONSE = 'SAVE_SLOTS_RESPONSE',
+  /** Server → all: game was auto-saved (toast notification). */
+  GAME_SAVED = 'GAME_SAVED',
+  /** Client → Server: delete a save slot. */
+  SAVE_DELETE = 'SAVE_DELETE',
+
   // ── Debug ─────────────────────────────────────────────────────────────────
   /** Client → Server: spawn a wave of enemies around the sender (dev tool). */
   DEBUG_SPAWN_ENEMIES = 'DEBUG_SPAWN_ENEMIES',
@@ -154,6 +164,8 @@ export interface HandshakeMessage extends BaseMessage {
   displayName: string;
   /** Client build version (compared server-side for version gating). */
   version: string;
+  /** Persistent player UUID (generated once, stored in localStorage). */
+  playerId?: string;
 }
 
 export interface HandshakeAckMessage extends BaseMessage {
@@ -180,6 +192,8 @@ export interface ErrorMessage extends BaseMessage {
 
 export interface SessionCreateMessage extends BaseMessage {
   type: typeof MessageType.SESSION_CREATE;
+  /** Optional save slot (1-3) to resume from. Omit for new game. */
+  saveSlot?: number;
 }
 
 export interface SessionJoinMessage extends BaseMessage {
@@ -370,6 +384,11 @@ export interface ProjectileSpawnMessage extends BaseMessage {
   vy: number;
   /** Slot of the player who fired (for color). */
   ownerSlot: number;
+  /** Mortar target position (cannon turret only). */
+  targetX?: number;
+  targetY?: number;
+  /** Total flight time for mortar arc (seconds). */
+  totalFlightTime?: number;
 }
 
 /** Server → all: a projectile was destroyed. */
@@ -626,6 +645,32 @@ export interface WarehouseUpdateMessage extends BaseMessage {
   exists: boolean;
 }
 
+// ─── Save Slots ──────────────────────────────────────────────────────────────
+
+/** Client → Server: request save slot info for the host player. */
+export interface SaveSlotsRequestMessage extends BaseMessage {
+  type: typeof MessageType.SAVE_SLOTS_REQUEST;
+}
+
+/** Server → Client: save slot info (3 slots). */
+export interface SaveSlotsResponseMessage extends BaseMessage {
+  type: typeof MessageType.SAVE_SLOTS_RESPONSE;
+  slots: import('./SaveFormat').SaveSlotInfo[];
+}
+
+/** Server → all: game was auto-saved after wave clear. */
+export interface GameSavedMessage extends BaseMessage {
+  type: typeof MessageType.GAME_SAVED;
+  wave: number;
+  slot: number;
+}
+
+/** Client → Server: delete a save slot. */
+export interface SaveDeleteMessage extends BaseMessage {
+  type: typeof MessageType.SAVE_DELETE;
+  slot: number;
+}
+
 // ─── Union ────────────────────────────────────────────────────────────────────
 
 export type AnyMessage =
@@ -678,4 +723,8 @@ export type AnyMessage =
   | BuildRepairConfirmMessage
   | AoeExplosionMessage
   | WarehouseUpdateMessage
+  | SaveSlotsRequestMessage
+  | SaveSlotsResponseMessage
+  | GameSavedMessage
+  | SaveDeleteMessage
   | BaseMessage;

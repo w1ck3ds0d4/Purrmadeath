@@ -1,12 +1,20 @@
 import { Container, Graphics } from 'pixi.js';
-import { snapBuildingPosition, buildingHalfExtent } from '@shared/constants';
+import { snapBuildingPosition, buildingHalfExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE } from '@shared/constants';
 
 const VALID_COLOR   = 0x44cc66;
 const INVALID_COLOR = 0xcc4444;
+const RANGE_COLOR   = 0x44aaff;
+
+/** Turret type → base range in pixels. */
+const TURRET_RANGES: Record<string, number> = {
+  arrow_turret: ARROW_TURRET_RANGE,
+  cannon_turret: CANNON_TURRET_RANGE,
+};
 
 /**
  * Semi-transparent building ghost that follows the mouse in build mode.
  * Snaps to tile grid. Green if placement is valid, red if blocked.
+ * Shows range circle for turret buildings.
  */
 export class BuildGhostRenderer {
   private gfx: Graphics;
@@ -43,6 +51,17 @@ export class BuildGhostRenderer {
     const half = buildingHalfExtent(buildingType);
 
     this.gfx.clear();
+
+    // Range circle for turrets
+    const range = TURRET_RANGES[buildingType];
+    if (range) {
+      this.gfx.circle(this.snapX, this.snapY, range);
+      this.gfx.fill({ color: RANGE_COLOR, alpha: 0.06 });
+      this.gfx.circle(this.snapX, this.snapY, range);
+      this.gfx.stroke({ color: RANGE_COLOR, alpha: 0.25, width: 1 });
+    }
+
+    // Building ghost
     this.gfx.rect(this.snapX - half, this.snapY - half, half * 2, half * 2);
     this.gfx.fill({ color, alpha: 0.35 });
     this.gfx.rect(this.snapX - half, this.snapY - half, half * 2, half * 2);

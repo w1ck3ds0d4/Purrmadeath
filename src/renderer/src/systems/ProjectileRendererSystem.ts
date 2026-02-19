@@ -7,6 +7,14 @@ interface ProjectileVisual {
   vx: number;
   vy: number;
   ownerSlot: number;
+  /** Mortar fields (cannon turret only). */
+  targetX?: number;
+  targetY?: number;
+  totalFlightTime?: number;
+  /** Start position for arc interpolation. */
+  startX?: number;
+  startY?: number;
+  elapsed?: number;
 }
 
 const TRAIL_LEN = 10; // pixels behind the body
@@ -37,8 +45,18 @@ export class ProjectileRendererSystem {
     parent.addChild(this.gfx);
   }
 
-  spawn(id: number, x: number, y: number, vx: number, vy: number, ownerSlot: number): void {
-    this.projectiles.set(id, { x, y, vx, vy, ownerSlot });
+  spawn(id: number, x: number, y: number, vx: number, vy: number, ownerSlot: number,
+        targetX?: number, targetY?: number, totalFlightTime?: number): void {
+    const vis: ProjectileVisual = { x, y, vx, vy, ownerSlot };
+    if (targetX != null && targetY != null && totalFlightTime != null) {
+      vis.targetX = targetX;
+      vis.targetY = targetY;
+      vis.totalFlightTime = totalFlightTime;
+      vis.startX = x;
+      vis.startY = y;
+      vis.elapsed = 0;
+    }
+    this.projectiles.set(id, vis);
   }
 
   remove(id: number): void {
@@ -58,8 +76,16 @@ export class ProjectileRendererSystem {
   /** Advance all projectile positions by dt seconds. */
   update(dt: number): void {
     for (const p of this.projectiles.values()) {
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
+      if (p.targetX != null && p.targetY != null && p.totalFlightTime != null && p.startX != null && p.startY != null) {
+        // Mortar arc: interpolate from start to target
+        p.elapsed = (p.elapsed ?? 0) + dt;
+        const t = Math.min(p.elapsed / p.totalFlightTime, 1);
+        p.x = p.startX + (p.targetX - p.startX) * t;
+        p.y = p.startY + (p.targetY - p.startY) * t;
+      } else {
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+      }
     }
     // Tick explosions
     for (let i = this.explosions.length - 1; i >= 0; i--) {
@@ -107,8 +133,24 @@ export class ProjectileRendererSystem {
       this.gfx.stroke({ color, alpha: 0.4, width: 2 });
 
       // Body circle - world coordinates
-      this.gfx.circle(p.x, p.y, PROJECTILE_RADIUS);
-      this.gfx.fill({ color, alpha: 0.9 });
+      // Mortar projectiles: draw larger with parabolic arc scale (bigger at midpoint)
+      let bodyRadius = PROJECTILE_RADIUS;
+      if (p.targetX != null && p.totalFlightTime != null && p.elapsed != null) {
+        const t = Math.min(p.elapsed / p.totalFlightTime, 1);
+        // Parabolic arc: scale peaks at 2.5x at midpoint
+        const arcScale = 1 + 1.5 * 4 * t * (1 - t);
+        bodyRadius = PROJECTILE_RADIUS * arcScale;
+        // Draw shadow on ground
+        this.gfx.circle(p.x, p.y, PROJECTILE_RADIUS * 0.8);
+        this.gfx.fill({ color: 0x000000, alpha: 0.2 });
+        // Offset body upward to simulate height
+        const arcHeight = 30 * 4 * t * (1 - t); // peaks at 30px "height"
+        this.gfx.circle(p.x, p.y - arcHeight, bodyRadius);
+        this.gfx.fill({ color: 0xff6600, alpha: 0.9 });
+      } else {
+        this.gfx.circle(p.x, p.y, bodyRadius);
+        this.gfx.fill({ color, alpha: 0.9 });
+      }
     }
 
     // Draw AOE explosions

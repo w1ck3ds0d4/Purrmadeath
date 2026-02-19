@@ -218,7 +218,7 @@ export const DIAMOND_YIELD = 1;
 /** Chunks around spawn origin to populate with resource nodes. */
 export const RESOURCE_SPAWN_RADIUS_CHUNKS = 5;
 /** Performance cap on total resource node entities. */
-export const MAX_RESOURCE_NODES = 400;
+export const MAX_RESOURCE_NODES = 1500;
 
 // ─── Item Drops ─────────────────────────────────────────────────────────
 
@@ -278,7 +278,7 @@ export const BUILDING_HALF_EXTENT = TILE_SIZE / 2; // 16px
 
 /** Tile dimensions per building type (tiles along each edge). */
 export const BUILDING_SIZES: Record<string, number> = {
-  wall: 1, campfire: 3, warehouse: 3, lumbermill: 2, mine: 2, farm: 2,
+  wall: 1, campfire: 3, warehouse: 3, lumbermill: 2, quarry: 2, mine: 2, farm: 2,
   arrow_turret: 1, cannon_turret: 2, spike_trap: 1, bridge: 1,
 };
 
@@ -311,8 +311,10 @@ export const WAREHOUSE_MAX_HEALTH = 200;
 /** Lumbermill HP. */
 export const LUMBERMILL_MAX_HEALTH = 180;
 
-/** Mine HP. */
-export const MINE_MAX_HEALTH = 180;
+/** Quarry HP (stone production). */
+export const QUARRY_MAX_HEALTH = 180;
+/** Mine HP (iron/diamond production). */
+export const MINE_MAX_HEALTH = 200;
 
 /** Farm HP. */
 export const FARM_MAX_HEALTH = 150;
@@ -337,10 +339,12 @@ export const DEMOLISH_REFUND_PERCENT = 0.5;
 
 /** Per-building-type resource costs for placement. */
 export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'iron' | 'diamond', number>>> = {
+  campfire:       { wood: 20, stone: 15, iron: 5 },
   wall:           { wood: 5 },
   warehouse:      { wood: 10, stone: 5 },
   lumbermill:     { wood: 15, stone: 5 },
-  mine:           { wood: 10, stone: 10 },
+  quarry:         { wood: 10, stone: 10 },
+  mine:           { wood: 15, stone: 15, iron: 5 },
   farm:           { wood: 10 },
   arrow_turret:   { stone: 5, iron: 5 },
   cannon_turret:  { stone: 10, iron: 10, diamond: 2 },
@@ -350,7 +354,7 @@ export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'i
 
 /** Ordered list of building types the player can cycle through in build mode. */
 export const PLACEABLE_BUILDINGS: string[] = [
-  'wall', 'warehouse', 'lumbermill', 'mine', 'farm',
+  'wall', 'warehouse', 'lumbermill', 'quarry', 'mine', 'farm',
   'arrow_turret', 'cannon_turret', 'spike_trap', 'bridge',
 ];
 
@@ -358,8 +362,10 @@ export const PLACEABLE_BUILDINGS: string[] = [
 
 /** Seconds between lumbermill production ticks. */
 export const LUMBERMILL_PRODUCTION_INTERVAL = 10;
-/** Seconds between mine production ticks. */
-export const MINE_PRODUCTION_INTERVAL = 15;
+/** Seconds between quarry production ticks (stone). */
+export const QUARRY_PRODUCTION_INTERVAL = 15;
+/** Seconds between mine production ticks (iron/diamond). */
+export const MINE_PRODUCTION_INTERVAL = 20;
 /** Seconds between farm production ticks. */
 export const FARM_PRODUCTION_INTERVAL = 8;
 /** Amount produced per tick (all production buildings). */
@@ -410,7 +416,7 @@ import type { BuildingType } from './components';
 /** Max upgrade level per building type. */
 export const BUILDING_MAX_LEVEL: Record<BuildingType, number> = {
   campfire: 5, bridge: 1,
-  wall: 3, warehouse: 3, lumbermill: 3, mine: 3, farm: 3,
+  wall: 3, warehouse: 3, lumbermill: 3, quarry: 3, mine: 3, farm: 3,
   arrow_turret: 3, cannon_turret: 3, spike_trap: 3,
 };
 
@@ -420,10 +426,10 @@ export const UPGRADE_COST_MULTIPLIERS = [1.5, 2.5, 3.5, 4.5];
 // Stat multipliers indexed by (level - 1). Level 1 = index 0 = 1.0 (base).
 /** HP multiplier per level (campfire uses all 5, others use first 3). */
 export const UPGRADE_HP_MULT        = [1, 1.5, 2.0, 2.5, 3.0];
-/** Production interval multiplier (lower = faster). */
-export const UPGRADE_PROD_INTERVAL  = [1, 0.75, 0.5];
-/** Production max stored multiplier. */
-export const UPGRADE_PROD_MAX       = [1, 1.5, 2];
+/** Production interval multiplier (lower = faster). 1x → 3x → 5x speed. */
+export const UPGRADE_PROD_INTERVAL  = [1, 0.333, 0.2];
+/** Production max stored multiplier. 10 → 30 → 50 storage. */
+export const UPGRADE_PROD_MAX       = [1, 3, 5];
 /** Arrow turret cooldown multiplier (lower = faster fire rate). */
 export const UPGRADE_ARROW_CD       = [1, 0.8, 0.6];
 /** Arrow turret damage multiplier. */

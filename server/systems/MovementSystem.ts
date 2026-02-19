@@ -307,6 +307,13 @@ export class MovementSystem {
     // Bridge overrides unwalkable terrain
     if (this.bridgeTiles.has(`${tx},${ty}`)) return false;
     const tileId = this.generator.getTile(tx, ty);
-    return !(TILE_DEFS[tileId]?.walkable ?? false);
+    if (TILE_DEFS[tileId]?.walkable ?? false) return false;
+    // Allow movement on unwalkable tiles adjacent to a bridge
+    // (so the player can smoothly transition onto/off a bridge)
+    if (this.bridgeTiles.has(`${tx - 1},${ty}`) ||
+        this.bridgeTiles.has(`${tx + 1},${ty}`) ||
+        this.bridgeTiles.has(`${tx},${ty - 1}`) ||
+        this.bridgeTiles.has(`${tx},${ty + 1}`)) return false;
+    return true;
   }
 }

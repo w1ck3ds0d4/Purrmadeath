@@ -30,4 +30,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   /** Quits the app and installs the downloaded update. */
   installUpdate: () => ipcRenderer.invoke('install-update'),
+
+  // ── Save system ──────────────────────────────────────────────────────────
+  /** Get save slot info for a player UUID. Returns SaveSlotInfo[]. */
+  getSaveSlots: (playerId: string) => ipcRenderer.invoke('get-save-slots', playerId),
+  /** Load save data for a slot. Returns SaveData | null. */
+  loadSave: (playerId: string, slot: number) => ipcRenderer.invoke('load-save', playerId, slot),
+  /** Write save data to a slot. */
+  writeSave: (playerId: string, slot: number, data: unknown) => ipcRenderer.invoke('write-save', playerId, slot, data),
 });

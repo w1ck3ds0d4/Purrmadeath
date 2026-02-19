@@ -2,6 +2,7 @@ import { app, BrowserWindow, shell, session, ipcMain } from 'electron';
 import { join } from 'path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import * as dgram from 'node:dgram';
+import * as fs from 'node:fs';
 import { DISCOVERY_PORT } from '../../server/discovery';
 import type { DiscoveryBeaconPayload } from '../../server/discovery';
 import pkg from 'electron-updater';
@@ -123,6 +124,67 @@ ipcMain.handle('resolve-session-code', (_event, code: string) => {
     if (s.code === upper) return { ip: s.ip, port: s.port };
   }
   return null;
+});
+
+// ─── Save System (Electron userData) ─────────────────────────────────────────
+
+function getSavesDir(): string {
+  const dir = join(app.getPath('userData'), 'saves');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function getSavePath(playerId: string, slot: number): string {
+  // Sanitize playerId (UUID format) to prevent path traversal
+  const safe = playerId.replace(/[^a-zA-Z0-9-]/g, '');
+  return join(getSavesDir(), `${safe}_slot${slot}.json`);
+}
+
+ipcMain.handle('get-save-slots', (_event, playerId: string) => {
+  const slots = [];
+  for (let i = 1; i <= 3; i++) {
+    const path = getSavePath(playerId, i);
+    if (fs.existsSync(path)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(path, 'utf-8'));
+        slots.push({
+          slot: i,
+          exists: true,
+          wave: data.currentWave,
+          elapsedTime: data.elapsedTime,
+          enemiesKilled: data.enemiesKilled,
+          playerCount: data.players?.length ?? 0,
+          timestamp: data.timestamp,
+        });
+      } catch {
+        slots.push({ slot: i, exists: false });
+      }
+    } else {
+      slots.push({ slot: i, exists: false });
+    }
+  }
+  return slots;
+});
+
+ipcMain.handle('load-save', (_event, playerId: string, slot: number) => {
+  const path = getSavePath(playerId, slot);
+  if (!fs.existsSync(path)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(path, 'utf-8'));
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.handle('write-save', (_event, playerId: string, slot: number, data: unknown) => {
+  // Basic schema validation before writing to disk
+  if (!data || typeof data !== 'object') return false;
+  const d = data as Record<string, unknown>;
+  if (d.formatVersion !== 1 || typeof d.seed !== 'number' || typeof d.currentWave !== 'number') return false;
+  if (!Number.isInteger(slot) || slot < 1 || slot > 3) return false;
+  const path = getSavePath(playerId, slot);
+  fs.writeFileSync(path, JSON.stringify(data), 'utf-8');
+  return true;
 });
 
 // ─── Window ────────────────────────────────────────────────────────────────────

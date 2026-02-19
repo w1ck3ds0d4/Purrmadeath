@@ -1,5 +1,7 @@
+import type { SaveSlotInfo } from '@shared/SaveFormat';
+
 /**
- * Manages the HTML overlay panels for the main menu and pause screen.
+ * Manages the HTML overlay panels for the main menu, save slot picker, and pause screen.
  *
  * The overlay sits in a `position: absolute` div above the Pixi.js canvas,
  * so the world renders as an animated background behind the menus.
@@ -16,9 +18,16 @@ export class MenuOverlay {
   private nameInput:       HTMLInputElement;
   private codeInput:       HTMLInputElement;
   private pauseSubtitle:   HTMLElement;
+  private pauseStats:      HTMLElement;
   private connectionStatus: HTMLElement;
   private hostBtn:         HTMLElement;
   private joinBtn:         HTMLElement;
+
+  // Save slot picker
+  private saveSlotScreen: HTMLElement;
+  private saveSlotList: HTMLElement;
+  private onSlotSelected: ((slot: number) => void) | null = null;
+  private onDeleteSlot: ((slot: number) => void) | null = null;
 
   constructor() {
     this.menuScreen  = this.require('menu-screen');
@@ -26,9 +35,28 @@ export class MenuOverlay {
     this.nameInput       = this.require('input-display-name') as HTMLInputElement;
     this.codeInput       = this.require('input-session-code') as HTMLInputElement;
     this.pauseSubtitle   = this.require('pause-subtitle');
+    this.pauseStats      = this.require('pause-stats');
     this.connectionStatus = this.require('connection-status');
     this.hostBtn         = this.require('btn-host-game');
     this.joinBtn         = this.require('btn-join-game');
+
+    // Create save slot picker screen dynamically
+    this.saveSlotScreen = document.createElement('div');
+    this.saveSlotScreen.className = 'screen';
+    this.saveSlotScreen.id = 'save-slot-screen';
+    this.saveSlotScreen.innerHTML = `
+      <h2 style="font-family:'Segoe UI',sans-serif;font-size:30px;font-weight:700;color:#ccd8ea;letter-spacing:4px;margin-bottom:8px;user-select:none;">SELECT SAVE SLOT</h2>
+      <p style="font-family:monospace;font-size:12px;color:#6a7a8a;margin-bottom:24px;user-select:none;">Choose a slot to host on</p>
+      <div id="save-slot-list" style="display:flex;flex-direction:column;gap:8px;width:360px;"></div>
+      <button id="btn-save-slot-back" class="menu-btn muted" style="margin-top:16px;width:360px;">Back</button>
+    `;
+    document.getElementById('overlay')!.appendChild(this.saveSlotScreen);
+
+    this.saveSlotList = this.saveSlotScreen.querySelector('#save-slot-list')!;
+    this.saveSlotScreen.querySelector('#btn-save-slot-back')!.addEventListener('click', () => {
+      this.saveSlotScreen.style.display = 'none';
+      this.menuScreen.style.display = 'flex';
+    });
 
     // Uppercase only when the value is all letters (session code, not an IP)
     this.codeInput.addEventListener('input', () => {
@@ -68,7 +96,8 @@ export class MenuOverlay {
     return this.nameInput.value.trim() || 'Player';
   }
 
-  /** Pre-fill the name input (e.g. from server's lastDisplayName). */
+  /** Pre-fill the name input (e.g. from localStorage or server's lastDisplayName).
+   *  Only fills if the field is currently empty. */
   set displayName(name: string) {
     if (name && !this.nameInput.value.trim()) {
       this.nameInput.value = name;
@@ -112,9 +141,10 @@ export class MenuOverlay {
   showMenu(): void {
     this.menuScreen.style.display  = 'flex';
     this.pauseScreen.style.display = 'none';
+    this.saveSlotScreen.style.display = 'none';
   }
 
-  showPause(subtitle?: string): void {
+  showPause(subtitle?: string, gameTime?: number): void {
     this.menuScreen.style.display  = 'none';
     this.pauseScreen.style.display = 'flex';
     if (subtitle) {
@@ -123,12 +153,141 @@ export class MenuOverlay {
     } else {
       this.pauseSubtitle.style.display = 'none';
     }
+    if (gameTime !== undefined && gameTime > 0) {
+      const m = Math.floor(gameTime / 60);
+      const s = Math.floor(gameTime % 60);
+      this.pauseStats.textContent = `Time: ${m}m ${s}s`;
+      this.pauseStats.style.display = 'block';
+    } else {
+      this.pauseStats.style.display = 'none';
+    }
   }
 
   /** Hide all overlay screens (transition to Playing or Lobby). */
   hide(): void {
     this.menuScreen.style.display  = 'none';
     this.pauseScreen.style.display = 'none';
+    this.saveSlotScreen.style.display = 'none';
+  }
+
+  /** Show save slot picker - called after SAVE_SLOTS_REQUEST is sent. */
+  showSaveSlotPicker(onSelect: (slot: number) => void, onDelete?: (slot: number) => void): void {
+    this.onSlotSelected = onSelect;
+    this.onDeleteSlot = onDelete ?? null;
+    this.menuScreen.style.display = 'none';
+    this.saveSlotScreen.style.display = 'flex';
+    // Show loading state initially; will be updated when SAVE_SLOTS_RESPONSE arrives
+    this.saveSlotList.innerHTML = '<p style="font-family:monospace;font-size:13px;color:#6a7a8a;">Loading save slots...</p>';
+  }
+
+  /** Update save slot picker with data from server (called from SAVE_SLOTS_RESPONSE handler). */
+  showSaveSlots(slots: SaveSlotInfo[]): void {
+    this.saveSlotList.innerHTML = '';
+
+    // Ensure we always show 3 slots
+    for (let i = 1; i <= 3; i++) {
+      const info = slots.find(s => s.slot === i);
+      const btn = document.createElement('button');
+      btn.className = 'menu-btn';
+      btn.style.cssText = 'text-align:left;padding:14px 20px;width:100%;';
+
+      if (info?.exists) {
+        const time = this.formatTime(info.elapsedTime ?? 0);
+        const row1 = document.createElement('div');
+        row1.style.cssText = 'display:flex;justify-content:space-between;align-items:center;';
+        const slotLabel = document.createElement('span');
+        slotLabel.style.cssText = 'color:#e8c96a;font-weight:bold;';
+        slotLabel.textContent = `Slot ${i}`;
+        const tsLabel = document.createElement('span');
+        tsLabel.style.cssText = 'font-size:11px;color:#6a7a8a;';
+        tsLabel.textContent = this.formatTimestamp(info.timestamp ?? 0);
+        row1.append(slotLabel, tsLabel);
+        const row2 = document.createElement('div');
+        row2.style.cssText = 'font-size:12px;color:#8a9ab0;margin-top:4px;';
+        row2.textContent = `Wave ${info.wave ?? 0}  \u00B7  ${time}  \u00B7  ${info.enemiesKilled ?? 0} kills`;
+        btn.append(row1, row2);
+      } else {
+        const row1 = document.createElement('div');
+        row1.style.cssText = 'display:flex;justify-content:space-between;align-items:center;';
+        const slotLabel = document.createElement('span');
+        slotLabel.style.cssText = 'color:#e8c96a;font-weight:bold;';
+        slotLabel.textContent = `Slot ${i}`;
+        const emptyLabel = document.createElement('span');
+        emptyLabel.style.cssText = 'font-size:12px;color:#4a5a6a;';
+        emptyLabel.textContent = 'Empty';
+        row1.append(slotLabel, emptyLabel);
+        const row2 = document.createElement('div');
+        row2.style.cssText = 'font-size:12px;color:#4a5a6a;margin-top:4px;';
+        row2.textContent = 'New Game';
+        btn.append(row1, row2);
+      }
+
+      btn.addEventListener('click', () => {
+        this.saveSlotScreen.style.display = 'none';
+        this.onSlotSelected?.(i);
+      });
+
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:6px;align-items:stretch;';
+      btn.style.flex = '1';
+      row.appendChild(btn);
+
+      // Delete button for existing saves
+      if (info?.exists && this.onDeleteSlot) {
+        const del = document.createElement('button');
+        del.className = 'menu-btn muted';
+        del.style.cssText = 'padding:8px 12px;font-size:16px;color:#cc4444;min-width:42px;display:flex;align-items:center;justify-content:center;';
+        del.textContent = '\u2715';
+        del.title = 'Delete save';
+        del.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.onDeleteSlot?.(i);
+        });
+        row.appendChild(del);
+      }
+
+      this.saveSlotList.appendChild(row);
+    }
+  }
+
+  private formatTime(seconds: number): string {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}m ${s}s`;
+  }
+
+  private formatTimestamp(ts: number): string {
+    if (!ts) return '';
+    const d = new Date(ts);
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' +
+           d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  }
+
+  /** Show a modal confirmation dialog. Calls onConfirm if user clicks Yes, otherwise dismisses. */
+  showConfirmDialog(message: string, onConfirm: () => void): void {
+    const backdrop = document.createElement('div');
+    backdrop.style.cssText = 'position:absolute;inset:0;z-index:50;background:rgba(4,4,10,0.8);display:flex;align-items:center;justify-content:center;';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:rgba(10,10,20,0.95);border:1px solid rgba(255,255,255,0.14);padding:24px 32px;max-width:400px;text-align:center;font-family:monospace;color:#ccd8ea;';
+    const msg = document.createElement('p');
+    msg.style.cssText = 'font-size:14px;margin-bottom:20px;line-height:1.5;';
+    msg.textContent = message;
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:12px;justify-content:center;';
+    const yesBtn = document.createElement('button');
+    yesBtn.className = 'menu-btn muted';
+    yesBtn.style.cssText = 'width:120px;color:#ff6644;';
+    yesBtn.textContent = 'Leave';
+    const noBtn = document.createElement('button');
+    noBtn.className = 'menu-btn';
+    noBtn.style.cssText = 'width:120px;';
+    noBtn.textContent = 'Stay';
+    yesBtn.addEventListener('click', () => { backdrop.remove(); onConfirm(); });
+    noBtn.addEventListener('click', () => { backdrop.remove(); });
+    btnRow.append(noBtn, yesBtn);
+    box.append(msg, btnRow);
+    backdrop.appendChild(box);
+    document.getElementById('overlay')!.appendChild(backdrop);
   }
 
   private require(id: string): HTMLElement {

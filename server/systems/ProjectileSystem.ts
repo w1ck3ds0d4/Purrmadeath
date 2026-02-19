@@ -80,6 +80,51 @@ export class ProjectileSystem {
         continue;
       }
 
+      // ── Mortar projectile (cannon turret) ──
+      // Flies to target position bypassing all collision, detonates AOE on arrival.
+      if (proj.flightTime != null && proj.targetX != null && proj.targetY != null) {
+        proj.flightTime -= dt;
+        // Move position toward target
+        pos.x += vel.vx * dt;
+        pos.y += vel.vy * dt;
+
+        if (proj.flightTime <= 0) {
+          // Snap to target and detonate
+          pos.x = proj.targetX;
+          pos.y = proj.targetY;
+          const aoeR = proj.aoeRadius ?? 40;
+          aoeExplosions.push({ x: pos.x, y: pos.y, radius: aoeR });
+          const aoeR2 = aoeR * aoeR;
+
+          for (const aoeTarget of targets) {
+            if (aoeTarget === projId) continue;
+            if (world.getComponent(aoeTarget, C.Projectile)) continue;
+            const aoeFaction = world.getComponent<FactionComponent>(aoeTarget, C.Faction);
+            // AOE hits enemies, portals, and resource nodes
+            if (aoeFaction?.type !== 'enemy' && aoeFaction?.type !== 'resource' && aoeFaction?.type !== 'portal') continue;
+            if (world.hasComponent(aoeTarget, C.Downed)) continue;
+            const aoePos = world.getComponent<PositionComponent>(aoeTarget, C.Position)!;
+            const adx = aoePos.x - pos.x, ady = aoePos.y - pos.y;
+            if (adx * adx + ady * ady > aoeR2) continue;
+            const aoeHp = world.getComponent<HealthComponent>(aoeTarget, C.Health)!;
+            let aoeDmg: number;
+            if (aoeFaction?.type === 'resource') {
+              aoeDmg = proj.damage;
+            } else {
+              const aoeDef = world.getComponent<DefenseComponent>(aoeTarget, C.Defense);
+              aoeDmg = proj.damage;
+              if (aoeDef) aoeDmg = Math.max(0, Math.round((aoeDmg - aoeDef.flat) * (1 - aoeDef.percent)));
+            }
+            aoeHp.current = Math.max(0, aoeHp.current - aoeDmg);
+            hits.push({ sourceId: proj.ownerId, targetId: aoeTarget, damage: aoeDmg, knockbackVx: 0, knockbackVy: 0 });
+            if (aoeHp.current <= 0) deaths.push(aoeTarget);
+          }
+
+          destroyed.push(projId);
+        }
+        continue; // Skip normal collision logic for mortar projectiles
+      }
+
       // Remember old position for swept collision
       const oldX = pos.x, oldY = pos.y;
 

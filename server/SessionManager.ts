@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import type { ConnectedClient } from './net/ServerSocket';
 import type { ServerSocket } from './net/ServerSocket';
 import { GameSession } from './GameSession';
@@ -29,6 +31,9 @@ import { GAME_VERSION, RECONNECT_GRACE_MS } from '@shared/constants';
 /** Minimum interval (ms) between SESSION_CREATE or SESSION_JOIN per client. */
 const SESSION_ACTION_COOLDOWN_MS = 2_000;
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SAVES_DIR = path.join(process.cwd(), 'saves');
+
 /** Pending reconnection: player disconnected mid-game, slot held for a grace period. */
 interface PendingReconnect {
   /** IP of the disconnected player. */
@@ -53,8 +58,14 @@ export class SessionManager {
   /** displayName stored on HANDSHAKE - keyed by clientId. */
   private displayNames = new Map<string, string>();
 
+  /** Persistent player UUID from HANDSHAKE - keyed by clientId. */
+  private clientPlayerIds = new Map<string, string>();
+
   /** IP → last-known display name (persists while server runs). */
   private knownPlayers = new Map<string, string>();
+
+  /** Save data: hostPlayerId → slot (1-3) → SaveData. */
+  private saves = new Map<string, Map<number, import('@shared/SaveFormat').SaveData>>();
 
   /** Per-client session action cooldown (clientId → last action timestamp). */
   private lastSessionAction = new Map<string, number>();
@@ -87,7 +98,43 @@ export class SessionManager {
     socket.on(MessageType.DEBUG_GIVE_RESOURCES, (c) => this.onDebugAction(c, () => this.session?.debugGiveResources(c.id, (cl, msg) => this.socket.send(cl, msg))));
     socket.on(MessageType.CHAT,                 (c, m) => this.onChat(c, m as ChatSendMessage));
     socket.on(MessageType.PAUSE_VOTE,            (c) => this.onPauseVote(c));
+    socket.on(MessageType.SAVE_SLOTS_REQUEST,    (c) => this.onSaveSlotsRequest(c));
+    socket.on(MessageType.SAVE_DELETE,             (c, m) => this.onSaveDelete(c, m as import('@shared/protocol').SaveDeleteMessage));
     socket.onDisconnect((c) => this.onDisconnect(c));
+
+    // Load persisted saves from disk
+    this.loadSavesFromDisk();
+  }
+
+  /** Load all save files from ./saves/ into memory on startup. */
+  private loadSavesFromDisk(): void {
+    if (!fs.existsSync(SAVES_DIR)) return;
+    const files = fs.readdirSync(SAVES_DIR).filter(f => f.endsWith('.json'));
+    for (const file of files) {
+      const match = file.match(/^([0-9a-f-]+)_slot(\d)\.json$/);
+      if (!match) continue;
+      const [, playerId, slotStr] = match;
+      if (!UUID_RE.test(playerId)) continue;
+      const slot = parseInt(slotStr, 10);
+      if (slot < 1 || slot > 3) continue;
+      try {
+        const data = JSON.parse(fs.readFileSync(path.join(SAVES_DIR, file), 'utf-8'));
+        if (!this.saves.has(playerId)) this.saves.set(playerId, new Map());
+        this.saves.get(playerId)!.set(slot, data);
+      } catch {
+        console.warn(`[Save] Failed to load ${file}`);
+      }
+    }
+    const total = [...this.saves.values()].reduce((n, m) => n + m.size, 0);
+    if (total > 0) console.log(`[Save] Loaded ${total} save(s) from disk`);
+  }
+
+  /** Write a save to disk. */
+  private writeSaveToDisk(playerId: string, slot: number, data: import('@shared/SaveFormat').SaveData): void {
+    if (!UUID_RE.test(playerId)) return;
+    if (!fs.existsSync(SAVES_DIR)) fs.mkdirSync(SAVES_DIR, { recursive: true });
+    const filePath = path.join(SAVES_DIR, `${playerId}_slot${slot}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(data), 'utf-8');
   }
 
   // ── Handlers ────────────────────────────────────────────────────────────────
@@ -106,6 +153,12 @@ export class SessionManager {
 
     const name = (msg.displayName ?? '').trim().slice(0, 24) || `Player${client.id}`;
     this.displayNames.set(client.id, name);
+
+    // Store persistent player UUID (generated client-side, stored in localStorage)
+    // Validate UUID v4 format to prevent injection / save hijacking
+    if (msg.playerId && UUID_RE.test(msg.playerId)) {
+      this.clientPlayerIds.set(client.id, msg.playerId);
+    }
 
     // Save IP → name for returning player recognition
     this.knownPlayers.set(client.ip, name);
@@ -136,7 +189,7 @@ export class SessionManager {
     }
   }
 
-  private onSessionCreate(client: ConnectedClient, _msg: SessionCreateMessage): void {
+  private onSessionCreate(client: ConnectedClient, msg: SessionCreateMessage): void {
     // Require HANDSHAKE first
     if (!this.displayNames.has(client.id)) {
       this.socket.send(client, {
@@ -159,12 +212,54 @@ export class SessionManager {
       return;
     }
 
-    const seed = Math.floor(Math.random() * 2 ** 31);
+    // Validate save slot range (1-3)
+    const rawSlot = msg.saveSlot;
+    if (rawSlot !== undefined && (!Number.isInteger(rawSlot) || rawSlot < 1 || rawSlot > 3)) {
+      this.socket.send(client, {
+        type: MessageType.ERROR,
+        code: 'INVALID_SAVE_SLOT',
+        message: 'Save slot must be 1, 2, or 3.',
+      });
+      return;
+    }
+
+    // Check for save slot resume
+    const hostPlayerId = this.clientPlayerIds.get(client.id);
+    const saveSlot = rawSlot;
+    let loadedSave: import('@shared/SaveFormat').SaveData | undefined;
+    if (saveSlot && hostPlayerId) {
+      const hostSaves = this.saves.get(hostPlayerId);
+      loadedSave = hostSaves?.get(saveSlot);
+    }
+
+    const seed = loadedSave?.seed ?? Math.floor(Math.random() * 2 ** 31);
     const sessionId = `session-${Date.now()}`;
     this.session = new GameSession(sessionId, seed);
 
+    // Wire up auto-save callback
+    if (hostPlayerId) {
+      this.session.onSave = (data) => {
+        if (!this.saves.has(hostPlayerId)) {
+          this.saves.set(hostPlayerId, new Map());
+        }
+        const slot = saveSlot ?? 1;
+        this.saves.get(hostPlayerId)!.set(slot, data);
+        this.writeSaveToDisk(hostPlayerId, slot, data);
+        console.log(`[Save] Auto-saved slot ${slot} for host ${hostPlayerId} (wave ${data.currentWave})`);
+      };
+      this.session.saveSlot = saveSlot ?? 1;
+      this.session.hostPlayerId = hostPlayerId;
+
+      // Load save data if resuming (validation may reject corrupt saves)
+      if (loadedSave) {
+        this.session.loadSave(loadedSave, (c, m) => this.socket.send(c, m));
+        // loadSave returns false for invalid data — session starts fresh in that case
+        console.log(`[Save] Loaded slot ${saveSlot} for host ${hostPlayerId} (wave ${loadedSave.currentWave})`);
+      }
+    }
+
     const displayName = this.displayNames.get(client.id) ?? `Player${client.id}`;
-    const player = this.session.addPlayer(client, displayName, /* isHost */ true);
+    const player = this.session.addPlayer(client, displayName, /* isHost */ true, hostPlayerId);
 
     const ack: SessionAckMessage = {
       type: MessageType.SESSION_ACK,
@@ -244,7 +339,8 @@ export class SessionManager {
     }
 
     const displayName = this.displayNames.get(client.id) ?? `Player${client.id}`;
-    const player = this.session.addPlayer(client, displayName, /* isHost */ false);
+    const joinerId = this.clientPlayerIds.get(client.id);
+    const player = this.session.addPlayer(client, displayName, /* isHost */ false, joinerId);
 
     // Acknowledge to the joining player
     const ack: SessionAckMessage = {
@@ -358,8 +454,53 @@ export class SessionManager {
     this.broadcastToSession(broadcast);
   }
 
+  private onSaveSlotsRequest(client: ConnectedClient): void {
+    const playerId = this.clientPlayerIds.get(client.id);
+    if (!playerId) {
+      this.socket.send(client, { type: MessageType.SAVE_SLOTS_RESPONSE, slots: [] });
+      return;
+    }
+    const hostSaves = this.saves.get(playerId);
+    const slots: import('@shared/SaveFormat').SaveSlotInfo[] = [];
+    for (let i = 1; i <= 3; i++) {
+      const save = hostSaves?.get(i);
+      if (save) {
+        slots.push({
+          slot: i,
+          exists: true,
+          wave: save.currentWave,
+          elapsedTime: save.elapsedTime,
+          enemiesKilled: save.enemiesKilled,
+          playerCount: save.players.length,
+          timestamp: save.timestamp,
+        });
+      } else {
+        slots.push({ slot: i, exists: false });
+      }
+    }
+    this.socket.send(client, { type: MessageType.SAVE_SLOTS_RESPONSE, slots });
+  }
+
+  private onSaveDelete(client: ConnectedClient, msg: import('@shared/protocol').SaveDeleteMessage): void {
+    const playerId = this.clientPlayerIds.get(client.id);
+    if (!playerId) return;
+    const slot = msg.slot;
+    if (!Number.isInteger(slot) || slot < 1 || slot > 3) return;
+    const hostSaves = this.saves.get(playerId);
+    if (hostSaves) hostSaves.delete(slot);
+    // Delete from disk
+    const filePath = path.join(SAVES_DIR, `${playerId}_slot${slot}.json`);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      console.log(`[Save] Deleted slot ${slot} for ${playerId}`);
+    }
+    // Re-send updated slot info
+    this.onSaveSlotsRequest(client);
+  }
+
   private onDisconnect(client: ConnectedClient): void {
     this.displayNames.delete(client.id);
+    this.clientPlayerIds.delete(client.id);
     this.lastSessionAction.delete(client.id);
     this.handlePlayerLeave(client, /* isDisconnect */ true);
   }
@@ -422,6 +563,11 @@ export class SessionManager {
     playerId: string,
   ): void {
     if (!this.session) return;
+
+    // Save before removing the host (needs player entities intact for serialization)
+    if (isHost && this.session.isPlaying) {
+      this.session.saveNow((c, m) => this.socket.send(c, m));
+    }
 
     this.session.removePlayer(clientId);
     console.log(`[Session] ${displayName} left (slot ${slot})`);

@@ -64,6 +64,7 @@ import {
   RESOURCE_NODE_RADIUS,
   WAREHOUSE_MAX_HEALTH,
   LUMBERMILL_MAX_HEALTH,
+  QUARRY_MAX_HEALTH,
   MINE_MAX_HEALTH,
   FARM_MAX_HEALTH,
   WAREHOUSE_DEPOSIT_RADIUS,
@@ -77,6 +78,7 @@ import {
   SPIKE_TRAP_MAX_HEALTH,
   BRIDGE_MAX_HEALTH,
   LUMBERMILL_PRODUCTION_INTERVAL,
+  QUARRY_PRODUCTION_INTERVAL,
   MINE_PRODUCTION_INTERVAL,
   FARM_PRODUCTION_INTERVAL,
   PRODUCTION_AMOUNT,
@@ -271,6 +273,14 @@ export class GameSession {
   /** Set of clientIds that have voted for the current pending action. */
   private pauseVotes = new Set<string>();
 
+  // ── Save system ──────────────────────────────────────────────────────────
+  /** Called by SessionManager when save triggers. */
+  onSave?: (data: import('@shared/SaveFormat').SaveData) => void;
+  /** Which save slot this session is using (1-3). */
+  saveSlot = 1;
+  /** Host's persistent player UUID. */
+  hostPlayerId = '';
+
   constructor(id: string, seed: number) {
     this.id = id;
     this.seed = seed;
@@ -313,11 +323,12 @@ export class GameSession {
     client: ConnectedClient,
     displayName: string,
     isHost: boolean,
+    persistentId?: string,
   ): SessionPlayer {
     const slot = this.nextFreeSlot();
     const player: SessionPlayer = {
       client,
-      playerId: client.id,
+      playerId: persistentId ?? client.id,
       displayName,
       slot,
       isHost,
@@ -369,7 +380,7 @@ export class GameSession {
     if (!player) return undefined;
     this.players.delete(oldClientId);
     player.client = newClient;
-    player.playerId = newClient.id;
+    // Keep persistent playerId (UUID) — only update the map key to new client ID
     this.players.set(newClient.id, player);
     return player;
   }
@@ -398,13 +409,12 @@ export class GameSession {
   start(send: (client: ConnectedClient, msg: object) => void): void {
     if (this.phase !== 'lobby') return;
     this.phase = 'playing';
-    this.startTime = Date.now();
-    this.enemiesKilled = 0;
+    this.startTime = Date.now() - this.savedElapsedTime * 1000;
+    this.enemiesKilled = this.savedBuildings.length > 0 ? this.enemiesKilled : 0;
 
-    // Find a single walkable origin and spread players around it.
-    // Players form a ring around the campfire (offset from origin centre)
-    // so nobody spawns inside the campfire.
-    const origin = findSpawnPoint(this.generator);
+    // For resumed saves, use saved spawn origin; otherwise find a new one
+    const hasSave = this.savedBuildings.length > 0;
+    const origin = hasSave ? this.spawnOrigin : findSpawnPoint(this.generator);
     this.spawnOrigin = origin;
     const OFFSET = 72; // pixels from centre — clears campfire AABB + player radius
     const offsets = [
@@ -439,12 +449,12 @@ export class GameSession {
       true,
     );
 
-    // Pre-generate resources around spawn so they're in the first SNAPSHOT
+    // Pre-generate resources for immediate spawn area (rest fills in via generateResourcesNearPlayers)
     const pcx = Math.floor(origin.x / (TILE_SIZE * CHUNK_SIZE));
     const pcy = Math.floor(origin.y / (TILE_SIZE * CHUNK_SIZE));
-    const R = GameSession.RESOURCE_GEN_RADIUS;
-    for (let cx = pcx - R; cx <= pcx + R; cx++) {
-      for (let cy = pcy - R; cy <= pcy + R; cy++) {
+    const startupR = 1; // 3×3 chunks — just enough for first SNAPSHOT
+    for (let cx = pcx - startupR; cx <= pcx + startupR; cx++) {
+      for (let cy = pcy - startupR; cy <= pcy + startupR; cy++) {
         const key = `${cx},${cy}`;
         this.processedChunks.add(key);
         this.generateResourcesForChunk(cx, cy);
@@ -462,10 +472,78 @@ export class GameSession {
       spawnPositions[player.slot] = [safe.x, safe.y];
     }
 
-    // Begin wave 1 prep countdown
-    this.currentWave = 1;
+    // ── Restore saved state ─────────────────────────────────────────────────
+    if (hasSave) {
+      console.log(`[GameSession] Restoring ${this.savedBuildings.length} buildings from save (wave ${this.currentWave})`);
+      // Restore saved buildings (campfire was already placed above)
+      for (const sb of this.savedBuildings) {
+        if (sb.buildingType === 'campfire') continue; // already spawned
+        const eid = this.spawnBuilding(sb.x, sb.y, sb.buildingType as BuildingType, sb.maxHp, sb.permanent);
+        const hp = this.world.getComponent<HealthComponent>(eid, C.Health);
+        if (hp) { hp.current = sb.currentHp; hp.max = sb.maxHp; }
+        const bld = this.world.getComponent<BuildingComponent>(eid, C.Building);
+        if (bld) bld.upgradeLevel = sb.upgradeLevel;
+        // Restore production state
+        if (sb.production) {
+          const prod = this.world.getComponent<ProductionComponent>(eid, C.Production);
+          if (prod) {
+            prod.timer = sb.production.timer;
+            prod.stored = sb.production.stored;
+            if (sb.production.secondaryResourceType) {
+              prod.secondaryResourceType = sb.production.secondaryResourceType as typeof prod.secondaryResourceType;
+              prod.secondaryChance = sb.production.secondaryChance;
+            }
+          }
+        }
+        // Restore turret stats
+        if (sb.turret) {
+          const t = this.world.getComponent<TurretComponent>(eid, C.Turret);
+          if (t) {
+            t.range = sb.turret.range;
+            t.cooldown = sb.turret.cooldown;
+            t.damage = sb.turret.damage;
+            t.projectileSpeed = sb.turret.projectileSpeed;
+          }
+        }
+        // Restore spike trap stats
+        if (sb.spikeTrap) {
+          const s = this.world.getComponent<SpikeTrapComponent>(eid, C.SpikeTrap);
+          if (s) {
+            s.damage = sb.spikeTrap.damage;
+            s.cooldown = sb.spikeTrap.cooldown;
+            s.selfDamage = sb.spikeTrap.selfDamage;
+          }
+        }
+      }
+
+      // Restore player resources from save (match by playerId)
+      for (const p of this.players.values()) {
+        if (p.entityId === null) continue;
+        const savedP = this.savedPlayers.find(sp => sp.playerId === p.playerId);
+        if (savedP) {
+          const res = this.world.getComponent<ResourcesComponent>(p.entityId, C.Resources);
+          if (res) Object.assign(res, savedP.resources);
+          const hp = this.world.getComponent<HealthComponent>(p.entityId, C.Health);
+          if (hp) { hp.current = savedP.hp; hp.max = savedP.maxHp; }
+          // Restore saved position
+          const pos = this.world.getComponent<PositionComponent>(p.entityId, C.Position);
+          if (pos && savedP.x != null && savedP.y != null) {
+            pos.x = savedP.x;
+            pos.y = savedP.y;
+            spawnPositions[p.slot] = [savedP.x, savedP.y];
+          }
+        }
+      }
+
+      // Clear saved data after restoration
+      this.savedBuildings = [];
+      this.savedPlayers = [];
+    }
+
+    // Begin wave prep countdown
+    if (!hasSave) this.currentWave = 1;
     this.wavePhase = 'prep';
-    this.prepTimer = WAVE_PREP_INITIAL;
+    this.prepTimer = hasSave ? WAVE_PREP_BETWEEN : WAVE_PREP_INITIAL;
 
     // Broadcast SESSION_STARTING
     const starting: SessionStartingMessage = {
@@ -479,11 +557,11 @@ export class GameSession {
     const snapshot = this.buildFullSnapshot();
     for (const p of this.players.values()) send(p.client, snapshot);
 
-    // Broadcast wave 1 prep start
+    // Broadcast wave prep start
     const waveStart: WaveStartMessage = {
       type: MessageType.WAVE_START,
       waveNumber: this.currentWave,
-      prepDuration: WAVE_PREP_INITIAL,
+      prepDuration: hasSave ? WAVE_PREP_BETWEEN : WAVE_PREP_INITIAL,
     };
     for (const p of this.players.values()) send(p.client, waveStart);
 
@@ -980,7 +1058,7 @@ export class GameSession {
     // Spawn the building
     const HP_MAP: Record<string, number> = {
       campfire: CAMPFIRE_MAX_HEALTH, wall: WALL_MAX_HEALTH, warehouse: WAREHOUSE_MAX_HEALTH,
-      lumbermill: LUMBERMILL_MAX_HEALTH, mine: MINE_MAX_HEALTH, farm: FARM_MAX_HEALTH,
+      lumbermill: LUMBERMILL_MAX_HEALTH, quarry: QUARRY_MAX_HEALTH, mine: MINE_MAX_HEALTH, farm: FARM_MAX_HEALTH,
       arrow_turret: ARROW_TURRET_MAX_HEALTH, cannon_turret: CANNON_TURRET_MAX_HEALTH,
       spike_trap: SPIKE_TRAP_MAX_HEALTH, bridge: BRIDGE_MAX_HEALTH,
     };
@@ -998,10 +1076,16 @@ export class GameSession {
         resourceType: 'wood', interval: LUMBERMILL_PRODUCTION_INTERVAL,
         timer: 0, amount: PRODUCTION_AMOUNT, stored: 0, maxStored: PRODUCTION_MAX_STORED,
       } as ProductionComponent);
+    } else if (msg.buildingType === 'quarry') {
+      this.world.addComponent(id, C.Production, {
+        resourceType: 'stone', interval: QUARRY_PRODUCTION_INTERVAL,
+        timer: 0, amount: PRODUCTION_AMOUNT, stored: 0, maxStored: PRODUCTION_MAX_STORED,
+      } as ProductionComponent);
     } else if (msg.buildingType === 'mine') {
       this.world.addComponent(id, C.Production, {
-        resourceType: 'stone', interval: MINE_PRODUCTION_INTERVAL,
+        resourceType: 'iron', interval: MINE_PRODUCTION_INTERVAL,
         timer: 0, amount: PRODUCTION_AMOUNT, stored: 0, maxStored: PRODUCTION_MAX_STORED,
+        secondaryResourceType: 'diamond', secondaryChance: 0.2,
       } as ProductionComponent);
     } else if (msg.buildingType === 'farm') {
       this.world.addComponent(id, C.Production, {
@@ -1363,8 +1447,17 @@ export class GameSession {
       if (prod.timer < prod.interval) continue;
       prod.timer -= prod.interval;
 
-      // Always accumulate locally — NPCs (future) will transport to warehouse
-      prod.stored = Math.min(prod.stored + prod.amount, prod.maxStored);
+      // Secondary resource chance (e.g. mine → diamond instead of iron)
+      if (prod.secondaryResourceType && prod.secondaryChance && Math.random() < prod.secondaryChance) {
+        // Deposit secondary resource directly to warehouse pool
+        const key = prod.secondaryResourceType as keyof typeof this.warehousePool;
+        if (key in this.warehousePool) {
+          this.warehousePool[key] += prod.amount;
+        }
+      } else {
+        // Primary resource: accumulate locally for F-key collection
+        prod.stored = Math.min(prod.stored + prod.amount, prod.maxStored);
+      }
     }
   }
 
@@ -1379,12 +1472,12 @@ export class GameSession {
       const bldg = this.world.getComponent<BuildingComponent>(id, C.Building);
       const halfExt = buildingHalfExtent(bldg?.buildingType ?? 'arrow_turret');
 
-      // Find nearest enemy in range
+      // Find nearest enemy or portal in range
       let bestId = -1;
       let bestDist = turret.range * turret.range;
       for (const eid of this.world.query(C.Position, C.Faction)) {
         const ef = this.world.getComponent<FactionComponent>(eid, C.Faction)!;
-        if (ef.type !== 'enemy') continue;
+        if (ef.type !== 'enemy' && ef.type !== 'portal') continue;
         const epos = this.world.getComponent<PositionComponent>(eid, C.Position)!;
         const dx = epos.x - tpos.x;
         const dy = epos.y - tpos.y;
@@ -1411,13 +1504,25 @@ export class GameSession {
 
       const projId = this.world.createEntity();
       this.world.addComponent(projId, C.Position,   { x: px, y: py });
-      this.world.addComponent(projId, C.Velocity,   { vx: nx * turret.projectileSpeed, vy: ny * turret.projectileSpeed });
       const projComp: any = { ownerId: id, damage: turret.damage, lifetime: RANGED_LIFETIME };
-      // Cannon turrets get AOE radius based on upgrade level
-      if (bldg?.buildingType === 'cannon_turret') {
-        const lvlIdx = (bldg.upgradeLevel ?? 1) - 1;
+
+      const isCannon = bldg?.buildingType === 'cannon_turret';
+      if (isCannon) {
+        // Mortar-style: fly to target position, then detonate AOE
+        const lvlIdx = (bldg!.upgradeLevel ?? 1) - 1;
         projComp.aoeRadius = UPGRADE_CANNON_AOE[lvlIdx] ?? CANNON_AOE_BASE_RADIUS;
+        projComp.targetX = epos.x;
+        projComp.targetY = epos.y;
+        const flightTime = dist / turret.projectileSpeed;
+        projComp.flightTime = flightTime;
+        projComp.totalFlightTime = flightTime;
+        // Velocity toward target (for visual direction)
+        this.world.addComponent(projId, C.Velocity, { vx: nx * turret.projectileSpeed, vy: ny * turret.projectileSpeed });
+      } else {
+        // Arrow turret: straight-line projectile
+        this.world.addComponent(projId, C.Velocity, { vx: nx * turret.projectileSpeed, vy: ny * turret.projectileSpeed });
       }
+
       this.world.addComponent(projId, C.Projectile, projComp);
       this.world.addComponent(projId, C.Faction,     { type: 'player' });
 
@@ -1427,6 +1532,7 @@ export class GameSession {
         x: px, y: py,
         vx: nx * turret.projectileSpeed, vy: ny * turret.projectileSpeed,
         ownerSlot: -1, // turret indicator
+        ...(isCannon ? { targetX: epos.x, targetY: epos.y, totalFlightTime: dist / turret.projectileSpeed } : {}),
       };
       for (const p of this.players.values()) send(p.client, spawnMsg);
     }
@@ -1751,8 +1857,26 @@ export class GameSession {
         };
         for (const p of this.players.values()) send(p.client, destroyedMsg);
 
-        // Warehouse destroyed → remove from pool and notify clients
+        // Warehouse destroyed → drop 50% of supplies, then clean up
         if (this.warehouseIds.has(deadId)) {
+          const wPos = this.world.getComponent<PositionComponent>(deadId, C.Position);
+          if (wPos) {
+            const DROP_FRACTION = 0.5;
+            const MAX_PER_DROP = 50;
+            for (const [res, amount] of Object.entries(this.warehousePool)) {
+              const dropAmount = Math.floor(amount * DROP_FRACTION);
+              if (dropAmount <= 0) continue;
+              // Deduct from pool
+              (this.warehousePool as Record<string, number>)[res] -= dropAmount;
+              // Spawn batched item drops
+              let remaining = dropAmount;
+              while (remaining > 0) {
+                const qty = Math.min(remaining, MAX_PER_DROP);
+                this.spawnItemDrop(wPos.x, wPos.y, res, qty, true);
+                remaining -= qty;
+              }
+            }
+          }
           this.warehouseIds.delete(deadId);
           if (this.warehouseIds.size === 0) {
             this.warehousePool = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
@@ -1857,9 +1981,205 @@ export class GameSession {
         for (const p of this.players.values()) send(p.client, waveStart);
 
         console.log(`[Wave] Wave ${this.currentWave - 1} cleared! Next wave in ${WAVE_PREP_BETWEEN}s`);
+
+        // Auto-save after wave clear
+        if (this.onSave) {
+          const saveData = this.serializeSave();
+          this.onSave(saveData);
+          // Notify all players
+          const savedMsg: import('@shared/protocol').GameSavedMessage = {
+            type: MessageType.GAME_SAVED,
+            wave: saveData.currentWave,
+            slot: this.saveSlot,
+          };
+          for (const p of this.players.values()) send(p.client, savedMsg);
+        }
       }
     }
   }
+
+  // ── Save system ──────────────────────────────────────────────────────────────
+
+  /** Trigger an immediate save (called on host leave, pause, etc.). */
+  saveNow(send?: SendFn): void {
+    if (this.phase !== 'playing' || !this.onSave) return;
+    const saveData = this.serializeSave();
+    this.onSave(saveData);
+    console.log(`[GameSession] Manual save: wave ${saveData.currentWave}, ${saveData.buildings.length} buildings`);
+    if (send) {
+      const savedMsg: import('@shared/protocol').GameSavedMessage = {
+        type: MessageType.GAME_SAVED,
+        wave: saveData.currentWave,
+        slot: this.saveSlot,
+      };
+      for (const p of this.players.values()) send(p.client, savedMsg);
+    }
+  }
+
+  /** Snapshot the entire world state into a SaveData object. */
+  serializeSave(): import('@shared/SaveFormat').SaveData {
+    const buildings: import('@shared/SaveFormat').SavedBuilding[] = [];
+    for (const id of this.world.query(C.Building, C.Position, C.Health)) {
+      const bld = this.world.getComponent<BuildingComponent>(id, C.Building)!;
+      const pos = this.world.getComponent<PositionComponent>(id, C.Position)!;
+      const hp = this.world.getComponent<HealthComponent>(id, C.Health)!;
+
+      const saved: import('@shared/SaveFormat').SavedBuilding = {
+        x: pos.x,
+        y: pos.y,
+        buildingType: bld.buildingType,
+        permanent: bld.permanent,
+        upgradeLevel: bld.upgradeLevel,
+        currentHp: hp.current,
+        maxHp: hp.max,
+      };
+
+      const prod = this.world.getComponent<ProductionComponent>(id, C.Production);
+      if (prod) {
+        saved.production = {
+          resourceType: prod.resourceType,
+          interval: prod.interval,
+          timer: prod.timer,
+          amount: prod.amount,
+          stored: prod.stored,
+          maxStored: prod.maxStored,
+          secondaryResourceType: prod.secondaryResourceType,
+          secondaryChance: prod.secondaryChance,
+        };
+      }
+
+      const turret = this.world.getComponent<TurretComponent>(id, C.Turret);
+      if (turret) {
+        saved.turret = {
+          range: turret.range,
+          cooldown: turret.cooldown,
+          damage: turret.damage,
+          projectileSpeed: turret.projectileSpeed,
+        };
+      }
+
+      const spike = this.world.getComponent<SpikeTrapComponent>(id, C.SpikeTrap);
+      if (spike) {
+        saved.spikeTrap = {
+          damage: spike.damage,
+          cooldown: spike.cooldown,
+          selfDamage: spike.selfDamage,
+        };
+      }
+
+      const bridge = this.world.getComponent<BridgeComponent>(id, C.Bridge);
+      if (bridge) {
+        saved.bridge = {
+          tileX: bridge.tileX,
+          tileY: bridge.tileY,
+        };
+      }
+
+      buildings.push(saved);
+    }
+
+    const players: import('@shared/SaveFormat').SavedPlayer[] = [];
+    for (const p of this.players.values()) {
+      if (p.entityId === null) continue;
+      const pos = this.world.getComponent<PositionComponent>(p.entityId, C.Position);
+      const hp = this.world.getComponent<HealthComponent>(p.entityId, C.Health);
+      const res = this.world.getComponent<ResourcesComponent>(p.entityId, C.Resources);
+      if (!pos || !hp || !res) continue;
+
+      players.push({
+        playerId: p.playerId,
+        displayName: p.displayName,
+        slot: p.slot,
+        resources: { wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold, food: res.food },
+        hp: hp.current,
+        maxHp: hp.max,
+        x: pos.x,
+        y: pos.y,
+      });
+    }
+
+    return {
+      formatVersion: 1,
+      seed: this.seed,
+      currentWave: this.currentWave,
+      warehousePool: { ...this.warehousePool },
+      spawnOrigin: { ...this.spawnOrigin },
+      processedChunks: [...this.processedChunks],
+      enemiesKilled: this.enemiesKilled,
+      elapsedTime: this.startTime > 0 ? (Date.now() - this.startTime) / 1000 : 0,
+      buildings,
+      players,
+      hostPlayerId: this.hostPlayerId,
+      timestamp: Date.now(),
+    };
+  }
+
+  /** Validate save data before loading. Returns true if valid. */
+  private static validateSaveData(save: unknown): save is import('@shared/SaveFormat').SaveData {
+    if (!save || typeof save !== 'object') return false;
+    const s = save as Record<string, unknown>;
+    if (s.formatVersion !== 1) return false;
+    if (!Number.isFinite(s.currentWave) || !Number.isInteger(s.currentWave) || (s.currentWave as number) < 1) return false;
+    if (!Number.isFinite(s.seed) || !Number.isInteger(s.seed)) return false;
+    if (!Number.isFinite(s.enemiesKilled) || (s.enemiesKilled as number) < 0) return false;
+    if (!Number.isFinite(s.elapsedTime) || (s.elapsedTime as number) < 0) return false;
+    const wp = s.warehousePool;
+    if (!wp || typeof wp !== 'object') return false;
+    const pool = wp as Record<string, unknown>;
+    for (const key of ['wood', 'stone', 'iron', 'diamond', 'gold', 'food']) {
+      if (!Number.isFinite(pool[key]) || (pool[key] as number) < 0) return false;
+    }
+    const origin = s.spawnOrigin as Record<string, unknown> | undefined;
+    if (!origin || !Number.isFinite(origin.x) || !Number.isFinite(origin.y)) return false;
+    if (!Array.isArray(s.buildings)) return false;
+    const validBuildings = new Set(['campfire', 'wall', 'warehouse', 'lumbermill', 'quarry', 'mine', 'farm', 'arrow_turret', 'cannon_turret', 'spike_trap', 'bridge']);
+    for (const b of s.buildings as Record<string, unknown>[]) {
+      if (!b || typeof b !== 'object') return false;
+      if (!validBuildings.has(b.buildingType as string)) return false;
+      if (!Number.isFinite(b.x) || !Number.isFinite(b.y)) return false;
+      if (!Number.isFinite(b.currentHp) || (b.currentHp as number) <= 0) return false;
+      if (!Number.isFinite(b.maxHp) || (b.maxHp as number) <= 0) return false;
+      if (!Number.isInteger(b.upgradeLevel) || (b.upgradeLevel as number) < 1 || (b.upgradeLevel as number) > 5) return false;
+    }
+    if (!Array.isArray(s.players)) return false;
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    for (const p of s.players as Record<string, unknown>[]) {
+      if (!p || typeof p !== 'object') return false;
+      if (typeof p.playerId !== 'string' || !uuidRe.test(p.playerId)) return false;
+      if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return false;
+    }
+    return true;
+  }
+
+  /** Load a save into the session. Called after construction but before start(). */
+  loadSave(save: import('@shared/SaveFormat').SaveData, _send: SendFn): boolean {
+    if (!GameSession.validateSaveData(save)) {
+      console.warn('[GameSession] Invalid save data — starting fresh');
+      return false;
+    }
+    console.log(`[GameSession] Loading save: wave ${save.currentWave}, ${save.buildings.length} buildings, ${save.players.length} players`);
+    this.currentWave = save.currentWave;
+    this.warehousePool = { ...save.warehousePool };
+    this.spawnOrigin = { ...save.spawnOrigin };
+    this.processedChunks = new Set(save.processedChunks);
+    this.enemiesKilled = save.enemiesKilled;
+    // elapsedTime is tracked via startTime offset
+    this.savedElapsedTime = save.elapsedTime;
+    // Migrate old 'mine' (stone) → 'quarry' for save compatibility
+    this.savedBuildings = save.buildings.map(b => {
+      if (b.buildingType === 'mine' && b.production?.resourceType === 'stone') {
+        return { ...b, buildingType: 'quarry' as const };
+      }
+      return b;
+    });
+    this.savedPlayers = save.players;
+    return true;
+  }
+
+  /** Stored save data for deferred restoration (applied during start()). */
+  private savedElapsedTime = 0;
+  private savedBuildings: import('@shared/SaveFormat').SavedBuilding[] = [];
+  private savedPlayers: import('@shared/SaveFormat').SavedPlayer[] = [];
 
   // ── Debug ───────────────────────────────────────────────────────────────────
 

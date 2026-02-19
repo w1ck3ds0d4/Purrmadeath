@@ -166,6 +166,7 @@ export class DebugOverlay {
     this.visible = !this.visible;
     this.el.style.display = this.visible ? 'flex' : 'none';
     if (this.visible) {
+      if (this.activeView === null) this.activeView = 'all';
       this.inputEl.focus();
     } else {
       this.inputEl.blur();

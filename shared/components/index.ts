@@ -138,6 +138,14 @@ export interface ProjectileComponent {
   lifetime: number;
   /** If set, projectile deals AOE damage on hit within this radius (cannon turret). */
   aoeRadius?: number;
+  /** Mortar target X (cannon turret). When set, projectile flies to target instead of straight-line. */
+  targetX?: number;
+  /** Mortar target Y (cannon turret). */
+  targetY?: number;
+  /** Remaining flight time for mortar projectile. Detonates when <= 0. */
+  flightTime?: number;
+  /** Total flight time (for arc calculation). */
+  totalFlightTime?: number;
 }
 
 // ── Phase 4.8+ components ─────────────────────────────────────────────────────
@@ -176,7 +184,7 @@ export interface ResourcesComponent {
 
 // ── Phase 5 components ────────────────────────────────────────────────────
 
-export type BuildingType = 'campfire' | 'wall' | 'warehouse' | 'lumbermill' | 'mine' | 'farm'
+export type BuildingType = 'campfire' | 'wall' | 'warehouse' | 'lumbermill' | 'quarry' | 'mine' | 'farm'
   | 'arrow_turret' | 'cannon_turret' | 'spike_trap' | 'bridge';
 
 /** Tags an entity as a player-built (or pre-placed) structure. */
@@ -203,7 +211,7 @@ export interface DownedComponent {
 /** Passive resource generator attached to lumbermill, mine, or farm. */
 export interface ProductionComponent {
   /** Which resource this building generates. */
-  resourceType: 'wood' | 'stone' | 'food';
+  resourceType: 'wood' | 'stone' | 'iron' | 'diamond' | 'food';
   /** Seconds between each production tick. */
   interval: number;
   /** Accumulator — counts up toward `interval`. */
@@ -214,6 +222,10 @@ export interface ProductionComponent {
   stored: number;
   /** Max resources this building can store locally. */
   maxStored: number;
+  /** Optional secondary resource (e.g., mine produces iron primarily, diamond rarely). */
+  secondaryResourceType?: 'wood' | 'stone' | 'iron' | 'diamond' | 'food';
+  /** Chance (0-1) to produce secondary resource instead of primary. */
+  secondaryChance?: number;
 }
 
 /** Auto-targeting turret that fires projectiles at nearby enemies. */

@@ -22,6 +22,9 @@ Thumbs.db
 # SSH keys
 *.pem
 
+# Game saves (server-side)
+saves/
+
 # Documentation 
 *.md
 !README.md

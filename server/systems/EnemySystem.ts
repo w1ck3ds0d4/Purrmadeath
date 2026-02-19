@@ -17,6 +17,7 @@ import {
   ENEMY_MELEE_KNOCKBACK,
   ENEMY_RANGER_RANGE,
   RESOURCE_NODE_RADIUS,
+  PORTAL_RADIUS,
   buildingHalfExtent,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
@@ -57,6 +58,10 @@ const WAYPOINT_REACH = 16; // half a tile
  * Movement is executed by MovementSystem (runs after this), so enemies
  * share the same physics and tile-collision as players.
  */
+/** Stuck detection: if enemy hasn't moved more than this distance in STUCK_TIME, apply wiggle. */
+const STUCK_DIST = 4;
+const STUCK_TIME = 2;
+
 export class EnemySystem {
   private paths = new Map<number, CachedPath>();
   /** Tiles occupied by building entities — used to block pathfinding. */
@@ -67,6 +72,8 @@ export class EnemySystem {
   private buildingEntities: { x: number; y: number; half: number }[] = [];
   /** Bridge tiles that override unwalkable terrain for pathfinding. */
   private bridgeTiles = new Set<number>();
+  /** Stuck detection: tracks last-known positions and time since last significant move. */
+  private stuckTimers = new Map<number, { x: number; y: number; timer: number }>();
 
   constructor(
     private readonly combat: CombatSystem,
@@ -129,12 +136,18 @@ export class EnemySystem {
       this.buildingTilesMap.set(bid, tiles);
     }
 
-    // Block tiles occupied by resource nodes so enemies path around them
+    // Block tiles occupied by resource nodes and portals so enemies path around them
     for (const rid of world.query(C.Position, C.Faction)) {
       const rf = world.getComponent<FactionComponent>(rid, C.Faction)!;
-      if (rf.type !== 'resource') continue;
+      let rHalf: number;
+      if (rf.type === 'resource') {
+        rHalf = RESOURCE_NODE_RADIUS;
+      } else if (rf.type === 'portal') {
+        rHalf = PORTAL_RADIUS;
+      } else {
+        continue;
+      }
       const rpos = world.getComponent<PositionComponent>(rid, C.Position)!;
-      const rHalf = RESOURCE_NODE_RADIUS;
       const rMinTx = Math.floor((rpos.x - rHalf) / TILE_SIZE);
       const rMaxTx = Math.floor((rpos.x + rHalf - 1) / TILE_SIZE);
       const rMinTy = Math.floor((rpos.y - rHalf) / TILE_SIZE);
@@ -146,9 +159,12 @@ export class EnemySystem {
       }
     }
 
-    // Clean stale paths for entities that no longer exist
+    // Clean stale paths and stuck timers for entities that no longer exist
     for (const id of this.paths.keys()) {
       if (!world.hasEntity(id)) this.paths.delete(id);
+    }
+    for (const id of this.stuckTimers.keys()) {
+      if (!world.hasEntity(id)) this.stuckTimers.delete(id);
     }
 
     for (const id of world.query(C.Position, C.Faction, C.PlayerInput)) {
@@ -316,6 +332,28 @@ export class EnemySystem {
           if (excludedTiles) for (const tk of excludedTiles) this.buildingBlockedTiles.delete(tk);
 
           this.navigateToward(id, pos, navPos as PositionComponent, inp, dt, len, ddx, ddy);
+
+          // Stuck detection: if enemy hasn't moved, apply perpendicular wiggle
+          let stuck = this.stuckTimers.get(id);
+          if (!stuck) {
+            stuck = { x: pos.x, y: pos.y, timer: 0 };
+            this.stuckTimers.set(id, stuck);
+          }
+          const movedDx = pos.x - stuck.x, movedDy = pos.y - stuck.y;
+          if (movedDx * movedDx + movedDy * movedDy > STUCK_DIST * STUCK_DIST) {
+            stuck.x = pos.x; stuck.y = pos.y; stuck.timer = 0;
+          } else {
+            stuck.timer += dt;
+            if (stuck.timer > STUCK_TIME) {
+              // Add perpendicular wiggle to current direction
+              const perp = (Math.random() < 0.5 ? 1 : -1);
+              inp.dx += -inp.dy * 0.7 * perp;
+              inp.dy += inp.dx * 0.7 * perp;
+              const wLen = Math.sqrt(inp.dx * inp.dx + inp.dy * inp.dy);
+              if (wLen > 0) { inp.dx /= wLen; inp.dy /= wLen; }
+              stuck.timer = 0; // reset so wiggle applies periodically
+            }
+          }
 
           // Restore excluded tiles
           if (excludedTiles) for (const tk of excludedTiles) this.buildingBlockedTiles.add(tk);

@@ -12,7 +12,13 @@ import {
   ProductionComponent,
   EnemyVariantComponent,
 } from '@shared/components';
-import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, ENEMY_MELEE_RANGE, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, buildingHalfExtent } from '@shared/constants';
+import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, ENEMY_MELEE_RANGE, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, buildingHalfExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE } from '@shared/constants';
+
+/** Turret type → base range in pixels. */
+const TURRET_RANGES: Record<string, number> = {
+  arrow_turret: ARROW_TURRET_RANGE,
+  cannon_turret: CANNON_TURRET_RANGE,
+};
 
 // Enemy body colors
 const ENEMY_COLOR = 0xcc3333;
@@ -41,7 +47,8 @@ const BUILDING_COLORS: Record<string, { body: number; border: number }> = {
   wall:           { body: 0x8a8a8a, border: 0xbbbbbb },
   warehouse:      { body: 0x8a6a3a, border: 0xc49a4a },
   lumbermill:     { body: 0x5a8a3a, border: 0x7aaa5a },
-  mine:           { body: 0x6a6a7a, border: 0x9a9aaa },
+  quarry:         { body: 0x6a6a7a, border: 0x9a9aaa },
+  mine:           { body: 0x4a3a2a, border: 0x7a5a3a },
   farm:           { body: 0x8aaa4a, border: 0xaacc6a },
   arrow_turret:   { body: 0x7a7a9a, border: 0xaaaacc },
   cannon_turret:  { body: 0x5a5a6a, border: 0x8888aa },
@@ -52,6 +59,8 @@ const BUILDING_COLORS: Record<string, { body: number; border: number }> = {
 const PRODUCTION_TAG_COLORS: Record<string, number> = {
   wood:  0x8a6a3a,
   stone: 0x888888,
+  iron:  0x8a5a3a,
+  diamond: 0x44ccdd,
   food:  0x44aa44,
 };
 // Duration of the white hit-flash in seconds
@@ -324,11 +333,19 @@ export class PlayerRendererSystem {
           gfx.stroke({ color: 0xddeedd, alpha: 0.8, width: 2.5 });
         }
 
-        // Mine: triangle
-        if (bType === 'mine') {
+        // Quarry: triangle
+        if (bType === 'quarry') {
           const ih = 8;
           gfx.poly([0, -ih, ih, ih, -ih, ih]);
           gfx.stroke({ color: 0xccccdd, alpha: 0.8, width: 2 });
+        }
+
+        // Mine: pickaxe shape
+        if (bType === 'mine') {
+          const ih = 8;
+          gfx.moveTo(-ih, -ih); gfx.lineTo(ih, ih);
+          gfx.moveTo(-ih + 2, -ih + 5); gfx.lineTo(-ih, -ih); gfx.lineTo(-ih + 5, -ih + 2);
+          gfx.stroke({ color: 0xccaa77, alpha: 0.8, width: 2 });
         }
 
         // Farm: wheat vertical lines
@@ -377,21 +394,34 @@ export class PlayerRendererSystem {
           gfx.zIndex = -5; // above tiles (-10), below entities (0)
         }
 
-        // Bridge: horizontal plank lines
+        // Bridge: filled plank rectangle above water tiles
         if (bType === 'bridge') {
-          const ih = 6;
-          for (let ly = -ih + 2; ly <= ih - 2; ly += 4) {
-            gfx.moveTo(-ih, ly); gfx.lineTo(ih, ly);
+          gfx.rect(-half, -half, half * 2, half * 2);
+          gfx.fill({ color: 0x8a6a3a, alpha: 0.9 });
+          // Plank lines across the bridge
+          for (let ly = -half + 4; ly < half; ly += 6) {
+            gfx.moveTo(-half + 2, ly); gfx.lineTo(half - 2, ly);
           }
-          gfx.stroke({ color: 0xddcc99, alpha: 0.8, width: 2 });
-          gfx.zIndex = -11; // below tiles (-10)
+          gfx.stroke({ color: 0xddcc99, alpha: 0.6, width: 1.5 });
+          gfx.rect(-half, -half, half * 2, half * 2);
+          gfx.stroke({ color: 0x6a4a2a, alpha: 0.8, width: 1 });
+          gfx.zIndex = -9; // above tiles (-10), below buildings (-5)
         }
 
-        // Selection highlight: pulsing yellow border
+        // Selection highlight: pulsing yellow border + turret range circle
         if (this.selectedBuildingId === id) {
           const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 300);
           gfx.rect(-half - 2, -half - 2, (half + 2) * 2, (half + 2) * 2);
           gfx.stroke({ color: 0xffdd44, alpha: 0.5 + 0.4 * pulse, width: 2.5 });
+
+          // Turret range circle
+          const range = TURRET_RANGES[bldg?.buildingType ?? ''];
+          if (range) {
+            gfx.circle(0, 0, range);
+            gfx.fill({ color: 0x44aaff, alpha: 0.06 });
+            gfx.circle(0, 0, range);
+            gfx.stroke({ color: 0x44aaff, alpha: 0.25, width: 1 });
+          }
         }
 
         // Upgrade level pips (small diamonds below building for level 2+)

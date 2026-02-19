@@ -62,8 +62,11 @@ import type {
   BuildRepairConfirmMessage,
   AoeExplosionMessage,
   WarehouseUpdateMessage,
+  SaveSlotsResponseMessage,
+  GameSavedMessage,
   LobbySlot,
 } from '@shared/protocol';
+import type { SaveSlotInfo } from '@shared/SaveFormat';
 
 import { World } from '@shared/ecs/World';
 import { C, PositionComponent, FactionComponent, HealthComponent, BuildingComponent, type BuildingType } from '@shared/components';
@@ -92,6 +95,8 @@ import { ChatOverlay } from './ui/ChatOverlay';
 import { BuildModeOverlay } from './ui/BuildModeOverlay';
 import { BuildGhostRenderer } from './render/BuildGhostRenderer';
 import { WarehouseHUD } from './ui/WarehouseHUD';
+import { DamageNumberSystem } from './systems/DamageNumberSystem';
+import { Minimap, MAP_SIZE, MAP_PADDING } from './ui/Minimap';
 
 // Slow world pan behind menus (world pixels per millisecond)
 const BG_PAN_X = 0.05;
@@ -109,6 +114,25 @@ const isDev = !import.meta.env.VITE_SERVER_IP;
 const versionEl = document.getElementById('version-label');
 if (versionEl) versionEl.textContent = `v${GAME_VERSION}`;
 
+// ── Persistent player identity (localStorage) ──────────────────────────────
+function getOrCreatePlayerId(): string {
+  let id = localStorage.getItem('playerId');
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem('playerId', id);
+  }
+  return id;
+}
+const localPlayerId = getOrCreatePlayerId();
+
+function loadSavedDisplayName(): string {
+  return localStorage.getItem('displayName') ?? '';
+}
+
+function saveDisplayName(name: string): void {
+  localStorage.setItem('displayName', name);
+}
+
 async function main(): Promise<void> {
   const container = document.getElementById('game');
   if (!container) throw new Error('Missing #game element in index.html');
@@ -122,8 +146,30 @@ async function main(): Promise<void> {
   const tileRenderer = new TileRenderer(renderer.stage);
   const playerRenderer = new PlayerRendererSystem(tileRenderer.worldContainer);
   const projectileRenderer = new ProjectileRendererSystem(tileRenderer.worldContainer);
+  const damageNumbers = new DamageNumberSystem(tileRenderer.worldContainer);
   const hud          = new HUD(renderer.stage);
   const weaponHotbar = new WeaponHotbar(renderer.stage);
+  const minimap      = new Minimap(renderer.stage);
+
+  // Coords display between minimap and wave HUD
+  const coordsEl = document.createElement('div');
+  coordsEl.id = 'coords-hud';
+  coordsEl.style.cssText = [
+    'position: absolute',
+    `top: ${MAP_SIZE + MAP_PADDING + 2}px`,
+    'right: 12px',
+    `width: ${MAP_SIZE}px`,
+    'z-index: 20',
+    "font-family: monospace",
+    'font-size: 11px',
+    'color: #c0d0e0',
+    'text-shadow: 0 1px 3px rgba(0,0,0,0.8)',
+    'text-align: center',
+    'pointer-events: none',
+    'display: none',
+  ].join('; ');
+  document.getElementById('overlay')!.appendChild(coordsEl);
+
   const debug        = new DebugOverlay();
 
   // ── ECS world ───────────────────────────────────────────────────────────────
@@ -162,6 +208,14 @@ async function main(): Promise<void> {
   let isMultiplayer = false;
   /** True when transport is connected AND HANDSHAKE_ACK received. */
   let transportReady = false;
+  /** Pending save slot info from SAVE_SLOTS_RESPONSE. */
+  let pendingSaveSlots: SaveSlotInfo[] = [];
+  /** Counter to discard stale SAVE_SLOTS_RESPONSE messages. */
+  let saveSlotRequestId = 0;
+  /** Timestamp when game started playing (for elapsed time display). */
+  let gameStartTime = 0;
+  /** True when a wave is actively spawning enemies (portals alive). */
+  let waveActive = false;
 
   // ── Mouse tracking (for player facing direction) ─────────────────────────────
   let mouseX = 0;
@@ -205,6 +259,10 @@ async function main(): Promise<void> {
 
   // ── Overlays ─────────────────────────────────────────────────────────────────
   const menuOverlay  = new MenuOverlay();
+  // Pre-fill display name from localStorage (before server's lastDisplayName arrives)
+  const savedName = loadSavedDisplayName();
+  if (savedName) menuOverlay.displayName = savedName;
+
   const lobbyOverlay = new LobbyOverlay();
   const pauseBanner  = new PauseBanner();
   const waveHUD      = new WaveHUD();
@@ -289,6 +347,9 @@ async function main(): Promise<void> {
     localDead   = false;
     respawnTimer = 0;
     localGameOver = false;
+    gameStartTime = 0;
+    waveActive = false;
+    coordsEl.style.display = 'none';
     deathOverlay.hide();
     gameOverOverlay.hide();
     chatOverlay.hide();
@@ -320,8 +381,10 @@ async function main(): Promise<void> {
 
   // ── State: Playing ──────────────────────────────────────────────────────────
   stateMgr.onEnter(GameState.Playing, () => {
+    if (gameStartTime === 0) gameStartTime = Date.now();
     menuOverlay.hide();
     lobbyOverlay.hide();
+    coordsEl.style.display = 'block';
     hud.setVisible(true);
     weaponHotbar.setVisible(true);
     waveHUD.setVisible(true);
@@ -338,8 +401,10 @@ async function main(): Promise<void> {
   // ── State: Paused ───────────────────────────────────────────────────────────
   stateMgr.onEnter(GameState.Paused, () => {
     pauseBanner.hide();
+    const elapsed = gameStartTime > 0 ? (Date.now() - gameStartTime) / 1000 : 0;
     menuOverlay.showPause(
       isMultiplayer ? 'All players must press ESC to resume' : undefined,
+      elapsed,
     );
   });
 
@@ -381,6 +446,7 @@ async function main(): Promise<void> {
 
   net.onDrop(() => {
     transportReady = false;
+    handshakeSent = false;
     menuOverlay.setConnectionStatus('disconnected');
     menuOverlay.setButtonsEnabled(false);
     debug.log('Connection lost');
@@ -404,6 +470,7 @@ async function main(): Promise<void> {
     generator      = new WorldGenerator(ack.seed);
     chunks         = new ChunkManager(generator);
     movementSystem = new MovementSystem(chunks);
+    minimap.setTileGetter((tx, ty) => generator!.getTile(tx, ty));
 
     stateMgr.transition(GameState.Lobby);
   });
@@ -486,11 +553,22 @@ async function main(): Promise<void> {
   net.on(MessageType.HIT, (msg) => {
     const hit = msg as HitMessage;
     playerRenderer.notifyHit(hit.targetId);
+
+    // Spawn floating damage number at target position
+    const pos = world.getComponent<PositionComponent>(hit.targetId, C.Position);
+    if (pos) {
+      const faction = world.getComponent<FactionComponent>(hit.targetId, C.Faction);
+      const color = faction?.type === 'building' ? 0xffa040
+                  : faction?.type === 'resource' ? 0xffffff
+                  : 0xff4444;
+      damageNumbers.add(pos.x, pos.y - 10, hit.damage, color);
+    }
   });
 
   net.on(MessageType.PROJECTILE_SPAWN, (msg) => {
     const ps = msg as ProjectileSpawnMessage;
-    projectileRenderer.spawn(ps.projectileId, ps.x, ps.y, ps.vx, ps.vy, ps.ownerSlot);
+    projectileRenderer.spawn(ps.projectileId, ps.x, ps.y, ps.vx, ps.vy, ps.ownerSlot,
+      ps.targetX, ps.targetY, ps.totalFlightTime);
   });
 
   net.on(MessageType.PROJECTILE_REMOVE, (msg) => {
@@ -529,12 +607,16 @@ async function main(): Promise<void> {
   net.on(MessageType.WAVE_START, (msg) => {
     const ws = msg as WaveStartMessage;
     waveHUD.onWaveStart(ws.waveNumber, ws.prepDuration);
+    // prepDuration === 0 means portals are live (active phase)
+    if (ws.prepDuration === 0) waveActive = true;
+    else waveActive = false;
     debug.log(`Wave ${ws.waveNumber} started (prep: ${ws.prepDuration}s)`);
   });
 
   net.on(MessageType.WAVE_END, (msg) => {
     const we = msg as WaveEndMessage;
     waveHUD.onWaveEnd(we.waveNumber);
+    waveActive = false;
     debug.log(`Wave ${we.waveNumber} cleared`);
   });
 
@@ -568,6 +650,22 @@ async function main(): Promise<void> {
       const currentBuilding = PLACEABLE_BUILDINGS[selectedBuildingIdx];
       buildOverlay.update(currentBuilding, combinedResources());
     }
+  });
+
+  // ── Save system handlers ────────────────────────────────────────────────
+  net.on(MessageType.GAME_SAVED, (msg) => {
+    const saved = msg as GameSavedMessage;
+    debug.log(`Game saved (wave ${saved.wave}, slot ${saved.slot})`);
+    // Brief toast notification
+    chatOverlay.addMessage('System', -1, `Game saved \u2014 Wave ${saved.wave}`);
+  });
+
+  net.on(MessageType.SAVE_SLOTS_RESPONSE, (msg) => {
+    const resp = msg as SaveSlotsResponseMessage;
+    // Discard stale responses (e.g. if user navigated away and back)
+    if (saveSlotRequestId < 1) return;
+    pendingSaveSlots = resp.slots;
+    menuOverlay.showSaveSlots(resp.slots);
   });
 
   // ── Death / respawn handlers ──────────────────────────────────────────────
@@ -676,11 +774,12 @@ async function main(): Promise<void> {
     const uc = msg as BuildUpgradeConfirmMessage;
     if (uc.success && uc.entityId !== undefined) {
       debug.log(`Upgraded to level ${uc.newLevel}`);
-      // Refresh selection overlay
+      // Refresh selection overlay — use newLevel from confirm (DELTA may not have arrived yet)
       if (selectedBuildingId === uc.entityId) {
         const bComp = world.getComponent<BuildingComponent>(uc.entityId, C.Building);
         const hp = world.getComponent<HealthComponent>(uc.entityId, C.Health);
         if (bComp) {
+          bComp.upgradeLevel = uc.newLevel!;
           buildOverlay.updateSelection(bComp.buildingType, bComp.upgradeLevel, combinedResources(), hp?.current, hp?.max);
         }
       }
@@ -735,15 +834,24 @@ async function main(): Promise<void> {
   });
 
   // ── Session action helper ─────────────────────────────────────────────────
-  function joinSession(role: 'host' | 'join', displayName: string, code?: string): void {
+  let handshakeSent = false;
+
+  function sendHandshakeIfNeeded(displayName: string): void {
+    if (handshakeSent) return;
+    net.send({ type: MessageType.HANDSHAKE, displayName, version: GAME_VERSION, playerId: localPlayerId });
+    handshakeSent = true;
+  }
+
+  function joinSession(role: 'host' | 'join', displayName: string, code?: string, saveSlot?: number): void {
     if (!transportReady) {
       console.warn('[Game] Not connected to server');
       return;
     }
-    // Send HANDSHAKE (identifies player + version), then session action
-    net.send({ type: MessageType.HANDSHAKE, displayName, version: GAME_VERSION });
+    // Persist display name for next launch
+    saveDisplayName(displayName);
+    sendHandshakeIfNeeded(displayName);
     if (role === 'host') {
-      net.send({ type: MessageType.SESSION_CREATE });
+      net.send({ type: MessageType.SESSION_CREATE, saveSlot });
     } else {
       net.send({ type: MessageType.SESSION_JOIN, code: code ?? '' });
     }
@@ -751,7 +859,22 @@ async function main(): Promise<void> {
 
   // ── Menu callbacks ────────────────────────────────────────────────────────
   menuOverlay.setCallbacks({
-    onHost: () => joinSession('host', menuOverlay.displayName),
+    onHost: () => {
+      if (!transportReady) { console.warn('[Game] Not connected'); return; }
+      // Send handshake (if not yet sent) + request save slots before showing slot picker
+      sendHandshakeIfNeeded(menuOverlay.displayName);
+      saveSlotRequestId++;
+      net.send({ type: MessageType.SAVE_SLOTS_REQUEST });
+      menuOverlay.showSaveSlotPicker(
+        (slot) => {
+          joinSession('host', menuOverlay.displayName, undefined, slot);
+        },
+        (slot) => {
+          // Delete save and refresh slot list
+          net.send({ type: MessageType.SAVE_DELETE, slot });
+        },
+      );
+    },
     onJoin: (value) => {
       if (!value) { console.warn('[Game] Enter an invite code first'); return; }
 
@@ -780,9 +903,18 @@ async function main(): Promise<void> {
     },
     onResume:     () => net.send({ type: MessageType.PAUSE_VOTE }),
     onQuitToMenu: () => {
-      // Send SESSION_LEAVE so the server frees the slot, but keep transport alive
-      net.send({ type: MessageType.SESSION_LEAVE });
-      stateMgr.transition(GameState.Menu);
+      const doLeave = () => {
+        net.send({ type: MessageType.SESSION_LEAVE });
+        stateMgr.transition(GameState.Menu);
+      };
+      if (waveActive) {
+        menuOverlay.showConfirmDialog(
+          'Leaving mid-wave will restart the current wave when you rejoin. Are you sure?',
+          doLeave,
+        );
+      } else {
+        doLeave();
+      }
     },
   });
 
@@ -877,6 +1009,9 @@ async function main(): Promise<void> {
       // Weapon switching (number keys) — exit build mode when selecting a weapon
       if (input.isJustPressed(Action.WeaponSlot1)) { selectedWeapon = 0; if (buildModeActive) { buildModeActive = false; selectedBuildingId = null; buildOverlay.hide(); buildGhost.hide(); } }
       if (input.isJustPressed(Action.WeaponSlot2)) { selectedWeapon = 1; if (buildModeActive) { buildModeActive = false; selectedBuildingId = null; buildOverlay.hide(); buildGhost.hide(); } }
+
+      // M key: toggle minimap
+      if (input.isJustPressed(Action.ToggleMinimap)) minimap.toggle();
 
       // B key: toggle build mode
       if (canAct && input.isJustPressed(Action.BuildMode)) {
@@ -1070,6 +1205,7 @@ async function main(): Promise<void> {
         projOldPos.set(pid, { x: p.x, y: p.y });
       }
       projectileRenderer.update(dt);
+      damageNumbers.update(dt);
 
       // Client-side projectile hit prediction — swept collision along path
       const projHits: number[] = [];
@@ -1140,6 +1276,8 @@ async function main(): Promise<void> {
     if (state === GameState.Playing) {
       hud.update(world, width, height);
       weaponHotbar.update(selectedWeapon, attackCooldown, WEAPON_COOLDOWNS[selectedWeapon], width, height, buildModeActive);
+      minimap.update(world, localEntityId, camera.x, camera.y, width, height);
+      coordsEl.textContent = `X: ${Math.round(camera.x)}  Y: ${Math.round(camera.y)}`;
     }
 
     const tileX = Math.floor(camera.x / TILE_SIZE);
