@@ -148,6 +148,18 @@ export enum MessageType {
   DEBUG_WAVE_PAUSE = 'DEBUG_WAVE_PAUSE',
   /** Client → Server: give resources to the sender (dev tool). */
   DEBUG_GIVE_RESOURCES = 'DEBUG_GIVE_RESOURCES',
+
+  // ── Phase 6 ────────────────────────────────────────────────────────────────
+  /** Server → all: a new enemy type appeared for the first time this run. */
+  ENEMY_INTRO = 'ENEMY_INTRO',
+  /** Client → Server: request persistent meta stats. */
+  META_STATS_REQUEST = 'META_STATS_REQUEST',
+  /** Server → Client: response with persistent meta stats. */
+  META_STATS_RESPONSE = 'META_STATS_RESPONSE',
+
+  CARD_OFFER   = 'CARD_OFFER',
+  CARD_PICK    = 'CARD_PICK',
+  CARD_APPLIED = 'CARD_APPLIED',
 }
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
@@ -273,7 +285,7 @@ export interface EntitySnapshot {
   /** Slot index if this is a player entity. Absent for enemies. */
   slot?: number;
   /** Faction - used by the client renderer to pick the visual. */
-  faction?: 'player' | 'enemy' | 'portal' | 'resource' | 'item' | 'building';
+  faction?: 'player' | 'enemy' | 'portal' | 'resource' | 'item' | 'building' | 'guard';
   x: number;
   y: number;
   vx: number;
@@ -300,6 +312,10 @@ export interface EntitySnapshot {
   enemyVariant?: import('./components').EnemyVariantType;
   /** Building upgrade level (1 = base). Only present for building faction. */
   upgradeLevel?: number;
+  /** True when a ghost enemy is currently hidden (invisible). */
+  ghostHidden?: boolean;
+  /** Non-standard enemy radius (e.g. giant = 20). Only sent when != default 10. */
+  enemyRadius?: number;
 }
 
 /** Full world snapshot sent on game start or player rejoin. */
@@ -420,6 +436,8 @@ export interface PauseStateMessage extends BaseMessage {
   type: typeof MessageType.PAUSE_STATE;
   /** True = game is now paused. False = game has resumed. */
   paused: boolean;
+  /** Server-authoritative elapsed play time in seconds (excludes paused time). */
+  elapsedTime?: number;
 }
 
 // ─── Chat ─────────────────────────────────────────────────────────────────────
@@ -671,6 +689,46 @@ export interface SaveDeleteMessage extends BaseMessage {
   slot: number;
 }
 
+// ── Phase 6 ──────────────────────────────────────────────────────────────────
+
+/** Server → all: a new enemy type appeared for the first time this run. */
+export interface EnemyIntroMessage extends BaseMessage {
+  type: typeof MessageType.ENEMY_INTRO;
+  variant: string;
+  displayName: string;
+}
+
+/** Client → Server: request persistent meta stats. */
+export interface MetaStatsRequestMessage extends BaseMessage {
+  type: typeof MessageType.META_STATS_REQUEST;
+}
+
+/** Server → Client: persistent meta stats response. */
+export interface MetaStatsResponseMessage extends BaseMessage {
+  type: typeof MessageType.META_STATS_RESPONSE;
+  stats: import('./MetaStats').MetaStats;
+}
+
+// ── Cards ───────────────────────────────────────────────────────────────────
+
+export interface CardOfferMessage extends BaseMessage {
+  type: typeof MessageType.CARD_OFFER;
+  cards: import('./CardDefinitions').CardDefinition[];
+}
+
+export interface CardPickMessage extends BaseMessage {
+  type: typeof MessageType.CARD_PICK;
+  cardId: string;
+}
+
+export interface CardAppliedMessage extends BaseMessage {
+  type: typeof MessageType.CARD_APPLIED;
+  displayName: string;
+  cardName: string;
+  category: import('./CardDefinitions').CardCategory;
+  isTrap: boolean;
+}
+
 // ─── Union ────────────────────────────────────────────────────────────────────
 
 export type AnyMessage =
@@ -727,4 +785,10 @@ export type AnyMessage =
   | SaveSlotsResponseMessage
   | GameSavedMessage
   | SaveDeleteMessage
+  | EnemyIntroMessage
+  | MetaStatsRequestMessage
+  | MetaStatsResponseMessage
+  | CardOfferMessage
+  | CardPickMessage
+  | CardAppliedMessage
   | BaseMessage;

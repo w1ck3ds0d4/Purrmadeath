@@ -29,6 +29,14 @@ export const C = {
   Turret:          'Turret',
   SpikeTrap:       'SpikeTrap',
   Bridge:          'Bridge',
+  // ── Phase 6 ──────────────────────────────────────────────────────────────
+  EnemyStats:      'EnemyStats',
+  GhostState:      'GhostState',
+  AssassinDash:    'AssassinDash',
+  LightReveal:     'LightReveal',
+  HealAura:        'HealAura',
+  BarracksSpawner: 'BarracksSpawner',
+  Guard:           'Guard',
 } as const;
 
 // ─── Component interfaces ──────────────────────────────────────────────────────
@@ -97,7 +105,7 @@ export interface FacingComponent {
 
 /** Which team an entity belongs to. Determines targetting and rendering. */
 export interface FactionComponent {
-  type: 'player' | 'enemy' | 'portal' | 'resource' | 'item' | 'building';
+  type: 'player' | 'enemy' | 'portal' | 'resource' | 'item' | 'building' | 'guard';
 }
 
 /** Tracks remaining cooldown before the entity can attack again. */
@@ -185,7 +193,8 @@ export interface ResourcesComponent {
 // ── Phase 5 components ────────────────────────────────────────────────────
 
 export type BuildingType = 'campfire' | 'wall' | 'warehouse' | 'lumbermill' | 'quarry' | 'mine' | 'farm'
-  | 'arrow_turret' | 'cannon_turret' | 'spike_trap' | 'bridge';
+  | 'arrow_turret' | 'cannon_turret' | 'spike_trap' | 'bridge'
+  | 'light_tower' | 'healing_shrine' | 'barracks';
 
 /** Tags an entity as a player-built (or pre-placed) structure. */
 export interface BuildingComponent {
@@ -264,9 +273,68 @@ export interface BridgeComponent {
 
 // ── Enemy variants ──────────────────────────────────────────────────────────
 
-export type EnemyVariantType = 'melee' | 'ranger';
+export type EnemyVariantType = 'melee' | 'ranger' | 'ghost' | 'giant' | 'assassin';
 
-/** Tags an enemy with its variant type (melee or ranger). */
+/** Tags an enemy with its variant type. */
 export interface EnemyVariantComponent {
   variant: EnemyVariantType;
+}
+
+// ── Phase 6 components ──────────────────────────────────────────────────────
+
+/** Per-entity enemy stats (replaces global constants for wave-scaled enemies). */
+export interface EnemyStatsComponent {
+  damage: number;
+  range: number;
+  knockback: number;
+  radius: number;
+  /** Ranged attack range (0 = melee only). */
+  rangedRange: number;
+  /** Ranged projectile speed. */
+  projectileSpeed: number;
+  /** Ranged damage. */
+  rangedDamage: number;
+  /** Ranged cooldown. */
+  rangedCooldown: number;
+}
+
+/** Ghost visibility state. */
+export interface GhostStateComponent {
+  hidden: boolean;
+}
+
+/** Assassin dash ability state. */
+export interface AssassinDashComponent {
+  /** Seconds until next dash is allowed. */
+  cooldown: number;
+  maxCooldown: number;
+  dashSpeed: number;
+  dashDuration: number;
+  dashing: boolean;
+  dashTimer: number;
+}
+
+/** Light tower ghost-reveal aura. */
+export interface LightRevealComponent {
+  range: number;
+}
+
+/** Healing shrine player-heal aura. */
+export interface HealAuraComponent {
+  range: number;
+  healPerSecond: number;
+}
+
+/** Barracks guard spawner. */
+export interface BarracksSpawnerComponent {
+  maxGuards: number;
+  spawnTimer: number;
+  spawnInterval: number;
+  guardIds: number[];
+}
+
+/** Tags an entity as a barracks guard. */
+export interface GuardComponent {
+  barracksId: number;
+  patrolRadius: number;
 }

@@ -14,6 +14,7 @@ export class MenuOverlay {
   private onJoin:       ((code: string) => void) | null = null;
   private onResume:     (() => void) | null = null;
   private onQuitToMenu: (() => void) | null = null;
+  private onStats:      (() => void) | null = null;
 
   private nameInput:       HTMLInputElement;
   private codeInput:       HTMLInputElement;
@@ -73,6 +74,8 @@ export class MenuOverlay {
     this.require('btn-resume').addEventListener('click', () => this.onResume?.());
     this.require('btn-quit').addEventListener('click',   () => this.onQuitToMenu?.());
 
+    this.require('btn-stats').addEventListener('click', () => this.onStats?.());
+
     // Settings stub - deferred to Phase 9
     this.require('btn-settings').addEventListener('click', () => {
       console.log('[Settings] Not implemented yet - Phase 9');
@@ -84,11 +87,13 @@ export class MenuOverlay {
     onJoin:       (code: string) => void;
     onResume:     () => void;
     onQuitToMenu: () => void;
+    onStats?:     () => void;
   }): void {
     this.onHost       = cbs.onHost;
     this.onJoin       = cbs.onJoin;
     this.onResume     = cbs.onResume;
     this.onQuitToMenu = cbs.onQuitToMenu;
+    this.onStats      = cbs.onStats ?? null;
   }
 
   /** The player name entered in the main menu input. */
@@ -142,6 +147,9 @@ export class MenuOverlay {
     this.menuScreen.style.display  = 'flex';
     this.pauseScreen.style.display = 'none';
     this.saveSlotScreen.style.display = 'none';
+    // Hide stats screen if it exists
+    const statsScreen = document.getElementById('stats-screen');
+    if (statsScreen) statsScreen.style.display = 'none';
   }
 
   showPause(subtitle?: string, gameTime?: number): void {

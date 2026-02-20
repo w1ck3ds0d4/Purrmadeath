@@ -9,6 +9,8 @@ import {
   BuildingComponent,
   ProductionComponent,
   EnemyVariantComponent,
+  GhostStateComponent,
+  EnemyStatsComponent,
 } from '@shared/components';
 import type { SnapshotMessage, DeltaMessage, EntitySnapshot } from '@shared/protocol';
 
@@ -153,6 +155,17 @@ export class RemotePlayerSystem {
       if (snap.enemyVariant) {
         world.addComponent(snap.entityId, C.EnemyVariant, { variant: snap.enemyVariant } as EnemyVariantComponent);
       }
+      // Ghost visibility state
+      if (snap.ghostHidden !== undefined) {
+        world.addComponent(snap.entityId, C.GhostState, { hidden: snap.ghostHidden } as GhostStateComponent);
+      }
+      // Non-default enemy radius (for rendering)
+      if (snap.enemyRadius !== undefined) {
+        world.addComponent(snap.entityId, C.EnemyStats, {
+          damage: 0, range: 0, knockback: 0, radius: snap.enemyRadius,
+          rangedRange: 0, projectileSpeed: 0, rangedDamage: 0, rangedCooldown: 0,
+        } as EnemyStatsComponent);
+      }
       // Production building stored resources (for renderer tag display)
       if (snap.productionStored !== undefined && snap.productionResource) {
         world.addComponent(snap.entityId, C.Production, {
@@ -168,6 +181,13 @@ export class RemotePlayerSystem {
       const hp  = world.getComponent<HealthComponent>(snap.entityId, C.Health);
       if (vel) { vel.vx = snap.vx; vel.vy = snap.vy; }
       if (hp)  { hp.current = snap.hp; hp.max = snap.maxHp; }
+
+      // Update ghost visibility
+      if (snap.ghostHidden !== undefined) {
+        const ghost = world.getComponent<GhostStateComponent>(snap.entityId, C.GhostState);
+        if (ghost) ghost.hidden = snap.ghostHidden;
+        else world.addComponent(snap.entityId, C.GhostState, { hidden: snap.ghostHidden } as GhostStateComponent);
+      }
 
       // Update building upgrade level
       if (snap.upgradeLevel !== undefined) {

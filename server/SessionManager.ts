@@ -27,12 +27,16 @@ import type {
   BuildRepairMessage,
 } from '@shared/protocol';
 import { GAME_VERSION, RECONNECT_GRACE_MS } from '@shared/constants';
+import type { MetaStats } from '@shared/MetaStats';
+import { emptyMetaStats, mergeRunStats } from '@shared/MetaStats';
+import type { MetaStatsRequestMessage, CardPickMessage } from '@shared/protocol';
 
 /** Minimum interval (ms) between SESSION_CREATE or SESSION_JOIN per client. */
 const SESSION_ACTION_COOLDOWN_MS = 2_000;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SAVES_DIR = path.join(process.cwd(), 'saves');
+const META_DIR = path.join(process.cwd(), 'metastats');
 
 /** Pending reconnection: player disconnected mid-game, slot held for a grace period. */
 interface PendingReconnect {
@@ -73,6 +77,9 @@ export class SessionManager {
   /** Players disconnected mid-game waiting for reconnection (keyed by IP). */
   private pendingReconnects = new Map<string, PendingReconnect>();
 
+  /** Persistent per-player meta stats (keyed by playerId/UUID). */
+  private metaStats = new Map<string, MetaStats>();
+
   constructor(
     private readonly socket: ServerSocket,
     private readonly beacon: DiscoveryBeacon,
@@ -100,10 +107,13 @@ export class SessionManager {
     socket.on(MessageType.PAUSE_VOTE,            (c) => this.onPauseVote(c));
     socket.on(MessageType.SAVE_SLOTS_REQUEST,    (c) => this.onSaveSlotsRequest(c));
     socket.on(MessageType.SAVE_DELETE,             (c, m) => this.onSaveDelete(c, m as import('@shared/protocol').SaveDeleteMessage));
+    socket.on(MessageType.META_STATS_REQUEST,      (c) => this.onMetaStatsRequest(c));
+    socket.on(MessageType.CARD_PICK,               (c, m) => this.session?.handleCardPick(c.id, m as CardPickMessage, (cl, msg) => this.socket.send(cl, msg)));
     socket.onDisconnect((c) => this.onDisconnect(c));
 
-    // Load persisted saves from disk
+    // Load persisted saves and meta stats from disk
     this.loadSavesFromDisk();
+    this.loadMetaStatsFromDisk();
   }
 
   /** Load all save files from ./saves/ into memory on startup. */
@@ -135,6 +145,31 @@ export class SessionManager {
     if (!fs.existsSync(SAVES_DIR)) fs.mkdirSync(SAVES_DIR, { recursive: true });
     const filePath = path.join(SAVES_DIR, `${playerId}_slot${slot}.json`);
     fs.writeFileSync(filePath, JSON.stringify(data), 'utf-8');
+  }
+
+  /** Load all meta stats files from ./metastats/ into memory on startup. */
+  private loadMetaStatsFromDisk(): void {
+    if (!fs.existsSync(META_DIR)) return;
+    const files = fs.readdirSync(META_DIR).filter(f => f.endsWith('.json'));
+    for (const file of files) {
+      const playerId = file.replace('.json', '');
+      if (!UUID_RE.test(playerId)) continue;
+      try {
+        const data = JSON.parse(fs.readFileSync(path.join(META_DIR, file), 'utf-8'));
+        this.metaStats.set(playerId, data);
+      } catch {
+        console.warn(`[MetaStats] Failed to load ${file}`);
+      }
+    }
+    if (this.metaStats.size > 0) console.log(`[MetaStats] Loaded stats for ${this.metaStats.size} player(s)`);
+  }
+
+  /** Write a player's meta stats to disk. */
+  private writeMetaStatsToDisk(playerId: string, stats: MetaStats): void {
+    if (!UUID_RE.test(playerId)) return;
+    if (!fs.existsSync(META_DIR)) fs.mkdirSync(META_DIR, { recursive: true });
+    const filePath = path.join(META_DIR, `${playerId}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(stats), 'utf-8');
   }
 
   // ── Handlers ────────────────────────────────────────────────────────────────
@@ -249,6 +284,16 @@ export class SessionManager {
       };
       this.session.saveSlot = saveSlot ?? 1;
       this.session.hostPlayerId = hostPlayerId;
+      const delSlot = saveSlot ?? 1;
+      this.session.onSaveDelete = () => {
+        const hostSaves = this.saves.get(hostPlayerId);
+        if (hostSaves) hostSaves.delete(delSlot);
+        const filePath = path.join(SAVES_DIR, `${hostPlayerId}_slot${delSlot}.json`);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+          console.log(`[Save] Deleted save slot ${delSlot} for ${hostPlayerId} (game over)`);
+        }
+      };
 
       // Load save data if resuming (validation may reject corrupt saves)
       if (loadedSave) {
@@ -257,6 +302,18 @@ export class SessionManager {
         console.log(`[Save] Loaded slot ${saveSlot} for host ${hostPlayerId} (wave ${loadedSave.currentWave})`);
       }
     }
+
+    // Wire up run-end stats merge (always, regardless of hostPlayerId)
+    this.session.onRunEnd = (playerStats) => {
+      for (const [pid, runStats] of playerStats) {
+        if (!UUID_RE.test(pid)) continue;
+        let meta = this.metaStats.get(pid);
+        if (!meta) { meta = emptyMetaStats(); this.metaStats.set(pid, meta); }
+        mergeRunStats(meta, runStats);
+        this.writeMetaStatsToDisk(pid, meta);
+      }
+      console.log(`[MetaStats] Merged run stats for ${playerStats.size} player(s)`);
+    };
 
     const displayName = this.displayNames.get(client.id) ?? `Player${client.id}`;
     const player = this.session.addPlayer(client, displayName, /* isHost */ true, hostPlayerId);
@@ -479,6 +536,15 @@ export class SessionManager {
       }
     }
     this.socket.send(client, { type: MessageType.SAVE_SLOTS_RESPONSE, slots });
+  }
+
+  private onMetaStatsRequest(client: ConnectedClient): void {
+    const playerId = this.clientPlayerIds.get(client.id);
+    const stats = playerId ? (this.metaStats.get(playerId) ?? emptyMetaStats()) : emptyMetaStats();
+    this.socket.send(client, {
+      type: MessageType.META_STATS_RESPONSE,
+      stats,
+    });
   }
 
   private onSaveDelete(client: ConnectedClient, msg: import('@shared/protocol').SaveDeleteMessage): void {

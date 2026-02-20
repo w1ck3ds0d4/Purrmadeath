@@ -24,6 +24,7 @@ Thumbs.db
 
 # Game saves (server-side)
 saves/
+metastats
 
 # Documentation 
 *.md

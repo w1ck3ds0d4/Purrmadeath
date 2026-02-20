@@ -8,6 +8,9 @@ import {
   KnockbackReceiverComponent,
   AttackCooldownComponent,
   BuildingComponent,
+  EnemyStatsComponent,
+  GhostStateComponent,
+  EnemyVariantComponent,
 } from '@shared/components';
 import { MELEE_RANGE, MELEE_ARC, MELEE_DAMAGE, MELEE_KNOCKBACK, TICK_MS, PLAYER_RADIUS, ENEMY_RADIUS, buildingHalfExtent } from '@shared/constants';
 
@@ -105,6 +108,12 @@ export class CombatSystem {
       // Skip downed players - they're already at 0 HP
       if (world.hasComponent(targetId, C.Downed)) continue;
 
+      // Hidden ghosts are untargetable by player/guard melee
+      if (srcFaction?.type !== 'enemy') {
+        const ghostSt = world.getComponent<GhostStateComponent>(targetId, C.GhostState);
+        if (ghostSt?.hidden) continue;
+      }
+
       // Enemies don't attack portals
       if (srcFaction?.type === 'enemy' && tgtFaction?.type === 'portal') continue;
 
@@ -131,7 +140,10 @@ export class CombatSystem {
       const bldgComp = world.getComponent<BuildingComponent>(targetId, C.Building);
       if (bldgComp) tgtRadius = buildingHalfExtent(bldgComp.buildingType);
       else if (world.getComponent(targetId, C.PlayerIndex)) tgtRadius = PLAYER_RADIUS;
-      else tgtRadius = ENEMY_RADIUS;
+      else {
+        const enemyStats = world.getComponent<EnemyStatsComponent>(targetId, C.EnemyStats);
+        tgtRadius = enemyStats?.radius ?? ENEMY_RADIUS;
+      }
       if (dist > meleeRange + tgtRadius || dist === 0) continue;
 
       // Arc check - must be within ±60° of facing (skip for buildings — large area targets)
@@ -149,10 +161,11 @@ export class CombatSystem {
       if (def) dmg = Math.max(0, Math.round((dmg - def.flat) * (1 - def.percent)));
       hp.current = Math.max(0, hp.current - dmg);
 
-      // Knockback impulse - direction from attacker to target
+      // Knockback impulse - direction from attacker to target (giants are immune)
       let knockbackVx = 0;
       let knockbackVy = 0;
-      if (meleeKnockback > 0) {
+      const tgtVariant = world.getComponent<EnemyVariantComponent>(targetId, C.EnemyVariant);
+      if (meleeKnockback > 0 && tgtVariant?.variant !== 'giant') {
         knockbackVx = (dx / dist) * meleeKnockback;
         knockbackVy = (dy / dist) * meleeKnockback;
         const kb = world.getComponent<KnockbackReceiverComponent>(targetId, C.KnockbackReceiver);

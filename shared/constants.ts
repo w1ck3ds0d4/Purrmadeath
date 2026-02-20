@@ -135,6 +135,17 @@ export const ENEMY_RANGER_SPEED = 60;
 /** Ranger health — slightly less than melee. */
 export const ENEMY_RANGER_HEALTH = 30;
 
+// ─── Wave difficulty scaling ────────────────────────────────────────────────
+
+/** Compound HP multiplier per wave: enemy HP = base × (1 + scale)^(wave-1). */
+export const ENEMY_HP_SCALE_PER_WAVE = 0.02;
+
+/** Compound damage multiplier per wave. */
+export const ENEMY_DAMAGE_SCALE_PER_WAVE = 0.01;
+
+/** Every N waves, portals spawn +1 enemy per spawn interval. */
+export const PORTAL_EXTRA_SPAWN_EVERY_N_WAVES = 3;
+
 // ─── Melee combat ─────────────────────────────────────────────────────────────
 
 /** Reach of a melee swing in world pixels. */
@@ -280,6 +291,7 @@ export const BUILDING_HALF_EXTENT = TILE_SIZE / 2; // 16px
 export const BUILDING_SIZES: Record<string, number> = {
   wall: 1, campfire: 3, warehouse: 3, lumbermill: 2, quarry: 2, mine: 2, farm: 2,
   arrow_turret: 1, cannon_turret: 2, spike_trap: 1, bridge: 1,
+  light_tower: 1, healing_shrine: 1, barracks: 2,
 };
 
 /** Half-extent in world pixels for a building of the given type. */
@@ -331,6 +343,13 @@ export const SPIKE_TRAP_MAX_HEALTH = 50;
 /** Bridge HP (effectively invulnerable). */
 export const BRIDGE_MAX_HEALTH = 999;
 
+/** Light tower HP. */
+export const LIGHT_TOWER_MAX_HEALTH = 120;
+/** Healing shrine HP. */
+export const HEALING_SHRINE_MAX_HEALTH = 100;
+/** Barracks HP. */
+export const BARRACKS_MAX_HEALTH = 200;
+
 /** Radius (px) for auto-depositing player resources into the warehouse. */
 export const WAREHOUSE_DEPOSIT_RADIUS = 80;
 
@@ -350,12 +369,16 @@ export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'i
   cannon_turret:  { stone: 10, iron: 10, diamond: 2 },
   spike_trap:     { wood: 3, iron: 2 },
   bridge:         { wood: 5, stone: 2 },
+  light_tower:    { stone: 8, iron: 3 },
+  healing_shrine: { stone: 10, iron: 5 },
+  barracks:       { wood: 15, iron: 10 },
 };
 
 /** Ordered list of building types the player can cycle through in build mode. */
 export const PLACEABLE_BUILDINGS: string[] = [
   'wall', 'warehouse', 'lumbermill', 'quarry', 'mine', 'farm',
   'arrow_turret', 'cannon_turret', 'spike_trap', 'bridge',
+  'light_tower', 'healing_shrine',
 ];
 
 // ─── Production Buildings ──────────────────────────────────────────────────
@@ -418,6 +441,7 @@ export const BUILDING_MAX_LEVEL: Record<BuildingType, number> = {
   campfire: 5, bridge: 1,
   wall: 3, warehouse: 3, lumbermill: 3, quarry: 3, mine: 3, farm: 3,
   arrow_turret: 3, cannon_turret: 3, spike_trap: 3,
+  light_tower: 3, healing_shrine: 3, barracks: 3,
 };
 
 /** Cost multiplier for each upgrade level (index 0 = level 2, index 1 = level 3, etc.). */
@@ -442,6 +466,30 @@ export const UPGRADE_CANNON_DMG     = [1, 1.4, 1.8];
 export const UPGRADE_CANNON_AOE     = [100, 200, 400];
 /** Spike trap damage multiplier. */
 export const UPGRADE_TRAP_DMG       = [1, 1.5, 2.0];
+
+// ─── Light Tower ────────────────────────────────────────────────────────────
+
+/** Light tower ghost-reveal range per level (px). */
+export const UPGRADE_LIGHT_RANGE    = [200, 300, 400];
+
+// ─── Healing Shrine ─────────────────────────────────────────────────────────
+
+/** Heal rate per level (HP/s per player in range). */
+export const UPGRADE_HEAL_RATE      = [3, 5, 8];
+/** Heal aura range per level (px). */
+export const UPGRADE_HEAL_RANGE     = [120, 160, 200];
+
+// ─── Barracks ───────────────────────────────────────────────────────────────
+
+/** Max guards per barracks level. */
+export const BARRACKS_MAX_GUARDS    = [1, 2, 3];
+/** Seconds between guard spawns. */
+export const BARRACKS_SPAWN_INTERVAL = 30;
+/** Guard stats. */
+export const BARRACKS_GUARD_HP      = 50;
+export const BARRACKS_GUARD_DAMAGE  = 8;
+export const BARRACKS_GUARD_SPEED   = 60;
+export const BARRACKS_GUARD_PATROL_RADIUS = 150;
 
 /**
  * Returns the resource cost to upgrade a building from its current level to the next,

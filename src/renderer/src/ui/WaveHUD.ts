@@ -107,6 +107,11 @@ export class WaveHUD {
     this.el.style.display = 'none';
   }
 
+  setPaused(p: boolean): void {
+    this.paused = p;
+    this.render();
+  }
+
   private render(): void {
     if (this.phase === 'prep') {
       const mins = Math.floor(this.prepTimer / 60);

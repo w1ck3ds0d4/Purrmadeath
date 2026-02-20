@@ -65,6 +65,10 @@ import type {
   SaveSlotsResponseMessage,
   GameSavedMessage,
   LobbySlot,
+  EnemyIntroMessage,
+  MetaStatsResponseMessage,
+  CardOfferMessage,
+  CardAppliedMessage,
 } from '@shared/protocol';
 import type { SaveSlotInfo } from '@shared/SaveFormat';
 
@@ -97,6 +101,8 @@ import { BuildGhostRenderer } from './render/BuildGhostRenderer';
 import { WarehouseHUD } from './ui/WarehouseHUD';
 import { DamageNumberSystem } from './systems/DamageNumberSystem';
 import { Minimap, MAP_SIZE, MAP_PADDING } from './ui/Minimap';
+import { StatsOverlay } from './ui/StatsOverlay';
+import { CardPickerOverlay } from './ui/CardPickerOverlay';
 
 // Slow world pan behind menus (world pixels per millisecond)
 const BG_PAN_X = 0.05;
@@ -214,6 +220,7 @@ async function main(): Promise<void> {
   let saveSlotRequestId = 0;
   /** Timestamp when game started playing (for elapsed time display). */
   let gameStartTime = 0;
+  let serverElapsedTime = 0;
   /** True when a wave is actively spawning enemies (portals alive). */
   let waveActive = false;
 
@@ -263,6 +270,8 @@ async function main(): Promise<void> {
   const savedName = loadSavedDisplayName();
   if (savedName) menuOverlay.displayName = savedName;
 
+  const statsOverlay = new StatsOverlay();
+  const cardPicker = new CardPickerOverlay();
   const lobbyOverlay = new LobbyOverlay();
   const pauseBanner  = new PauseBanner();
   const waveHUD      = new WaveHUD();
@@ -348,7 +357,9 @@ async function main(): Promise<void> {
     respawnTimer = 0;
     localGameOver = false;
     gameStartTime = 0;
+    serverElapsedTime = 0;
     waveActive = false;
+    waveHUD.setPaused(false);
     coordsEl.style.display = 'none';
     deathOverlay.hide();
     gameOverOverlay.hide();
@@ -401,7 +412,7 @@ async function main(): Promise<void> {
   // ── State: Paused ───────────────────────────────────────────────────────────
   stateMgr.onEnter(GameState.Paused, () => {
     pauseBanner.hide();
-    const elapsed = gameStartTime > 0 ? (Date.now() - gameStartTime) / 1000 : 0;
+    const elapsed = serverElapsedTime > 0 ? serverElapsedTime : (gameStartTime > 0 ? (Date.now() - gameStartTime) / 1000 : 0);
     menuOverlay.showPause(
       isMultiplayer ? 'All players must press ESC to resume' : undefined,
       elapsed,
@@ -584,6 +595,7 @@ async function main(): Promise<void> {
   net.on(MessageType.PAUSE_STATE, (msg) => {
     const ps = msg as PauseStateMessage;
     pauseBanner.hide();
+    if (ps.elapsedTime != null) serverElapsedTime = ps.elapsedTime;
     if (ps.paused) {
       // Send zero-input so the server zeros our velocity
       const seq = reconciler.recordInput(0, 0, false, 0);
@@ -623,6 +635,34 @@ async function main(): Promise<void> {
   net.on(MessageType.WAVE_TIMER_SYNC, (msg) => {
     const sync = msg as WaveTimerSyncMessage;
     waveHUD.onTimerSync(sync.waveNumber, sync.remaining, sync.paused);
+  });
+
+  net.on(MessageType.ENEMY_INTRO, (msg) => {
+    const intro = msg as EnemyIntroMessage;
+    chatOverlay.addMessage('System', -1, `New threat: ${intro.displayName}!`);
+    debug.log(`New enemy type: ${intro.displayName}`);
+  });
+
+  net.on(MessageType.META_STATS_RESPONSE, (msg) => {
+    const resp = msg as MetaStatsResponseMessage;
+    statsOverlay.show(resp.stats, () => menuOverlay.showMenu());
+  });
+
+  net.on(MessageType.CARD_OFFER, (msg) => {
+    const offer = msg as CardOfferMessage;
+    waveHUD.setPaused(true);
+    cardPicker.show(offer.cards, (cardId) => {
+      net.send({ type: MessageType.CARD_PICK, cardId });
+    });
+  });
+
+  net.on(MessageType.CARD_APPLIED, (msg) => {
+    const applied = msg as CardAppliedMessage;
+    const prefix = applied.isTrap ? 'TRAP' : 'Card';
+    chatOverlay.addMessage('System', -1, `${applied.displayName} picked ${prefix}: ${applied.cardName}`);
+    // Hide card picker if this was our auto-pick (server chose for us)
+    cardPicker.hide();
+    waveHUD.setPaused(false);
   });
 
   net.on(MessageType.RESOURCE_UPDATE, (msg) => {
@@ -903,18 +943,12 @@ async function main(): Promise<void> {
     },
     onResume:     () => net.send({ type: MessageType.PAUSE_VOTE }),
     onQuitToMenu: () => {
-      const doLeave = () => {
-        net.send({ type: MessageType.SESSION_LEAVE });
-        stateMgr.transition(GameState.Menu);
-      };
-      if (waveActive) {
-        menuOverlay.showConfirmDialog(
-          'Leaving mid-wave will restart the current wave when you rejoin. Are you sure?',
-          doLeave,
-        );
-      } else {
-        doLeave();
-      }
+      net.send({ type: MessageType.SESSION_LEAVE });
+      stateMgr.transition(GameState.Menu);
+    },
+    onStats: () => {
+      net.send({ type: MessageType.META_STATS_REQUEST });
+      menuOverlay.hide();
     },
   });
 
@@ -957,7 +991,7 @@ async function main(): Promise<void> {
 
     // Playing: local prediction + send input
     if (state === GameState.Playing && localEntityId !== null) {
-      const canAct = !localDowned && !localDead && !localGameOver && !chatOverlay.isOpen;
+      const canAct = !localDowned && !localDead && !localGameOver && !chatOverlay.isOpen && !cardPicker.isVisible;
 
       // 1. Map keyboard → PlayerInput component (only local entity has it)
       if (canAct) inputSystem.update(world);
@@ -1157,6 +1191,12 @@ async function main(): Promise<void> {
         if (selectedBuildingId !== null && !world.hasEntity(selectedBuildingId)) {
           selectedBuildingId = null;
           buildOverlay.update(PLACEABLE_BUILDINGS[selectedBuildingIdx], combinedResources());
+        }
+
+        // Live HP update for selected building
+        if (selectedBuildingId !== null) {
+          const hp = world.getComponent<HealthComponent>(selectedBuildingId, C.Health);
+          if (hp) buildOverlay.updateSelectionHp(hp.current, hp.max);
         }
       }
 

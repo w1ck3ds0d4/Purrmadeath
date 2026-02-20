@@ -9,6 +9,9 @@ import {
   KnockbackReceiverComponent,
   ProjectileComponent,
   BuildingComponent,
+  EnemyStatsComponent,
+  GhostStateComponent,
+  EnemyVariantComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -141,8 +144,8 @@ export class ProjectileSystem {
         continue;
       }
 
-      // Building collision — projectiles are blocked by buildings (no damage, just destroyed)
-      if (this.hitsBuilding(world, oldX, oldY, pos.x, pos.y, proj.ownerId)) {
+      // Building collision — enemy projectiles are blocked by buildings (player/turret projectiles pass through)
+      if (!isPlayerProj && this.hitsBuilding(world, oldX, oldY, pos.x, pos.y, proj.ownerId)) {
         destroyed.push(projId);
         continue;
       }
@@ -182,6 +185,12 @@ export class ProjectileSystem {
         // Skip downed players - they're already at 0 HP
         if (world.hasComponent(targetId, C.Downed)) continue;
 
+        // Hidden ghosts are untargetable by player/guard projectiles
+        if (projFaction?.type !== 'enemy') {
+          const ghostSt = world.getComponent<GhostStateComponent>(targetId, C.GhostState);
+          if (ghostSt?.hidden) continue;
+        }
+
         const tgtPos = world.getComponent<PositionComponent>(targetId, C.Position)!;
 
         // Target radius varies by entity type
@@ -190,7 +199,7 @@ export class ProjectileSystem {
           ? RESOURCE_NODE_RADIUS
           : world.getComponent(targetId, C.PlayerIndex)
             ? PLAYER_RADIUS
-            : ENEMY_RADIUS;
+            : (world.getComponent<EnemyStatsComponent>(targetId, C.EnemyStats)?.radius ?? ENEMY_RADIUS);
         const collisionDist = PROJECTILE_RADIUS + tgtRadius;
 
         // Swept collision: closest point on path segment to target center
@@ -210,13 +219,14 @@ export class ProjectileSystem {
         }
         hp.current = Math.max(0, hp.current - damage);
 
-        // Knockback - direction from projectile to target
+        // Knockback - direction from projectile to target (giants are immune)
         let knockbackVx = 0;
         let knockbackVy = 0;
         const dx = tgtPos.x - pos.x;
         const dy = tgtPos.y - pos.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        if (RANGED_KNOCKBACK > 0 && dist > 0) {
+        const tgtVariant = world.getComponent<EnemyVariantComponent>(targetId, C.EnemyVariant);
+        if (RANGED_KNOCKBACK > 0 && dist > 0 && tgtVariant?.variant !== 'giant') {
           knockbackVx = (dx / dist) * RANGED_KNOCKBACK;
           knockbackVy = (dy / dist) * RANGED_KNOCKBACK;
           const kb = world.getComponent<KnockbackReceiverComponent>(targetId, C.KnockbackReceiver);

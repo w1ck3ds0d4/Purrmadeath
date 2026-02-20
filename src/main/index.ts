@@ -195,6 +195,7 @@ function createWindow(): void {
     height: 720,
     minWidth: 800,
     minHeight: 600,
+    show: false,
     title: 'Purrmadeath',
     backgroundColor: '#0a0a0f',
     webPreferences: {
@@ -204,9 +205,11 @@ function createWindow(): void {
     },
   });
 
+  win.maximize();
+  win.show();
+
   if (process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL']);
-    win.webContents.openDevTools({ mode: 'detach' });
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'));
   }

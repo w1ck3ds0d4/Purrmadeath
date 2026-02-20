@@ -1,14 +1,23 @@
 import { Container, Graphics } from 'pixi.js';
-import { snapBuildingPosition, buildingHalfExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE } from '@shared/constants';
+import { snapBuildingPosition, buildingHalfExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RANGE } from '@shared/constants';
 
 const VALID_COLOR   = 0x44cc66;
 const INVALID_COLOR = 0xcc4444;
-const RANGE_COLOR   = 0x44aaff;
 
-/** Turret type → base range in pixels. */
-const TURRET_RANGES: Record<string, number> = {
+/** Building type → base range in pixels (level 1). */
+const BUILDING_RANGES: Record<string, number> = {
   arrow_turret: ARROW_TURRET_RANGE,
   cannon_turret: CANNON_TURRET_RANGE,
+  light_tower: UPGRADE_LIGHT_RANGE[0],
+  healing_shrine: UPGRADE_HEAL_RANGE[0],
+};
+
+/** Per-type range circle color. */
+const RANGE_COLORS: Record<string, number> = {
+  arrow_turret: 0x44aaff,
+  cannon_turret: 0x44aaff,
+  light_tower: 0xffdd44,
+  healing_shrine: 0x44ff88,
 };
 
 /**
@@ -52,13 +61,14 @@ export class BuildGhostRenderer {
 
     this.gfx.clear();
 
-    // Range circle for turrets
-    const range = TURRET_RANGES[buildingType];
+    // Range circle for turrets, light tower, healing shrine
+    const range = BUILDING_RANGES[buildingType];
     if (range) {
+      const rangeColor = RANGE_COLORS[buildingType] ?? 0x44aaff;
       this.gfx.circle(this.snapX, this.snapY, range);
-      this.gfx.fill({ color: RANGE_COLOR, alpha: 0.06 });
+      this.gfx.fill({ color: rangeColor, alpha: 0.06 });
       this.gfx.circle(this.snapX, this.snapY, range);
-      this.gfx.stroke({ color: RANGE_COLOR, alpha: 0.25, width: 1 });
+      this.gfx.stroke({ color: rangeColor, alpha: 0.25, width: 1 });
     }
 
     // Building ghost

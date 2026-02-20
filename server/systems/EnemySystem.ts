@@ -8,6 +8,10 @@ import {
   FacingComponent,
   BuildingComponent,
   EnemyVariantComponent,
+  EnemyStatsComponent,
+  AssassinDashComponent,
+  VelocityComponent,
+  SpeedComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -18,6 +22,7 @@ import {
   ENEMY_RANGER_RANGE,
   RESOURCE_NODE_RADIUS,
   PORTAL_RADIUS,
+  ENEMY_RADIUS,
   buildingHalfExtent,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
@@ -31,10 +36,10 @@ export interface EnemyAttackResult {
   /** Enemies that swung (for ATTACK_PERFORMED broadcast - fires even on miss). */
   attackPerformed: { sourceId: number; facing: number }[];
   /** Rangers that want to fire a projectile (spawned by GameSession). */
-  rangedAttacks: { sourceId: number; x: number; y: number; facing: number }[];
+  rangedAttacks: { sourceId: number; x: number; y: number; facing: number; projectileSpeed: number; damage: number; radius: number }[];
 }
 
-const ENEMY_OVERRIDES = {
+const ENEMY_OVERRIDES_DEFAULT = {
   damage: ENEMY_MELEE_DAMAGE,
   range: ENEMY_MELEE_RANGE,
   knockback: ENEMY_MELEE_KNOCKBACK,
@@ -141,9 +146,9 @@ export class EnemySystem {
       const rf = world.getComponent<FactionComponent>(rid, C.Faction)!;
       let rHalf: number;
       if (rf.type === 'resource') {
-        rHalf = RESOURCE_NODE_RADIUS;
+        rHalf = RESOURCE_NODE_RADIUS + ENEMY_RADIUS;
       } else if (rf.type === 'portal') {
-        rHalf = PORTAL_RADIUS;
+        rHalf = PORTAL_RADIUS + ENEMY_RADIUS;
       } else {
         continue;
       }
@@ -173,6 +178,24 @@ export class EnemySystem {
 
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
       const inp = world.getComponent<PlayerInputComponent>(id, C.PlayerInput)!;
+      const ev = world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant);
+      const variant = ev?.variant ?? 'melee';
+
+      // ── Assassin dash tick ─────────────────────────────────────────────────
+      const dash = world.getComponent<AssassinDashComponent>(id, C.AssassinDash);
+      if (dash) {
+        if (dash.dashing) {
+          dash.dashTimer -= dt;
+          if (dash.dashTimer <= 0) {
+            dash.dashing = false;
+            // Restore normal speed
+            const spd = world.getComponent<SpeedComponent>(id, C.Speed);
+            if (spd) spd.multiplier = 1;
+          }
+        } else if (dash.cooldown > 0) {
+          dash.cooldown -= dt;
+        }
+      }
 
       // Priority targeting: campfire > players > walls > other buildings
       let targetPos: { x: number; y: number } | null = null;
@@ -180,9 +203,27 @@ export class EnemySystem {
       let targetDist = Infinity;
       let targetHalfExtent = 0; // >0 for buildings (used for edge-based melee check)
       let targetEntityId: number | null = null; // building entity to exclude from pathfinding
+      /** If true, skip pathfinding and beeline directly (ghosts phase through everything). */
+      let directBeeline = false;
 
       // Margin to push nav point outside building collision so pathfinder can reach it
       const NAV_MARGIN = 14; // ~ENEMY_RADIUS + buffer
+
+      // Helper: find nearest player (alive, not downed)
+      const findNearestPlayer = (maxRange: number) => {
+        let best: { pos: PositionComponent; dist: number } | null = null;
+        for (const pid of playerIds) {
+          if (world.hasComponent(pid, C.Downed)) continue;
+          const ppos = world.getComponent<PositionComponent>(pid, C.Position)!;
+          const ddx = ppos.x - pos.x;
+          const ddy = ppos.y - pos.y;
+          const dist = Math.sqrt(ddx * ddx + ddy * ddy);
+          if (dist < maxRange && (!best || dist < best.dist)) {
+            best = { pos: ppos, dist };
+          }
+        }
+        return best;
+      };
 
       const tryBuildings = (ids: number[], maxRange: number) => {
         let best: { id: number; pos: PositionComponent; nav: { x: number; y: number }; dist: number; half: number } | null = null;
@@ -207,56 +248,85 @@ export class EnemySystem {
         return best;
       };
 
-      // 1. Campfire (always the global objective — no range limit)
-      const campfire = tryBuildings(campfireIds, Infinity);
-      if (campfire) {
-        targetPos = campfire.pos;
-        navPos = campfire.nav;
-        targetDist = campfire.dist;
-        targetHalfExtent = campfire.half;
-        targetEntityId = campfire.id;
-      }
-
-      // 2. Nearby players override campfire (distraction — only if very close)
-      const PLAYER_DISTRACT_RANGE = ENEMY_MELEE_RANGE * 2;
-      let closestPlayer: { pos: PositionComponent; dist: number } | null = null;
-      for (const pid of playerIds) {
-        if (world.hasComponent(pid, C.Downed)) continue;
-        const ppos = world.getComponent<PositionComponent>(pid, C.Position)!;
-        const ddx = ppos.x - pos.x;
-        const ddy = ppos.y - pos.y;
-        const dist = Math.sqrt(ddx * ddx + ddy * ddy);
-        if (dist < ENEMY_AGGRO_RANGE && (!closestPlayer || dist < closestPlayer.dist)) {
-          closestPlayer = { pos: ppos, dist };
+      // ── Variant-specific targeting ────────────────────────────────────────
+      if (variant === 'ghost') {
+        // Ghosts: only target players, phase through everything (no pathfinding)
+        const nearest = findNearestPlayer(Infinity);
+        if (nearest) {
+          targetPos = nearest.pos;
+          navPos = nearest.pos;
+          targetDist = nearest.dist;
+          directBeeline = true;
         }
-      }
-      if (closestPlayer && (closestPlayer.dist < PLAYER_DISTRACT_RANGE || !targetPos)) {
-        // Only distract from a building target if the enemy has line of sight to the player
-        // (prevents enemies getting stuck when the campfire is between them and the player)
-        if (!targetPos || this.isDirectPathClear(pos.x, pos.y, closestPlayer.pos.x, closestPlayer.pos.y)) {
-          targetPos = closestPlayer.pos;
-          navPos = closestPlayer.pos;
-          targetDist = closestPlayer.dist;
-          targetHalfExtent = 0;
-          targetEntityId = null;
+      } else if (variant === 'assassin') {
+        // Assassins: only target players (use pathfinding, not beeline)
+        const nearest = findNearestPlayer(Infinity);
+        if (nearest) {
+          targetPos = nearest.pos;
+          navPos = nearest.pos;
+          targetDist = nearest.dist;
         }
-      }
+      } else if (variant === 'giant') {
+        // Giants: target nearest building (any type), skip player distraction entirely
+        const allBuildingIds = [...campfireIds, ...wallIds, ...otherBuildingIds];
+        const nearest = tryBuildings(allBuildingIds, Infinity);
+        if (nearest) {
+          targetPos = nearest.pos;
+          navPos = nearest.nav;
+          targetDist = nearest.dist;
+          targetHalfExtent = nearest.half;
+          targetEntityId = nearest.id;
+        }
+      } else {
+        // Standard targeting: campfire > players > walls > other buildings
+        // (melee, ranger all use this)
 
-      // 3. Walls (only if nothing else found)
-      if (!targetPos) {
-        const wall = tryBuildings(wallIds, ENEMY_AGGRO_RANGE);
-        if (wall) { targetPos = wall.pos; navPos = wall.nav; targetDist = wall.dist; targetHalfExtent = wall.half; targetEntityId = wall.id; }
-      }
+        // 1. Campfire (always the global objective — no range limit)
+        const campfire = tryBuildings(campfireIds, Infinity);
+        if (campfire) {
+          targetPos = campfire.pos;
+          navPos = campfire.nav;
+          targetDist = campfire.dist;
+          targetHalfExtent = campfire.half;
+          targetEntityId = campfire.id;
+        }
 
-      // 4. Other buildings (lowest priority)
-      if (!targetPos) {
-        const other = tryBuildings(otherBuildingIds, ENEMY_AGGRO_RANGE);
-        if (other) { targetPos = other.pos; navPos = other.nav; targetDist = other.dist; targetHalfExtent = other.half; targetEntityId = other.id; }
+        // 2. Nearby players override campfire (distraction — only if very close)
+        const PLAYER_DISTRACT_RANGE = ENEMY_MELEE_RANGE * 2;
+        const closestPlayer = findNearestPlayer(ENEMY_AGGRO_RANGE);
+        if (closestPlayer && (closestPlayer.dist < PLAYER_DISTRACT_RANGE || !targetPos)) {
+          if (!targetPos || this.isDirectPathClear(pos.x, pos.y, closestPlayer.pos.x, closestPlayer.pos.y)) {
+            targetPos = closestPlayer.pos;
+            navPos = closestPlayer.pos;
+            targetDist = closestPlayer.dist;
+            targetHalfExtent = 0;
+            targetEntityId = null;
+          }
+        }
+
+        // 3. Walls (only if nothing else found)
+        if (!targetPos) {
+          const wall = tryBuildings(wallIds, ENEMY_AGGRO_RANGE);
+          if (wall) { targetPos = wall.pos; navPos = wall.nav; targetDist = wall.dist; targetHalfExtent = wall.half; targetEntityId = wall.id; }
+        }
+
+        // 4. Other buildings (lowest priority)
+        if (!targetPos) {
+          const other = tryBuildings(otherBuildingIds, ENEMY_AGGRO_RANGE);
+          if (other) { targetPos = other.pos; navPos = other.nav; targetDist = other.dist; targetHalfExtent = other.half; targetEntityId = other.id; }
+        }
       }
 
       if (targetPos && navPos) {
-        const ev = world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant);
-        const isRanger = ev?.variant === 'ranger';
+        const stats = world.getComponent<EnemyStatsComponent>(id, C.EnemyStats);
+
+        // Per-entity stats (fallback to global defaults for legacy entities without EnemyStats)
+        const meleeRange = stats?.range ?? ENEMY_MELEE_RANGE;
+        const rangedRange = stats?.rangedRange ?? (variant === 'ranger' ? ENEMY_RANGER_RANGE : 0);
+        const hasRanged = rangedRange > 0;
+        const enemyOverrides = stats
+          ? { damage: stats.damage, range: stats.range, knockback: stats.knockback }
+          : ENEMY_OVERRIDES_DEFAULT;
 
         // For buildings: use edge distance for melee check (not center distance)
         let meleeCheckDist: number;
@@ -269,10 +339,10 @@ export class EnemySystem {
           meleeCheckDist = Math.sqrt(ddx * ddx + ddy * ddy);
         }
 
-        // Ranger ranged attack: fire at non-building targets within range
-        const rangerCanShoot = isRanger && targetHalfExtent === 0 && meleeCheckDist <= ENEMY_RANGER_RANGE && meleeCheckDist > ENEMY_MELEE_RANGE;
+        // Ranged attack: fire at non-building targets within range
+        const canShootRanged = hasRanged && targetHalfExtent === 0 && meleeCheckDist <= rangedRange && meleeCheckDist > meleeRange;
 
-        if (rangerCanShoot) {
+        if (canShootRanged) {
           // Stop and fire
           inp.dx = 0;
           inp.dy = 0;
@@ -285,9 +355,14 @@ export class EnemySystem {
           const cd = world.getComponent<AttackCooldownComponent>(id, C.AttackCooldown);
           if (cd && cd.remaining <= 0) {
             cd.remaining = cd.max;
-            result.rangedAttacks.push({ sourceId: id, x: pos.x, y: pos.y, facing });
+            result.rangedAttacks.push({
+              sourceId: id, x: pos.x, y: pos.y, facing,
+              projectileSpeed: stats?.projectileSpeed ?? 300,
+              damage: stats?.rangedDamage ?? 8,
+              radius: stats?.radius ?? 10,
+            });
           }
-        } else if (meleeCheckDist <= ENEMY_MELEE_RANGE) {
+        } else if (meleeCheckDist <= meleeRange) {
           // In melee range: face target center, attack
           if (targetHalfExtent > 0) {
             // Buildings: keep closing distance — building collision stops naturally at surface
@@ -311,7 +386,7 @@ export class EnemySystem {
           const cdBefore = cd?.remaining ?? 0;
 
           const { hits, deaths } = this.combat.processMeleeAttack(
-            world, id, facing, undefined, ENEMY_OVERRIDES,
+            world, id, facing, undefined, enemyOverrides,
           );
 
           const didSwing = cd && cdBefore <= 0 && cd.remaining > 0;
@@ -322,63 +397,83 @@ export class EnemySystem {
           result.hits.push(...hits);
           result.deaths.push(...deaths);
         } else {
-          // Navigate toward the nav point (outside building for buildings, center for players)
+          // ── Movement toward target ────────────────────────────────────────
           const ddx = navPos.x - pos.x, ddy = navPos.y - pos.y;
           const len = Math.sqrt(ddx * ddx + ddy * ddy);
 
-          // Temporarily exclude target building tiles so pathfinding doesn't treat
-          // the target as an obstacle (enemies should path around OTHER buildings, not the target)
-          const excludedTiles = targetEntityId !== null ? this.buildingTilesMap.get(targetEntityId) : undefined;
-          if (excludedTiles) for (const tk of excludedTiles) this.buildingBlockedTiles.delete(tk);
-
-          this.navigateToward(id, pos, navPos as PositionComponent, inp, dt, len, ddx, ddy);
-
-          // Stuck detection: if enemy hasn't moved, apply perpendicular wiggle
-          let stuck = this.stuckTimers.get(id);
-          if (!stuck) {
-            stuck = { x: pos.x, y: pos.y, timer: 0 };
-            this.stuckTimers.set(id, stuck);
+          // Assassin dash: instant lunge when target is a player within 200px
+          if (variant === 'assassin' && dash && !dash.dashing && dash.cooldown <= 0
+              && targetHalfExtent === 0 && meleeCheckDist <= 200) {
+            dash.dashing = true;
+            dash.dashTimer = dash.dashDuration;
+            dash.cooldown = dash.maxCooldown;
+            // Override speed multiplier for the dash
+            const spd = world.getComponent<SpeedComponent>(id, C.Speed);
+            if (spd) spd.multiplier = dash.dashSpeed / spd.base;
           }
-          const movedDx = pos.x - stuck.x, movedDy = pos.y - stuck.y;
-          if (movedDx * movedDx + movedDy * movedDy > STUCK_DIST * STUCK_DIST) {
-            stuck.x = pos.x; stuck.y = pos.y; stuck.timer = 0;
+
+          if (directBeeline) {
+            // Ghost: beeline directly, ignore pathfinding and terrain
+            inp.dx = len > 0 ? ddx / len : 0;
+            inp.dy = len > 0 ? ddy / len : 0;
+            this.paths.delete(id);
           } else {
-            stuck.timer += dt;
-            if (stuck.timer > STUCK_TIME) {
-              // Add perpendicular wiggle to current direction
-              const perp = (Math.random() < 0.5 ? 1 : -1);
-              inp.dx += -inp.dy * 0.7 * perp;
-              inp.dy += inp.dx * 0.7 * perp;
-              const wLen = Math.sqrt(inp.dx * inp.dx + inp.dy * inp.dy);
-              if (wLen > 0) { inp.dx /= wLen; inp.dy /= wLen; }
-              stuck.timer = 0; // reset so wiggle applies periodically
+            // Normal navigation: A* pathfinding with building awareness
+            // Temporarily exclude target building tiles
+            const excludedTiles = targetEntityId !== null ? this.buildingTilesMap.get(targetEntityId) : undefined;
+            if (excludedTiles) for (const tk of excludedTiles) this.buildingBlockedTiles.delete(tk);
+
+            this.navigateToward(id, pos, navPos as PositionComponent, inp, dt, len, ddx, ddy);
+
+            // Stuck detection: if enemy hasn't moved, apply perpendicular wiggle
+            let stuck = this.stuckTimers.get(id);
+            if (!stuck) {
+              stuck = { x: pos.x, y: pos.y, timer: 0 };
+              this.stuckTimers.set(id, stuck);
             }
-          }
-
-          // Restore excluded tiles
-          if (excludedTiles) for (const tk of excludedTiles) this.buildingBlockedTiles.add(tk);
-
-          // Attack any building within melee range while navigating (break through obstacles)
-          const blocking = this.findBlockingBuilding(pos);
-          if (blocking) {
-            const facing = Math.atan2(blocking.y - pos.y, blocking.x - pos.x);
-            const facingComp = world.getComponent<FacingComponent>(id, C.Facing);
-            if (facingComp) facingComp.angle = facing;
-
-            const cd = world.getComponent<AttackCooldownComponent>(id, C.AttackCooldown);
-            const cdBefore = cd?.remaining ?? 0;
-
-            const { hits, deaths } = this.combat.processMeleeAttack(
-              world, id, facing, undefined, ENEMY_OVERRIDES,
-            );
-
-            const didSwing = cd && cdBefore <= 0 && cd.remaining > 0;
-            if (didSwing) {
-              result.attackPerformed.push({ sourceId: id, facing });
+            const movedDx = pos.x - stuck.x, movedDy = pos.y - stuck.y;
+            if (movedDx * movedDx + movedDy * movedDy > STUCK_DIST * STUCK_DIST) {
+              stuck.x = pos.x; stuck.y = pos.y; stuck.timer = 0;
+            } else {
+              stuck.timer += dt;
+              if (stuck.timer > STUCK_TIME) {
+                const perp = (Math.random() < 0.5 ? 1 : -1);
+                inp.dx += -inp.dy * 0.7 * perp;
+                inp.dy += inp.dx * 0.7 * perp;
+                const wLen = Math.sqrt(inp.dx * inp.dx + inp.dy * inp.dy);
+                if (wLen > 0) { inp.dx /= wLen; inp.dy /= wLen; }
+                stuck.timer = 0;
+              }
             }
 
-            result.hits.push(...hits);
-            result.deaths.push(...deaths);
+            // Restore excluded tiles
+            if (excludedTiles) for (const tk of excludedTiles) this.buildingBlockedTiles.add(tk);
+
+            // Attack any building within melee range while navigating (break through obstacles)
+            // Ghosts don't attack buildings
+            if (variant !== 'ghost') {
+              const blocking = this.findBlockingBuilding(pos);
+              if (blocking) {
+                const facing = Math.atan2(blocking.y - pos.y, blocking.x - pos.x);
+                const facingComp = world.getComponent<FacingComponent>(id, C.Facing);
+                if (facingComp) facingComp.angle = facing;
+
+                const cd = world.getComponent<AttackCooldownComponent>(id, C.AttackCooldown);
+                const cdBefore = cd?.remaining ?? 0;
+
+                const { hits, deaths } = this.combat.processMeleeAttack(
+                  world, id, facing, undefined, enemyOverrides,
+                );
+
+                const didSwing = cd && cdBefore <= 0 && cd.remaining > 0;
+                if (didSwing) {
+                  result.attackPerformed.push({ sourceId: id, facing });
+                }
+
+                result.hits.push(...hits);
+                result.deaths.push(...deaths);
+              }
+            }
           }
         }
       } else {

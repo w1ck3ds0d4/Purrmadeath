@@ -11,8 +11,10 @@ import {
   BuildingComponent,
   ProductionComponent,
   EnemyVariantComponent,
+  GhostStateComponent,
+  EnemyStatsComponent,
 } from '@shared/components';
-import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, ENEMY_MELEE_RANGE, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, buildingHalfExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE } from '@shared/constants';
+import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, ENEMY_MELEE_RANGE, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, buildingHalfExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RANGE } from '@shared/constants';
 
 /** Turret type → base range in pixels. */
 const TURRET_RANGES: Record<string, number> = {
@@ -20,9 +22,20 @@ const TURRET_RANGES: Record<string, number> = {
   cannon_turret: CANNON_TURRET_RANGE,
 };
 
-// Enemy body colors
-const ENEMY_COLOR = 0xcc3333;
-const ENEMY_RANGER_COLOR = 0xdd7722;
+/** Building type → range color for the selection indicator. */
+const RANGE_COLORS: Record<string, number> = {
+  arrow_turret: 0x44aaff,
+  cannon_turret: 0x44aaff,
+  light_tower: 0xffdd44,
+  healing_shrine: 0x44ff88,
+};
+
+// Enemy body colors by variant
+const ENEMY_COLOR = 0xcc3333;          // melee (default)
+const ENEMY_RANGER_COLOR = 0xdd7722;   // ranger
+const ENEMY_GHOST_COLOR = 0x44cccc;    // ghost (teal/cyan)
+const ENEMY_GIANT_COLOR = 0x664422;    // giant (dark brown)
+const ENEMY_ASSASSIN_COLOR = 0xcc44cc; // assassin (purple-pink)
 // Portal colors
 const PORTAL_OUTER_COLOR = 0x9933ff;
 const PORTAL_CORE_COLOR  = 0x6600cc;
@@ -54,6 +67,9 @@ const BUILDING_COLORS: Record<string, { body: number; border: number }> = {
   cannon_turret:  { body: 0x5a5a6a, border: 0x8888aa },
   spike_trap:     { body: 0x8a3a3a, border: 0xcc5555 },
   bridge:         { body: 0x8a6a3a, border: 0xaa8a5a },
+  light_tower:    { body: 0xeedd44, border: 0xccbb22 },
+  healing_shrine: { body: 0x44cc66, border: 0x228844 },
+  barracks:       { body: 0x886644, border: 0x664422 },
 };
 // Production resource tag colors
 const PRODUCTION_TAG_COLORS: Record<string, number> = {
@@ -108,6 +124,18 @@ export class PlayerRendererSystem {
   /** Production building resource tags (Text objects managed per-entity). */
   private productionTags = new Map<EntityId, { bg: Graphics; text: Text }>();
   private tagContainer: Container;
+  /** Per-entity dirty flags: true when geometry needs rebuild, false when just position update suffices. */
+  private dirty = new Map<EntityId, boolean>();
+  /** Per-entity: was entity flashing last frame? */
+  private wasFlashing = new Map<EntityId, boolean>();
+  /** Per-entity: was ghost hidden last frame? */
+  private wasGhostHidden = new Map<EntityId, boolean>();
+  /** Per-entity: was entity downed last frame? */
+  private wasDowned = new Map<EntityId, boolean>();
+  /** Per-entity: last revive progress value. */
+  private lastReviveProg = new Map<EntityId, number>();
+  /** Last selected building ID (to detect selection changes). */
+  private lastSelectedId: number | null = null;
 
   constructor(private readonly worldContainer: Container) {
     this.healthBarGfx = new Graphics();
@@ -182,6 +210,7 @@ export class PlayerRendererSystem {
     const resourceIds = new Set<number>();
     const itemIds     = new Set<number>();
     const buildingIds = new Set<number>();
+    const guardIds    = new Set<number>();
     for (const id of factionEntities) {
       const f = world.getComponent<FactionComponent>(id, C.Faction)!;
       if (f.type === 'enemy') enemyIds.add(id);
@@ -189,8 +218,9 @@ export class PlayerRendererSystem {
       else if (f.type === 'resource') resourceIds.add(id);
       else if (f.type === 'item') itemIds.add(id);
       else if (f.type === 'building') buildingIds.add(id);
+      else if (f.type === 'guard') guardIds.add(id);
     }
-    const living = new Set([...playerIds, ...enemyIds, ...portalIds, ...resourceIds, ...itemIds, ...buildingIds]);
+    const living = new Set([...playerIds, ...enemyIds, ...portalIds, ...resourceIds, ...itemIds, ...buildingIds, ...guardIds]);
 
     // Remove sprites for entities that no longer exist; clean up all timers
     for (const [id, gfx] of this.sprites) {
@@ -200,7 +230,19 @@ export class PlayerRendererSystem {
         this.sprites.delete(id);
         this.hitTimers.delete(id);
         this.attackArcs.delete(id);
+        this.dirty.delete(id);
+        this.wasFlashing.delete(id);
+        this.wasGhostHidden.delete(id);
+        this.wasDowned.delete(id);
+        this.lastReviveProg.delete(id);
       }
+    }
+
+    // Detect selection change (marks old and new selected buildings as dirty)
+    if (this.selectedBuildingId !== this.lastSelectedId) {
+      if (this.lastSelectedId !== null) this.dirty.set(this.lastSelectedId, true);
+      if (this.selectedBuildingId !== null) this.dirty.set(this.selectedBuildingId, true);
+      this.lastSelectedId = this.selectedBuildingId;
     }
 
     for (const id of living) {
@@ -212,14 +254,15 @@ export class PlayerRendererSystem {
       const isResource = resourceIds.has(id);
       const isItem     = itemIds.has(id);
 
+      let isNew = false;
       if (!this.sprites.has(id)) {
         const gfx = new Graphics();
         this.worldContainer.addChild(gfx);
         this.sprites.set(id, gfx);
+        isNew = true;
       }
 
       const gfx = this.sprites.get(id)!;
-      gfx.clear();
 
       // ── Timers ────────────────────────────────────────────────────────────────
 
@@ -227,6 +270,52 @@ export class PlayerRendererSystem {
       const flashRemaining = this.hitTimers.get(id) ?? 0;
       if (flashRemaining > 0) this.hitTimers.set(id, Math.max(0, flashRemaining - dt));
       const flashT = Math.min(1, flashRemaining / HIT_FLASH_DURATION); // 1 → 0
+
+      // ── Dirty flag determination ──────────────────────────────────────────────
+      const isFlashing = flashT > 0;
+      const prevFlashing = this.wasFlashing.get(id) ?? false;
+      const hasArc = this.attackArcs.has(id);
+      const isDowned = this.downedEntities.has(id);
+      const prevDowned = this.wasDowned.get(id) ?? false;
+      const revProg = this.reviveProgress.get(id) ?? -1;
+      const prevRevProg = this.lastReviveProg.get(id) ?? -1;
+
+      // Always-animated entities need per-frame redraw
+      const alwaysAnimated = isPortal || isItem || id === localEntityId || this.selectedBuildingId === id;
+
+      let needsRedraw = isNew || alwaysAnimated
+        || isFlashing || prevFlashing !== isFlashing
+        || hasArc
+        || isDowned !== prevDowned
+        || revProg !== prevRevProg
+        || this.dirty.get(id) === true;
+
+      // Ghost visibility change
+      if (isEnemy) {
+        const gs = world.getComponent<GhostStateComponent>(id, C.GhostState);
+        const hidden = gs?.hidden ?? false;
+        const prevHidden = this.wasGhostHidden.get(id) ?? false;
+        if (hidden !== prevHidden) needsRedraw = true;
+        this.wasGhostHidden.set(id, hidden);
+      }
+
+      // Update tracking state
+      this.wasFlashing.set(id, isFlashing);
+      this.wasDowned.set(id, isDowned);
+      this.lastReviveProg.set(id, revProg);
+      this.dirty.delete(id);
+
+      if (!needsRedraw) {
+        // Just update position — skip expensive geometry rebuild
+        if (id === localEntityId) {
+          gfx.position.set(pos.x + smoothX, pos.y + smoothY);
+        } else {
+          gfx.position.set(pos.x, pos.y);
+        }
+        continue;
+      }
+
+      gfx.clear();
 
       if (isPortal) {
         // ── Portal rendering ──────────────────────────────────────────────────
@@ -295,9 +384,21 @@ export class PlayerRendererSystem {
         const borderW = bType === 'wall' ? 2.5 : 4;
 
         if (bType === 'wall') {
-          // Walls: fill the whole tile, colored border
+          // Walls: visual upgrade tiers — stone (grey) → iron (white) → reinforced (white + lines)
+          const wLvl = bldg?.upgradeLevel ?? 1;
+          const wallBody = wLvl >= 2 ? 0xcccccc : 0x8a8a8a;
+          const wallFill = bFlashT > 0 ? lerpColor(wallBody, 0xffffff, bFlashT * 0.6) : wallBody;
           gfx.rect(-half, -half, half * 2, half * 2);
-          gfx.fill({ color: bodyColor, alpha: 0.95 });
+          gfx.fill({ color: wallFill, alpha: 0.95 });
+          if (wLvl >= 3) {
+            // Reinforced iron: grey diagonal lines
+            for (let i = -1; i <= 1; i++) {
+              const off = i * 8;
+              gfx.moveTo(-half + Math.max(0, off), -half + Math.max(0, -off));
+              gfx.lineTo(half + Math.min(0, off), half + Math.min(0, -off));
+            }
+            gfx.stroke({ color: 0x888888, alpha: 0.5, width: 1 });
+          }
           gfx.rect(-half, -half, half * 2, half * 2);
           gfx.stroke({ color: 0x000000, alpha: 0.75, width: 1.5 });
         } else {
@@ -408,35 +509,57 @@ export class PlayerRendererSystem {
           gfx.zIndex = -9; // above tiles (-10), below buildings (-5)
         }
 
+        // Light tower: radiating light rays
+        if (bType === 'light_tower') {
+          const rayCount = 8;
+          const rayLen = 8;
+          for (let i = 0; i < rayCount; i++) {
+            const a = (i / rayCount) * Math.PI * 2;
+            gfx.moveTo(Math.cos(a) * 3, Math.sin(a) * 3);
+            gfx.lineTo(Math.cos(a) * rayLen, Math.sin(a) * rayLen);
+          }
+          gfx.stroke({ color: 0xffee88, alpha: 0.8, width: 1.5 });
+          gfx.circle(0, 0, 3);
+          gfx.fill({ color: 0xffee88, alpha: 0.9 });
+        }
+
+        // Healing shrine: cross/plus symbol
+        if (bType === 'healing_shrine') {
+          const cw = 3, ch = 8;
+          gfx.rect(-cw, -ch, cw * 2, ch * 2);
+          gfx.fill({ color: 0xeeffee, alpha: 0.8 });
+          gfx.rect(-ch, -cw, ch * 2, cw * 2);
+          gfx.fill({ color: 0xeeffee, alpha: 0.8 });
+        }
+
+        // Barracks: shield icon
+        if (bType === 'barracks') {
+          const sw = 7, sh = 9;
+          gfx.poly([0, -sh, sw, -sh + 3, sw, sh - 3, 0, sh, -sw, sh - 3, -sw, -sh + 3]);
+          gfx.stroke({ color: 0xddccaa, alpha: 0.8, width: 2 });
+        }
+
         // Selection highlight: pulsing yellow border + turret range circle
         if (this.selectedBuildingId === id) {
           const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 300);
           gfx.rect(-half - 2, -half - 2, (half + 2) * 2, (half + 2) * 2);
           gfx.stroke({ color: 0xffdd44, alpha: 0.5 + 0.4 * pulse, width: 2.5 });
 
-          // Turret range circle
-          const range = TURRET_RANGES[bldg?.buildingType ?? ''];
+          // Range circle (turrets, light tower, healing shrine)
+          const bType = bldg?.buildingType ?? '';
+          let range = TURRET_RANGES[bType];
+          if (!range && bType === 'light_tower') range = UPGRADE_LIGHT_RANGE[bldg?.upgradeLevel ?? 0] ?? UPGRADE_LIGHT_RANGE[0];
+          if (!range && bType === 'healing_shrine') range = UPGRADE_HEAL_RANGE[bldg?.upgradeLevel ?? 0] ?? UPGRADE_HEAL_RANGE[0];
           if (range) {
+            const color = RANGE_COLORS[bType] ?? 0x44aaff;
             gfx.circle(0, 0, range);
-            gfx.fill({ color: 0x44aaff, alpha: 0.06 });
+            gfx.fill({ color, alpha: 0.06 });
             gfx.circle(0, 0, range);
-            gfx.stroke({ color: 0x44aaff, alpha: 0.25, width: 1 });
+            gfx.stroke({ color, alpha: 0.25, width: 1 });
           }
         }
 
-        // Upgrade level pips (small diamonds below building for level 2+)
-        const upgradeLevel = bldg?.upgradeLevel ?? 1;
-        if (upgradeLevel > 1) {
-          const pipY = half + 6;
-          const pipSpacing = 8;
-          const totalW = (upgradeLevel - 1) * pipSpacing;
-          const startX = -totalW / 2;
-          for (let i = 0; i < upgradeLevel; i++) {
-            const px = startX + i * pipSpacing;
-            gfx.poly([px, pipY - 3, px + 3, pipY, px, pipY + 3, px - 3, pipY]);
-            gfx.fill({ color: 0xffdd44, alpha: 0.9 });
-          }
-        }
+        // Upgrade pips are drawn in the health bar overlay pass (above all entities)
 
       } else if (isItem) {
         // ── Item drop rendering ──────────────────────────────────────────────
@@ -464,7 +587,7 @@ export class PlayerRendererSystem {
         gfx.stroke({ color: 0xffffff, alpha: 0.3, width: 1 });
 
       } else {
-        // ── Standard entity rendering (players + enemies) ────────────────────
+        // ── Standard entity rendering (players, enemies, guards) ─────────────
 
         // Tick down attack arc
         const arc = this.attackArcs.get(id);
@@ -473,12 +596,31 @@ export class PlayerRendererSystem {
           if (arc.elapsed >= ARC_DURATION) this.attackArcs.delete(id);
         }
 
+        const isGuard = guardIds.has(id);
         const ev = isEnemy ? world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant) : undefined;
-        const baseColor = isEnemy
-          ? (ev?.variant === 'ranger' ? ENEMY_RANGER_COLOR : ENEMY_COLOR)
-          : (PLAYER_COLORS[pIdx?.index ?? 0] ?? PLAYER_COLORS[0]);
+        const ghostState = isEnemy ? world.getComponent<GhostStateComponent>(id, C.GhostState) : undefined;
+        const enemyStats = isEnemy ? world.getComponent<EnemyStatsComponent>(id, C.EnemyStats) : undefined;
+
+        // Variant-specific colors
+        let baseColor: number;
+        if (isGuard) {
+          baseColor = 0x4488cc; // friendly blue for guards
+        } else if (!isEnemy) {
+          baseColor = PLAYER_COLORS[pIdx?.index ?? 0] ?? PLAYER_COLORS[0];
+        } else {
+          switch (ev?.variant) {
+            case 'ranger':   baseColor = ENEMY_RANGER_COLOR; break;
+            case 'ghost':    baseColor = ENEMY_GHOST_COLOR; break;
+            case 'giant':    baseColor = ENEMY_GIANT_COLOR; break;
+            case 'assassin': baseColor = ENEMY_ASSASSIN_COLOR; break;
+            default:         baseColor = ENEMY_COLOR;
+          }
+        }
         const color = flashT > 0 ? lerpColor(baseColor, 0xffffff, flashT * 0.6) : baseColor;
-        const r = PLAYER_RADIUS;
+        // Use per-entity radius (giants are 2x), default to PLAYER_RADIUS
+        const r = (enemyStats?.radius && enemyStats.radius !== 10) ? enemyStats.radius : PLAYER_RADIUS;
+        // Ghost hidden: render barely visible shimmer
+        const ghostAlpha = (ghostState?.hidden) ? 0.06 : 1;
 
         // ── Attack arc (drawn first, appears behind the entity body) ──────────
 
@@ -503,7 +645,6 @@ export class PlayerRendererSystem {
 
         // ── Body ────────────────────────────────────────────────────────────────
 
-        const isDowned = this.downedEntities.has(id);
         if (isDowned) {
           // Downed: dark tint + reduced alpha
           gfx.circle(0, 0, r);
@@ -530,10 +671,10 @@ export class PlayerRendererSystem {
           }
         } else {
           gfx.circle(0, 0, r);
-          gfx.fill({ color, alpha: 1 });
+          gfx.fill({ color, alpha: ghostAlpha });
 
           gfx.circle(0, 0, r);
-          gfx.stroke({ color: 0x000000, alpha: 0.45, width: 2 });
+          gfx.stroke({ color: 0x000000, alpha: 0.45 * ghostAlpha, width: 2 });
         }
 
         // ── Facing triangle (local player only, skip when downed) ────────────────
@@ -597,7 +738,12 @@ export class PlayerRendererSystem {
         const half = buildingHalfExtent(bldg?.buildingType ?? 'wall');
         barW = Math.min(half * 2, 36); barH = 3; barY = -(half + 8); alwaysShow = false;
       } else if (isEnemy) {
+        // Skip health bars for hidden ghosts
+        const gs = world.getComponent<GhostStateComponent>(id, C.GhostState);
+        if (gs?.hidden) continue;
         barW = BAR_W; barH = BAR_H; barY = BAR_Y; alwaysShow = true;
+      } else if (guardIds.has(id)) {
+        barW = BAR_W; barH = BAR_H; barY = BAR_Y; alwaysShow = false;
       } else {
         continue; // players don't show health bars (HUD instead)
       }
@@ -613,6 +759,27 @@ export class PlayerRendererSystem {
       if (ratio > 0) {
         hb.rect(wx - barW / 2, wy + barY, barW * ratio, barH);
         hb.fill({ color: barColor, alpha: 1 });
+      }
+    }
+
+    // ── Upgrade level pips (drawn on health bar layer so they render above all buildings) ──
+    // Walls use visual tier changes instead of pips
+    for (const id of buildingIds) {
+      if (!living.has(id)) continue;
+      const bldg = world.getComponent<BuildingComponent>(id, C.Building);
+      const level = bldg?.upgradeLevel ?? 1;
+      if (level <= 1) continue;
+      if (bldg?.buildingType === 'wall') continue;
+      const pos = world.getComponent<PositionComponent>(id, C.Position)!;
+      const half = buildingHalfExtent(bldg?.buildingType ?? 'wall');
+      const pipY = pos.y + half + 6;
+      const pipSpacing = 8;
+      const totalW = (level - 1) * pipSpacing;
+      const startX = pos.x - totalW / 2;
+      for (let i = 0; i < level; i++) {
+        const px = startX + i * pipSpacing;
+        hb.poly([px, pipY - 3, px + 3, pipY, px, pipY + 3, px - 3, pipY]);
+        hb.fill({ color: 0xffdd44, alpha: 0.9 });
       }
     }
 
@@ -685,6 +852,11 @@ export class PlayerRendererSystem {
     this.downedEntities.clear();
     this.reviveProgress.clear();
     this.healthBarGfx.clear();
+    this.dirty.clear();
+    this.wasFlashing.clear();
+    this.wasGhostHidden.clear();
+    this.wasDowned.clear();
+    this.lastReviveProg.clear();
     for (const [, tag] of this.productionTags) {
       this.tagContainer.removeChild(tag.bg);
       this.tagContainer.removeChild(tag.text);

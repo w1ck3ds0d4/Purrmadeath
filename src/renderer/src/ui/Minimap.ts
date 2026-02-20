@@ -6,16 +6,16 @@ import {
   FactionComponent,
   PlayerIndexComponent,
   ResourceNodeComponent,
+  GhostStateComponent,
 } from '@shared/components';
 import { PLAYER_COLORS, TILE_SIZE } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 
 export const MAP_SIZE = 220;
 export const MAP_PADDING = 12;
-const MAP_BORDER_ALPHA = 0.2;
 
 /** World pixels visible on the minimap in each direction from center. */
-const MAP_RANGE = 1200;
+const MAP_RANGE = 900;
 
 /** Biome grid cell size in minimap pixels. */
 const BIOME_CELL = 5;
@@ -52,24 +52,42 @@ export type TileGetter = (tx: number, ty: number) => number;
 /**
  * Top-right minimap showing biome terrain and nearby entities as colored dots.
  *
- * Smooth scrolling: biome grid cells are drawn with a sub-cell pixel offset
- * derived from the camera position, so the minimap pans continuously instead
- * of jumping in BIOME_CELL-sized steps.
+ * Performance: biome terrain is cached in a separate Graphics object and only
+ * redrawn when the camera moves more than one cell (~55 world pixels). Entity
+ * dots are drawn every frame on a lightweight overlay.
  */
 export class Minimap {
   private container: Container;
-  private gfx: Graphics;
+  /** Static background — never shifts. */
+  private bgGfx: Graphics;
+  /** Cached biome terrain layer — redrawn only on significant camera movement. */
+  private terrainGfx: Graphics;
+  /** Entity dots + border + crosshair — redrawn every frame. */
+  private dotGfx: Graphics;
   private maskGfx: Graphics;
   private visible = true;
   private tileGetter: TileGetter | null = null;
 
+  /** Last camera cell used for terrain cache invalidation. */
+  private lastCellX = NaN;
+  private lastCellY = NaN;
+  /** Fractional offsets baked into the cached terrain geometry. */
+  private bakedFracX = 0;
+  private bakedFracY = 0;
+
   constructor(stage: Container) {
     this.container = new Container();
-    this.gfx = new Graphics();
+    this.bgGfx = new Graphics();
+    this.terrainGfx = new Graphics();
+    this.dotGfx = new Graphics();
     this.maskGfx = new Graphics();
-    this.container.addChild(this.gfx);
+    this.container.addChild(this.bgGfx);
+    this.container.addChild(this.terrainGfx);
+    this.container.addChild(this.dotGfx);
     this.container.addChild(this.maskGfx);
-    this.gfx.mask = this.maskGfx;
+    this.bgGfx.mask = this.maskGfx;
+    this.terrainGfx.mask = this.maskGfx;
+    this.dotGfx.mask = this.maskGfx;
     stage.addChild(this.container);
   }
 
@@ -93,57 +111,47 @@ export class Minimap {
     const halfMap = MAP_SIZE / 2;
 
     // Sub-cell fractional offset for smooth scrolling
-    // As the camera moves within one cell's worth of world pixels,
-    // shift all drawing by the fractional minimap-pixel remainder.
     const fracX = ((centerX % WORLD_PER_CELL) + WORLD_PER_CELL) % WORLD_PER_CELL / WORLD_PER_CELL * BIOME_CELL;
     const fracY = ((centerY % WORLD_PER_CELL) + WORLD_PER_CELL) % WORLD_PER_CELL / WORLD_PER_CELL * BIOME_CELL;
 
-    this.gfx.clear();
+    // ── Terrain layer (cached, redrawn only when camera moves ≥ 1 cell) ──
+    const cellX = Math.floor(centerX / WORLD_PER_CELL);
+    const cellY = Math.floor(centerY / WORLD_PER_CELL);
+    if (cellX !== this.lastCellX || cellY !== this.lastCellY) {
+      this.lastCellX = cellX;
+      this.lastCellY = cellY;
+      this.bakedFracX = fracX;
+      this.bakedFracY = fracY;
+      this.rebuildTerrain(mapX, mapY, halfMap, centerX, centerY, fracX, fracY);
+    }
 
-    // Update clip mask (prevents shifted rects from overflowing the border)
+    // Smooth sub-cell scrolling: shift cached terrain by delta from baked frac
+    this.terrainGfx.position.set(
+      -(fracX - this.bakedFracX),
+      -(fracY - this.bakedFracY),
+    );
+
+    // Update clip mask
     this.maskGfx.clear();
     this.maskGfx.rect(mapX, mapY, MAP_SIZE, MAP_SIZE);
     this.maskGfx.fill({ color: 0xffffff });
 
-    // ── Background ──
-    this.gfx.rect(mapX, mapY, MAP_SIZE, MAP_SIZE);
-    this.gfx.fill({ color: 0x0a0a14, alpha: 0.55 });
+    // ── Static background (doesn't shift with terrain) ──
+    this.bgGfx.clear();
+    this.bgGfx.rect(mapX, mapY, MAP_SIZE, MAP_SIZE);
+    this.bgGfx.fill({ color: 0x0a0a14, alpha: 0.55 });
 
-    // ── Biome terrain grid (with sub-cell offset for smooth scrolling) ──
-    if (this.tileGetter) {
-      // Draw one extra cell on each edge to fill gaps from the fractional shift
-      const cells = Math.ceil(MAP_SIZE / BIOME_CELL) + 1;
-      for (let gx = 0; gx < cells; gx++) {
-        for (let gy = 0; gy < cells; gy++) {
-          // Minimap pixel at cell center (before offset)
-          const mapPx = gx * BIOME_CELL + BIOME_CELL / 2 - fracX;
-          const mapPy = gy * BIOME_CELL + BIOME_CELL / 2 - fracY;
-          const worldOffX = ((mapPx - halfMap) / halfMap) * MAP_RANGE;
-          const worldOffY = ((mapPy - halfMap) / halfMap) * MAP_RANGE;
-          const wx = centerX + worldOffX;
-          const wy = centerY + worldOffY;
-          const tx = Math.floor(wx / TILE_SIZE);
-          const ty = Math.floor(wy / TILE_SIZE);
-          const tileId = this.tileGetter(tx, ty);
-          const def = TILE_DEFS[tileId];
-          if (def) {
-            this.gfx.rect(
-              mapX + gx * BIOME_CELL - fracX,
-              mapY + gy * BIOME_CELL - fracY,
-              BIOME_CELL, BIOME_CELL,
-            );
-            this.gfx.fill({ color: def.color, alpha: 0.6 });
-          }
-        }
-      }
-    }
+    // ── Entity dots (redrawn every frame — lightweight) ──
+    this.dotGfx.clear();
 
-    // ── Entity dots (exact positions, smooth) ──
     for (const id of world.query(C.Position, C.Faction)) {
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
       const faction = world.getComponent<FactionComponent>(id, C.Faction)!;
 
       if (faction.type === 'item') continue;
+      // Skip hidden ghosts on minimap
+      const gs = world.getComponent<GhostStateComponent>(id, C.GhostState);
+      if (gs?.hidden) continue;
 
       const relX = pos.x - centerX;
       const relY = pos.y - centerY;
@@ -164,22 +172,58 @@ export class Minimap {
       }
 
       const size = DOT_SIZES[faction.type] ?? 2;
-      this.gfx.circle(dotX, dotY, size);
-      this.gfx.fill({ color, alpha: 0.9 });
+      this.dotGfx.circle(dotX, dotY, size);
+      this.dotGfx.fill({ color, alpha: 0.9 });
     }
 
-    // ── Border (drawn on top, outside mask) ──
-    this.gfx.rect(mapX, mapY, MAP_SIZE, MAP_SIZE);
-    this.gfx.stroke({ color: 0x000000, alpha: 0.6, width: 2 });
+    // ── Border (drawn on dot layer, above terrain) ──
+    this.dotGfx.rect(mapX, mapY, MAP_SIZE, MAP_SIZE);
+    this.dotGfx.stroke({ color: 0x000000, alpha: 0.6, width: 2 });
 
     // ── Local player crosshair (always centered) ──
     const cx = mapX + halfMap;
     const cy = mapY + halfMap;
-    this.gfx.moveTo(cx - 4, cy);
-    this.gfx.lineTo(cx + 4, cy);
-    this.gfx.moveTo(cx, cy - 4);
-    this.gfx.lineTo(cx, cy + 4);
-    this.gfx.stroke({ color: 0xffffff, alpha: 0.5, width: 1 });
+    this.dotGfx.moveTo(cx - 4, cy);
+    this.dotGfx.lineTo(cx + 4, cy);
+    this.dotGfx.moveTo(cx, cy - 4);
+    this.dotGfx.lineTo(cx, cy + 4);
+    this.dotGfx.stroke({ color: 0xffffff, alpha: 0.5, width: 1 });
+  }
+
+  private rebuildTerrain(
+    mapX: number, mapY: number, halfMap: number,
+    centerX: number, centerY: number,
+    fracX: number, fracY: number,
+  ): void {
+    this.terrainGfx.clear();
+    // Reset position since we're baking fresh frac values
+    this.terrainGfx.position.set(0, 0);
+
+    if (!this.tileGetter) return;
+
+    const cells = Math.ceil(MAP_SIZE / BIOME_CELL) + 1;
+    for (let gx = 0; gx < cells; gx++) {
+      for (let gy = 0; gy < cells; gy++) {
+        const mapPx = gx * BIOME_CELL + BIOME_CELL / 2 - fracX;
+        const mapPy = gy * BIOME_CELL + BIOME_CELL / 2 - fracY;
+        const worldOffX = ((mapPx - halfMap) / halfMap) * MAP_RANGE;
+        const worldOffY = ((mapPy - halfMap) / halfMap) * MAP_RANGE;
+        const wx = centerX + worldOffX;
+        const wy = centerY + worldOffY;
+        const tx = Math.floor(wx / TILE_SIZE);
+        const ty = Math.floor(wy / TILE_SIZE);
+        const tileId = this.tileGetter(tx, ty);
+        const def = TILE_DEFS[tileId];
+        if (def) {
+          this.terrainGfx.rect(
+            mapX + gx * BIOME_CELL - fracX,
+            mapY + gy * BIOME_CELL - fracY,
+            BIOME_CELL, BIOME_CELL,
+          );
+          this.terrainGfx.fill({ color: def.color, alpha: 0.6 });
+        }
+      }
+    }
   }
 
   setVisible(visible: boolean): void {

@@ -21,7 +21,11 @@ import {
   BridgeComponent,
   EnemyVariantComponent,
 } from '@shared/components';
-import type { ResourceType, BuildingType, EnemyVariantType } from '@shared/components';
+import type {
+  ResourceType, BuildingType, EnemyVariantType, EnemyStatsComponent, GhostStateComponent,
+  LightRevealComponent, HealAuraComponent, BarracksSpawnerComponent, GuardComponent,
+} from '@shared/components';
+import { ENEMY_VARIANT_STATS, pickEnemyVariant, ENEMY_VARIANT_NAMES } from '@shared/EnemyVariants';
 import {
   TILE_SIZE,
   PLAYER_RADIUS,
@@ -62,6 +66,7 @@ import {
   WALL_MAX_HEALTH,
   WALL_COST_WOOD,
   RESOURCE_NODE_RADIUS,
+  PORTAL_RADIUS,
   WAREHOUSE_MAX_HEALTH,
   LUMBERMILL_MAX_HEALTH,
   QUARRY_MAX_HEALTH,
@@ -102,6 +107,9 @@ import {
   ENEMY_RANGER_PROJECTILE_SPEED,
   ENEMY_RANGER_SPEED,
   ENEMY_RANGER_HEALTH,
+  ENEMY_HP_SCALE_PER_WAVE,
+  ENEMY_DAMAGE_SCALE_PER_WAVE,
+  PORTAL_EXTRA_SPAWN_EVERY_N_WAVES,
   BUILDING_MAX_LEVEL,
   UPGRADE_HP_MULT,
   UPGRADE_PROD_INTERVAL,
@@ -115,6 +123,18 @@ import {
   CANNON_AOE_BASE_RADIUS,
   getUpgradeCost,
   getRepairCost,
+  LIGHT_TOWER_MAX_HEALTH,
+  HEALING_SHRINE_MAX_HEALTH,
+  BARRACKS_MAX_HEALTH,
+  UPGRADE_LIGHT_RANGE,
+  UPGRADE_HEAL_RATE,
+  UPGRADE_HEAL_RANGE,
+  BARRACKS_MAX_GUARDS,
+  BARRACKS_SPAWN_INTERVAL,
+  BARRACKS_GUARD_HP,
+  BARRACKS_GUARD_DAMAGE,
+  BARRACKS_GUARD_SPEED,
+  BARRACKS_GUARD_PATROL_RADIUS,
 } from '@shared/constants';
 import { RESOURCE_STATS, RESOURCE_SPAWN_TABLE, TILE_SPAWN_CHANCE } from '@shared/data/ResourceSpawnTable';
 import { LOOT_TABLES } from '@shared/data/LootTables';
@@ -157,6 +177,9 @@ import type {
   BuildRepairConfirmMessage,
   AoeExplosionMessage,
   WarehouseUpdateMessage,
+  CardOfferMessage,
+  CardPickMessage,
+  CardAppliedMessage,
 } from '@shared/protocol';
 import { ItemDropSystem, PickupResult } from './systems/ItemDropSystem';
 import type { ConnectedClient } from './net/ServerSocket';
@@ -165,6 +188,7 @@ import { EnemySystem } from './systems/EnemySystem';
 import { CombatSystem } from './systems/CombatSystem';
 import { ProjectileSystem } from './systems/ProjectileSystem';
 import { PortalSystem } from './systems/PortalSystem';
+import { CardSystem } from './CardSystem';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -216,6 +240,7 @@ export class GameSession {
   private projectile: ProjectileSystem;
   private portal: PortalSystem;
   private itemDrop: ItemDropSystem;
+  private cards: CardSystem;
 
   private players = new Map<string, SessionPlayer>(); // keyed by clientId
   /** Fast lookup: entity IDs that belong to players (updated on spawn/despawn). */
@@ -261,9 +286,52 @@ export class GameSession {
   /** Bridge tile positions: "tileX,tileY" → entityId. */
   private bridgePositions = new Map<string, number>();
 
+  /** Tracks which enemy variant types have been introduced this run (for ENEMY_INTRO toast). */
+  private introducedEnemyTypes = new Set<EnemyVariantType>();
+  /** Queued intro messages to broadcast (spawnEnemy doesn't have send). */
+  private pendingIntroMessages: { variant: string; displayName: string }[] = [];
+
+  /** Card offer auto-pick countdown (seconds remaining). -1 = no pending offer. */
+  private cardOfferTimer = -1;
+  private static readonly CARD_OFFER_TIMEOUT = 35; // 5s pre-reveal + 30s pick window
+
   // ── Run stats ──────────────────────────────────────────────────────────────
   private enemiesKilled = 0;
   private startTime = 0;
+  /** Accumulated paused time in ms (excluded from elapsed time). */
+  private pausedAccum = 0;
+  /** Timestamp when current pause started (0 = not paused). */
+  private pauseStart = 0;
+
+  /** Get elapsed play time in seconds (excludes paused time). */
+  private getElapsedSeconds(): number {
+    if (this.startTime <= 0) return 0;
+    let totalPaused = this.pausedAccum;
+    if (this.paused && this.pauseStart > 0) totalPaused += Date.now() - this.pauseStart;
+    return (Date.now() - this.startTime - totalPaused) / 1000;
+  }
+
+  /** Call when paused state changes to track accumulated pause time. */
+  private setPaused(value: boolean): void {
+    if (value === this.paused) return;
+    if (value) {
+      this.pauseStart = Date.now();
+    } else if (this.pauseStart > 0) {
+      this.pausedAccum += Date.now() - this.pauseStart;
+      this.pauseStart = 0;
+    }
+    this.paused = value;
+  }
+  /** Per-player damage dealt (keyed by playerId/UUID). */
+  private damageByPlayer = new Map<string, number>();
+  /** Per-player resources gathered (keyed by playerId/UUID). */
+  private resourcesByPlayer = new Map<string, { wood: number; stone: number; iron: number; diamond: number }>();
+  /** Per-player enemy kills by type (keyed by playerId/UUID). */
+  private killsByPlayer = new Map<string, Record<string, number>>();
+  /** Per-player buildings built (keyed by playerId/UUID). */
+  private buildingsByPlayer = new Map<string, number>();
+  /** Called at game over with per-player run stats. */
+  onRunEnd?: (playerStats: Map<string, import('@shared/MetaStats').RunStats>) => void;
 
   /** Snapshot of entity positions from the previous tick, for delta diffing. */
   private prevSnapshot = new Map<number, EntitySnapshot>();
@@ -276,6 +344,8 @@ export class GameSession {
   // ── Save system ──────────────────────────────────────────────────────────
   /** Called by SessionManager when save triggers. */
   onSave?: (data: import('@shared/SaveFormat').SaveData) => void;
+  /** Called on game over to delete the active save. */
+  onSaveDelete?: () => void;
   /** Which save slot this session is using (1-3). */
   saveSlot = 1;
   /** Host's persistent player UUID. */
@@ -292,6 +362,7 @@ export class GameSession {
     this.projectile = new ProjectileSystem(this.generator);
     this.portal = new PortalSystem();
     this.itemDrop = new ItemDropSystem();
+    this.cards = new CardSystem();
   }
 
   // ── Lobby management ────────────────────────────────────────────────────────
@@ -449,15 +520,17 @@ export class GameSession {
       true,
     );
 
-    // Pre-generate resources for immediate spawn area (rest fills in via generateResourcesNearPlayers)
-    const pcx = Math.floor(origin.x / (TILE_SIZE * CHUNK_SIZE));
-    const pcy = Math.floor(origin.y / (TILE_SIZE * CHUNK_SIZE));
-    const startupR = 1; // 3×3 chunks — just enough for first SNAPSHOT
-    for (let cx = pcx - startupR; cx <= pcx + startupR; cx++) {
-      for (let cy = pcy - startupR; cy <= pcy + startupR; cy++) {
-        const key = `${cx},${cy}`;
-        this.processedChunks.add(key);
-        this.generateResourcesForChunk(cx, cy);
+    // Pre-generate resources for immediate spawn area (skip for saves — resources restored later)
+    if (!hasSave) {
+      const pcx = Math.floor(origin.x / (TILE_SIZE * CHUNK_SIZE));
+      const pcy = Math.floor(origin.y / (TILE_SIZE * CHUNK_SIZE));
+      const startupR = 1; // 3×3 chunks — just enough for first SNAPSHOT
+      for (let cx = pcx - startupR; cx <= pcx + startupR; cx++) {
+        for (let cy = pcy - startupR; cy <= pcy + startupR; cy++) {
+          const key = `${cx},${cy}`;
+          this.processedChunks.add(key);
+          this.generateResourcesForChunk(cx, cy);
+        }
       }
     }
 
@@ -475,44 +548,82 @@ export class GameSession {
     // ── Restore saved state ─────────────────────────────────────────────────
     if (hasSave) {
       console.log(`[GameSession] Restoring ${this.savedBuildings.length} buildings from save (wave ${this.currentWave})`);
-      // Restore saved buildings (campfire was already placed above)
+      // Restore saved buildings (campfire was already placed above — just restore its state)
       for (const sb of this.savedBuildings) {
-        if (sb.buildingType === 'campfire') continue; // already spawned
+        if (sb.buildingType === 'campfire') {
+          // Restore campfire HP and upgrade level from save
+          if (this.campfireEntityId !== null) {
+            const hp = this.world.getComponent<HealthComponent>(this.campfireEntityId, C.Health);
+            if (hp) { hp.current = sb.currentHp; hp.max = sb.maxHp; }
+            const bld = this.world.getComponent<BuildingComponent>(this.campfireEntityId, C.Building);
+            if (bld) bld.upgradeLevel = sb.upgradeLevel;
+          }
+          continue;
+        }
         const eid = this.spawnBuilding(sb.x, sb.y, sb.buildingType as BuildingType, sb.maxHp, sb.permanent);
+        // Track warehouse entities
+        if (sb.buildingType === 'warehouse') this.warehouseIds.add(eid);
         const hp = this.world.getComponent<HealthComponent>(eid, C.Health);
         if (hp) { hp.current = sb.currentHp; hp.max = sb.maxHp; }
         const bld = this.world.getComponent<BuildingComponent>(eid, C.Building);
         if (bld) bld.upgradeLevel = sb.upgradeLevel;
-        // Restore production state
+        // Restore production component (must add — spawnBuilding doesn't)
         if (sb.production) {
-          const prod = this.world.getComponent<ProductionComponent>(eid, C.Production);
-          if (prod) {
-            prod.timer = sb.production.timer;
-            prod.stored = sb.production.stored;
-            if (sb.production.secondaryResourceType) {
-              prod.secondaryResourceType = sb.production.secondaryResourceType as typeof prod.secondaryResourceType;
-              prod.secondaryChance = sb.production.secondaryChance;
-            }
-          }
+          this.world.addComponent(eid, C.Production, {
+            resourceType: sb.production.resourceType,
+            interval: sb.production.interval,
+            timer: sb.production.timer,
+            amount: sb.production.amount,
+            stored: sb.production.stored,
+            maxStored: sb.production.maxStored,
+            secondaryResourceType: sb.production.secondaryResourceType,
+            secondaryChance: sb.production.secondaryChance,
+          } as ProductionComponent);
         }
-        // Restore turret stats
+        // Restore turret component (must add — spawnBuilding doesn't)
         if (sb.turret) {
-          const t = this.world.getComponent<TurretComponent>(eid, C.Turret);
-          if (t) {
-            t.range = sb.turret.range;
-            t.cooldown = sb.turret.cooldown;
-            t.damage = sb.turret.damage;
-            t.projectileSpeed = sb.turret.projectileSpeed;
-          }
+          this.world.addComponent(eid, C.Turret, {
+            range: sb.turret.range,
+            cooldown: sb.turret.cooldown,
+            cooldownTimer: 0,
+            damage: sb.turret.damage,
+            projectileSpeed: sb.turret.projectileSpeed,
+          } as TurretComponent);
         }
-        // Restore spike trap stats
+        // Restore spike trap component (must add — spawnBuilding doesn't)
         if (sb.spikeTrap) {
-          const s = this.world.getComponent<SpikeTrapComponent>(eid, C.SpikeTrap);
-          if (s) {
-            s.damage = sb.spikeTrap.damage;
-            s.cooldown = sb.spikeTrap.cooldown;
-            s.selfDamage = sb.spikeTrap.selfDamage;
-          }
+          this.world.addComponent(eid, C.SpikeTrap, {
+            damage: sb.spikeTrap.damage,
+            cooldown: sb.spikeTrap.cooldown,
+            selfDamage: sb.spikeTrap.selfDamage,
+            enemyCooldowns: new Map(),
+          } as SpikeTrapComponent);
+        }
+        // Restore bridge
+        if (sb.bridge) {
+          this.world.addComponent(eid, C.Bridge, { tileX: sb.bridge.tileX, tileY: sb.bridge.tileY } as BridgeComponent);
+          this.bridgePositions.set(`${sb.bridge.tileX},${sb.bridge.tileY}`, eid);
+          this.movement.bridgeTiles.add(`${sb.bridge.tileX},${sb.bridge.tileY}`);
+        }
+        // Restore light tower
+        if (sb.lightReveal) {
+          this.world.addComponent(eid, C.LightReveal, { range: sb.lightReveal.range } as LightRevealComponent);
+        }
+        // Restore healing shrine
+        if (sb.healAura) {
+          this.world.addComponent(eid, C.HealAura, {
+            range: sb.healAura.range,
+            healPerSecond: sb.healAura.healPerSecond,
+          } as HealAuraComponent);
+        }
+        // Restore barracks
+        if (sb.barracksSpawner) {
+          this.world.addComponent(eid, C.BarracksSpawner, {
+            maxGuards: sb.barracksSpawner.maxGuards,
+            spawnTimer: sb.barracksSpawner.spawnInterval,
+            spawnInterval: sb.barracksSpawner.spawnInterval,
+            guardIds: [],
+          } as BarracksSpawnerComponent);
         }
       }
 
@@ -535,15 +646,107 @@ export class GameSession {
         }
       }
 
+      // Restore saved enemies
+      for (const se of this.savedEnemies) {
+        const id = this.world.createEntity();
+        this.world.addComponent(id, C.Position,          { x: se.x, y: se.y });
+        this.world.addComponent(id, C.Velocity,          { vx: 0, vy: 0 });
+        this.world.addComponent(id, C.Health,            { current: se.currentHp, max: se.maxHp });
+        this.world.addComponent(id, C.Speed,             { base: se.speedBase, multiplier: se.speedMultiplier });
+        this.world.addComponent(id, C.PlayerInput,       { dx: 0, dy: 0, sprint: false });
+        this.world.addComponent(id, C.Faction,           { type: 'enemy' });
+        this.world.addComponent(id, C.Facing,            { angle: 0 });
+        this.world.addComponent(id, C.AttackCooldown,    { remaining: 0, max: se.rangedCooldown });
+        this.world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
+        this.world.addComponent(id, C.EnemyVariant,      { variant: se.variant });
+        this.world.addComponent(id, C.EnemyStats, {
+          damage: se.damage, range: se.range, knockback: se.knockback, radius: se.radius,
+          rangedRange: se.rangedRange, projectileSpeed: se.projectileSpeed,
+          rangedDamage: se.rangedDamage, rangedCooldown: se.rangedCooldown,
+        });
+        if (se.variant === 'ghost') {
+          this.world.addComponent(id, C.GhostState, { hidden: se.ghostHidden ?? true });
+        }
+        if (se.variant === 'assassin') {
+          this.world.addComponent(id, C.AssassinDash, {
+            cooldown: 0, maxCooldown: 20, dashSpeed: 500, dashDuration: 0.3, dashing: false, dashTimer: 0,
+          });
+        }
+        this.enemyCount++;
+      }
+      console.log(`[GameSession] Restored ${this.savedEnemies.length} enemies from save`);
+
+      // Restore saved portals
+      for (const sp of this.savedPortals) {
+        const id = this.world.createEntity();
+        this.world.addComponent(id, C.Position,          { x: sp.x, y: sp.y });
+        this.world.addComponent(id, C.Velocity,          { vx: 0, vy: 0 });
+        this.world.addComponent(id, C.Health,            { current: sp.currentHp, max: sp.maxHp });
+        this.world.addComponent(id, C.Faction,           { type: 'portal' });
+        this.world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
+        this.world.addComponent(id, C.Portal,            { waveNumber: sp.waveNumber, spawnTimer: sp.spawnTimer, spawnInterval: sp.spawnInterval });
+      }
+      if (this.savedPortals.length > 0) {
+        console.log(`[GameSession] Restored ${this.savedPortals.length} portals from save`);
+      }
+
+      // Restore saved resource nodes
+      for (const sr of this.savedResourceNodes) {
+        const id = this.world.createEntity();
+        this.world.addComponent(id, C.Position,          { x: sr.x, y: sr.y });
+        this.world.addComponent(id, C.Velocity,          { vx: 0, vy: 0 });
+        this.world.addComponent(id, C.Health,            { current: sr.currentHp, max: sr.maxHp });
+        this.world.addComponent(id, C.Faction,           { type: 'resource' });
+        this.world.addComponent(id, C.ResourceNode,      { resourceType: sr.resourceType, yield: sr.yield });
+        this.world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
+        this.resourceNodeCount++;
+      }
+      if (this.savedResourceNodes.length > 0) {
+        console.log(`[GameSession] Restored ${this.savedResourceNodes.length} resource nodes from save`);
+      }
+
+      // Restore saved item drops
+      for (const si of this.savedItemDrops) {
+        const id = this.world.createEntity();
+        this.world.addComponent(id, C.Position, { x: si.x, y: si.y });
+        this.world.addComponent(id, C.Velocity, { vx: 0, vy: 0 });
+        this.world.addComponent(id, C.Health,   { current: 1, max: 1 });
+        this.world.addComponent(id, C.Faction,  { type: 'item' });
+        this.world.addComponent(id, C.ItemDrop, {
+          itemType: si.itemType, quantity: si.quantity,
+          autoPickup: si.autoPickup, lifetime: si.lifetime,
+        });
+      }
+      if (this.savedItemDrops.length > 0) {
+        console.log(`[GameSession] Restored ${this.savedItemDrops.length} item drops from save`);
+      }
+
       // Clear saved data after restoration
       this.savedBuildings = [];
       this.savedPlayers = [];
+      this.savedEnemies = [];
+      this.savedPortals = [];
+      this.savedResourceNodes = [];
+      this.savedItemDrops = [];
     }
 
-    // Begin wave prep countdown
-    if (!hasSave) this.currentWave = 1;
-    this.wavePhase = 'prep';
-    this.prepTimer = hasSave ? WAVE_PREP_BETWEEN : WAVE_PREP_INITIAL;
+    // Begin wave state
+    if (!hasSave) {
+      this.currentWave = 1;
+      this.wavePhase = 'prep';
+      this.prepTimer = WAVE_PREP_INITIAL;
+    } else if (this.savedWavePhase === 'active') {
+      // Resume mid-wave — portals and enemies already restored above
+      this.wavePhase = 'active';
+    } else {
+      // Resume in prep phase
+      this.wavePhase = 'prep';
+      if (this.savedPrepTimeRemaining != null && this.savedPrepTimeRemaining > 0) {
+        this.prepTimer = this.savedPrepTimeRemaining;
+      } else {
+        this.prepTimer = WAVE_PREP_BETWEEN;
+      }
+    }
 
     // Broadcast SESSION_STARTING
     const starting: SessionStartingMessage = {
@@ -553,17 +756,45 @@ export class GameSession {
     };
     for (const p of this.players.values()) send(p.client, starting);
 
-    // Broadcast full SNAPSHOT
+    // Broadcast full SNAPSHOT (includes restored enemies/portals)
     const snapshot = this.buildFullSnapshot();
     for (const p of this.players.values()) send(p.client, snapshot);
 
-    // Broadcast wave prep start
-    const waveStart: WaveStartMessage = {
-      type: MessageType.WAVE_START,
-      waveNumber: this.currentWave,
-      prepDuration: hasSave ? WAVE_PREP_BETWEEN : WAVE_PREP_INITIAL,
-    };
-    for (const p of this.players.values()) send(p.client, waveStart);
+    // Send resource sync to each player (resources aren't in SNAPSHOT)
+    for (const p of this.players.values()) {
+      if (p.entityId === null) continue;
+      const res = this.world.getComponent<ResourcesComponent>(p.entityId, C.Resources);
+      if (res) {
+        send(p.client, {
+          type: MessageType.RESOURCE_UPDATE,
+          wood: res.wood, stone: res.stone, iron: res.iron,
+          diamond: res.diamond, gold: res.gold, food: res.food,
+        });
+      }
+    }
+
+    // Send warehouse pool sync
+    if (hasSave) {
+      this.broadcastWarehouseUpdate(send);
+    }
+
+    // Broadcast wave state to clients
+    if (this.wavePhase === 'active') {
+      // Signal active wave (prepDuration=0 means "already active")
+      const waveActive: WaveStartMessage = {
+        type: MessageType.WAVE_START,
+        waveNumber: this.currentWave,
+        prepDuration: 0,
+      };
+      for (const p of this.players.values()) send(p.client, waveActive);
+    } else {
+      const waveStart: WaveStartMessage = {
+        type: MessageType.WAVE_START,
+        waveNumber: this.currentWave,
+        prepDuration: this.prepTimer,
+      };
+      for (const p of this.players.values()) send(p.client, waveStart);
+    }
 
     // Seed prevSnapshot so first DELTA is accurate
     this.prevSnapshot.clear();
@@ -578,6 +809,18 @@ export class GameSession {
     const ty = Math.floor(wy / TILE_SIZE);
     const tileId = this.generator.getTile(tx, ty);
     return TILE_DEFS[tileId]?.walkable ?? false;
+  }
+
+  /** Returns true if (wx, wy) overlaps any building's footprint (with optional radius padding). */
+  private overlapsBuilding(wx: number, wy: number, radius = 0): boolean {
+    for (const id of this.world.query(C.Building, C.Position)) {
+      const bldg = this.world.getComponent<BuildingComponent>(id, C.Building)!;
+      if (bldg.buildingType === 'bridge' || bldg.buildingType === 'spike_trap') continue;
+      const bpos = this.world.getComponent<PositionComponent>(id, C.Position)!;
+      const half = buildingHalfExtent(bldg.buildingType) + radius;
+      if (Math.abs(wx - bpos.x) < half && Math.abs(wy - bpos.y) < half) return true;
+    }
+    return false;
   }
 
   /**
@@ -672,6 +915,7 @@ export class GameSession {
         const py = cy + Math.sin(angle) * dist;
 
         if (!this.isWalkable(px, py)) continue;
+        if (this.overlapsBuilding(px, py, PORTAL_RADIUS)) continue;
 
         // Check spacing from already-placed portals
         let tooClose = false;
@@ -848,6 +1092,30 @@ export class GameSession {
     }
   }
 
+  /** Find the playerId (UUID) for a given entity ID. */
+  private playerIdForEntity(entityId: number): string | undefined {
+    for (const p of this.players.values()) {
+      if (p.entityId === entityId) return p.playerId;
+    }
+    return undefined;
+  }
+
+  /** Track damage dealt by a player entity for meta stats. */
+  private trackDamage(attackerEntityId: number, damage: number): void {
+    const pid = this.playerIdForEntity(attackerEntityId);
+    if (!pid) return;
+    this.damageByPlayer.set(pid, (this.damageByPlayer.get(pid) ?? 0) + damage);
+  }
+
+  /** Track an enemy kill by a player entity for meta stats. */
+  private trackKill(attackerEntityId: number, enemyVariant: string): void {
+    const pid = this.playerIdForEntity(attackerEntityId);
+    if (!pid) return;
+    let kills = this.killsByPlayer.get(pid);
+    if (!kills) { kills = {}; this.killsByPlayer.set(pid, kills); }
+    kills[enemyVariant] = (kills[enemyVariant] ?? 0) + 1;
+  }
+
   /**
    * Credit a player's resource counter and send RESOURCE_UPDATE.
    */
@@ -875,6 +1143,13 @@ export class GameSession {
     else if (itemType === 'gold') res.gold += quantity;
     else if (itemType === 'food') res.food += quantity;
 
+    // Track for meta stats (only wood/stone/iron/diamond)
+    if (itemType === 'wood' || itemType === 'stone' || itemType === 'iron' || itemType === 'diamond') {
+      let pr = this.resourcesByPlayer.get(target.playerId);
+      if (!pr) { pr = { wood: 0, stone: 0, iron: 0, diamond: 0 }; this.resourcesByPlayer.set(target.playerId, pr); }
+      pr[itemType as 'wood' | 'stone' | 'iron' | 'diamond'] += quantity;
+    }
+
     const update: ResourceUpdateMessage = {
       type: MessageType.RESOURCE_UPDATE,
       wood: res.wood,
@@ -890,29 +1165,71 @@ export class GameSession {
   private spawnEnemy(x: number, y: number): number | null {
     if (this.enemyCount >= GameSession.MAX_ENEMIES) return null;
 
-    const isRanger = Math.random() < ENEMY_RANGER_SPAWN_CHANCE;
-    const variant: EnemyVariantType = isRanger ? 'ranger' : 'melee';
+    const variant = pickEnemyVariant(this.currentWave);
+    const base = ENEMY_VARIANT_STATS[variant];
+
+    // Wave difficulty scaling (compound)
+    const wave = Math.max(1, this.currentWave);
+    const hpMult = Math.pow(1 + ENEMY_HP_SCALE_PER_WAVE, wave - 1);
+    const dmgMult = Math.pow(1 + ENEMY_DAMAGE_SCALE_PER_WAVE, wave - 1);
+
+    const scaledHp = Math.round(base.hp * hpMult);
+    const scaledDmg = Math.round(base.damage * dmgMult * this.cards.debuffs.enemyDamageMult);
 
     const id = this.world.createEntity();
     this.world.addComponent(id, C.Position,          { x, y });
     this.world.addComponent(id, C.Velocity,          { vx: 0, vy: 0 });
     this.world.addComponent(id, C.Health, {
-      current: isRanger ? ENEMY_RANGER_HEALTH : ENEMY_MAX_HEALTH,
-      max: isRanger ? ENEMY_RANGER_HEALTH : ENEMY_MAX_HEALTH,
+      current: scaledHp,
+      max: scaledHp,
     });
     this.world.addComponent(id, C.Speed, {
-      base: isRanger ? ENEMY_RANGER_SPEED : ENEMY_BASE_SPEED,
-      multiplier: 1,
+      base: base.speed,
+      multiplier: this.cards.debuffs.enemySpeedMult,
     });
     this.world.addComponent(id, C.PlayerInput,       { dx: 0, dy: 0, sprint: false });
     this.world.addComponent(id, C.Faction,           { type: 'enemy' });
     this.world.addComponent(id, C.Facing,            { angle: 0 });
     this.world.addComponent(id, C.AttackCooldown, {
       remaining: 0,
-      max: isRanger ? ENEMY_RANGER_COOLDOWN : ENEMY_MELEE_COOLDOWN,
+      max: base.rangedCooldown ?? base.cooldown,
     });
     this.world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
     this.world.addComponent(id, C.EnemyVariant,      { variant });
+    this.world.addComponent(id, C.EnemyStats, {
+      damage: scaledDmg,
+      range: base.range,
+      knockback: base.knockback,
+      radius: base.radius,
+      rangedRange: base.rangedRange ?? 0,
+      projectileSpeed: base.projectileSpeed ?? 0,
+      rangedDamage: Math.round((base.rangedDamage ?? 0) * dmgMult * this.cards.debuffs.enemyDamageMult),
+      rangedCooldown: base.rangedCooldown ?? base.cooldown,
+    });
+
+    // Ghost-specific components
+    if (variant === 'ghost') {
+      this.world.addComponent(id, C.GhostState, { hidden: true });
+    }
+
+    // Assassin-specific components
+    if (variant === 'assassin') {
+      this.world.addComponent(id, C.AssassinDash, {
+        cooldown: 0,
+        maxCooldown: 20,
+        dashSpeed: 500,
+        dashDuration: 0.3,
+        dashing: false,
+        dashTimer: 0,
+      });
+    }
+
+    // Track new enemy type introduction for toast (broadcast deferred to tick)
+    if (!this.introducedEnemyTypes.has(variant) && variant !== 'melee' && variant !== 'ranger') {
+      this.introducedEnemyTypes.add(variant);
+      this.pendingIntroMessages.push({ variant, displayName: ENEMY_VARIANT_NAMES[variant] });
+    }
+
     this.enemyCount++;
     return id;
   }
@@ -1061,6 +1378,8 @@ export class GameSession {
       lumbermill: LUMBERMILL_MAX_HEALTH, quarry: QUARRY_MAX_HEALTH, mine: MINE_MAX_HEALTH, farm: FARM_MAX_HEALTH,
       arrow_turret: ARROW_TURRET_MAX_HEALTH, cannon_turret: CANNON_TURRET_MAX_HEALTH,
       spike_trap: SPIKE_TRAP_MAX_HEALTH, bridge: BRIDGE_MAX_HEALTH,
+      light_tower: LIGHT_TOWER_MAX_HEALTH, healing_shrine: HEALING_SHRINE_MAX_HEALTH,
+      barracks: BARRACKS_MAX_HEALTH,
     };
     const maxHp = HP_MAP[msg.buildingType] ?? WALL_MAX_HEALTH;
     const id = this.spawnBuilding(snapX, snapY, msg.buildingType, maxHp, false);
@@ -1112,11 +1431,28 @@ export class GameSession {
       const tileY = Math.floor(snapY / TILE_SIZE);
       this.world.addComponent(id, C.Bridge, { tileX, tileY } as BridgeComponent);
       this.bridgePositions.set(`${tileX},${tileY}`, id);
-      // Update movement system bridge tiles
       this.movement.bridgeTiles.add(`${tileX},${tileY}`);
+    } else if (msg.buildingType === 'light_tower') {
+      this.world.addComponent(id, C.LightReveal, {
+        range: UPGRADE_LIGHT_RANGE[0],
+      } as LightRevealComponent);
+    } else if (msg.buildingType === 'healing_shrine') {
+      this.world.addComponent(id, C.HealAura, {
+        range: UPGRADE_HEAL_RANGE[0],
+        healPerSecond: UPGRADE_HEAL_RATE[0],
+      } as HealAuraComponent);
+    } else if (msg.buildingType === 'barracks') {
+      this.world.addComponent(id, C.BarracksSpawner, {
+        maxGuards: BARRACKS_MAX_GUARDS[0],
+        spawnTimer: BARRACKS_SPAWN_INTERVAL,
+        spawnInterval: BARRACKS_SPAWN_INTERVAL,
+        guardIds: [],
+      } as BarracksSpawnerComponent);
     }
 
     send(player.client, { type: MessageType.BUILD_CONFIRM, success: true } as BuildConfirmMessage);
+    // Track for meta stats
+    this.buildingsByPlayer.set(player.playerId, (this.buildingsByPlayer.get(player.playerId) ?? 0) + 1);
   }
 
   private deductBuildingCost(buildingType: string, player: any, send: SendFn, costOverride?: Partial<Record<string, number>>): boolean {
@@ -1286,13 +1622,12 @@ export class GameSession {
     const newLevel = bldg.upgradeLevel;
     const lvlIdx = newLevel - 1; // 0-based index into multiplier arrays
 
-    // Scale HP: increase max and heal the gained amount
+    // Scale HP: increase max and fully repair
     const hp = this.world.getComponent<HealthComponent>(targetId, C.Health)!;
     const baseMaxHp = hp.max / UPGRADE_HP_MULT[oldLevel - 1];
     const newMaxHp = Math.round(baseMaxHp * UPGRADE_HP_MULT[lvlIdx]);
-    const hpGain = newMaxHp - hp.max;
     hp.max = newMaxHp;
-    hp.current = Math.min(hp.max, hp.current + hpGain);
+    hp.current = hp.max;
 
     // Scale production buildings
     const prod = this.world.getComponent<ProductionComponent>(targetId, C.Production);
@@ -1325,6 +1660,25 @@ export class GameSession {
     if (trap && lvlIdx < UPGRADE_TRAP_DMG.length) {
       const baseDmg = trap.damage / UPGRADE_TRAP_DMG[oldLevel - 1];
       trap.damage = Math.round(baseDmg * UPGRADE_TRAP_DMG[lvlIdx]);
+    }
+
+    // Scale light tower range
+    const lightReveal = this.world.getComponent<LightRevealComponent>(targetId, C.LightReveal);
+    if (lightReveal && lvlIdx < UPGRADE_LIGHT_RANGE.length) {
+      lightReveal.range = UPGRADE_LIGHT_RANGE[lvlIdx];
+    }
+
+    // Scale healing shrine
+    const healAura = this.world.getComponent<HealAuraComponent>(targetId, C.HealAura);
+    if (healAura) {
+      if (lvlIdx < UPGRADE_HEAL_RATE.length) healAura.healPerSecond = UPGRADE_HEAL_RATE[lvlIdx];
+      if (lvlIdx < UPGRADE_HEAL_RANGE.length) healAura.range = UPGRADE_HEAL_RANGE[lvlIdx];
+    }
+
+    // Scale barracks max guards
+    const barracks = this.world.getComponent<BarracksSpawnerComponent>(targetId, C.BarracksSpawner);
+    if (barracks && lvlIdx < BARRACKS_MAX_GUARDS.length) {
+      barracks.maxGuards = BARRACKS_MAX_GUARDS[lvlIdx];
     }
 
     send(player.client, {
@@ -1447,17 +1801,8 @@ export class GameSession {
       if (prod.timer < prod.interval) continue;
       prod.timer -= prod.interval;
 
-      // Secondary resource chance (e.g. mine → diamond instead of iron)
-      if (prod.secondaryResourceType && prod.secondaryChance && Math.random() < prod.secondaryChance) {
-        // Deposit secondary resource directly to warehouse pool
-        const key = prod.secondaryResourceType as keyof typeof this.warehousePool;
-        if (key in this.warehousePool) {
-          this.warehousePool[key] += prod.amount;
-        }
-      } else {
-        // Primary resource: accumulate locally for F-key collection
-        prod.stored = Math.min(prod.stored + prod.amount, prod.maxStored);
-      }
+      // Accumulate locally for F-key collection (primary and secondary share the same storage)
+      prod.stored = Math.min(prod.stored + prod.amount, prod.maxStored);
     }
   }
 
@@ -1478,6 +1823,9 @@ export class GameSession {
       for (const eid of this.world.query(C.Position, C.Faction)) {
         const ef = this.world.getComponent<FactionComponent>(eid, C.Faction)!;
         if (ef.type !== 'enemy' && ef.type !== 'portal') continue;
+        // Turrets can't target hidden ghosts
+        const ghostSt = this.world.getComponent<GhostStateComponent>(eid, C.GhostState);
+        if (ghostSt?.hidden) continue;
         const epos = this.world.getComponent<PositionComponent>(eid, C.Position)!;
         const dx = epos.x - tpos.x;
         const dy = epos.y - tpos.y;
@@ -1535,6 +1883,186 @@ export class GameSession {
         ...(isCannon ? { targetX: epos.x, targetY: epos.y, totalFlightTime: dist / turret.projectileSpeed } : {}),
       };
       for (const p of this.players.values()) send(p.client, spawnMsg);
+    }
+  }
+
+  /** Update ghost visibility: ghosts are hidden by default, revealed by light towers (Part 3). */
+  private tickGhostVisibility(): void {
+    for (const eid of this.world.query(C.GhostState, C.Position)) {
+      const ghost = this.world.getComponent<GhostStateComponent>(eid, C.GhostState)!;
+      // Once revealed, ghosts stay permanently visible
+      if (!ghost.hidden) continue;
+
+      let revealed = false;
+
+      // Light towers reveal ghosts permanently
+      for (const lid of this.world.query(C.LightReveal, C.Position)) {
+        const lpos = this.world.getComponent<PositionComponent>(lid, C.Position)!;
+        const lr = this.world.getComponent<import('@shared/components').LightRevealComponent>(lid, C.LightReveal)!;
+        const epos = this.world.getComponent<PositionComponent>(eid, C.Position)!;
+        const dx = epos.x - lpos.x, dy = epos.y - lpos.y;
+        if (dx * dx + dy * dy <= lr.range * lr.range) {
+          revealed = true;
+          break;
+        }
+      }
+
+      // Players with ghost_sight ability reveal ghosts within 300px
+      if (!revealed) {
+        const epos = this.world.getComponent<PositionComponent>(eid, C.Position)!;
+        for (const p of this.players.values()) {
+          if (!p.entityId) continue;
+          const pBuffs = this.cards.playerBuffs.get(p.client.id);
+          if (!pBuffs?.abilities.includes('reveal_ghosts')) continue;
+          const ppos = this.world.getComponent<PositionComponent>(p.entityId, C.Position);
+          if (!ppos) continue;
+          const dx2 = epos.x - ppos.x, dy2 = epos.y - ppos.y;
+          if (dx2 * dx2 + dy2 * dy2 <= 300 * 300) { revealed = true; break; }
+        }
+      }
+
+      if (revealed) ghost.hidden = false;
+    }
+  }
+
+  /** Heal players within range of healing shrines. */
+  private tickHealAuras(dt: number): void {
+    for (const sid of this.world.query(C.HealAura, C.Position)) {
+      const aura = this.world.getComponent<HealAuraComponent>(sid, C.HealAura)!;
+      const spos = this.world.getComponent<PositionComponent>(sid, C.Position)!;
+      const rangeSq = aura.range * aura.range;
+      const healAmount = aura.healPerSecond * dt;
+
+      for (const pid of this.playerEntityIds) {
+        if (this.world.hasComponent(pid, C.Downed)) continue;
+        const ppos = this.world.getComponent<PositionComponent>(pid, C.Position);
+        const php = this.world.getComponent<HealthComponent>(pid, C.Health);
+        if (!ppos || !php || php.current >= php.max) continue;
+        const dx = ppos.x - spos.x, dy = ppos.y - spos.y;
+        if (dx * dx + dy * dy <= rangeSq) {
+          php.current = Math.min(php.max, php.current + healAmount);
+        }
+      }
+    }
+  }
+
+  /** Spawn and manage barracks guards. */
+  private tickBarracks(dt: number): void {
+    for (const bid of this.world.query(C.BarracksSpawner, C.Position)) {
+      const spawner = this.world.getComponent<BarracksSpawnerComponent>(bid, C.BarracksSpawner)!;
+      const bpos = this.world.getComponent<PositionComponent>(bid, C.Position)!;
+
+      // Clean up dead guards
+      spawner.guardIds = spawner.guardIds.filter(gid => this.world.hasEntity(gid));
+
+      if (spawner.guardIds.length < spawner.maxGuards) {
+        spawner.spawnTimer -= dt;
+        if (spawner.spawnTimer <= 0) {
+          spawner.spawnTimer = spawner.spawnInterval;
+          // Spawn guard outside the barracks footprint
+          const bHalf = buildingHalfExtent('barracks');
+          const spawnDist = bHalf + 16 + Math.random() * 20; // outside building edge
+          const angle = Math.random() * Math.PI * 2;
+          const gx = bpos.x + Math.cos(angle) * spawnDist;
+          const gy = bpos.y + Math.sin(angle) * spawnDist;
+          if (!this.isWalkable(gx, gy)) continue; // skip if bad position
+          const gid = this.spawnGuard(gx, gy, bid);
+          if (gid !== null) spawner.guardIds.push(gid);
+        }
+      }
+    }
+  }
+
+  /** Spawn a barracks guard entity. */
+  private spawnGuard(x: number, y: number, barracksId: number): number | null {
+    const id = this.world.createEntity();
+    this.world.addComponent(id, C.Position,          { x, y });
+    this.world.addComponent(id, C.Velocity,          { vx: 0, vy: 0 });
+    this.world.addComponent(id, C.Health,            { current: BARRACKS_GUARD_HP, max: BARRACKS_GUARD_HP });
+    this.world.addComponent(id, C.Speed,             { base: BARRACKS_GUARD_SPEED, multiplier: 1 });
+    this.world.addComponent(id, C.PlayerInput,       { dx: 0, dy: 0, sprint: false });
+    this.world.addComponent(id, C.Faction,           { type: 'guard' });
+    this.world.addComponent(id, C.Facing,            { angle: 0 });
+    this.world.addComponent(id, C.AttackCooldown,    { remaining: 0, max: 1.0 });
+    this.world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
+    this.world.addComponent(id, C.Guard,             { barracksId, patrolRadius: BARRACKS_GUARD_PATROL_RADIUS } as GuardComponent);
+    this.world.addComponent(id, C.EnemyStats, {
+      damage: BARRACKS_GUARD_DAMAGE, range: 40, knockback: 150, radius: 10,
+      rangedRange: 0, projectileSpeed: 0, rangedDamage: 0, rangedCooldown: 0,
+    });
+    return id;
+  }
+
+  /** Guard AI: patrol near barracks, chase and attack nearby enemies. */
+  private tickGuardAI(dt: number, send: SendFn): void {
+    const GUARD_DETECT_RANGE = 150;
+    const GUARD_DETECT_RANGE_SQ = GUARD_DETECT_RANGE * GUARD_DETECT_RANGE;
+    const GUARD_ATTACK_RANGE = 40;
+
+    for (const gid of this.world.query(C.Guard, C.Position, C.PlayerInput)) {
+      const guard = this.world.getComponent<GuardComponent>(gid, C.Guard)!;
+      const gpos = this.world.getComponent<PositionComponent>(gid, C.Position)!;
+      const ginp = this.world.getComponent<PlayerInputComponent>(gid, C.PlayerInput)!;
+
+      // Find nearest enemy
+      let nearestEnemyId = -1;
+      let nearestDist = Infinity;
+      for (const eid of this.world.query(C.Position, C.Faction)) {
+        const ef = this.world.getComponent<FactionComponent>(eid, C.Faction)!;
+        if (ef.type !== 'enemy') continue;
+        const epos = this.world.getComponent<PositionComponent>(eid, C.Position)!;
+        const dx = epos.x - gpos.x, dy = epos.y - gpos.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < GUARD_DETECT_RANGE_SQ && d2 < nearestDist) {
+          nearestDist = d2;
+          nearestEnemyId = eid;
+        }
+      }
+
+      if (nearestEnemyId >= 0) {
+        // Chase enemy
+        const epos = this.world.getComponent<PositionComponent>(nearestEnemyId, C.Position)!;
+        const dx = epos.x - gpos.x, dy = epos.y - gpos.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist <= GUARD_ATTACK_RANGE) {
+          // In range: stop and attack
+          ginp.dx = 0; ginp.dy = 0;
+          const facing = Math.atan2(dy, dx);
+          const facingComp = this.world.getComponent<import('@shared/components').FacingComponent>(gid, C.Facing);
+          if (facingComp) facingComp.angle = facing;
+
+          const stats = this.world.getComponent<EnemyStatsComponent>(gid, C.EnemyStats);
+          const overrides = stats
+            ? { damage: stats.damage, range: stats.range, knockback: stats.knockback }
+            : { damage: BARRACKS_GUARD_DAMAGE, range: 40, knockback: 150 };
+          const { hits, deaths } = this.combat.processMeleeAttack(this.world, gid, facing, undefined, overrides);
+
+          for (const hit of hits) {
+            const hitMsg = { type: MessageType.HIT, ...hit };
+            for (const p of this.players.values()) send(p.client, hitMsg);
+          }
+          this.destroyDeadEntities(deaths, undefined, send);
+        } else {
+          // Move toward enemy
+          ginp.dx = dx / dist; ginp.dy = dy / dist;
+        }
+      } else {
+        // Patrol: drift back toward barracks if too far
+        const bpos = this.world.getComponent<PositionComponent>(guard.barracksId, C.Position);
+        if (bpos) {
+          const dx = bpos.x - gpos.x, dy = bpos.y - gpos.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist > guard.patrolRadius) {
+            ginp.dx = dx / dist; ginp.dy = dy / dist;
+          } else {
+            ginp.dx = 0; ginp.dy = 0;
+          }
+        } else {
+          ginp.dx = 0; ginp.dy = 0;
+        }
+      }
+      ginp.sprint = false;
     }
   }
 
@@ -1692,7 +2220,18 @@ export class GameSession {
       const bdx = bpos.x - playerPos.x;
       const bdy = bpos.y - playerPos.y;
       if (bdx * bdx + bdy * bdy <= collectDist * collectDist) {
-        this.creditResources(player.entityId, prod.resourceType, prod.stored, send);
+        // Split between primary and secondary resource
+        if (prod.secondaryResourceType && prod.secondaryChance) {
+          let primary = 0, secondary = 0;
+          for (let i = 0; i < prod.stored; i++) {
+            if (Math.random() < prod.secondaryChance) secondary++;
+            else primary++;
+          }
+          if (primary > 0) this.creditResources(player.entityId, prod.resourceType, primary, send);
+          if (secondary > 0) this.creditResources(player.entityId, prod.secondaryResourceType, secondary, send);
+        } else {
+          this.creditResources(player.entityId, prod.resourceType, prod.stored, send);
+        }
         prod.stored = 0;
         return;
       }
@@ -1735,11 +2274,17 @@ export class GameSession {
     const cd = this.world.getComponent<AttackCooldownComponent>(entityId, C.AttackCooldown);
     if (cd && cd.remaining > TICK_MS / 1000) return;
 
+    // Apply card damage multiplier
+    const pBuffs = this.cards.playerBuffs.get(player.client.id);
+    const dmgMult = (pBuffs?.damageMultiplier ?? 1) * this.cards.debuffs.playerDamageMult;
+    const meleeOverrides = dmgMult !== 1 ? { damage: Math.round(15 * dmgMult) } : undefined;
+
     const { hits, deaths } = this.combat.processMeleeAttack(
       this.world,
       entityId,
       msg.facing,
       { x: msg.x, y: msg.y },
+      meleeOverrides,
     );
 
     // Broadcast attack animation to all players (fires even on miss)
@@ -1750,10 +2295,11 @@ export class GameSession {
     };
     for (const p of this.players.values()) send(p.client, performed);
 
-    // Broadcast each hit to all players
+    // Broadcast each hit to all players + track damage for meta stats
     for (const hit of hits) {
       const hitMsg: HitMessage = { type: MessageType.HIT, ...hit };
       for (const p of this.players.values()) send(p.client, hitMsg);
+      this.trackDamage(hit.sourceId, hit.damage);
     }
 
     // Build attacker map so destroyDeadEntities can credit resource harvesting
@@ -1794,7 +2340,11 @@ export class GameSession {
     const projId = this.world.createEntity();
     this.world.addComponent(projId, C.Position,   { x: spawnX, y: spawnY });
     this.world.addComponent(projId, C.Velocity,   { vx, vy });
-    this.world.addComponent(projId, C.Projectile, { ownerId: entityId, damage: RANGED_DAMAGE, lifetime: RANGED_LIFETIME });
+    // Apply card damage multiplier to ranged damage
+    const rBuffs = this.cards.playerBuffs.get(player.client.id);
+    const rDmgMult = (rBuffs?.damageMultiplier ?? 1) * this.cards.debuffs.playerDamageMult;
+    const projDamage = rDmgMult !== 1 ? Math.round(RANGED_DAMAGE * rDmgMult) : RANGED_DAMAGE;
+    this.world.addComponent(projId, C.Projectile, { ownerId: entityId, damage: projDamage, lifetime: RANGED_LIFETIME });
     this.world.addComponent(projId, C.Faction,    { type: faction?.type ?? 'player' });
 
     // Broadcast spawn to all clients
@@ -1842,11 +2392,19 @@ export class GameSession {
         this.resourceNodeCount--;
       }
 
-      // Enemy → spawn loot drops
+      // Enemy → spawn loot drops + track kill
       if (faction?.type === 'enemy') {
         this.spawnLootDrops(deadId);
         this.enemyCount--;
         this.enemiesKilled++;
+        // Track kill by type for meta stats
+        if (attackerMap) {
+          const attackerId = attackerMap.get(deadId);
+          if (attackerId !== undefined) {
+            const ev = this.world.getComponent<EnemyVariantComponent>(deadId, C.EnemyVariant);
+            this.trackKill(attackerId, ev?.variant ?? 'melee');
+          }
+        }
       }
 
       // Building → broadcast destruction, clean up warehouse, check campfire game-over
@@ -1887,6 +2445,15 @@ export class GameSession {
         // Bridge destroyed → remove from bridge tiles
         this.cleanupBridge(deadId);
 
+        // Barracks destroyed → destroy all its guards
+        const spawner = this.world.getComponent<BarracksSpawnerComponent>(deadId, C.BarracksSpawner);
+        if (spawner) {
+          for (const gid of spawner.guardIds) {
+            if (this.world.hasEntity(gid)) this.world.destroyEntity(gid);
+          }
+          spawner.guardIds.length = 0;
+        }
+
         if (deadId === this.campfireEntityId && !this.gameOver) {
           this.gameOver = true;
           const campfireMsg: CampfireDestroyedMessage = {
@@ -1894,7 +2461,7 @@ export class GameSession {
           };
           for (const p of this.players.values()) send(p.client, campfireMsg);
 
-          const timePlayed = Math.floor((Date.now() - this.startTime) / 1000);
+          const timePlayed = Math.floor(this.getElapsedSeconds());
           const gameOverMsg: GameOverMessage = {
             type: MessageType.GAME_OVER,
             waveReached: this.currentWave,
@@ -1903,10 +2470,157 @@ export class GameSession {
             timePlayed,
           };
           for (const p of this.players.values()) send(p.client, gameOverMsg);
+          this.fireRunEnd();
         }
       }
 
       this.world.destroyEntity(deadId);
+    }
+  }
+
+  /** Fire onRunEnd with per-player RunStats. Called once at game over. */
+  private fireRunEnd(): void {
+    if (!this.onRunEnd) return;
+    const timePlayed = Math.round(this.getElapsedSeconds());
+    const statsMap = new Map<string, import('@shared/MetaStats').RunStats>();
+    for (const p of this.players.values()) {
+      const pid = p.playerId;
+      statsMap.set(pid, {
+        damageDealt: this.damageByPlayer.get(pid) ?? 0,
+        resourcesGathered: this.resourcesByPlayer.get(pid) ?? { wood: 0, stone: 0, iron: 0, diamond: 0 },
+        enemiesKilled: Object.values(this.killsByPlayer.get(pid) ?? {}).reduce((a, b) => a + b, 0),
+        killsByType: this.killsByPlayer.get(pid) ?? {},
+        wavesSurvived: this.currentWave,
+        timePlayed,
+        buildingsBuilt: this.buildingsByPlayer.get(pid) ?? 0,
+      });
+    }
+    this.onRunEnd(statsMap);
+    // Delete save on game over
+    this.onSaveDelete?.();
+  }
+
+  // ── Card system ────────────────────────────────────────────────────────────
+
+  /** Send card offers to all players and start the auto-pick timer. */
+  private sendCardOffers(send: SendFn): void {
+    for (const p of this.players.values()) {
+      const offer = this.cards.generateOffer();
+      this.cards.setPendingOffer(p.client.id, offer);
+      const msg: CardOfferMessage = { type: MessageType.CARD_OFFER, cards: offer };
+      send(p.client, msg);
+    }
+    this.cardOfferTimer = GameSession.CARD_OFFER_TIMEOUT;
+    this.setPaused(true); // Pause game during card selection
+    console.log(`[Cards] Card offers sent to ${this.players.size} player(s)`);
+  }
+
+  /** Handle a CARD_PICK message from a player. */
+  handleCardPick(clientId: string, msg: CardPickMessage, send: SendFn): void {
+    const player = this.players.get(clientId);
+    if (!player) return;
+
+    const card = this.cards.applyPick(clientId, msg.cardId);
+    if (!card) return;
+
+    // Apply immediate effects
+    this.applyCardToEntity(player, card, send);
+
+    // Broadcast to all players
+    const applied: CardAppliedMessage = {
+      type: MessageType.CARD_APPLIED,
+      displayName: player.displayName,
+      cardName: card.name,
+      category: card.category,
+      isTrap: card.category === 'trap',
+    };
+    for (const p of this.players.values()) send(p.client, applied);
+
+    // If no more pending offers, stop timer
+    let anyPending = false;
+    for (const p of this.players.values()) {
+      if (this.cards.hasPendingOffer(p.client.id)) { anyPending = true; break; }
+    }
+    if (!anyPending) {
+      this.cardOfferTimer = -1;
+      this.setPaused(false); // Unpause when all players have picked
+    }
+  }
+
+  /** Tick the card auto-pick timer. Auto-picks for players who haven't chosen. */
+  private tickCardTimer(dt: number, send: SendFn): void {
+    if (this.cardOfferTimer < 0) return;
+    this.cardOfferTimer -= dt;
+    if (this.cardOfferTimer > 0) return;
+
+    this.cardOfferTimer = -1;
+    this.setPaused(false); // Unpause after auto-pick
+    // Auto-pick for all players who haven't chosen
+    for (const p of this.players.values()) {
+      if (!this.cards.hasPendingOffer(p.client.id)) continue;
+      const card = this.cards.autoPickNonTrap(p.client.id);
+      if (!card) continue;
+
+      this.applyCardToEntity(p, card, send);
+
+      const applied: CardAppliedMessage = {
+        type: MessageType.CARD_APPLIED,
+        displayName: p.displayName,
+        cardName: card.name,
+        category: card.category,
+        isTrap: card.category === 'trap',
+      };
+      for (const pp of this.players.values()) send(pp.client, applied);
+    }
+  }
+
+  /** Apply a card's effects to the player's entity. */
+  private applyCardToEntity(
+    player: SessionPlayer,
+    card: import('@shared/CardDefinitions').CardDefinition,
+    send: SendFn,
+  ): void {
+    if (!player.entityId) return;
+    const eid = player.entityId;
+    const buffs = this.cards.getBuffs(player.client.id);
+    const effect = card.effect;
+
+    if (effect.type === 'stat_buff') {
+      if (effect.stat === 'speed') {
+        const spd = this.world.getComponent<import('@shared/components').SpeedComponent>(eid, C.Speed);
+        if (spd) spd.multiplier = buffs.speedMultiplier;
+      } else if (effect.stat === 'maxHp') {
+        const hp = this.world.getComponent<HealthComponent>(eid, C.Health);
+        if (hp) {
+          hp.max = PLAYER_MAX_HEALTH + buffs.maxHpBonus;
+          hp.current = Math.min(hp.current + effect.value, hp.max); // heal the bonus amount
+        }
+      }
+      // damage multiplier is applied at attack time (checked in combat)
+    } else if (effect.type === 'resource') {
+      this.creditResources(eid, effect.resource, effect.amount, send);
+    } else if (effect.type === 'trap_player' && effect.stat === 'speed') {
+      // Apply speed debuff to all players
+      for (const p of this.players.values()) {
+        if (!p.entityId) continue;
+        const pBuffs = this.cards.getBuffs(p.client.id);
+        const spd = this.world.getComponent<import('@shared/components').SpeedComponent>(p.entityId, C.Speed);
+        if (spd) spd.multiplier = pBuffs.speedMultiplier;
+      }
+    }
+  }
+
+  /** Tick HP regen from card buffs. */
+  private tickCardHpRegen(dt: number): void {
+    for (const p of this.players.values()) {
+      if (!p.entityId) continue;
+      const buffs = this.cards.playerBuffs.get(p.client.id);
+      if (!buffs || buffs.hpRegen <= 0) continue;
+      const hp = this.world.getComponent<HealthComponent>(p.entityId, C.Health);
+      if (!hp || hp.current >= hp.max || hp.current <= 0) continue;
+      // Don't regen while downed
+      if (this.world.hasComponent(p.entityId, C.Downed)) continue;
+      hp.current = Math.min(hp.max, hp.current + buffs.hpRegen * dt);
     }
   }
 
@@ -1940,9 +2654,10 @@ export class GameSession {
       }
     } else if (this.wavePhase === 'active') {
       // Run portal spawn timers
-      const spawnRequests = this.portal.update(this.world, dt);
+      const extraSpawns = Math.floor(this.currentWave / PORTAL_EXTRA_SPAWN_EVERY_N_WAVES);
+      const spawnRequests = this.portal.update(this.world, dt, extraSpawns);
       for (const req of spawnRequests) {
-        if (this.isWalkable(req.x, req.y)) {
+        if (this.isWalkable(req.x, req.y) && !this.overlapsBuilding(req.x, req.y, ENEMY_RADIUS)) {
           this.spawnEnemy(req.x, req.y);
         }
       }
@@ -1982,6 +2697,12 @@ export class GameSession {
 
         console.log(`[Wave] Wave ${this.currentWave - 1} cleared! Next wave in ${WAVE_PREP_BETWEEN}s`);
 
+        // Card offers every 3 waves (after wave 3, 6, 9...)
+        const clearedWave = this.currentWave - 1;
+        if (clearedWave >= 3 && clearedWave % 3 === 0) {
+          this.sendCardOffers(send);
+        }
+
         // Auto-save after wave clear
         if (this.onSave) {
           const saveData = this.serializeSave();
@@ -2002,7 +2723,11 @@ export class GameSession {
 
   /** Trigger an immediate save (called on host leave, pause, etc.). */
   saveNow(send?: SendFn): void {
-    if (this.phase !== 'playing' || !this.onSave) return;
+    if (this.phase !== 'playing' || this.gameOver || !this.onSave) return;
+    // Clear all item drops before saving (they don't persist across sessions)
+    for (const id of this.world.query(C.ItemDrop)) {
+      this.world.destroyEntity(id);
+    }
     const saveData = this.serializeSave();
     this.onSave(saveData);
     console.log(`[GameSession] Manual save: wave ${saveData.currentWave}, ${saveData.buildings.length} buildings`);
@@ -2075,6 +2800,15 @@ export class GameSession {
         };
       }
 
+      const lr = this.world.getComponent<LightRevealComponent>(id, C.LightReveal);
+      if (lr) saved.lightReveal = { range: lr.range };
+
+      const ha = this.world.getComponent<HealAuraComponent>(id, C.HealAura);
+      if (ha) saved.healAura = { range: ha.range, healPerSecond: ha.healPerSecond };
+
+      const bs = this.world.getComponent<BarracksSpawnerComponent>(id, C.BarracksSpawner);
+      if (bs) saved.barracksSpawner = { maxGuards: bs.maxGuards, spawnInterval: bs.spawnInterval };
+
       buildings.push(saved);
     }
 
@@ -2098,17 +2832,87 @@ export class GameSession {
       });
     }
 
+    // ── Serialize enemies ──────────────────────────────────────────────────────
+    const enemies: import('@shared/SaveFormat').SavedEnemy[] = [];
+    for (const id of this.world.query(C.Faction, C.Position, C.Health, C.EnemyVariant, C.EnemyStats)) {
+      const f = this.world.getComponent<FactionComponent>(id, C.Faction)!;
+      if (f.type !== 'enemy') continue;
+      const pos = this.world.getComponent<PositionComponent>(id, C.Position)!;
+      const hp = this.world.getComponent<HealthComponent>(id, C.Health)!;
+      const ev = this.world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant)!;
+      const es = this.world.getComponent<EnemyStatsComponent>(id, C.EnemyStats)!;
+      const spd = this.world.getComponent<import('@shared/components').SpeedComponent>(id, C.Speed);
+      const ghost = this.world.getComponent<GhostStateComponent>(id, C.GhostState);
+      enemies.push({
+        x: pos.x, y: pos.y,
+        variant: ev.variant,
+        currentHp: hp.current, maxHp: hp.max,
+        damage: es.damage, range: es.range, knockback: es.knockback, radius: es.radius,
+        rangedRange: es.rangedRange, projectileSpeed: es.projectileSpeed,
+        rangedDamage: es.rangedDamage, rangedCooldown: es.rangedCooldown,
+        speedBase: spd?.base ?? 80, speedMultiplier: spd?.multiplier ?? 1,
+        ghostHidden: ghost?.hidden,
+      });
+    }
+
+    // ── Serialize portals ────────────────────────────────────────────────────
+    const portals: import('@shared/SaveFormat').SavedPortal[] = [];
+    for (const id of this.world.query(C.Portal, C.Position, C.Health)) {
+      const pos = this.world.getComponent<PositionComponent>(id, C.Position)!;
+      const hp = this.world.getComponent<HealthComponent>(id, C.Health)!;
+      const portal = this.world.getComponent<PortalComponent>(id, C.Portal)!;
+      if (hp.current <= 0) continue;
+      portals.push({
+        x: pos.x, y: pos.y,
+        waveNumber: portal.waveNumber,
+        currentHp: hp.current, maxHp: hp.max,
+        spawnTimer: portal.spawnTimer, spawnInterval: portal.spawnInterval,
+      });
+    }
+
+    // ── Serialize resource nodes ─────────────────────────────────────────────
+    const resourceNodes: import('@shared/SaveFormat').SavedResourceNode[] = [];
+    for (const id of this.world.query(C.ResourceNode, C.Position, C.Health)) {
+      const pos = this.world.getComponent<PositionComponent>(id, C.Position)!;
+      const hp = this.world.getComponent<HealthComponent>(id, C.Health)!;
+      const rn = this.world.getComponent<ResourceNodeComponent>(id, C.ResourceNode)!;
+      if (hp.current <= 0) continue;
+      resourceNodes.push({
+        x: pos.x, y: pos.y,
+        resourceType: rn.resourceType, yield: rn.yield,
+        currentHp: hp.current, maxHp: hp.max,
+      });
+    }
+
+    // ── Serialize item drops ──────────────────────────────────────────────────
+    const itemDrops: import('@shared/SaveFormat').SavedItemDrop[] = [];
+    for (const id of this.world.query(C.ItemDrop, C.Position)) {
+      const pos = this.world.getComponent<PositionComponent>(id, C.Position)!;
+      const drop = this.world.getComponent<ItemDropComponent>(id, C.ItemDrop)!;
+      itemDrops.push({
+        x: pos.x, y: pos.y,
+        itemType: drop.itemType, quantity: drop.quantity,
+        autoPickup: drop.autoPickup, lifetime: drop.lifetime,
+      });
+    }
+
     return {
       formatVersion: 1,
       seed: this.seed,
       currentWave: this.currentWave,
+      wavePhase: this.wavePhase,
+      prepTimeRemaining: this.wavePhase === 'prep' ? this.prepTimer : undefined,
       warehousePool: { ...this.warehousePool },
       spawnOrigin: { ...this.spawnOrigin },
       processedChunks: [...this.processedChunks],
       enemiesKilled: this.enemiesKilled,
-      elapsedTime: this.startTime > 0 ? (Date.now() - this.startTime) / 1000 : 0,
+      elapsedTime: this.getElapsedSeconds(),
       buildings,
       players,
+      enemies,
+      portals,
+      resourceNodes,
+      itemDrops,
       hostPlayerId: this.hostPlayerId,
       timestamp: Date.now(),
     };
@@ -2132,7 +2936,7 @@ export class GameSession {
     const origin = s.spawnOrigin as Record<string, unknown> | undefined;
     if (!origin || !Number.isFinite(origin.x) || !Number.isFinite(origin.y)) return false;
     if (!Array.isArray(s.buildings)) return false;
-    const validBuildings = new Set(['campfire', 'wall', 'warehouse', 'lumbermill', 'quarry', 'mine', 'farm', 'arrow_turret', 'cannon_turret', 'spike_trap', 'bridge']);
+    const validBuildings = new Set(['campfire', 'wall', 'warehouse', 'lumbermill', 'quarry', 'mine', 'farm', 'arrow_turret', 'cannon_turret', 'spike_trap', 'bridge', 'light_tower', 'healing_shrine', 'barracks']);
     for (const b of s.buildings as Record<string, unknown>[]) {
       if (!b || typeof b !== 'object') return false;
       if (!validBuildings.has(b.buildingType as string)) return false;
@@ -2173,6 +2977,12 @@ export class GameSession {
       return b;
     });
     this.savedPlayers = save.players;
+    this.savedEnemies = save.enemies ?? [];
+    this.savedPortals = save.portals ?? [];
+    this.savedResourceNodes = save.resourceNodes ?? [];
+    this.savedItemDrops = save.itemDrops ?? [];
+    this.savedWavePhase = save.wavePhase ?? 'prep';
+    this.savedPrepTimeRemaining = save.prepTimeRemaining ?? null;
     return true;
   }
 
@@ -2180,6 +2990,12 @@ export class GameSession {
   private savedElapsedTime = 0;
   private savedBuildings: import('@shared/SaveFormat').SavedBuilding[] = [];
   private savedPlayers: import('@shared/SaveFormat').SavedPlayer[] = [];
+  private savedEnemies: import('@shared/SaveFormat').SavedEnemy[] = [];
+  private savedPortals: import('@shared/SaveFormat').SavedPortal[] = [];
+  private savedResourceNodes: import('@shared/SaveFormat').SavedResourceNode[] = [];
+  private savedItemDrops: import('@shared/SaveFormat').SavedItemDrop[] = [];
+  private savedWavePhase: 'idle' | 'prep' | 'active' | 'cleared' = 'prep';
+  private savedPrepTimeRemaining: number | null = null;
 
   // ── Debug ───────────────────────────────────────────────────────────────────
 
@@ -2199,7 +3015,7 @@ export class GameSession {
       const dist  = 150 + Math.random() * 100;
       const ex = pos.x + Math.cos(angle) * dist;
       const ey = pos.y + Math.sin(angle) * dist;
-      if (!this.isWalkable(ex, ey)) continue;
+      if (!this.isWalkable(ex, ey) || this.overlapsBuilding(ex, ey, ENEMY_RADIUS)) continue;
 
       this.spawnEnemy(ex, ey);
       spawned++;
@@ -2266,11 +3082,12 @@ export class GameSession {
 
     // Solo: instant toggle
     if (this.players.size === 1) {
-      this.paused = !this.paused;
+      this.setPaused(!this.paused);
       this.pauseVotes.clear();
       const stateMsg: PauseStateMessage = {
         type: MessageType.PAUSE_STATE,
         paused: this.paused,
+        elapsedTime: this.getElapsedSeconds(),
       };
       send(player.client, stateMsg);
       return;
@@ -2285,11 +3102,12 @@ export class GameSession {
 
     // Check if all players have voted
     if (this.pauseVotes.size >= this.players.size) {
-      this.paused = !this.paused;
+      this.setPaused(!this.paused);
       this.pauseVotes.clear();
       const stateMsg: PauseStateMessage = {
         type: MessageType.PAUSE_STATE,
         paused: this.paused,
+        elapsedTime: this.getElapsedSeconds(),
       };
       for (const p of this.players.values()) send(p.client, stateMsg);
     } else {
@@ -2309,11 +3127,12 @@ export class GameSession {
 
     // If only 1 player remains while paused, auto-resume
     if (this.paused && this.players.size <= 1) {
-      this.paused = false;
+      this.setPaused(false);
       this.pauseVotes.clear();
       const stateMsg: PauseStateMessage = {
         type: MessageType.PAUSE_STATE,
         paused: false,
+        elapsedTime: this.getElapsedSeconds(),
       };
       for (const p of this.players.values()) send(p.client, stateMsg);
       return;
@@ -2321,11 +3140,12 @@ export class GameSession {
 
     // If pending votes now satisfy threshold (removed player was the holdout)
     if (this.pauseVotes.size > 0 && this.pauseVotes.size >= this.players.size) {
-      this.paused = !this.paused;
+      this.setPaused(!this.paused);
       this.pauseVotes.clear();
       const stateMsg: PauseStateMessage = {
         type: MessageType.PAUSE_STATE,
         paused: this.paused,
+        elapsedTime: this.getElapsedSeconds(),
       };
       for (const p of this.players.values()) send(p.client, stateMsg);
       return;
@@ -2359,7 +3179,12 @@ export class GameSession {
    * Runs systems and broadcasts DELTA to all clients.
    */
   tick_(dt: number, send: (client: ConnectedClient, msg: object) => void): void {
-    if (this.phase !== 'playing' || this.paused) return;
+    if (this.phase !== 'playing') return;
+
+    // Card timer must tick even while paused (card selection pauses the game)
+    this.tickCardTimer(dt, send);
+
+    if (this.paused) return;
     this.tick++;
 
     // Spawn resources near players (chunk-based, processed chunks are skipped)
@@ -2385,20 +3210,20 @@ export class GameSession {
       for (const p of this.players.values()) send(p.client, hitMsg);
     }
 
-    // Spawn ranger projectiles
+    // Spawn ranged enemy projectiles (uses per-entity stats from EnemySystem)
     for (const ra of enemyResult.rangedAttacks) {
       const dirX = Math.cos(ra.facing);
       const dirY = Math.sin(ra.facing);
-      const offset = ENEMY_RADIUS + PROJECTILE_RADIUS + 2;
+      const offset = ra.radius + PROJECTILE_RADIUS + 2;
       const spawnX = ra.x + dirX * offset;
       const spawnY = ra.y + dirY * offset;
-      const vx = dirX * ENEMY_RANGER_PROJECTILE_SPEED;
-      const vy = dirY * ENEMY_RANGER_PROJECTILE_SPEED;
+      const vx = dirX * ra.projectileSpeed;
+      const vy = dirY * ra.projectileSpeed;
 
       const projId = this.world.createEntity();
       this.world.addComponent(projId, C.Position,   { x: spawnX, y: spawnY });
       this.world.addComponent(projId, C.Velocity,   { vx, vy });
-      this.world.addComponent(projId, C.Projectile, { ownerId: ra.sourceId, damage: ENEMY_RANGER_DAMAGE, lifetime: RANGED_LIFETIME });
+      this.world.addComponent(projId, C.Projectile, { ownerId: ra.sourceId, damage: ra.damage, lifetime: RANGED_LIFETIME });
       this.world.addComponent(projId, C.Faction,    { type: 'enemy' });
 
       const spawn: ProjectileSpawnMessage = {
@@ -2419,6 +3244,7 @@ export class GameSession {
     for (const hit of projResult.hits) {
       const hitMsg: HitMessage = { type: MessageType.HIT, ...hit };
       for (const p of this.players.values()) send(p.client, hitMsg);
+      this.trackDamage(hit.sourceId, hit.damage);
     }
 
     for (const projId of projResult.destroyed) {
@@ -2468,8 +3294,28 @@ export class GameSession {
     if (!this.gameOver) this.tickTurrets(dt, send);
     if (!this.gameOver) this.tickSpikeTraps(dt, send);
 
+    // ── Ghost visibility (revealed by light towers) ──────────────────────────
+    this.tickGhostVisibility();
+
+    // ── Healing shrines ─────────────────────────────────────────────────────
+    this.tickHealAuras(dt);
+
+    // ── Barracks guard spawning + AI ──────────────────────────────────────
+    this.tickBarracks(dt);
+    this.tickGuardAI(dt, send);
+
+    // ── Card system ──────────────────────────────────────────────────────────
+    this.tickCardHpRegen(dt);
+
     // ── Wave state machine ────────────────────────────────────────────────────
     if (!this.gameOver) this.tickWave(dt, send);
+
+    // ── Flush pending enemy intro messages ──────────────────────────────────
+    for (const intro of this.pendingIntroMessages) {
+      const msg = { type: MessageType.ENEMY_INTRO, variant: intro.variant, displayName: intro.displayName };
+      for (const p of this.players.values()) send(p.client, msg);
+    }
+    this.pendingIntroMessages.length = 0;
 
     const delta = this.buildDelta();
     for (const p of this.players.values()) {
@@ -2590,9 +3436,17 @@ export class GameSession {
         snap.productionResource = prod.resourceType;
       }
 
-      // Enemy variant
+      // Enemy variant + ghost/radius info
       const ev = this.world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant);
-      if (ev) snap.enemyVariant = ev.variant;
+      if (ev) {
+        snap.enemyVariant = ev.variant;
+        // Ghost visibility
+        const ghost = this.world.getComponent<import('@shared/components').GhostStateComponent>(id, C.GhostState);
+        if (ghost) snap.ghostHidden = ghost.hidden;
+        // Non-default radius (e.g. giant)
+        const eStats = this.world.getComponent<import('@shared/components').EnemyStatsComponent>(id, C.EnemyStats);
+        if (eStats && eStats.radius !== 10) snap.enemyRadius = eStats.radius;
+      }
 
       // Downed state
       if (this.world.hasComponent(id, C.Downed)) snap.downed = true;
@@ -2612,7 +3466,9 @@ export class GameSession {
       prev.itemType !== curr.itemType ||
       prev.buildingType !== curr.buildingType ||
       prev.upgradeLevel !== curr.upgradeLevel ||
-      prev.productionStored !== curr.productionStored
+      prev.productionStored !== curr.productionStored ||
+      prev.ghostHidden !== curr.ghostHidden ||
+      prev.enemyRadius !== curr.enemyRadius
     );
   }
 
@@ -2810,8 +3666,12 @@ export class GameSession {
     ];
     const off = offsets[sp.slot] ?? { dx: -OFFSET, dy: -OFFSET };
     if (pos) {
-      pos.x = this.spawnOrigin.x + off.dx;
-      pos.y = this.spawnOrigin.y + off.dy;
+      const candidate = this.findSafeSpawnNear(
+        this.spawnOrigin.x + off.dx,
+        this.spawnOrigin.y + off.dy,
+      );
+      pos.x = candidate.x;
+      pos.y = candidate.y;
     }
 
     // Clear any lingering Downed component
@@ -2870,9 +3730,10 @@ export class GameSession {
         waveReached: this.currentWave,
         reason: '2nd party wipe - run over',
         enemiesKilled: this.enemiesKilled,
-        timePlayed: Math.round((Date.now() - this.startTime) / 1000),
+        timePlayed: Math.round(this.getElapsedSeconds()),
       };
       for (const p of this.players.values()) send(p.client, msg);
+      this.fireRunEnd();
       return;
     }
 

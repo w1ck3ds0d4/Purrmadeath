@@ -53,7 +53,7 @@ export class WarehouseHUD {
   update(resources: { wood: number; stone: number; iron: number; diamond: number; gold: number; food: number }): void {
     const parts: string[] = [];
     for (const [key, val] of Object.entries(resources)) {
-      if (key === 'gold') continue; // skip gold in display for now
+
       const color = RES_COLORS[key] ?? '#ccc';
       parts.push(`<span style="color:${color}">${val} ${key.charAt(0).toUpperCase() + key.slice(1)}</span>`);
     }

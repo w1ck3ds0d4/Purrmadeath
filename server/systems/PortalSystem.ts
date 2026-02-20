@@ -13,8 +13,9 @@ export interface PortalSpawnRequest {
  * so it can reuse spawnEnemy() and broadcast correctly.
  */
 export class PortalSystem {
-  update(world: World, dt: number): PortalSpawnRequest[] {
+  update(world: World, dt: number, extraSpawnCount = 0): PortalSpawnRequest[] {
     const requests: PortalSpawnRequest[] = [];
+    const spawnsPerInterval = 1 + extraSpawnCount;
 
     for (const id of world.query(C.Portal, C.Position, C.Health)) {
       const portal = world.getComponent<PortalComponent>(id, C.Portal)!;
@@ -28,13 +29,15 @@ export class PortalSystem {
         portal.spawnTimer += portal.spawnInterval;
 
         const pos = world.getComponent<PositionComponent>(id, C.Position)!;
-        // Spawn enemy in a ring around the portal (30-50px offset)
-        const angle = Math.random() * Math.PI * 2;
-        const dist  = 30 + Math.random() * 20;
-        requests.push({
-          x: pos.x + Math.cos(angle) * dist,
-          y: pos.y + Math.sin(angle) * dist,
-        });
+        for (let i = 0; i < spawnsPerInterval; i++) {
+          // Spawn enemy in a ring around the portal (30-50px offset)
+          const angle = Math.random() * Math.PI * 2;
+          const dist  = 30 + Math.random() * 20;
+          requests.push({
+            x: pos.x + Math.cos(angle) * dist,
+            y: pos.y + Math.sin(angle) * dist,
+          });
+        }
       }
     }
 

@@ -8,6 +8,7 @@ import {
   KnockbackReceiverComponent,
   FactionComponent,
   BuildingComponent,
+  EnemyVariantComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -29,6 +30,7 @@ function getEntityRadius(factionType: string): number {
   switch (factionType) {
     case 'player':   return PLAYER_RADIUS;
     case 'enemy':    return ENEMY_RADIUS;
+    case 'guard':    return ENEMY_RADIUS;
     case 'portal':   return PORTAL_RADIUS;
     case 'resource': return RESOURCE_NODE_RADIUS;
     default:         return 0;
@@ -85,6 +87,8 @@ function circleAABBPush(
 export class MovementSystem {
   /** Cached resource node positions - refreshed each update for solid-block collision. */
   private resourceCache: PositionComponent[] = [];
+  /** Cached portal positions - refreshed each update for solid-circle collision. */
+  private portalCache: PositionComponent[] = [];
   /** Cached building positions - refreshed each update for solid-block collision. */
   private buildingCache: { x: number; y: number; halfExtent: number }[] = [];
   /** Bridge tile keys ("tileX,tileY") that override unwalkable terrain. Populated by GameSession. */
@@ -95,6 +99,7 @@ export class MovementSystem {
   update(world: World, dt: number): void {
     // Cache solid entities so overlapsAny can treat them as solid blocks
     this.cacheResources(world);
+    this.cachePortals(world);
     this.cacheBuildings(world);
     for (const id of world.query(C.Position, C.Velocity, C.Speed, C.PlayerInput)) {
       // Skip downed entities - they cannot move
@@ -126,11 +131,14 @@ export class MovementSystem {
         vel.vy *= Math.max(0, 1 - FRICTION * dt);
       }
 
-      // Wall-slide collision
+      // Wall-slide collision (ghosts phase through everything)
       const nx = pos.x + vel.vx * dt;
       const ny = pos.y + vel.vy * dt;
 
-      if (!this.overlapsAny(nx, ny)) {
+      const ev = world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant);
+      const isGhost = ev?.variant === 'ghost';
+
+      if (isGhost || !this.overlapsAny(nx, ny)) {
         pos.x = nx;
         pos.y = ny;
       } else if (!this.overlapsAny(nx, pos.y)) {
@@ -175,12 +183,15 @@ export class MovementSystem {
     for (const id of world.query(C.Position, C.Faction)) {
       if (world.hasComponent(id, C.Projectile)) continue; // projectiles aren't solid bodies
       const faction = world.getComponent<FactionComponent>(id, C.Faction)!;
-      // Resource nodes and buildings are handled as solid blocks in overlapsAny - skip here
-      if (faction.type === 'resource' || faction.type === 'building') continue;
+      // Buildings are handled as solid blocks in overlapsAny - skip here
+      if (faction.type === 'building') continue;
+      // Ghosts phase through everything — skip separation
+      const evSep = world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant);
+      if (evSep?.variant === 'ghost') continue;
       const r = getEntityRadius(faction.type);
       if (r <= 0) continue;
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
-      const movable = faction.type === 'player' || faction.type === 'enemy';
+      const movable = faction.type === 'player' || faction.type === 'enemy' || faction.type === 'guard';
       bodies.push({ id, pos, r, movable, square: isSquareEntity(faction.type) });
     }
 
@@ -258,6 +269,17 @@ export class MovementSystem {
     }
   }
 
+  /** Cache portal positions for solid-circle collision checks. */
+  private cachePortals(world: World): void {
+    this.portalCache.length = 0;
+    for (const id of world.query(C.Position, C.Faction)) {
+      const f = world.getComponent<FactionComponent>(id, C.Faction)!;
+      if (f.type === 'portal') {
+        this.portalCache.push(world.getComponent<PositionComponent>(id, C.Position)!);
+      }
+    }
+  }
+
   /** Cache building positions for solid-block collision checks. */
   private cacheBuildings(world: World): void {
     this.buildingCache.length = 0;
@@ -288,6 +310,12 @@ export class MovementSystem {
       if (circleAABBPush(px, py, PLAYER_RADIUS, node.x, node.y, RESOURCE_NODE_RADIUS)) {
         return true;
       }
+    }
+    // Portals act as solid circles
+    for (const portal of this.portalCache) {
+      const dx = px - portal.x, dy = py - portal.y;
+      const minDist = PLAYER_RADIUS + PORTAL_RADIUS;
+      if (dx * dx + dy * dy < minDist * minDist) return true;
     }
     // Buildings act as solid blocks (circle-vs-AABB)
     for (const bldg of this.buildingCache) {
