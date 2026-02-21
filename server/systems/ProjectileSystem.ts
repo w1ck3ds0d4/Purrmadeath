@@ -84,17 +84,40 @@ export class ProjectileSystem {
       }
 
       // ── Mortar projectile (cannon turret) ──
-      // Flies to target position bypassing all collision, detonates AOE on arrival.
+      // Flies to target position, detonates AOE on arrival OR on direct enemy hit.
       if (proj.flightTime != null && proj.targetX != null && proj.targetY != null) {
         proj.flightTime -= dt;
+        const oldMX = pos.x, oldMY = pos.y;
         // Move position toward target
         pos.x += vel.vx * dt;
         pos.y += vel.vy * dt;
 
-        if (proj.flightTime <= 0) {
-          // Snap to target and detonate
-          pos.x = proj.targetX;
-          pos.y = proj.targetY;
+        // Check for direct hit with an enemy during flight
+        let directHit = false;
+        if (proj.flightTime > 0) {
+          for (const targetId of targets) {
+            if (targetId === projId) continue;
+            if (world.getComponent(targetId, C.Projectile)) continue;
+            const tgtFaction = world.getComponent<FactionComponent>(targetId, C.Faction);
+            if (tgtFaction?.type !== 'enemy') continue;
+            if (world.hasComponent(targetId, C.Downed)) continue;
+            const tgtPos = world.getComponent<PositionComponent>(targetId, C.Position)!;
+            const tgtRadius = world.getComponent<EnemyStatsComponent>(targetId, C.EnemyStats)?.radius ?? ENEMY_RADIUS;
+            const collisionDist = PROJECTILE_RADIUS + tgtRadius;
+            const d2 = segPointDist2(oldMX, oldMY, pos.x, pos.y, tgtPos.x, tgtPos.y);
+            if (d2 <= collisionDist * collisionDist) {
+              directHit = true;
+              break;
+            }
+          }
+        }
+
+        if (proj.flightTime <= 0 || directHit) {
+          // If flight expired, snap to target; if direct hit, detonate at current position
+          if (!directHit) {
+            pos.x = proj.targetX;
+            pos.y = proj.targetY;
+          }
           const aoeR = proj.aoeRadius ?? 40;
           aoeExplosions.push({ x: pos.x, y: pos.y, radius: aoeR });
           const aoeR2 = aoeR * aoeR;

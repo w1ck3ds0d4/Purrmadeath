@@ -5,6 +5,8 @@ export interface PortalSpawnRequest {
   /** World-pixel position to spawn the enemy. */
   x: number;
   y: number;
+  /** Entity ID of the portal that requested this spawn. */
+  portalId: number;
 }
 
 /**
@@ -36,6 +38,7 @@ export class PortalSystem {
           requests.push({
             x: pos.x + Math.cos(angle) * dist,
             y: pos.y + Math.sin(angle) * dist,
+            portalId: id,
           });
         }
       }

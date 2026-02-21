@@ -545,7 +545,7 @@ export class EnemySystem {
             } else {
               stuck.timer += dt;
               if (stuck.timer > STUCK_TIME) {
-                // Find nearest obstacle to push away from
+                // Find nearest obstacle to push away from (resources, portals, and buildings)
                 let nearOX = 0, nearOY = 0, nearOD = Infinity;
                 let hasNear = false;
                 for (const node of this.resourcePositions) {
@@ -555,6 +555,11 @@ export class EnemySystem {
                 }
                 for (const portal of this.portalPositions) {
                   const ox = portal.x - pos.x, oy = portal.y - pos.y;
+                  const od = ox * ox + oy * oy;
+                  if (od < nearOD) { nearOD = od; nearOX = ox; nearOY = oy; hasNear = true; }
+                }
+                for (const bldg of this.buildingEntities) {
+                  const ox = bldg.x - pos.x, oy = bldg.y - pos.y;
                   const od = ox * ox + oy * oy;
                   if (od < nearOD) { nearOD = od; nearOX = ox; nearOY = oy; hasNear = true; }
                 }
@@ -778,7 +783,7 @@ export class EnemySystem {
     return closest;
   }
 
-  /** Steer inp.dx/dy around nearby resource nodes and portals to prevent jamming. */
+  /** Steer inp.dx/dy around nearby resource nodes, portals, and buildings to prevent jamming. */
   private applyObstacleAvoidance(
     pos: PositionComponent,
     inp: PlayerInputComponent,
@@ -787,59 +792,51 @@ export class EnemySystem {
   ): void {
     if (inp.dx === 0 && inp.dy === 0) return;
 
-    let bestDistSq = Infinity;
-    let bestObsX = 0, bestObsY = 0, bestObsRadius = 0;
-    let found = false;
+    // Accumulate avoidance forces from ALL nearby obstacles (not just nearest)
+    let totalPushX = 0, totalPushY = 0;
+
+    const addObstacle = (toX: number, toY: number, obsRadius: number) => {
+      const dot = toX * inp.dx + toY * inp.dy;
+      if (dot <= 0) return; // behind
+      const distSq = toX * toX + toY * toY;
+      const combined = enemyRadius + obsRadius + AVOIDANCE_MARGIN;
+      if (distSq > (AVOIDANCE_LOOK_AHEAD + combined) ** 2) return; // too far
+      const cross = Math.abs(toX * inp.dy - toY * inp.dx);
+      if (cross >= combined) return; // beside path, not in it
+
+      const dist = Math.sqrt(distSq);
+      // Two perpendicular directions around obstacle
+      const pAx = -toY / dist, pAy = toX / dist;
+      const pBx = toY / dist, pBy = -toX / dist;
+      // Pick the one toward target
+      const ttX = targetPos.x - pos.x, ttY = targetPos.y - pos.y;
+      const [perpX, perpY] = (pAx * ttX + pAy * ttY >= pBx * ttX + pBy * ttY)
+        ? [pAx, pAy] : [pBx, pBy];
+      // Strength: 1.0 when touching, fades at distance
+      const strength = Math.max(0, Math.min(1, 1.0 - (dist - combined) / AVOIDANCE_LOOK_AHEAD));
+      totalPushX += perpX * strength;
+      totalPushY += perpY * strength;
+    };
 
     // Scan resources
     for (const node of this.resourcePositions) {
-      const toX = node.x - pos.x, toY = node.y - pos.y;
-      const dot = toX * inp.dx + toY * inp.dy;
-      if (dot <= 0) continue; // behind
-      const distSq = toX * toX + toY * toY;
-      const combined = enemyRadius + RESOURCE_NODE_RADIUS + AVOIDANCE_MARGIN;
-      if (distSq > (AVOIDANCE_LOOK_AHEAD + combined) ** 2) continue; // too far
-      const cross = Math.abs(toX * inp.dy - toY * inp.dx);
-      if (cross >= combined) continue; // beside path, not in it
-      if (distSq < bestDistSq) {
-        bestDistSq = distSq; bestObsX = toX; bestObsY = toY;
-        bestObsRadius = RESOURCE_NODE_RADIUS; found = true;
-      }
+      addObstacle(node.x - pos.x, node.y - pos.y, RESOURCE_NODE_RADIUS);
     }
 
     // Scan portals
     for (const portal of this.portalPositions) {
-      const toX = portal.x - pos.x, toY = portal.y - pos.y;
-      const dot = toX * inp.dx + toY * inp.dy;
-      if (dot <= 0) continue;
-      const distSq = toX * toX + toY * toY;
-      const combined = enemyRadius + PORTAL_RADIUS + AVOIDANCE_MARGIN;
-      if (distSq > (AVOIDANCE_LOOK_AHEAD + combined) ** 2) continue;
-      const cross = Math.abs(toX * inp.dy - toY * inp.dx);
-      if (cross >= combined) continue;
-      if (distSq < bestDistSq) {
-        bestDistSq = distSq; bestObsX = toX; bestObsY = toY;
-        bestObsRadius = PORTAL_RADIUS; found = true;
-      }
+      addObstacle(portal.x - pos.x, portal.y - pos.y, PORTAL_RADIUS);
     }
 
-    if (!found) return;
+    // Scan buildings
+    for (const bldg of this.buildingEntities) {
+      addObstacle(bldg.x - pos.x, bldg.y - pos.y, bldg.half);
+    }
 
-    const dist = Math.sqrt(bestDistSq);
-    // Two perpendicular directions around obstacle
-    const pAx = -bestObsY / dist, pAy = bestObsX / dist;
-    const pBx = bestObsY / dist, pBy = -bestObsX / dist;
-    // Pick the one toward target
-    const ttX = targetPos.x - pos.x, ttY = targetPos.y - pos.y;
-    const [perpX, perpY] = (pAx * ttX + pAy * ttY >= pBx * ttX + pBy * ttY)
-      ? [pAx, pAy] : [pBx, pBy];
+    if (totalPushX === 0 && totalPushY === 0) return;
 
-    // Strength: 1.0 when touching, fades at distance
-    const combined = enemyRadius + bestObsRadius + AVOIDANCE_MARGIN;
-    const strength = Math.max(0, Math.min(1, 1.0 - (dist - combined) / AVOIDANCE_LOOK_AHEAD));
-
-    inp.dx += perpX * strength * AVOIDANCE_STRENGTH;
-    inp.dy += perpY * strength * AVOIDANCE_STRENGTH;
+    inp.dx += totalPushX * AVOIDANCE_STRENGTH;
+    inp.dy += totalPushY * AVOIDANCE_STRENGTH;
     const len = Math.sqrt(inp.dx * inp.dx + inp.dy * inp.dy);
     if (len > 0) { inp.dx /= len; inp.dy /= len; }
   }

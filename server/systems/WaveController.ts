@@ -8,7 +8,12 @@ import {
   EnemyVariantComponent,
 } from '@shared/components';
 import type { EnemyVariantType, EnemyStatsComponent } from '@shared/components';
-import { ENEMY_VARIANT_STATS, pickEnemyVariant, ENEMY_VARIANT_NAMES } from '@shared/EnemyVariants';
+import {
+  ENEMY_VARIANT_STATS, pickEnemyVariant, ENEMY_VARIANT_NAMES,
+  pickWaveFactions, pickEnemyVariantForFaction,
+  FACTION_INTRO_MESSAGES,
+  type EnemyFaction,
+} from '@shared/EnemyVariants';
 import {
   TILE_SIZE,
   PORTAL_BASE_HP,
@@ -44,6 +49,7 @@ export interface WaveState {
   enemyCount: number;
   wipeCount: number;
   introducedTypes: Set<EnemyVariantType>;
+  introducedFactions: Set<string>;
   pendingIntros: { variant: string; displayName: string }[];
 }
 
@@ -75,6 +81,9 @@ export function createWaveController(deps: WaveControllerDeps) {
   } = deps;
   const s = deps.state;
 
+  /** Maps portal entity ID → assigned faction for that portal. */
+  const portalFactions = new Map<number, EnemyFaction>();
+
   // ── Portal spawning ──────────────────────────────────────────────────────
 
   function spawnPortal(x: number, y: number, wave: number): number {
@@ -100,6 +109,15 @@ export function createWaveController(deps: WaveControllerDeps) {
     if (count === 0) return;
     cx /= count; cy /= count;
 
+    const factions = pickWaveFactions(wave);
+    // Introduce new factions with toast messages
+    for (const f of factions) {
+      if (!s.introducedFactions.has(f) && f !== 'bandits') {
+        s.introducedFactions.add(f);
+        s.pendingIntros.push({ variant: f, displayName: FACTION_INTRO_MESSAGES[f] });
+      }
+    }
+
     const numPortals = PORTALS_PER_WAVE_BASE + PORTALS_PER_WAVE_GROWTH * (wave - 1);
     const placed: { x: number; y: number }[] = [];
 
@@ -123,17 +141,23 @@ export function createWaveController(deps: WaveControllerDeps) {
 
         bestX = px; bestY = py; found = true; break;
       }
-      if (found) { spawnPortal(bestX, bestY, wave); placed.push({ x: bestX, y: bestY }); }
+      if (found) {
+        // Assign faction to this portal (round-robin across active factions)
+        const faction = factions[i % factions.length];
+        const portalId = spawnPortal(bestX, bestY, wave);
+        portalFactions.set(portalId, faction);
+        placed.push({ x: bestX, y: bestY });
+      }
     }
-    console.log(`[Wave] Spawned ${placed.length}/${numPortals} portals for wave ${wave}`);
+    console.log(`[Wave] Spawned ${placed.length}/${numPortals} portals for wave ${wave} (factions: ${factions.join(', ')})`);
   }
 
   // ── Enemy spawning ───────────────────────────────────────────────────────
 
-  function spawnEnemy(x: number, y: number): number | null {
+  function spawnEnemy(x: number, y: number, faction: EnemyFaction = 'bandits'): number | null {
     if (s.enemyCount >= deps.maxEnemies) return null;
 
-    const variant = pickEnemyVariant(s.currentWave);
+    const variant = pickEnemyVariantForFaction(s.currentWave, faction);
     const base = ENEMY_VARIANT_STATS[variant];
     const wave = Math.max(1, s.currentWave);
     const hpMult = Math.pow(1 + ENEMY_HP_SCALE_PER_WAVE, wave - 1);
@@ -147,7 +171,7 @@ export function createWaveController(deps: WaveControllerDeps) {
     world.addComponent(id, C.Health, { current: scaledHp, max: scaledHp });
     world.addComponent(id, C.Speed, { base: base.speed, multiplier: cards.debuffs.enemySpeedMult });
     world.addComponent(id, C.PlayerInput, { dx: 0, dy: 0, sprint: false });
-    world.addComponent(id, C.Faction, { type: 'enemy', enemyFaction: 'bandits' });
+    world.addComponent(id, C.Faction, { type: 'enemy', enemyFaction: faction });
     world.addComponent(id, C.Facing, { angle: 0 });
     world.addComponent(id, C.AttackCooldown, { remaining: 0, max: base.rangedCooldown ?? base.cooldown });
     world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
@@ -213,7 +237,8 @@ export function createWaveController(deps: WaveControllerDeps) {
       const spawnRequests = portal.update(world, dt, extraSpawns);
       for (const req of spawnRequests) {
         if (isWalkable(req.x, req.y) && !overlapsBuilding(req.x, req.y, ENEMY_RADIUS)) {
-          spawnEnemy(req.x, req.y);
+          const faction = portalFactions.get(req.portalId) ?? 'bandits';
+          spawnEnemy(req.x, req.y, faction);
         }
       }
 

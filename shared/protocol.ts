@@ -310,6 +310,8 @@ export interface EntitySnapshot {
   productionResource?: string;
   /** Enemy variant type (melee or ranger). Only present for enemy faction. */
   enemyVariant?: import('./components').EnemyVariantType;
+  /** Enemy faction name (bandits, undead, corrupted). Only present for enemy faction. */
+  enemyFaction?: string;
   /** Building upgrade level (1 = base). Only present for building faction. */
   upgradeLevel?: number;
   /** True when a ghost enemy is currently hidden (invisible). */

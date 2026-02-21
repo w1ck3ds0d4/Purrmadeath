@@ -174,7 +174,7 @@ export class GameSession {
   private waveState: WaveState = {
     phase: 'idle', currentWave: 0, prepTimer: 0,
     paused: false, syncTimer: 0, enemyCount: 0, wipeCount: 0,
-    introducedTypes: new Set(), pendingIntros: [],
+    introducedTypes: new Set(), introducedFactions: new Set(), pendingIntros: [],
   };
   private waves!: WaveController;
   /** Rolling average of per-system tick times (ms) for debug profiling. */
@@ -1016,7 +1016,9 @@ export class GameSession {
   private spawnLootDrops(deadEntityId: number): void {
     const pos = this.world.getComponent<PositionComponent>(deadEntityId, C.Position);
     if (!pos) return;
-    const drops = this.rollLootTable('basic_enemy');
+    const ev = this.world.getComponent<EnemyVariantComponent>(deadEntityId, C.EnemyVariant);
+    const tableKey = ev?.variant && LOOT_TABLES[ev.variant] ? ev.variant : 'basic_enemy';
+    const drops = this.rollLootTable(tableKey);
     for (const drop of drops) {
       this.spawnItemDrop(pos.x, pos.y, drop.itemType, drop.quantity, drop.autoPickup);
     }
@@ -1863,10 +1865,11 @@ export class GameSession {
         snap.productionResource = prod.resourceType;
       }
 
-      // Enemy variant + ghost/radius info
+      // Enemy variant + ghost/radius/faction info
       const ev = this.world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant);
       if (ev) {
         snap.enemyVariant = ev.variant;
+        if (factionComp?.enemyFaction) snap.enemyFaction = factionComp.enemyFaction;
         // Ghost visibility
         const ghost = this.world.getComponent<import('@shared/components').GhostStateComponent>(id, C.GhostState);
         if (ghost) snap.ghostHidden = ghost.hidden;

@@ -38,8 +38,8 @@ export const ENEMY_VARIANT_STATS: Record<EnemyVariantType, EnemyVariantStats> = 
     radius: 10,
   },
   ranger: {
-    hp: 30,
-    speed: 60,
+    hp: 35,
+    speed: 70,
     damage: 10,       // melee fallback damage
     range: 40,        // melee range (when close)
     knockback: 200,
@@ -47,8 +47,8 @@ export const ENEMY_VARIANT_STATS: Record<EnemyVariantType, EnemyVariantStats> = 
     radius: 10,
     rangedRange: 200,
     projectileSpeed: 300,
-    rangedDamage: 8,
-    rangedCooldown: 2.0,
+    rangedDamage: 12,
+    rangedCooldown: 1.5,
   },
   ghost: {
     hp: 25,
@@ -135,3 +135,88 @@ export const ENEMY_VARIANT_NAMES: Record<EnemyVariantType, string> = {
   giant: 'Giants',
   assassin: 'Assassins',
 };
+
+// ─── Enemy Factions ──────────────────────────────────────────────────────────
+
+export const ENEMY_FACTIONS = ['bandits', 'undead', 'corrupted'] as const;
+export type EnemyFaction = (typeof ENEMY_FACTIONS)[number];
+
+export const FACTION_DISPLAY_NAMES: Record<EnemyFaction, string> = {
+  bandits: 'Bandits',
+  undead: 'The Undead',
+  corrupted: 'The Corrupted',
+};
+
+export const FACTION_INTRO_MESSAGES: Record<EnemyFaction, string> = {
+  bandits: 'Bandits attack!',
+  undead: 'The Undead rise!',
+  corrupted: 'Corrupted forces emerge!',
+};
+
+/** Faction tint colors for enemy rendering. */
+export const FACTION_COLORS: Record<EnemyFaction, number> = {
+  bandits: 0xcc3333,    // red (default)
+  undead: 0x44cc66,     // green
+  corrupted: 0x9944dd,  // purple
+};
+
+/**
+ * Pick which factions are active for a given wave.
+ * W1-4: bandits only. W5-8: bandits + undead. W9+: 2 of 3 (random).
+ */
+export function pickWaveFactions(wave: number): EnemyFaction[] {
+  if (wave < 5) return ['bandits'];
+  if (wave < 9) return ['bandits', 'undead'];
+  // W9+: pick 2 of 3 factions randomly
+  const shuffled = [...ENEMY_FACTIONS].sort(() => Math.random() - 0.5);
+  return [shuffled[0], shuffled[1]];
+}
+
+/**
+ * Faction-biased spawn weights. Each faction emphasizes certain variants.
+ * - Bandits: standard (melee/ranger heavy)
+ * - Undead: ghost + giant heavy
+ * - Corrupted: assassin + ranger heavy
+ */
+export function getSpawnWeightsForFaction(
+  wave: number,
+  faction: EnemyFaction,
+): { variant: EnemyVariantType; weight: number }[] {
+  // Base weights filtered by wave unlock (same thresholds as before)
+  const hasGhost = wave >= 3;
+  const hasGiant = wave >= 5;
+  const hasAssassin = wave >= 7;
+
+  switch (faction) {
+    case 'undead':
+      return [
+        { variant: 'melee', weight: 20 },
+        { variant: 'ranger', weight: 10 },
+        ...(hasGhost ? [{ variant: 'ghost' as EnemyVariantType, weight: 40 }] : []),
+        ...(hasGiant ? [{ variant: 'giant' as EnemyVariantType, weight: 25 }] : []),
+        ...(hasAssassin ? [{ variant: 'assassin' as EnemyVariantType, weight: 5 }] : []),
+      ];
+    case 'corrupted':
+      return [
+        { variant: 'melee', weight: 15 },
+        { variant: 'ranger', weight: 30 },
+        ...(hasGhost ? [{ variant: 'ghost' as EnemyVariantType, weight: 10 }] : []),
+        ...(hasGiant ? [{ variant: 'giant' as EnemyVariantType, weight: 10 }] : []),
+        ...(hasAssassin ? [{ variant: 'assassin' as EnemyVariantType, weight: 35 }] : []),
+      ];
+    default: // bandits — standard weights
+      return getSpawnWeights(wave);
+  }
+}
+
+/** Pick a random variant using faction-biased weights. */
+export function pickEnemyVariantForFaction(wave: number, faction: EnemyFaction): EnemyVariantType {
+  const weights = getSpawnWeightsForFaction(wave, faction);
+  const totalWeight = weights.reduce((sum, w) => sum + w.weight, 0);
+  let roll = Math.random() * totalWeight;
+  for (const entry of weights) {
+    roll -= entry.weight;
+    if (roll <= 0) return entry.variant;
+  }
+  return weights[weights.length - 1].variant;
+}

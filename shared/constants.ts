@@ -414,7 +414,7 @@ export const CANNON_TURRET_RANGE = 300;
 /** Seconds between cannon turret shots. */
 export const CANNON_TURRET_COOLDOWN = 4;
 /** Damage per cannon turret projectile. */
-export const CANNON_TURRET_DAMAGE = 25;
+export const CANNON_TURRET_DAMAGE = 20;
 /** Cannon turret projectile speed (px/s). */
 export const CANNON_TURRET_PROJ_SPEED = 250;
 
@@ -463,7 +463,7 @@ export const UPGRADE_CANNON_CD      = [1, 0.8, 0.6];
 /** Cannon turret damage multiplier. */
 export const UPGRADE_CANNON_DMG     = [1, 1.4, 1.8];
 /** Cannon AOE radius per level (absolute values in px). */
-export const UPGRADE_CANNON_AOE     = [100, 200, 400];
+export const UPGRADE_CANNON_AOE     = [80, 120, 180];
 /** Spike trap damage multiplier. */
 export const UPGRADE_TRAP_DMG       = [1, 1.5, 2.0];
 
@@ -484,10 +484,10 @@ export const UPGRADE_HEAL_RANGE     = [120, 160, 200];
 /** Max guards per barracks level. */
 export const BARRACKS_MAX_GUARDS    = [1, 2, 3];
 /** Seconds between guard spawns. */
-export const BARRACKS_SPAWN_INTERVAL = 30;
+export const BARRACKS_SPAWN_INTERVAL = 15;
 /** Guard stats. */
-export const BARRACKS_GUARD_HP      = 50;
-export const BARRACKS_GUARD_DAMAGE  = 8;
+export const BARRACKS_GUARD_HP      = 80;
+export const BARRACKS_GUARD_DAMAGE  = 12;
 export const BARRACKS_GUARD_SPEED   = 60;
 export const BARRACKS_GUARD_PATROL_RADIUS = 150;
 

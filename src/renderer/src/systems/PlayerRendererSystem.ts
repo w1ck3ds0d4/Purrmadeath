@@ -15,6 +15,7 @@ import {
   EnemyStatsComponent,
 } from '@shared/components';
 import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, ENEMY_MELEE_RANGE, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, buildingHalfExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RANGE } from '@shared/constants';
+import { FACTION_COLORS, type EnemyFaction } from '@shared/EnemyVariants';
 
 /** Turret type → base range in pixels. */
 const TURRET_RANGES: Record<string, number> = {
@@ -562,8 +563,8 @@ export class PlayerRendererSystem {
           // Range circle (turrets, light tower, healing shrine)
           const bType = bldg?.buildingType ?? '';
           let range = TURRET_RANGES[bType];
-          if (!range && bType === 'light_tower') range = UPGRADE_LIGHT_RANGE[bldg?.upgradeLevel ?? 0] ?? UPGRADE_LIGHT_RANGE[0];
-          if (!range && bType === 'healing_shrine') range = UPGRADE_HEAL_RANGE[bldg?.upgradeLevel ?? 0] ?? UPGRADE_HEAL_RANGE[0];
+          if (!range && bType === 'light_tower') range = UPGRADE_LIGHT_RANGE[(bldg?.upgradeLevel ?? 1) - 1] ?? UPGRADE_LIGHT_RANGE[0];
+          if (!range && bType === 'healing_shrine') range = UPGRADE_HEAL_RANGE[(bldg?.upgradeLevel ?? 1) - 1] ?? UPGRADE_HEAL_RANGE[0];
           if (range) {
             const color = RANGE_COLORS[bType] ?? 0x44aaff;
             gfx.circle(0, 0, range);
@@ -614,6 +615,7 @@ export class PlayerRendererSystem {
         const ev = isEnemy ? world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant) : undefined;
         const ghostState = isEnemy ? world.getComponent<GhostStateComponent>(id, C.GhostState) : undefined;
         const enemyStats = isEnemy ? world.getComponent<EnemyStatsComponent>(id, C.EnemyStats) : undefined;
+        const factionComp = isEnemy ? world.getComponent<FactionComponent>(id, C.Faction) : undefined;
 
         // Variant-specific colors
         let baseColor: number;
@@ -628,6 +630,12 @@ export class PlayerRendererSystem {
             case 'giant':    baseColor = ENEMY_GIANT_COLOR; break;
             case 'assassin': baseColor = ENEMY_ASSASSIN_COLOR; break;
             default:         baseColor = ENEMY_COLOR;
+          }
+          // Apply faction tint (blend 25% toward faction color for non-bandit factions)
+          const eFaction = factionComp?.enemyFaction as EnemyFaction | undefined;
+          if (eFaction && eFaction !== 'bandits') {
+            const fColor = FACTION_COLORS[eFaction];
+            if (fColor !== undefined) baseColor = lerpColor(baseColor, fColor, 0.25);
           }
         }
         const color = flashT > 0 ? lerpColor(baseColor, 0xffffff, flashT * 0.6) : baseColor;

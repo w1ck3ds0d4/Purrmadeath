@@ -125,7 +125,7 @@ export class RemotePlayerSystem {
         world.addComponent(snap.entityId, C.PlayerIndex, { index: snap.slot });
       }
       if (snap.faction) {
-        world.addComponent(snap.entityId, C.Faction, { type: snap.faction });
+        world.addComponent(snap.entityId, C.Faction, { type: snap.faction, enemyFaction: snap.enemyFaction });
       }
       // Resource node metadata (for renderer color selection)
       if (snap.resourceType) {
