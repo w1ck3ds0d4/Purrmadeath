@@ -28,12 +28,18 @@ export class World {
   // storage[componentType][entityId] = componentData
   private storage = new Map<string, Map<EntityId, unknown>>();
 
+  // Query result cache: "CompA,CompB" → EntityId[]
+  // Invalidated on any structural change (entity create/destroy, component add/remove).
+  private queryCache = new Map<string, EntityId[]>();
+  private queryCacheDirty = true;
+
   // ── Entity lifecycle ────────────────────────────────────────────────────────
 
   /** Create a new entity and return its ID. */
   createEntity(): EntityId {
     const id = this.nextId++;
     this.entities.add(id);
+    this.queryCacheDirty = true;
     return id;
   }
 
@@ -44,6 +50,7 @@ export class World {
   createEntityWithId(id: EntityId): void {
     this.entities.add(id);
     if (id >= this.nextId) this.nextId = id + 1;
+    this.queryCacheDirty = true;
   }
 
   /** Destroy an entity and remove all its components. Safe to call on unknown ID. */
@@ -51,6 +58,7 @@ export class World {
     if (!this.entities.has(id)) return;
     this.entities.delete(id);
     for (const store of this.storage.values()) store.delete(id);
+    this.queryCacheDirty = true;
   }
 
   hasEntity(id: EntityId): boolean {
@@ -74,12 +82,15 @@ export class World {
       store = new Map();
       this.storage.set(type, store);
     }
+    const hadBefore = store.has(id);
     store.set(id, data);
+    if (!hadBefore) this.queryCacheDirty = true;
   }
 
   /** Remove a component from an entity. No-op if not present. */
   removeComponent(id: EntityId, type: string): void {
-    this.storage.get(type)?.delete(id);
+    const store = this.storage.get(type);
+    if (store && store.delete(id)) this.queryCacheDirty = true;
   }
 
   /** Get component data. Returns undefined if the entity lacks this component. */
@@ -95,6 +106,7 @@ export class World {
 
   /**
    * Return all entities that have ALL the listed component types.
+   * Results are cached until the next structural change (entity/component add/remove).
    * Returns a snapshot array - safe to iterate while destroying entities.
    *
    * Example:
@@ -104,10 +116,20 @@ export class World {
    *   }
    */
   query(...types: string[]): EntityId[] {
+    if (this.queryCacheDirty) {
+      this.queryCache.clear();
+      this.queryCacheDirty = false;
+    }
+
+    const key = types.length === 1 ? types[0] : types.join(',');
+    const cached = this.queryCache.get(key);
+    if (cached) return cached;
+
     const result: EntityId[] = [];
     for (const id of this.entities) {
       if (types.every((t) => this.hasComponent(id, t))) result.push(id);
     }
+    this.queryCache.set(key, result);
     return result;
   }
 
@@ -139,6 +161,7 @@ export class World {
         store.set(id, data as object);
       }
     }
+    this.queryCacheDirty = true;
   }
 
   /**
@@ -159,12 +182,15 @@ export class World {
         store.set(id, data as object);
       }
     }
+    this.queryCacheDirty = true;
   }
 
   /** Remove all entities and components, reset ID counter. */
   clear(): void {
     this.entities.clear();
     this.storage.clear();
+    this.queryCache.clear();
+    this.queryCacheDirty = false;
     this.nextId = 1;
   }
 }

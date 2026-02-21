@@ -10,9 +10,6 @@ import { MessageType } from '@shared/protocol';
 import {
   SERVER_PORT,
   TILE_SIZE,
-  PLAYER_MAX_STAMINA,
-  PLAYER_STAMINA_REGEN,
-  PLAYER_BASE_SPEED,
   MELEE_COOLDOWN,
   MELEE_RANGE,
   MELEE_ARC,
@@ -22,59 +19,14 @@ import {
   RESOURCE_NODE_RADIUS,
   GAME_VERSION,
   TICK_MS,
-  BUILDING_COSTS,
-  BUILDING_SIZES,
-  PLACEABLE_BUILDINGS,
-  buildingHalfExtent,
-  snapBuildingPosition,
-  PLAYER_RADIUS,
-  BUILDING_MAX_LEVEL,
-  getUpgradeCost,
-  getRepairCost,
 } from '@shared/constants';
-import type {
-  HandshakeAckMessage,
-  SessionAckMessage,
-  PlayerJoinedMessage,
-  PlayerLeftMessage,
-  SnapshotMessage,
-  DeltaMessage,
-  AttackPerformedMessage,
-  HitMessage,
-  ProjectileSpawnMessage,
-  ProjectileRemoveMessage,
-  PauseVoteUpdateMessage,
-  PauseStateMessage,
-  ChatMessage,
-  WaveStartMessage,
-  WaveEndMessage,
-  WaveTimerSyncMessage,
-  ResourceUpdateMessage,
-  PlayerDownedMessage,
-  ReviveProgressMessage,
-  PlayerRevivedMessage,
-  PlayerDiedMessage,
-  PlayerRespawnedMessage,
-  PartyWipeMessage,
-  GameOverMessage,
-  BuildConfirmMessage,
-  BuildUpgradeConfirmMessage,
-  BuildRepairConfirmMessage,
-  AoeExplosionMessage,
-  WarehouseUpdateMessage,
-  SaveSlotsResponseMessage,
-  GameSavedMessage,
-  LobbySlot,
-  EnemyIntroMessage,
-  MetaStatsResponseMessage,
-  CardOfferMessage,
-  CardAppliedMessage,
-} from '@shared/protocol';
+import type { LobbySlot } from '@shared/protocol';
 import type { SaveSlotInfo } from '@shared/SaveFormat';
+import { registerMessageHandlers, type GameplayState } from './net/NetworkHandler';
+import { createBuildController } from './systems/BuildController';
 
 import { World } from '@shared/ecs/World';
-import { C, PositionComponent, FactionComponent, HealthComponent, BuildingComponent, type BuildingType } from '@shared/components';
-import { TILE_DEFS } from '@shared/world/TileRegistry';
+import { C, PositionComponent, FactionComponent, BuildingComponent } from '@shared/components';
 
 import { InputManager, Action } from './input/InputManager';
 import { GameStateManager, GameState } from './state/GameStateManager';
@@ -223,6 +175,8 @@ async function main(): Promise<void> {
   let serverElapsedTime = 0;
   /** True when a wave is actively spawning enemies (portals alive). */
   let waveActive = false;
+  /** Reusable Map for projectile old positions (avoids per-frame allocation). */
+  const projOldPos = new Map<number, { x: number; y: number }>();
 
   // ── Mouse tracking (for player facing direction) ─────────────────────────────
   let mouseX = 0;
@@ -240,13 +194,11 @@ async function main(): Promise<void> {
   let inputTickAccum = 0;
   let lastServerStats: { wave: number; enemyCount: number; portalCount: number; playerCount: number } | undefined;
 
-  // ── Build mode state ─────────────────────────────────────────────────────
-  let buildModeActive = false;
-  let selectedBuildingIdx = 0;
-  let selectedBuildingId: number | null = null;
+  // ── Build / resource state ──────────────────────────────────────────────
   let localResources: Record<string, number> = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
   let warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
   let warehouseExists = false;
+  let handshakeSent = false;
 
   /** Warehouse + player inventory combined (for build cost checks). */
   function combinedResources(): Record<string, number> {
@@ -367,14 +319,10 @@ async function main(): Promise<void> {
     debug.hide();
     resourceHUD.setResources(0, 0, 0, 0, 0, 0);
     resourceHUD.hide();
-    buildModeActive = false;
-    selectedBuildingId = null;
-    selectedBuildingIdx = 0;
+    buildCtrl.reset();
     localResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
     warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
     warehouseExists = false;
-    buildOverlay.hide();
-    buildGhost.hide();
     warehouseHUD.hide();
     // Transport stays alive - don't disconnect
     menuOverlay.setButtonsEnabled(transportReady);
@@ -426,455 +374,69 @@ async function main(): Promise<void> {
 
   const net = new NetworkClient(`ws://${serverIp}:${SERVER_PORT}`);
 
-  // ── Transport: HANDSHAKE_ACK (fires on each connect / reconnect) ──────────
-  net.on(MessageType.HANDSHAKE_ACK, (msg) => {
-    const ack = msg as HandshakeAckMessage;
-    console.log(`[Net] Connected - clientId: ${ack.clientId}, server v${ack.serverVersion}`);
-
-    transportReady = true;
-    menuOverlay.setConnectionStatus('connected');
-    menuOverlay.setButtonsEnabled(true);
-
-    // Version gate
-    if (ack.serverVersion !== GAME_VERSION) {
-      console.warn(`[Net] Version mismatch: client ${GAME_VERSION}, server ${ack.serverVersion}`);
-      menuOverlay.setConnectionStatus('disconnected');
-      menuOverlay.setButtonsEnabled(false);
-      electronAPI?.checkForUpdates?.();
-      return;
-    }
-
-    // Pre-fill name from server's IP memory
-    if (ack.lastDisplayName) {
-      menuOverlay.displayName = ack.lastDisplayName;
-    }
+  // ── Build controller ──────────────────────────────────────────────────────
+  const buildCtrl = createBuildController({
+    world, input, buildOverlay, buildGhost, combinedResources,
+    getChunks: () => chunks,
+    getMouseWorld: () => {
+      const { width, height } = renderer.screen;
+      return {
+        x: camera.viewX + (mouseX - width / 2) / camera.zoom,
+        y: camera.viewY + (mouseY - height / 2) / camera.zoom,
+      };
+    },
+    getLocalResources: () => localResources,
+    getWarehouseResources: () => warehouseResources as Record<string, number>,
+    getWarehouseExists: () => warehouseExists,
+    send: (msg) => net.send(msg),
   });
 
-  // ── Transport: connection status callbacks ────────────────────────────────
-  net.onConnect(() => {
-    menuOverlay.setConnectionStatus('connecting');
-  });
+  // ── Handler state bridge (maps handler reads/writes to local variables) ────
+  const handlerState: GameplayState = {
+    get localSlot() { return localSlot; }, set localSlot(v) { localSlot = v; },
+    get localEntityId() { return localEntityId; }, set localEntityId(v) { localEntityId = v; },
+    get isHost() { return isHost; }, set isHost(v) { isHost = v; },
+    get currentSessionId() { return currentSessionId; }, set currentSessionId(v) { currentSessionId = v; },
+    get currentSessionCode() { return currentSessionCode; }, set currentSessionCode(v) { currentSessionCode = v; },
+    get lobbyPlayers() { return lobbyPlayers; }, set lobbyPlayers(v) { lobbyPlayers = v; },
+    get isMultiplayer() { return isMultiplayer; }, set isMultiplayer(v) { isMultiplayer = v; },
+    get transportReady() { return transportReady; }, set transportReady(v) { transportReady = v; },
+    get pendingSaveSlots() { return pendingSaveSlots; }, set pendingSaveSlots(v) { pendingSaveSlots = v; },
+    get saveSlotRequestId() { return saveSlotRequestId; }, set saveSlotRequestId(v) { saveSlotRequestId = v; },
+    get gameStartTime() { return gameStartTime; }, set gameStartTime(v) { gameStartTime = v; },
+    get serverElapsedTime() { return serverElapsedTime; }, set serverElapsedTime(v) { serverElapsedTime = v; },
+    get waveActive() { return waveActive; }, set waveActive(v) { waveActive = v; },
+    get localDowned() { return localDowned; }, set localDowned(v) { localDowned = v; },
+    get localDead() { return localDead; }, set localDead(v) { localDead = v; },
+    get respawnTimer() { return respawnTimer; }, set respawnTimer(v) { respawnTimer = v; },
+    get localGameOver() { return localGameOver; }, set localGameOver(v) { localGameOver = v; },
+    get buildModeActive() { return buildCtrl.active; }, set buildModeActive(v) { buildCtrl.active = v; },
+    get selectedBuildingIdx() { return buildCtrl.selectedIdx; }, set selectedBuildingIdx(v) { buildCtrl.selectedIdx = v; },
+    get selectedBuildingId() { return buildCtrl.selectedId; }, set selectedBuildingId(v) { buildCtrl.selectedId = v; },
+    get localResources() { return localResources; }, set localResources(v) { localResources = v; },
+    get warehouseResources() { return warehouseResources; }, set warehouseResources(v) { warehouseResources = v; },
+    get warehouseExists() { return warehouseExists; }, set warehouseExists(v) { warehouseExists = v; },
+    get selectedWeapon() { return selectedWeapon; }, set selectedWeapon(v) { selectedWeapon = v; },
+    get lastServerStats() { return lastServerStats; }, set lastServerStats(v) { lastServerStats = v; },
+    get handshakeSent() { return handshakeSent; }, set handshakeSent(v) { handshakeSent = v; },
+    get seed() { return seed; }, set seed(v) { seed = v; },
+  };
 
-  net.onDrop(() => {
-    transportReady = false;
-    handshakeSent = false;
-    menuOverlay.setConnectionStatus('disconnected');
-    menuOverlay.setButtonsEnabled(false);
-    debug.log('Connection lost');
-
-    // If in a game session, return to menu (session state is lost)
-    if (stateMgr.current !== GameState.Menu) {
-      console.warn('[Net] Connection lost - returning to menu');
-      stateMgr.transition(GameState.Menu);
-    }
-  });
-
-  // ── Register all game message handlers (called once) ──────────────────────
-  net.on(MessageType.SESSION_ACK, (msg) => {
-    const ack = msg as SessionAckMessage;
-    localSlot          = ack.slot;
-    isHost             = ack.isHost;
-    currentSessionId   = ack.sessionId;
-    currentSessionCode = ack.code ?? '';
-    lobbyPlayers       = ack.players;
-    seed               = ack.seed;
-    generator      = new WorldGenerator(ack.seed);
-    chunks         = new ChunkManager(generator);
-    movementSystem = new MovementSystem(chunks);
-    minimap.setTileGetter((tx, ty) => generator!.getTile(tx, ty));
-
-    stateMgr.transition(GameState.Lobby);
-  });
-
-  net.on(MessageType.PLAYER_JOINED, (msg) => {
-    const pj = msg as PlayerJoinedMessage;
-    lobbyPlayers = lobbyPlayers.filter((p) => p.playerId !== pj.player.playerId);
-    lobbyPlayers.push(pj.player);
-    lobbyOverlay.updatePlayers(lobbyPlayers);
-    lobbyOverlay.addChatMessage('→', `${pj.player.displayName} joined`);
-    debug.log(`Player joined: ${pj.player.displayName} (slot ${pj.player.slot})`);
-  });
-
-  net.on(MessageType.PLAYER_LEFT, (msg) => {
-    const pl = msg as PlayerLeftMessage;
-    lobbyPlayers = lobbyPlayers.filter((p) => p.playerId !== pl.playerId);
-    lobbyOverlay.updatePlayers(lobbyPlayers);
-    lobbyOverlay.addChatMessage('←', `Player ${pl.slot + 1} left`);
-    debug.log(`Player left: slot ${pl.slot + 1}`);
-  });
-
-  net.on(MessageType.SNAPSHOT, (msg) => {
-    const snap = msg as SnapshotMessage;
-
-    world.clear();
-    playerRenderer.destroy();
-
-    // Track multiplayer status for pause voting
-    isMultiplayer = lobbyPlayers.length > 1;
-
-    // Create all remote player entities from server snapshot
-    remotePlayerSys.applySnapshot(world, snap);
-
-    // Find and configure the local player entity
-    const localSnap = snap.entities.find((e) => e.slot === localSlot);
-    if (localSnap) {
-      localEntityId = localSnap.entityId;
-      reconciler.localEntityId = localEntityId;
-
-      // Add prediction-only components (not sent by server)
-      world.addComponent(localEntityId, C.Speed,       { base: PLAYER_BASE_SPEED, multiplier: 1 });
-      world.addComponent(localEntityId, C.Stamina,     { current: PLAYER_MAX_STAMINA, max: PLAYER_MAX_STAMINA, regenRate: PLAYER_STAMINA_REGEN, exhausted: false });
-      world.addComponent(localEntityId, C.PlayerInput, { dx: 0, dy: 0, sprint: false });
-
-      // Snap camera - no lerp pop on first frame
-      const pos = world.getComponent<PositionComponent>(localEntityId, C.Position)!;
-      camera.x = pos.x; camera.y = pos.y;
-      camera.targetX = pos.x; camera.targetY = pos.y;
-    }
-
-    stateMgr.transition(GameState.Playing);
-  });
-
-  net.on(MessageType.DELTA, (msg) => {
-    if (stateMgr.current !== GameState.Playing) return;
-    const delta = msg as DeltaMessage;
-
-    // Capture server stats for debug console
-    if (delta.serverStats) lastServerStats = delta.serverStats;
-
-    // Reconcile local player (snap-to-server + replay pending inputs).
-    // Pass localEntityId so entity separation runs during replay - prevents
-    // walking through resource nodes when the reconciler replays movement.
-    reconciler.applyDelta(world, delta, (replayDt) => {
-      movementSystem?.update(world, replayDt, localEntityId ?? undefined);
-    });
-
-    // Apply remote entity updates
-    remotePlayerSys.applyDelta(world, delta);
-  });
-
-  net.on(MessageType.ATTACK_PERFORMED, (msg) => {
-    const ap = msg as AttackPerformedMessage;
-    // Skip local player - their arc is triggered immediately on input
-    if (ap.sourceId !== localEntityId) {
-      playerRenderer.notifyAttack(ap.sourceId, ap.facing);
-    }
-  });
-
-  net.on(MessageType.HIT, (msg) => {
-    const hit = msg as HitMessage;
-    playerRenderer.notifyHit(hit.targetId);
-
-    // Spawn floating damage number at target position
-    const pos = world.getComponent<PositionComponent>(hit.targetId, C.Position);
-    if (pos) {
-      const faction = world.getComponent<FactionComponent>(hit.targetId, C.Faction);
-      const color = faction?.type === 'building' ? 0xffa040
-                  : faction?.type === 'resource' ? 0xffffff
-                  : 0xff4444;
-      damageNumbers.add(pos.x, pos.y - 10, hit.damage, color);
-    }
-  });
-
-  net.on(MessageType.PROJECTILE_SPAWN, (msg) => {
-    const ps = msg as ProjectileSpawnMessage;
-    projectileRenderer.spawn(ps.projectileId, ps.x, ps.y, ps.vx, ps.vy, ps.ownerSlot,
-      ps.targetX, ps.targetY, ps.totalFlightTime);
-  });
-
-  net.on(MessageType.PROJECTILE_REMOVE, (msg) => {
-    const pr = msg as ProjectileRemoveMessage;
-    projectileRenderer.remove(pr.projectileId);
-  });
-
-  net.on(MessageType.PAUSE_VOTE_UPDATE, (msg) => {
-    const update = msg as PauseVoteUpdateMessage;
-    pauseBanner.show(update.direction, update.voters, update.required);
-  });
-
-  net.on(MessageType.PAUSE_STATE, (msg) => {
-    const ps = msg as PauseStateMessage;
-    pauseBanner.hide();
-    if (ps.elapsedTime != null) serverElapsedTime = ps.elapsedTime;
-    if (ps.paused) {
-      // Send zero-input so the server zeros our velocity
-      const seq = reconciler.recordInput(0, 0, false, 0);
-      net.send({ type: MessageType.INPUT, seq, dx: 0, dy: 0, sprint: false, t: performance.now() });
-      stateMgr.transition(GameState.Paused);
-    } else {
-      stateMgr.transition(GameState.Playing);
-    }
-  });
-
-  net.on(MessageType.CHAT, (msg) => {
-    const chat = msg as ChatMessage;
-    if (stateMgr.current === GameState.Lobby) {
-      lobbyOverlay.addChatMessage(chat.displayName, chat.text);
-    } else {
-      chatOverlay.addMessage(chat.displayName, chat.slot, chat.text);
-    }
-    debug.log(`[Chat] ${chat.displayName}: ${chat.text}`);
-  });
-
-  net.on(MessageType.WAVE_START, (msg) => {
-    const ws = msg as WaveStartMessage;
-    waveHUD.onWaveStart(ws.waveNumber, ws.prepDuration);
-    // prepDuration === 0 means portals are live (active phase)
-    if (ws.prepDuration === 0) waveActive = true;
-    else waveActive = false;
-    debug.log(`Wave ${ws.waveNumber} started (prep: ${ws.prepDuration}s)`);
-  });
-
-  net.on(MessageType.WAVE_END, (msg) => {
-    const we = msg as WaveEndMessage;
-    waveHUD.onWaveEnd(we.waveNumber);
-    waveActive = false;
-    debug.log(`Wave ${we.waveNumber} cleared`);
-  });
-
-  net.on(MessageType.WAVE_TIMER_SYNC, (msg) => {
-    const sync = msg as WaveTimerSyncMessage;
-    waveHUD.onTimerSync(sync.waveNumber, sync.remaining, sync.paused);
-  });
-
-  net.on(MessageType.ENEMY_INTRO, (msg) => {
-    const intro = msg as EnemyIntroMessage;
-    chatOverlay.addMessage('System', -1, `New threat: ${intro.displayName}!`);
-    debug.log(`New enemy type: ${intro.displayName}`);
-  });
-
-  net.on(MessageType.META_STATS_RESPONSE, (msg) => {
-    const resp = msg as MetaStatsResponseMessage;
-    statsOverlay.show(resp.stats, () => menuOverlay.showMenu());
-  });
-
-  net.on(MessageType.CARD_OFFER, (msg) => {
-    const offer = msg as CardOfferMessage;
-    waveHUD.setPaused(true);
-    cardPicker.show(offer.cards, (cardId) => {
-      net.send({ type: MessageType.CARD_PICK, cardId });
-    });
-  });
-
-  net.on(MessageType.CARD_APPLIED, (msg) => {
-    const applied = msg as CardAppliedMessage;
-    const prefix = applied.isTrap ? 'TRAP' : 'Card';
-    chatOverlay.addMessage('System', -1, `${applied.displayName} picked ${prefix}: ${applied.cardName}`);
-    // Hide card picker if this was our auto-pick (server chose for us)
-    cardPicker.hide();
-    waveHUD.setPaused(false);
-  });
-
-  net.on(MessageType.RESOURCE_UPDATE, (msg) => {
-    const ru = msg as ResourceUpdateMessage;
-    resourceHUD.setResources(ru.wood, ru.stone, ru.iron, ru.diamond, ru.gold, ru.food);
-    localResources = { wood: ru.wood, stone: ru.stone, iron: ru.iron, diamond: ru.diamond, gold: ru.gold, food: ru.food };
-    if (buildModeActive) {
-      const currentBuilding = PLACEABLE_BUILDINGS[selectedBuildingIdx];
-      buildOverlay.update(currentBuilding, combinedResources());
-    }
-  });
-
-  net.on(MessageType.WAREHOUSE_UPDATE, (msg) => {
-    const wu = msg as WarehouseUpdateMessage;
-    warehouseResources = { wood: wu.wood, stone: wu.stone, iron: wu.iron, diamond: wu.diamond, gold: wu.gold, food: wu.food };
-    warehouseExists = wu.exists;
-    if (warehouseExists) {
-      warehouseHUD.update(warehouseResources);
-      warehouseHUD.show();
-    } else {
-      warehouseHUD.hide();
-    }
-    // Refresh build overlay with new available resources
-    if (buildModeActive) {
-      const currentBuilding = PLACEABLE_BUILDINGS[selectedBuildingIdx];
-      buildOverlay.update(currentBuilding, combinedResources());
-    }
-  });
-
-  // ── Save system handlers ────────────────────────────────────────────────
-  net.on(MessageType.GAME_SAVED, (msg) => {
-    const saved = msg as GameSavedMessage;
-    debug.log(`Game saved (wave ${saved.wave}, slot ${saved.slot})`);
-    // Brief toast notification
-    chatOverlay.addMessage('System', -1, `Game saved \u2014 Wave ${saved.wave}`);
-  });
-
-  net.on(MessageType.SAVE_SLOTS_RESPONSE, (msg) => {
-    const resp = msg as SaveSlotsResponseMessage;
-    // Discard stale responses (e.g. if user navigated away and back)
-    if (saveSlotRequestId < 1) return;
-    pendingSaveSlots = resp.slots;
-    menuOverlay.showSaveSlots(resp.slots);
-  });
-
-  // ── Death / respawn handlers ──────────────────────────────────────────────
-  net.on(MessageType.PLAYER_DOWNED, (msg) => {
-    if (localGameOver) return;
-    const pd = msg as PlayerDownedMessage;
-    playerRenderer.notifyDowned(pd.entityId);
-    debug.log(`Player downed (entity ${pd.entityId})`);
-    if (pd.entityId === localEntityId) {
-      localDowned = true;
-      buildModeActive = false;
-      selectedBuildingId = null;
-      buildOverlay.hide();
-      buildGhost.hide();
-      deathOverlay.showDowned(pd.bleedTimer, !isMultiplayer);
-    }
-  });
-
-  net.on(MessageType.REVIVE_PROGRESS, (msg) => {
-    if (localGameOver) return;
-    const rp = msg as ReviveProgressMessage;
-    playerRenderer.notifyReviveProgress(rp.targetId, rp.progress);
-    if (rp.targetId === localEntityId) {
-      deathOverlay.showReviving(rp.progress);
-    }
-  });
-
-  net.on(MessageType.PLAYER_REVIVED, (msg) => {
-    if (localGameOver) return;
-    const pr = msg as PlayerRevivedMessage;
-    playerRenderer.notifyRevived(pr.entityId);
-    debug.log(`Player revived (entity ${pr.entityId})`);
-    if (pr.entityId === localEntityId) {
-      localDowned = false;
-      localDead   = false;
-      deathOverlay.hide();
-    }
-  });
-
-  net.on(MessageType.PLAYER_DIED, (msg) => {
-    if (localGameOver) return;
-    const pd = msg as PlayerDiedMessage;
-    playerRenderer.notifyDeath(pd.entityId);
-    debug.log(`Player died (entity ${pd.entityId})`);
-    if (pd.entityId === localEntityId) {
-      localDowned = false;
-      localDead   = true;
-      respawnTimer = pd.respawnTimer;
-      deathOverlay.showDead(pd.respawnTimer);
-    }
-  });
-
-  net.on(MessageType.PLAYER_RESPAWNED, (msg) => {
-    if (localGameOver) return;
-    const pr = msg as PlayerRespawnedMessage;
-    playerRenderer.notifyRespawned(pr.entityId);
-    if (pr.entityId === localEntityId) {
-      localDowned = false;
-      localDead   = false;
-      respawnTimer = 0;
-      deathOverlay.hide();
-      // Snap camera to respawn position
-      camera.x = pr.x; camera.y = pr.y;
-      camera.targetX = pr.x; camera.targetY = pr.y;
-    }
-  });
-
-  net.on(MessageType.PARTY_WIPE, (msg) => {
-    if (localGameOver) return;
-    const pw = msg as PartyWipeMessage;
-    debug.log(`Party wipe #${pw.wipeCount} - ${pw.outcome}`);
-    if (pw.outcome === 'penalty') {
-      console.log(`[Game] Party wipe #${pw.wipeCount} - 25% resource penalty`);
-    }
-  });
-
-  net.on(MessageType.GAME_OVER, (msg) => {
-    const go = msg as GameOverMessage;
-    console.log(`[Game] Game Over - reached wave ${go.waveReached}, reason: ${go.reason}`);
-    debug.log(`Game Over - wave ${go.waveReached}, reason: ${go.reason}`);
-    localGameOver = true;
-    localDowned = false;
-    localDead   = false;
-    buildModeActive = false;
-    selectedBuildingId = null;
-    buildOverlay.hide();
-    buildGhost.hide();
-    deathOverlay.hide();
-    gameOverOverlay.show({
-      waveReached: go.waveReached,
-      enemiesKilled: go.enemiesKilled,
-      timePlayed: go.timePlayed,
-      reason: go.reason,
-    });
-  });
-
-  // ── Building handlers ───────────────────────────────────────────────────
-  net.on(MessageType.BUILD_CONFIRM, (msg) => {
-    const bc = msg as BuildConfirmMessage;
-    if (!bc.success) {
-      debug.log(`Build failed: ${bc.reason ?? 'unknown'}`);
-    }
-  });
-
-  net.on(MessageType.BUILD_UPGRADE_CONFIRM, (msg) => {
-    const uc = msg as BuildUpgradeConfirmMessage;
-    if (uc.success && uc.entityId !== undefined) {
-      debug.log(`Upgraded to level ${uc.newLevel}`);
-      // Refresh selection overlay — use newLevel from confirm (DELTA may not have arrived yet)
-      if (selectedBuildingId === uc.entityId) {
-        const bComp = world.getComponent<BuildingComponent>(uc.entityId, C.Building);
-        const hp = world.getComponent<HealthComponent>(uc.entityId, C.Health);
-        if (bComp) {
-          bComp.upgradeLevel = uc.newLevel!;
-          buildOverlay.updateSelection(bComp.buildingType, bComp.upgradeLevel, combinedResources(), hp?.current, hp?.max);
-        }
-      }
-    } else if (!uc.success) {
-      debug.log(`Upgrade failed: ${uc.reason ?? 'unknown'}`);
-    }
-  });
-
-  net.on(MessageType.BUILD_REPAIR_CONFIRM, (msg) => {
-    const rc = msg as BuildRepairConfirmMessage;
-    if (rc.success && rc.entityId !== undefined) {
-      debug.log('Building repaired');
-      // Refresh selection overlay
-      if (selectedBuildingId === rc.entityId) {
-        const bComp = world.getComponent<BuildingComponent>(rc.entityId, C.Building);
-        const hp = world.getComponent<HealthComponent>(rc.entityId, C.Health);
-        if (bComp) {
-          buildOverlay.updateSelection(bComp.buildingType, bComp.upgradeLevel, combinedResources(), hp?.current, hp?.max);
-        }
-      }
-    } else if (!rc.success) {
-      debug.log(`Repair failed: ${rc.reason ?? 'unknown'}`);
-    }
-  });
-
-  net.on(MessageType.AOE_EXPLOSION, (msg) => {
-    const aoe = msg as AoeExplosionMessage;
-    projectileRenderer.addExplosion(aoe.x, aoe.y, aoe.radius);
-  });
-
-  net.on(MessageType.CAMPFIRE_DESTROYED, () => {
-    debug.log('Campfire destroyed!');
-  });
-
-  net.on(MessageType.ERROR, (msg) => {
-    const err = msg as unknown as { code: string; message: string };
-    console.error(`[Net] Server error ${err.code}: ${err.message}`);
-    debug.log(`Error: ${err.code} - ${err.message}`);
-    if (err.code === 'VERSION_MISMATCH') {
-      menuOverlay.setConnectionStatus('disconnected');
-      menuOverlay.setButtonsEnabled(false);
-      electronAPI?.checkForUpdates?.();
-    }
-  });
-
-  // Session closed by host departure (clean message path)
-  net.on(MessageType.SESSION_CLOSED, (msg) => {
-    const closed = msg as unknown as { reason: string };
-    console.warn(`[Net] Session closed: ${closed.reason}`);
-    debug.log(`Session closed: ${closed.reason}`);
-    stateMgr.transition(GameState.Menu);
+  registerMessageHandlers(net, handlerState, {
+    world, camera, playerRenderer, projectileRenderer, damageNumbers, reconciler, remotePlayerSys,
+    getMovementSystem: () => movementSystem,
+    initGameWorld: (newSeed: number) => {
+      generator = new WorldGenerator(newSeed);
+      chunks = new ChunkManager(generator);
+      movementSystem = new MovementSystem(chunks);
+      minimap.setTileGetter((tx, ty) => generator!.getTile(tx, ty));
+    },
+    stateMgr, menuOverlay, lobbyOverlay, pauseBanner, waveHUD, resourceHUD,
+    deathOverlay, gameOverOverlay, chatOverlay, debug, buildOverlay, buildGhost,
+    warehouseHUD, cardPicker, statsOverlay, combinedResources, electronAPI,
   });
 
   // ── Session action helper ─────────────────────────────────────────────────
-  let handshakeSent = false;
 
   function sendHandshakeIfNeeded(displayName: string): void {
     if (handshakeSent) return;
@@ -973,11 +535,8 @@ async function main(): Promise<void> {
 
     // ESC: close build mode first, otherwise send pause vote
     if (input.isJustPressed(Action.Pause)) {
-      if (buildModeActive && state === GameState.Playing) {
-        buildModeActive = false;
-        selectedBuildingId = null;
-        buildOverlay.hide();
-        buildGhost.hide();
+      if (buildCtrl.active && state === GameState.Playing) {
+        buildCtrl.exitBuildMode();
       } else if (!localGameOver && !chatOverlay.isOpen && (state === GameState.Playing || state === GameState.Paused)) {
         net.send({ type: MessageType.PAUSE_VOTE });
       }
@@ -1041,170 +600,26 @@ async function main(): Promise<void> {
       }
 
       // Weapon switching (number keys) — exit build mode when selecting a weapon
-      if (input.isJustPressed(Action.WeaponSlot1)) { selectedWeapon = 0; if (buildModeActive) { buildModeActive = false; selectedBuildingId = null; buildOverlay.hide(); buildGhost.hide(); } }
-      if (input.isJustPressed(Action.WeaponSlot2)) { selectedWeapon = 1; if (buildModeActive) { buildModeActive = false; selectedBuildingId = null; buildOverlay.hide(); buildGhost.hide(); } }
+      if (input.isJustPressed(Action.WeaponSlot1)) { selectedWeapon = 0; if (buildCtrl.active) buildCtrl.exitBuildMode(); }
+      if (input.isJustPressed(Action.WeaponSlot2)) { selectedWeapon = 1; if (buildCtrl.active) buildCtrl.exitBuildMode(); }
 
       // M key: toggle minimap
       if (input.isJustPressed(Action.ToggleMinimap)) minimap.toggle();
 
       // B key: toggle build mode
-      if (canAct && input.isJustPressed(Action.BuildMode)) {
-        buildModeActive = !buildModeActive;
-        selectedBuildingId = null;
-        if (buildModeActive) {
-          const currentBuilding = PLACEABLE_BUILDINGS[selectedBuildingIdx];
-          buildOverlay.show();
-          buildOverlay.update(currentBuilding, combinedResources());
-          buildGhost.show();
-        } else {
-          buildOverlay.hide();
-          buildGhost.hide();
-        }
-      }
+      if (canAct && input.isJustPressed(Action.BuildMode)) buildCtrl.toggle();
 
-      // Scroll wheel cycles building type in build mode (deselects any selected building)
-      if (buildModeActive && input.scrollDelta !== 0) {
-        const dir = input.scrollDelta > 0 ? 1 : -1;
-        selectedBuildingIdx = (selectedBuildingIdx + dir + PLACEABLE_BUILDINGS.length) % PLACEABLE_BUILDINGS.length;
-        selectedBuildingId = null;
-        const currentBuilding = PLACEABLE_BUILDINGS[selectedBuildingIdx];
-        buildOverlay.update(currentBuilding, combinedResources());
-      }
+      // Scroll wheel cycles building type
+      buildCtrl.handleScroll(input.scrollDelta);
 
-      // Build ghost update + placement + demolish
-      if (buildModeActive && pos) {
-        const { width: gw, height: gh } = renderer.screen;
-        const wmx = camera.viewX + (mouseX - gw / 2) / camera.zoom;
-        const wmy = camera.viewY + (mouseY - gh / 2) / camera.zoom;
-        const currentBuilding = PLACEABLE_BUILDINGS[selectedBuildingIdx];
-
-        // Snap to grid using variable-size snapping
-        const { x: snapX, y: snapY } = snapBuildingPosition(wmx, wmy, currentBuilding);
-        const newHalf = buildingHalfExtent(currentBuilding);
-        const tiles = BUILDING_SIZES[currentBuilding] ?? 1;
-
-        // Check cost affordability (warehouse + player inventory combined)
-        const costs = BUILDING_COSTS[currentBuilding] ?? {};
-        const wRes = warehouseExists ? warehouseResources as unknown as Record<string, number> : {} as Record<string, number>;
-        let ghostValid = true;
-        for (const [res, amount] of Object.entries(costs)) {
-          const total = (wRes[res] ?? 0) + (localResources[res] ?? 0);
-          if (total < amount!) { ghostValid = false; break; }
-        }
-
-        // Multi-tile walkability check (bridges: inverted — must be on water)
-        const isBridgeGhost = currentBuilding === 'bridge';
-        if (ghostValid && chunks) {
-          const startTX = Math.floor((snapX - newHalf) / TILE_SIZE);
-          const startTY = Math.floor((snapY - newHalf) / TILE_SIZE);
-          for (let ty = 0; ty < tiles && ghostValid; ty++) {
-            for (let tx = 0; tx < tiles && ghostValid; tx++) {
-              const tileId = chunks.getTile(startTX + tx, startTY + ty);
-              const walkable = TILE_DEFS[tileId]?.walkable ?? false;
-              if (isBridgeGhost) {
-                // Bridge must be placed on non-walkable (water) tiles
-                if (walkable) ghostValid = false;
-              } else {
-                if (!walkable) ghostValid = false;
-              }
-            }
-          }
-        }
-
-        // Variable-size overlap check against existing buildings, resources, players, and enemies
-        if (ghostValid) {
-          for (const eid of world.query(C.Position, C.Faction)) {
-            const ef = world.getComponent<FactionComponent>(eid, C.Faction);
-            const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
-            if (ef?.type === 'building') {
-              const bComp = world.getComponent<BuildingComponent>(eid, C.Building);
-              const existHalf = bComp ? buildingHalfExtent(bComp.buildingType) : 16;
-              if (Math.abs(ep.x - snapX) < newHalf + existHalf && Math.abs(ep.y - snapY) < newHalf + existHalf) {
-                ghostValid = false;
-                break;
-              }
-            } else if (ef?.type === 'resource') {
-              if (Math.abs(ep.x - snapX) < newHalf + RESOURCE_NODE_RADIUS && Math.abs(ep.y - snapY) < newHalf + RESOURCE_NODE_RADIUS) {
-                ghostValid = false;
-                break;
-              }
-            } else if (ef?.type === 'player' || ef?.type === 'enemy') {
-              const entRadius = ef.type === 'player' ? PLAYER_RADIUS : ENEMY_RADIUS;
-              if (Math.abs(ep.x - snapX) < newHalf + entRadius && Math.abs(ep.y - snapY) < newHalf + entRadius) {
-                ghostValid = false;
-                break;
-              }
-            }
-          }
-        }
-
-        buildGhost.update(wmx, wmy, ghostValid, currentBuilding);
-
-        // Left-click: try selecting an existing building first, else place new building
-        if (input.isJustPressed(Action.Attack)) {
-          // Check if clicking on an existing building
-          let clickedBuilding: number | null = null;
-          for (const eid of world.query(C.Position, C.Building)) {
-            const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
-            const bComp = world.getComponent<BuildingComponent>(eid, C.Building)!;
-            const bHalf = buildingHalfExtent(bComp.buildingType);
-            if (Math.abs(wmx - ep.x) < bHalf && Math.abs(wmy - ep.y) < bHalf) {
-              clickedBuilding = eid;
-              break;
-            }
-          }
-          if (clickedBuilding !== null) {
-            selectedBuildingId = clickedBuilding;
-            const bComp = world.getComponent<BuildingComponent>(clickedBuilding, C.Building)!;
-            const hp = world.getComponent<HealthComponent>(clickedBuilding, C.Health);
-            buildOverlay.updateSelection(
-              bComp.buildingType,
-              bComp.upgradeLevel,
-              combinedResources(),
-              hp?.current,
-              hp?.max,
-            );
-          } else if (ghostValid) {
-            net.send({ type: MessageType.BUILD_PLACE, buildingType: currentBuilding, x: wmx, y: wmy });
-            selectedBuildingId = null;
-          }
-        }
-
-        // X key: demolish selected building
-        if (input.isJustPressed(Action.Demolish) && selectedBuildingId !== null) {
-          net.send({ type: MessageType.BUILD_DEMOLISH, entityId: selectedBuildingId });
-          selectedBuildingId = null;
-          buildOverlay.update(PLACEABLE_BUILDINGS[selectedBuildingIdx], combinedResources());
-        }
-
-        // V key: upgrade selected building
-        if (input.isJustPressed(Action.Upgrade) && selectedBuildingId !== null) {
-          net.send({ type: MessageType.BUILD_UPGRADE, entityId: selectedBuildingId });
-        }
-
-        // R key: repair selected building
-        if (input.isJustPressed(Action.Repair) && selectedBuildingId !== null) {
-          net.send({ type: MessageType.BUILD_REPAIR, entityId: selectedBuildingId });
-        }
-
-        // Deselect if the selected building no longer exists
-        if (selectedBuildingId !== null && !world.hasEntity(selectedBuildingId)) {
-          selectedBuildingId = null;
-          buildOverlay.update(PLACEABLE_BUILDINGS[selectedBuildingIdx], combinedResources());
-        }
-
-        // Live HP update for selected building
-        if (selectedBuildingId !== null) {
-          const hp = world.getComponent<HealthComponent>(selectedBuildingId, C.Health);
-          if (hp) buildOverlay.updateSelectionHp(hp.current, hp.max);
-        }
-      }
+      // Build ghost update + placement + selection + demolish + upgrade + repair
+      if (buildCtrl.active && pos) buildCtrl.update();
 
       // Attack: client-side cooldown mirrors server AttackCooldown. Allow a small
       // tolerance (one server tick) so the client doesn't silently miss an attack
       // due to floating-point drift between variable-rate client and fixed-rate server.
       if (attackCooldown > 0) attackCooldown = Math.max(0, attackCooldown - dt);
-      if (canAct && !buildModeActive && input.isJustPressed(Action.Attack) && localFacing !== null && pos && attackCooldown <= TICK_MS / 1000) {
+      if (canAct && !buildCtrl.active && input.isJustPressed(Action.Attack) && localFacing !== null && pos && attackCooldown <= TICK_MS / 1000) {
         const attackType = WEAPON_TYPES[selectedWeapon];
         attackCooldown = WEAPON_COOLDOWNS[selectedWeapon];
         net.send({ type: MessageType.ATTACK, attackType, facing: localFacing, x: pos.x, y: pos.y, t: performance.now() });
@@ -1233,14 +648,14 @@ async function main(): Promise<void> {
         net.send({ type: MessageType.INTERACT, x: pos.x, y: pos.y, t: performance.now() });
       }
 
-      playerRenderer.selectedBuildingId = selectedBuildingId;
+      playerRenderer.selectedBuildingId = buildCtrl.selectedId;
       playerRenderer.update(world, localEntityId, localFacing, dt, reconciler.smoothX, reconciler.smoothY);
       deathOverlay.update(dt);
 
       // 6. Update and render projectiles
       const { width: sw, height: sh } = renderer.screen;
       // Snapshot old positions before moving for swept collision
-      const projOldPos = new Map<number, { x: number; y: number }>();
+      projOldPos.clear();
       for (const [pid, p] of projectileRenderer.getProjectiles()) {
         projOldPos.set(pid, { x: p.x, y: p.y });
       }
@@ -1315,7 +730,7 @@ async function main(): Promise<void> {
 
     if (state === GameState.Playing) {
       hud.update(world, width, height);
-      weaponHotbar.update(selectedWeapon, attackCooldown, WEAPON_COOLDOWNS[selectedWeapon], width, height, buildModeActive);
+      weaponHotbar.update(selectedWeapon, attackCooldown, WEAPON_COOLDOWNS[selectedWeapon], width, height, buildCtrl.active);
       minimap.update(world, localEntityId, camera.x, camera.y, width, height);
       coordsEl.textContent = `X: ${Math.round(camera.x)}  Y: ${Math.round(camera.y)}`;
     }

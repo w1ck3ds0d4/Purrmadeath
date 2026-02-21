@@ -12,6 +12,8 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "server": "tsx server/server.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "lint": "eslint src server shared --ext .ts",
     "typecheck": "tsc --noEmit",
     "build:win": "electron-vite build && electron-builder --win",
@@ -40,7 +42,8 @@
     "globals": "^15.0.0",
     "nodemon": "^3.1.4",
     "tsx": "^4.16.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "vitest": "^4.0.18"
   },
   "build": {
     "appId": "com.purrmadeath.app",

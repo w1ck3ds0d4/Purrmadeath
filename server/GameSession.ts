@@ -9,7 +9,6 @@ import {
   PlayerInputComponent,
   AttackCooldownComponent,
   FactionComponent,
-  PortalComponent,
   ResourceNodeComponent,
   ResourcesComponent,
   ItemDropComponent,
@@ -23,9 +22,8 @@ import {
 } from '@shared/components';
 import type {
   ResourceType, BuildingType, EnemyVariantType, EnemyStatsComponent, GhostStateComponent,
-  LightRevealComponent, HealAuraComponent, BarracksSpawnerComponent, GuardComponent,
+  LightRevealComponent, HealAuraComponent, BarracksSpawnerComponent,
 } from '@shared/components';
-import { ENEMY_VARIANT_STATS, pickEnemyVariant, ENEMY_VARIANT_NAMES } from '@shared/EnemyVariants';
 import {
   TILE_SIZE,
   PLAYER_RADIUS,
@@ -40,31 +38,16 @@ import {
   PROJECTILE_RADIUS,
   WAVE_PREP_INITIAL,
   WAVE_PREP_BETWEEN,
-  PORTAL_BASE_HP,
-  PORTAL_HP_PER_WAVE,
-  PORTAL_BASE_SPAWN_INTERVAL,
-  PORTAL_SPAWN_INTERVAL_DECAY,
-  PORTALS_PER_WAVE_BASE,
-  PORTALS_PER_WAVE_GROWTH,
-  PORTAL_MIN_DIST,
-  PORTAL_MAX_DIST,
-  PORTAL_MIN_SPACING,
   CHUNK_SIZE,
   MAX_RESOURCE_NODES,
   ITEM_DROP_LIFETIME,
   ITEM_DROP_SCATTER_SPEED,
   ITEM_DROP_INTERACT_RADIUS,
-  DOWNED_BLEED_TIME,
-  REVIVE_DURATION,
-  REVIVE_HP_PERCENT,
-  RESPAWN_DELAY,
   REVIVE_RANGE,
-  WIPE_1_RESOURCE_LOSS_PERCENT,
   MAX_ATTACK_POSITION_TOLERANCE,
   TICK_MS,
   CAMPFIRE_MAX_HEALTH,
   WALL_MAX_HEALTH,
-  WALL_COST_WOOD,
   RESOURCE_NODE_RADIUS,
   PORTAL_RADIUS,
   WAREHOUSE_MAX_HEALTH,
@@ -72,33 +55,7 @@ import {
   QUARRY_MAX_HEALTH,
   MINE_MAX_HEALTH,
   FARM_MAX_HEALTH,
-  WAREHOUSE_DEPOSIT_RADIUS,
-  DEMOLISH_REFUND_PERCENT,
-  BUILDING_COSTS,
-  BUILDING_SIZES,
   buildingHalfExtent,
-  snapBuildingPosition,
-  ARROW_TURRET_MAX_HEALTH,
-  CANNON_TURRET_MAX_HEALTH,
-  SPIKE_TRAP_MAX_HEALTH,
-  BRIDGE_MAX_HEALTH,
-  LUMBERMILL_PRODUCTION_INTERVAL,
-  QUARRY_PRODUCTION_INTERVAL,
-  MINE_PRODUCTION_INTERVAL,
-  FARM_PRODUCTION_INTERVAL,
-  PRODUCTION_AMOUNT,
-  PRODUCTION_MAX_STORED,
-  ARROW_TURRET_RANGE,
-  ARROW_TURRET_COOLDOWN,
-  ARROW_TURRET_DAMAGE,
-  ARROW_TURRET_PROJ_SPEED,
-  CANNON_TURRET_RANGE,
-  CANNON_TURRET_COOLDOWN,
-  CANNON_TURRET_DAMAGE,
-  CANNON_TURRET_PROJ_SPEED,
-  SPIKE_TRAP_DAMAGE,
-  SPIKE_TRAP_COOLDOWN,
-  SPIKE_TRAP_SELF_DAMAGE,
   ENEMY_RADIUS,
   ENEMY_RANGER_SPAWN_CHANCE,
   ENEMY_RANGER_RANGE,
@@ -107,34 +64,6 @@ import {
   ENEMY_RANGER_PROJECTILE_SPEED,
   ENEMY_RANGER_SPEED,
   ENEMY_RANGER_HEALTH,
-  ENEMY_HP_SCALE_PER_WAVE,
-  ENEMY_DAMAGE_SCALE_PER_WAVE,
-  PORTAL_EXTRA_SPAWN_EVERY_N_WAVES,
-  BUILDING_MAX_LEVEL,
-  UPGRADE_HP_MULT,
-  UPGRADE_PROD_INTERVAL,
-  UPGRADE_PROD_MAX,
-  UPGRADE_ARROW_CD,
-  UPGRADE_ARROW_DMG,
-  UPGRADE_CANNON_CD,
-  UPGRADE_CANNON_DMG,
-  UPGRADE_CANNON_AOE,
-  UPGRADE_TRAP_DMG,
-  CANNON_AOE_BASE_RADIUS,
-  getUpgradeCost,
-  getRepairCost,
-  LIGHT_TOWER_MAX_HEALTH,
-  HEALING_SHRINE_MAX_HEALTH,
-  BARRACKS_MAX_HEALTH,
-  UPGRADE_LIGHT_RANGE,
-  UPGRADE_HEAL_RATE,
-  UPGRADE_HEAL_RANGE,
-  BARRACKS_MAX_GUARDS,
-  BARRACKS_SPAWN_INTERVAL,
-  BARRACKS_GUARD_HP,
-  BARRACKS_GUARD_DAMAGE,
-  BARRACKS_GUARD_SPEED,
-  BARRACKS_GUARD_PATROL_RADIUS,
 } from '@shared/constants';
 import { RESOURCE_STATS, RESOURCE_SPAWN_TABLE, TILE_SPAWN_CHANCE } from '@shared/data/ResourceSpawnTable';
 import { LOOT_TABLES } from '@shared/data/LootTables';
@@ -155,31 +84,14 @@ import type {
   PauseVoteUpdateMessage,
   PauseStateMessage,
   WaveStartMessage,
-  WaveEndMessage,
-  WaveTimerSyncMessage,
   ResourceUpdateMessage,
   InteractMessage,
-  PlayerDownedMessage,
-  ReviveProgressMessage,
-  PlayerRevivedMessage,
-  PlayerDiedMessage,
-  PlayerRespawnedMessage,
-  PartyWipeMessage,
-  GameOverMessage,
   BuildPlaceMessage,
-  BuildConfirmMessage,
-  BuildDestroyedMessage,
-  CampfireDestroyedMessage,
   BuildDemolishMessage,
   BuildUpgradeMessage,
-  BuildUpgradeConfirmMessage,
   BuildRepairMessage,
-  BuildRepairConfirmMessage,
   AoeExplosionMessage,
-  WarehouseUpdateMessage,
-  CardOfferMessage,
   CardPickMessage,
-  CardAppliedMessage,
 } from '@shared/protocol';
 import { ItemDropSystem, PickupResult } from './systems/ItemDropSystem';
 import type { ConnectedClient } from './net/ServerSocket';
@@ -189,6 +101,12 @@ import { CombatSystem } from './systems/CombatSystem';
 import { ProjectileSystem } from './systems/ProjectileSystem';
 import { PortalSystem } from './systems/PortalSystem';
 import { CardSystem } from './CardSystem';
+import { createBuildingSystem, type BuildingSystem } from './systems/BuildingSystem';
+import { createWaveController, type WaveController, type WaveState } from './systems/WaveController';
+import { createCardDispenser, type CardDispenser, type CardState } from './systems/CardDispenser';
+import { createSaveManager, type SaveManager, type LoadedSaveState } from './systems/SaveManager';
+import { createRespawnManager, type RespawnManager } from './systems/RespawnManager';
+import { createStatsCollector, type StatsCollector } from './systems/StatsCollector';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -206,7 +124,7 @@ export interface SessionPlayer {
 export type SessionPhase = 'lobby' | 'playing';
 
 /** Shorthand for the send callback used throughout GameSession. */
-type SendFn = (client: ConnectedClient, msg: object) => void;
+export type SendFn = (client: ConnectedClient, msg: object) => void;
 
 // ─── GameSession ──────────────────────────────────────────────────────────────
 
@@ -241,6 +159,10 @@ export class GameSession {
   private portal: PortalSystem;
   private itemDrop: ItemDropSystem;
   private cards: CardSystem;
+  private buildings!: BuildingSystem;
+  private saveManager!: SaveManager;
+  private respawn!: RespawnManager;
+  private stats!: StatsCollector;
 
   private players = new Map<string, SessionPlayer>(); // keyed by clientId
   /** Fast lookup: entity IDs that belong to players (updated on spawn/despawn). */
@@ -248,19 +170,16 @@ export class GameSession {
   private phase: SessionPhase = 'lobby';
   private tick = 0;
 
-  /** Current wave number (0 = no wave yet). */
-  private currentWave = 0;
-  /** Wave phase: idle (lobby), prep (countdown), active (portals spawning). */
-  private wavePhase: 'idle' | 'prep' | 'active' = 'idle';
-  /** Seconds remaining in the prep countdown. */
-  private prepTimer = 0;
-  /** Debug flag: when true, wave timers (prep + portal spawns) don't tick. */
-  private wavePaused = false;
-  /** Accumulator for periodic wave timer sync (drift correction). */
-  private waveSyncTimer = 0;
+  /** Mutable wave state — shared with WaveController. */
+  private waveState: WaveState = {
+    phase: 'idle', currentWave: 0, prepTimer: 0,
+    paused: false, syncTimer: 0, enemyCount: 0, wipeCount: 0,
+    introducedTypes: new Set(), pendingIntros: [],
+  };
+  private waves!: WaveController;
+  /** Rolling average of per-system tick times (ms) for debug profiling. */
+  private tickProfile = { combat: 0, enemy: 0, movement: 0, projectile: 0, buildings: 0, waves: 0, total: 0 };
   private static readonly WAVE_SYNC_INTERVAL = 5; // seconds
-  /** Current count of enemy entities for cap enforcement. */
-  private enemyCount = 0;
   private static readonly MAX_ENEMIES = 200;
   /** Current count of resource node entities. */
   private resourceNodeCount = 0;
@@ -273,8 +192,6 @@ export class GameSession {
   private spawnOrigin: { x: number; y: number } = { x: 0, y: 0 };
   /** Players waiting to respawn: clientId → seconds remaining. */
   private respawnTimers = new Map<string, number>();
-  /** Per-wave wipe count. Reset when a new wave begins. */
-  private wipeCount = 0;
   /** True after GAME_OVER is sent - stops all death/respawn/wave processing. */
   private gameOver = false;
 
@@ -286,13 +203,10 @@ export class GameSession {
   /** Bridge tile positions: "tileX,tileY" → entityId. */
   private bridgePositions = new Map<string, number>();
 
-  /** Tracks which enemy variant types have been introduced this run (for ENEMY_INTRO toast). */
-  private introducedEnemyTypes = new Set<EnemyVariantType>();
-  /** Queued intro messages to broadcast (spawnEnemy doesn't have send). */
-  private pendingIntroMessages: { variant: string; displayName: string }[] = [];
 
-  /** Card offer auto-pick countdown (seconds remaining). -1 = no pending offer. */
-  private cardOfferTimer = -1;
+  /** Mutable card state — shared with CardDispenser. */
+  private cardState: CardState = { offerTimer: -1 };
+  private cardDispenser!: CardDispenser;
   private static readonly CARD_OFFER_TIMEOUT = 35; // 5s pre-reveal + 30s pick window
 
   // ── Run stats ──────────────────────────────────────────────────────────────
@@ -322,12 +236,6 @@ export class GameSession {
     }
     this.paused = value;
   }
-  /** Per-player damage dealt (keyed by playerId/UUID). */
-  private damageByPlayer = new Map<string, number>();
-  /** Per-player resources gathered (keyed by playerId/UUID). */
-  private resourcesByPlayer = new Map<string, { wood: number; stone: number; iron: number; diamond: number }>();
-  /** Per-player enemy kills by type (keyed by playerId/UUID). */
-  private killsByPlayer = new Map<string, Record<string, number>>();
   /** Per-player buildings built (keyed by playerId/UUID). */
   private buildingsByPlayer = new Map<string, number>();
   /** Called at game over with per-player run stats. */
@@ -363,6 +271,94 @@ export class GameSession {
     this.portal = new PortalSystem();
     this.itemDrop = new ItemDropSystem();
     this.cards = new CardSystem();
+
+    this.buildings = createBuildingSystem({
+      world: this.world,
+      generator: this.generator,
+      combat: this.combat,
+      warehousePool: this.warehousePool,
+      warehouseIds: this.warehouseIds,
+      bridgePositions: this.bridgePositions,
+      movementBridgeTiles: this.movement.bridgeTiles,
+      players: this.players,
+      playerEntityIds: this.playerEntityIds,
+      respawnTimers: this.respawnTimers,
+      buildingsByPlayer: this.buildingsByPlayer,
+      cards: this.cards,
+      isActive: () => this.phase === 'playing' && !this.paused && !this.gameOver,
+      isWalkable: (wx, wy) => this.isWalkable(wx, wy),
+      spawnBuilding: (x, y, type, maxHp, permanent) => this.spawnBuilding(x, y, type as any, maxHp, permanent),
+      destroyDeadEntities: (deaths, attackerMap, send) => this.respawn.destroyDeadEntities(deaths, attackerMap, send),
+    });
+
+    this.waves = createWaveController({
+      world: this.world,
+      generator: this.generator,
+      portal: this.portal,
+      state: this.waveState,
+      players: this.players,
+      cards: this.cards,
+      maxEnemies: GameSession.MAX_ENEMIES,
+      waveSyncInterval: GameSession.WAVE_SYNC_INTERVAL,
+      isWalkable: (wx, wy) => this.isWalkable(wx, wy),
+      overlapsBuilding: (wx, wy, r) => this.overlapsBuilding(wx, wy, r),
+      onWaveCleared: (wave, send) => this.onWaveCleared(wave, send),
+    });
+
+    this.cardDispenser = createCardDispenser({
+      world: this.world,
+      cards: this.cards,
+      state: this.cardState,
+      players: this.players,
+      offerTimeout: GameSession.CARD_OFFER_TIMEOUT,
+      setPaused: (v) => this.setPaused(v),
+      creditResources: (eid, res, amt, send) => this.creditResources(eid, res, amt, send),
+    });
+
+    this.saveManager = createSaveManager({
+      world: this.world,
+      seed: this.seed,
+      waveState: this.waveState,
+      warehousePool: this.warehousePool,
+      spawnOrigin: this.spawnOrigin,
+      processedChunks: this.processedChunks,
+      players: this.players,
+      getEnemiesKilled: () => this.enemiesKilled,
+      getElapsedSeconds: () => this.getElapsedSeconds(),
+      getHostPlayerId: () => this.hostPlayerId,
+    });
+
+    this.respawn = createRespawnManager({
+      world: this.world,
+      players: this.players,
+      playerEntityIds: this.playerEntityIds,
+      respawnTimers: this.respawnTimers,
+      spawnOrigin: this.spawnOrigin,
+      waveState: this.waveState,
+      warehousePool: this.warehousePool as Record<string, number>,
+      warehouseIds: this.warehouseIds,
+      getGameOver: () => this.gameOver,
+      setGameOver: (v) => { this.gameOver = v; },
+      getEnemiesKilled: () => this.enemiesKilled,
+      incrementEnemiesKilled: () => { this.enemiesKilled++; },
+      decrementResourceNodeCount: () => { this.resourceNodeCount--; },
+      getCampfireEntityId: () => this.campfireEntityId,
+      getElapsedSeconds: () => this.getElapsedSeconds(),
+      getBuildings: () => this.buildings,
+      creditResources: (eid, res, amt, send) => this.creditResources(eid, res, amt, send),
+      spawnLootDrops: (deadId) => this.spawnLootDrops(deadId),
+      spawnItemDrop: (x, y, item, qty, auto) => this.spawnItemDrop(x, y, item, qty, auto),
+      findSafeSpawnNear: (wx, wy) => this.findSafeSpawnNear(wx, wy),
+      trackKill: (eid, variant) => this.stats.trackKill(eid, variant),
+      fireRunEnd: () => this.fireRunEnd(),
+    });
+
+    this.stats = createStatsCollector({
+      players: this.players,
+      waveState: this.waveState,
+      buildingsByPlayer: this.buildingsByPlayer,
+      getElapsedSeconds: () => this.getElapsedSeconds(),
+    });
   }
 
   // ── Lobby management ────────────────────────────────────────────────────────
@@ -480,11 +476,12 @@ export class GameSession {
   start(send: (client: ConnectedClient, msg: object) => void): void {
     if (this.phase !== 'lobby') return;
     this.phase = 'playing';
-    this.startTime = Date.now() - this.savedElapsedTime * 1000;
-    this.enemiesKilled = this.savedBuildings.length > 0 ? this.enemiesKilled : 0;
+    const save = this.loadedSave;
+    const hasSave = save !== null;
+    this.startTime = Date.now() - (save?.elapsedTime ?? 0) * 1000;
+    this.enemiesKilled = hasSave ? this.enemiesKilled : 0;
 
     // For resumed saves, use saved spawn origin; otherwise find a new one
-    const hasSave = this.savedBuildings.length > 0;
     const origin = hasSave ? this.spawnOrigin : findSpawnPoint(this.generator);
     this.spawnOrigin = origin;
     const OFFSET = 72; // pixels from centre — clears campfire AABB + player radius
@@ -546,13 +543,15 @@ export class GameSession {
     }
 
     // ── Restore saved state ─────────────────────────────────────────────────
-    if (hasSave) {
-      console.log(`[GameSession] Restoring ${this.savedBuildings.length} buildings from save (wave ${this.currentWave})`);
+    if (hasSave && save) {
+      console.log(`[GameSession] Restoring ${save.buildings.length} buildings from save (wave ${this.waveState.currentWave})`);
       // Restore saved buildings (campfire was already placed above — just restore its state)
-      for (const sb of this.savedBuildings) {
+      for (const sb of save.buildings) {
         if (sb.buildingType === 'campfire') {
-          // Restore campfire HP and upgrade level from save
+          // Restore campfire HP, upgrade level, and position from save
           if (this.campfireEntityId !== null) {
+            const pos = this.world.getComponent<PositionComponent>(this.campfireEntityId, C.Position);
+            if (pos) { pos.x = sb.x; pos.y = sb.y; }
             const hp = this.world.getComponent<HealthComponent>(this.campfireEntityId, C.Health);
             if (hp) { hp.current = sb.currentHp; hp.max = sb.maxHp; }
             const bld = this.world.getComponent<BuildingComponent>(this.campfireEntityId, C.Building);
@@ -630,7 +629,7 @@ export class GameSession {
       // Restore player resources from save (match by playerId)
       for (const p of this.players.values()) {
         if (p.entityId === null) continue;
-        const savedP = this.savedPlayers.find(sp => sp.playerId === p.playerId);
+        const savedP = save.players.find(sp => sp.playerId === p.playerId);
         if (savedP) {
           const res = this.world.getComponent<ResourcesComponent>(p.entityId, C.Resources);
           if (res) Object.assign(res, savedP.resources);
@@ -647,7 +646,7 @@ export class GameSession {
       }
 
       // Restore saved enemies
-      for (const se of this.savedEnemies) {
+      for (const se of save.enemies) {
         const id = this.world.createEntity();
         this.world.addComponent(id, C.Position,          { x: se.x, y: se.y });
         this.world.addComponent(id, C.Velocity,          { vx: 0, vy: 0 });
@@ -672,12 +671,12 @@ export class GameSession {
             cooldown: 0, maxCooldown: 20, dashSpeed: 500, dashDuration: 0.3, dashing: false, dashTimer: 0,
           });
         }
-        this.enemyCount++;
+        this.waveState.enemyCount++;
       }
-      console.log(`[GameSession] Restored ${this.savedEnemies.length} enemies from save`);
+      console.log(`[GameSession] Restored ${save.enemies.length} enemies from save`);
 
       // Restore saved portals
-      for (const sp of this.savedPortals) {
+      for (const sp of save.portals) {
         const id = this.world.createEntity();
         this.world.addComponent(id, C.Position,          { x: sp.x, y: sp.y });
         this.world.addComponent(id, C.Velocity,          { vx: 0, vy: 0 });
@@ -686,12 +685,12 @@ export class GameSession {
         this.world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
         this.world.addComponent(id, C.Portal,            { waveNumber: sp.waveNumber, spawnTimer: sp.spawnTimer, spawnInterval: sp.spawnInterval });
       }
-      if (this.savedPortals.length > 0) {
-        console.log(`[GameSession] Restored ${this.savedPortals.length} portals from save`);
+      if (save.portals.length > 0) {
+        console.log(`[GameSession] Restored ${save.portals.length} portals from save`);
       }
 
       // Restore saved resource nodes
-      for (const sr of this.savedResourceNodes) {
+      for (const sr of save.resourceNodes) {
         const id = this.world.createEntity();
         this.world.addComponent(id, C.Position,          { x: sr.x, y: sr.y });
         this.world.addComponent(id, C.Velocity,          { vx: 0, vy: 0 });
@@ -701,12 +700,12 @@ export class GameSession {
         this.world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
         this.resourceNodeCount++;
       }
-      if (this.savedResourceNodes.length > 0) {
-        console.log(`[GameSession] Restored ${this.savedResourceNodes.length} resource nodes from save`);
+      if (save.resourceNodes.length > 0) {
+        console.log(`[GameSession] Restored ${save.resourceNodes.length} resource nodes from save`);
       }
 
       // Restore saved item drops
-      for (const si of this.savedItemDrops) {
+      for (const si of save.itemDrops) {
         const id = this.world.createEntity();
         this.world.addComponent(id, C.Position, { x: si.x, y: si.y });
         this.world.addComponent(id, C.Velocity, { vx: 0, vy: 0 });
@@ -717,34 +716,29 @@ export class GameSession {
           autoPickup: si.autoPickup, lifetime: si.lifetime,
         });
       }
-      if (this.savedItemDrops.length > 0) {
-        console.log(`[GameSession] Restored ${this.savedItemDrops.length} item drops from save`);
+      if (save.itemDrops.length > 0) {
+        console.log(`[GameSession] Restored ${save.itemDrops.length} item drops from save`);
       }
 
       // Clear saved data after restoration
-      this.savedBuildings = [];
-      this.savedPlayers = [];
-      this.savedEnemies = [];
-      this.savedPortals = [];
-      this.savedResourceNodes = [];
-      this.savedItemDrops = [];
+      this.loadedSave = null;
     }
 
     // Begin wave state
     if (!hasSave) {
-      this.currentWave = 1;
-      this.wavePhase = 'prep';
-      this.prepTimer = WAVE_PREP_INITIAL;
-    } else if (this.savedWavePhase === 'active') {
+      this.waveState.currentWave = 1;
+      this.waveState.phase = 'prep';
+      this.waveState.prepTimer = WAVE_PREP_INITIAL;
+    } else if (save?.wavePhase === 'active') {
       // Resume mid-wave — portals and enemies already restored above
-      this.wavePhase = 'active';
+      this.waveState.phase = 'active';
     } else {
       // Resume in prep phase
-      this.wavePhase = 'prep';
-      if (this.savedPrepTimeRemaining != null && this.savedPrepTimeRemaining > 0) {
-        this.prepTimer = this.savedPrepTimeRemaining;
+      this.waveState.phase = 'prep';
+      if (save?.prepTimeRemaining != null && save.prepTimeRemaining > 0) {
+        this.waveState.prepTimer = save.prepTimeRemaining;
       } else {
-        this.prepTimer = WAVE_PREP_BETWEEN;
+        this.waveState.prepTimer = WAVE_PREP_BETWEEN;
       }
     }
 
@@ -775,23 +769,23 @@ export class GameSession {
 
     // Send warehouse pool sync
     if (hasSave) {
-      this.broadcastWarehouseUpdate(send);
+      this.buildings.broadcastWarehouseUpdate(send);
     }
 
     // Broadcast wave state to clients
-    if (this.wavePhase === 'active') {
+    if (this.waveState.phase === 'active') {
       // Signal active wave (prepDuration=0 means "already active")
       const waveActive: WaveStartMessage = {
         type: MessageType.WAVE_START,
-        waveNumber: this.currentWave,
+        waveNumber: this.waveState.currentWave,
         prepDuration: 0,
       };
       for (const p of this.players.values()) send(p.client, waveActive);
     } else {
       const waveStart: WaveStartMessage = {
         type: MessageType.WAVE_START,
-        waveNumber: this.currentWave,
-        prepDuration: this.prepTimer,
+        waveNumber: this.waveState.currentWave,
+        prepDuration: this.waveState.prepTimer,
       };
       for (const p of this.players.values()) send(p.client, waveStart);
     }
@@ -853,7 +847,13 @@ export class GameSession {
       const p = this.world.getComponent<PositionComponent>(id, C.Position)!;
       const dx = Math.abs(p.x - wx);
       const dy = Math.abs(p.y - wy);
-      if (dx < PLAYER_RADIUS + RESOURCE_NODE_RADIUS && dy < PLAYER_RADIUS + RESOURCE_NODE_RADIUS) return false;
+      if (f.type === 'building') {
+        const bldg = this.world.getComponent<BuildingComponent>(id, C.Building);
+        const half = buildingHalfExtent(bldg?.buildingType ?? 'campfire') + PLAYER_RADIUS;
+        if (dx < half && dy < half) return false;
+      } else {
+        if (dx < PLAYER_RADIUS + RESOURCE_NODE_RADIUS && dy < PLAYER_RADIUS + RESOURCE_NODE_RADIUS) return false;
+      }
     }
     return true;
   }
@@ -872,76 +872,6 @@ export class GameSession {
     this.world.addComponent(id, C.Faction,   { type: 'building' });
     this.world.addComponent(id, C.Building,  { buildingType, permanent, upgradeLevel: 1 } as BuildingComponent);
     return id;
-  }
-
-  /** Create a portal entity at (x, y) for the given wave. */
-  private spawnPortal(x: number, y: number, wave: number): number {
-    const hp = PORTAL_BASE_HP + PORTAL_HP_PER_WAVE * wave;
-    const interval = PORTAL_BASE_SPAWN_INTERVAL * Math.pow(PORTAL_SPAWN_INTERVAL_DECAY, wave - 1);
-
-    const id = this.world.createEntity();
-    this.world.addComponent(id, C.Position,          { x, y });
-    this.world.addComponent(id, C.Velocity,          { vx: 0, vy: 0 });
-    this.world.addComponent(id, C.Health,            { current: hp, max: hp });
-    this.world.addComponent(id, C.Faction,           { type: 'portal' });
-    this.world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
-    this.world.addComponent(id, C.Portal,            { waveNumber: wave, spawnTimer: interval, spawnInterval: interval });
-    return id;
-  }
-
-  /** Spawn N portals at walkable positions around the player centroid. */
-  private spawnPortals(wave: number): void {
-    // Compute player centroid
-    let cx = 0, cy = 0, count = 0;
-    for (const p of this.players.values()) {
-      if (p.entityId === null) continue;
-      const pos = this.world.getComponent<PositionComponent>(p.entityId, C.Position);
-      if (pos) { cx += pos.x; cy += pos.y; count++; }
-    }
-    if (count === 0) return;
-    cx /= count;
-    cy /= count;
-
-    const numPortals = PORTALS_PER_WAVE_BASE + PORTALS_PER_WAVE_GROWTH * (wave - 1);
-    const placed: { x: number; y: number }[] = [];
-
-    // Try up to 100 random positions per portal to find valid placements
-    for (let i = 0; i < numPortals; i++) {
-      let bestX = 0, bestY = 0, found = false;
-      for (let attempt = 0; attempt < 100; attempt++) {
-        const angle = Math.random() * Math.PI * 2;
-        const dist = PORTAL_MIN_DIST + Math.random() * (PORTAL_MAX_DIST - PORTAL_MIN_DIST);
-        const px = cx + Math.cos(angle) * dist;
-        const py = cy + Math.sin(angle) * dist;
-
-        if (!this.isWalkable(px, py)) continue;
-        if (this.overlapsBuilding(px, py, PORTAL_RADIUS)) continue;
-
-        // Check spacing from already-placed portals
-        let tooClose = false;
-        for (const prev of placed) {
-          const ddx = px - prev.x;
-          const ddy = py - prev.y;
-          if (ddx * ddx + ddy * ddy < PORTAL_MIN_SPACING * PORTAL_MIN_SPACING) {
-            tooClose = true;
-            break;
-          }
-        }
-        if (tooClose) continue;
-
-        bestX = px;
-        bestY = py;
-        found = true;
-        break;
-      }
-
-      if (found) {
-        this.spawnPortal(bestX, bestY, wave);
-        placed.push({ x: bestX, y: bestY });
-      }
-    }
-
-    console.log(`[Wave] Spawned ${placed.length}/${numPortals} portals for wave ${wave}`);
   }
 
   // ── Resource & Item spawning ───────────────────────────────────────────────
@@ -1093,28 +1023,6 @@ export class GameSession {
   }
 
   /** Find the playerId (UUID) for a given entity ID. */
-  private playerIdForEntity(entityId: number): string | undefined {
-    for (const p of this.players.values()) {
-      if (p.entityId === entityId) return p.playerId;
-    }
-    return undefined;
-  }
-
-  /** Track damage dealt by a player entity for meta stats. */
-  private trackDamage(attackerEntityId: number, damage: number): void {
-    const pid = this.playerIdForEntity(attackerEntityId);
-    if (!pid) return;
-    this.damageByPlayer.set(pid, (this.damageByPlayer.get(pid) ?? 0) + damage);
-  }
-
-  /** Track an enemy kill by a player entity for meta stats. */
-  private trackKill(attackerEntityId: number, enemyVariant: string): void {
-    const pid = this.playerIdForEntity(attackerEntityId);
-    if (!pid) return;
-    let kills = this.killsByPlayer.get(pid);
-    if (!kills) { kills = {}; this.killsByPlayer.set(pid, kills); }
-    kills[enemyVariant] = (kills[enemyVariant] ?? 0) + 1;
-  }
 
   /**
    * Credit a player's resource counter and send RESOURCE_UPDATE.
@@ -1143,12 +1051,8 @@ export class GameSession {
     else if (itemType === 'gold') res.gold += quantity;
     else if (itemType === 'food') res.food += quantity;
 
-    // Track for meta stats (only wood/stone/iron/diamond)
-    if (itemType === 'wood' || itemType === 'stone' || itemType === 'iron' || itemType === 'diamond') {
-      let pr = this.resourcesByPlayer.get(target.playerId);
-      if (!pr) { pr = { wood: 0, stone: 0, iron: 0, diamond: 0 }; this.resourcesByPlayer.set(target.playerId, pr); }
-      pr[itemType as 'wood' | 'stone' | 'iron' | 'diamond'] += quantity;
-    }
+    // Track for meta stats
+    this.stats.trackResources(target.playerId, itemType, quantity);
 
     const update: ResourceUpdateMessage = {
       type: MessageType.RESOURCE_UPDATE,
@@ -1160,78 +1064,6 @@ export class GameSession {
       food: res.food,
     };
     send(target.client, update);
-  }
-
-  private spawnEnemy(x: number, y: number): number | null {
-    if (this.enemyCount >= GameSession.MAX_ENEMIES) return null;
-
-    const variant = pickEnemyVariant(this.currentWave);
-    const base = ENEMY_VARIANT_STATS[variant];
-
-    // Wave difficulty scaling (compound)
-    const wave = Math.max(1, this.currentWave);
-    const hpMult = Math.pow(1 + ENEMY_HP_SCALE_PER_WAVE, wave - 1);
-    const dmgMult = Math.pow(1 + ENEMY_DAMAGE_SCALE_PER_WAVE, wave - 1);
-
-    const scaledHp = Math.round(base.hp * hpMult);
-    const scaledDmg = Math.round(base.damage * dmgMult * this.cards.debuffs.enemyDamageMult);
-
-    const id = this.world.createEntity();
-    this.world.addComponent(id, C.Position,          { x, y });
-    this.world.addComponent(id, C.Velocity,          { vx: 0, vy: 0 });
-    this.world.addComponent(id, C.Health, {
-      current: scaledHp,
-      max: scaledHp,
-    });
-    this.world.addComponent(id, C.Speed, {
-      base: base.speed,
-      multiplier: this.cards.debuffs.enemySpeedMult,
-    });
-    this.world.addComponent(id, C.PlayerInput,       { dx: 0, dy: 0, sprint: false });
-    this.world.addComponent(id, C.Faction,           { type: 'enemy' });
-    this.world.addComponent(id, C.Facing,            { angle: 0 });
-    this.world.addComponent(id, C.AttackCooldown, {
-      remaining: 0,
-      max: base.rangedCooldown ?? base.cooldown,
-    });
-    this.world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
-    this.world.addComponent(id, C.EnemyVariant,      { variant });
-    this.world.addComponent(id, C.EnemyStats, {
-      damage: scaledDmg,
-      range: base.range,
-      knockback: base.knockback,
-      radius: base.radius,
-      rangedRange: base.rangedRange ?? 0,
-      projectileSpeed: base.projectileSpeed ?? 0,
-      rangedDamage: Math.round((base.rangedDamage ?? 0) * dmgMult * this.cards.debuffs.enemyDamageMult),
-      rangedCooldown: base.rangedCooldown ?? base.cooldown,
-    });
-
-    // Ghost-specific components
-    if (variant === 'ghost') {
-      this.world.addComponent(id, C.GhostState, { hidden: true });
-    }
-
-    // Assassin-specific components
-    if (variant === 'assassin') {
-      this.world.addComponent(id, C.AssassinDash, {
-        cooldown: 0,
-        maxCooldown: 20,
-        dashSpeed: 500,
-        dashDuration: 0.3,
-        dashing: false,
-        dashTimer: 0,
-      });
-    }
-
-    // Track new enemy type introduction for toast (broadcast deferred to tick)
-    if (!this.introducedEnemyTypes.has(variant) && variant !== 'melee' && variant !== 'ranger') {
-      this.introducedEnemyTypes.add(variant);
-      this.pendingIntroMessages.push({ variant, displayName: ENEMY_VARIANT_NAMES[variant] });
-    }
-
-    this.enemyCount++;
-    return id;
   }
 
   // ── Input handling ──────────────────────────────────────────────────────────
@@ -1309,864 +1141,24 @@ export class GameSession {
     }
   }
 
-  // ── Building Placement (Phase 5) ───────────────────────────────────────────
+  // ── Building Placement (delegated to BuildingSystem) ─────────────────────────
 
-  /**
-   * Called when a client sends BUILD_PLACE to place a building.
-   */
-  handleBuildPlace(
-    clientId: string,
-    msg: BuildPlaceMessage,
-    send: SendFn,
-  ): void {
-    if (this.phase !== 'playing' || this.paused || this.gameOver) return;
-    const player = this.players.get(clientId);
-    if (!player || player.entityId === null) return;
-    if (this.world.hasComponent(player.entityId, C.Downed)) return;
-    if (this.respawnTimers.has(clientId)) return;
-    if (!Number.isFinite(msg.x) || !Number.isFinite(msg.y)) return;
-
-    // Validate building type
-    if (!BUILDING_COSTS[msg.buildingType]) {
-      send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'unknown_type' } as BuildConfirmMessage);
-      return;
-    }
-
-    // Grid-snap to correct position for building size
-    const { x: snapX, y: snapY } = snapBuildingPosition(msg.x, msg.y, msg.buildingType);
-
-    // Tile validation: bridges require non-walkable tiles (water); all others require walkable tiles
-    const tileCount = BUILDING_SIZES[msg.buildingType] ?? 1;
-    const half = buildingHalfExtent(msg.buildingType);
-    const startTX = Math.floor((snapX - half) / TILE_SIZE);
-    const startTY = Math.floor((snapY - half) / TILE_SIZE);
-    const isBridge = msg.buildingType === 'bridge';
-    for (let dy = 0; dy < tileCount; dy++) {
-      for (let dx = 0; dx < tileCount; dx++) {
-        const tx = startTX + dx;
-        const ty = startTY + dy;
-        const tileId = this.generator.getTile(tx, ty);
-        const walkable = TILE_DEFS[tileId]?.walkable ?? false;
-        if (isBridge) {
-          // Bridge must be placed on non-walkable (water) tiles, and not on existing bridges
-          if (walkable || this.bridgePositions.has(`${tx},${ty}`)) {
-            send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'not_water' } as BuildConfirmMessage);
-            return;
-          }
-        } else if (!walkable) {
-          send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'not_walkable' } as BuildConfirmMessage);
-          return;
-        }
-      }
-    }
-
-    // Must not collide with existing buildings or resources
-    if (this.footprintCollides(snapX, snapY, msg.buildingType)) {
-      send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'blocked' } as BuildConfirmMessage);
-      return;
-    }
-
-    // Validate and deduct resources
-    if (!this.deductBuildingCost(msg.buildingType, player, send)) {
-      send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'insufficient_resources' } as BuildConfirmMessage);
-      return;
-    }
-
-    // Spawn the building
-    const HP_MAP: Record<string, number> = {
-      campfire: CAMPFIRE_MAX_HEALTH, wall: WALL_MAX_HEALTH, warehouse: WAREHOUSE_MAX_HEALTH,
-      lumbermill: LUMBERMILL_MAX_HEALTH, quarry: QUARRY_MAX_HEALTH, mine: MINE_MAX_HEALTH, farm: FARM_MAX_HEALTH,
-      arrow_turret: ARROW_TURRET_MAX_HEALTH, cannon_turret: CANNON_TURRET_MAX_HEALTH,
-      spike_trap: SPIKE_TRAP_MAX_HEALTH, bridge: BRIDGE_MAX_HEALTH,
-      light_tower: LIGHT_TOWER_MAX_HEALTH, healing_shrine: HEALING_SHRINE_MAX_HEALTH,
-      barracks: BARRACKS_MAX_HEALTH,
-    };
-    const maxHp = HP_MAP[msg.buildingType] ?? WALL_MAX_HEALTH;
-    const id = this.spawnBuilding(snapX, snapY, msg.buildingType, maxHp, false);
-
-    if (msg.buildingType === 'warehouse') {
-      this.warehouseIds.add(id);
-      this.broadcastWarehouseUpdate(send);
-    }
-
-    // Attach special components for new building types
-    if (msg.buildingType === 'lumbermill') {
-      this.world.addComponent(id, C.Production, {
-        resourceType: 'wood', interval: LUMBERMILL_PRODUCTION_INTERVAL,
-        timer: 0, amount: PRODUCTION_AMOUNT, stored: 0, maxStored: PRODUCTION_MAX_STORED,
-      } as ProductionComponent);
-    } else if (msg.buildingType === 'quarry') {
-      this.world.addComponent(id, C.Production, {
-        resourceType: 'stone', interval: QUARRY_PRODUCTION_INTERVAL,
-        timer: 0, amount: PRODUCTION_AMOUNT, stored: 0, maxStored: PRODUCTION_MAX_STORED,
-      } as ProductionComponent);
-    } else if (msg.buildingType === 'mine') {
-      this.world.addComponent(id, C.Production, {
-        resourceType: 'iron', interval: MINE_PRODUCTION_INTERVAL,
-        timer: 0, amount: PRODUCTION_AMOUNT, stored: 0, maxStored: PRODUCTION_MAX_STORED,
-        secondaryResourceType: 'diamond', secondaryChance: 0.2,
-      } as ProductionComponent);
-    } else if (msg.buildingType === 'farm') {
-      this.world.addComponent(id, C.Production, {
-        resourceType: 'food', interval: FARM_PRODUCTION_INTERVAL,
-        timer: 0, amount: PRODUCTION_AMOUNT, stored: 0, maxStored: PRODUCTION_MAX_STORED,
-      } as ProductionComponent);
-    } else if (msg.buildingType === 'arrow_turret') {
-      this.world.addComponent(id, C.Turret, {
-        range: ARROW_TURRET_RANGE, cooldown: ARROW_TURRET_COOLDOWN,
-        cooldownTimer: 0, damage: ARROW_TURRET_DAMAGE, projectileSpeed: ARROW_TURRET_PROJ_SPEED,
-      } as TurretComponent);
-    } else if (msg.buildingType === 'cannon_turret') {
-      this.world.addComponent(id, C.Turret, {
-        range: CANNON_TURRET_RANGE, cooldown: CANNON_TURRET_COOLDOWN,
-        cooldownTimer: 0, damage: CANNON_TURRET_DAMAGE, projectileSpeed: CANNON_TURRET_PROJ_SPEED,
-      } as TurretComponent);
-    } else if (msg.buildingType === 'spike_trap') {
-      this.world.addComponent(id, C.SpikeTrap, {
-        damage: SPIKE_TRAP_DAMAGE, cooldown: SPIKE_TRAP_COOLDOWN,
-        selfDamage: SPIKE_TRAP_SELF_DAMAGE, enemyCooldowns: new Map(),
-      } as SpikeTrapComponent);
-    } else if (msg.buildingType === 'bridge') {
-      const tileX = Math.floor(snapX / TILE_SIZE);
-      const tileY = Math.floor(snapY / TILE_SIZE);
-      this.world.addComponent(id, C.Bridge, { tileX, tileY } as BridgeComponent);
-      this.bridgePositions.set(`${tileX},${tileY}`, id);
-      this.movement.bridgeTiles.add(`${tileX},${tileY}`);
-    } else if (msg.buildingType === 'light_tower') {
-      this.world.addComponent(id, C.LightReveal, {
-        range: UPGRADE_LIGHT_RANGE[0],
-      } as LightRevealComponent);
-    } else if (msg.buildingType === 'healing_shrine') {
-      this.world.addComponent(id, C.HealAura, {
-        range: UPGRADE_HEAL_RANGE[0],
-        healPerSecond: UPGRADE_HEAL_RATE[0],
-      } as HealAuraComponent);
-    } else if (msg.buildingType === 'barracks') {
-      this.world.addComponent(id, C.BarracksSpawner, {
-        maxGuards: BARRACKS_MAX_GUARDS[0],
-        spawnTimer: BARRACKS_SPAWN_INTERVAL,
-        spawnInterval: BARRACKS_SPAWN_INTERVAL,
-        guardIds: [],
-      } as BarracksSpawnerComponent);
-    }
-
-    send(player.client, { type: MessageType.BUILD_CONFIRM, success: true } as BuildConfirmMessage);
-    // Track for meta stats
-    this.buildingsByPlayer.set(player.playerId, (this.buildingsByPlayer.get(player.playerId) ?? 0) + 1);
-  }
-
-  private deductBuildingCost(buildingType: string, player: any, send: SendFn, costOverride?: Partial<Record<string, number>>): boolean {
-    const costs = costOverride ?? BUILDING_COSTS[buildingType] ?? {};
-    const playerRes = this.world.getComponent<any>(player.entityId, C.Resources);
-    if (!playerRes) return false;
-
-    const hasWarehouse = this.warehouseIds.size > 0;
-    const wPool = this.warehousePool as Record<string, number>;
-    const pPool = playerRes as Record<string, number>;
-
-    // Check combined availability (warehouse + player inventory)
-    for (const [res, amount] of Object.entries(costs)) {
-      const total = (hasWarehouse ? (wPool[res] ?? 0) : 0) + (pPool[res] ?? 0);
-      if (total < amount!) return false;
-    }
-
-    // Deduct: warehouse first, then player inventory for the remainder
-    let drewFromWarehouse = false;
-    let drewFromPlayer = false;
-    for (const [res, amount] of Object.entries(costs)) {
-      let remaining = amount!;
-      if (hasWarehouse) {
-        const fromW = Math.min(remaining, wPool[res] ?? 0);
-        if (fromW > 0) { wPool[res] -= fromW; remaining -= fromW; drewFromWarehouse = true; }
-      }
-      if (remaining > 0) { pPool[res] -= remaining; drewFromPlayer = true; }
-    }
-
-    if (drewFromWarehouse) this.broadcastWarehouseUpdate(send);
-    if (drewFromPlayer) {
-      send(player.client, {
-        type: MessageType.RESOURCE_UPDATE,
-        wood: playerRes.wood, stone: playerRes.stone, iron: playerRes.iron, diamond: playerRes.diamond, gold: playerRes.gold, food: playerRes.food,
-      });
-    }
-    return true;
-  }
-
-  private broadcastWarehouseUpdate(send: SendFn): void {
-    const msg = {
-      type: MessageType.WAREHOUSE_UPDATE,
-      ...this.warehousePool,
-      exists: this.warehouseIds.size > 0,
-    };
-    for (const p of this.players.values()) send(p.client, msg);
+  handleBuildPlace(clientId: string, msg: BuildPlaceMessage, send: SendFn): void {
+    this.buildings.handlePlace(clientId, msg, send);
   }
 
   handleBuildDemolish(clientId: string, msg: BuildDemolishMessage, send: SendFn): void {
-    if (this.phase !== 'playing' || this.paused || this.gameOver) return;
-    const player = this.players.get(clientId);
-    if (!player || player.entityId === null) return;
-    if (this.world.hasComponent(player.entityId, C.Downed)) return;
-    if (this.respawnTimers.has(clientId)) return;
-
-    const targetId = msg.entityId;
-    if (!Number.isFinite(targetId)) return;
-    if (!this.world.hasEntity(targetId)) {
-      send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'no_building' } as BuildConfirmMessage);
-      return;
-    }
-    const bldg = this.world.getComponent<BuildingComponent>(targetId, C.Building);
-    if (!bldg) {
-      send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'no_building' } as BuildConfirmMessage);
-      return;
-    }
-    if (bldg.permanent) {
-      send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'permanent' } as BuildConfirmMessage);
-      return;
-    }
-
-    // Calculate total invested cost (base + all upgrade costs) for refund
-    const baseCosts = BUILDING_COSTS[bldg.buildingType] ?? {};
-    const totalCosts: Record<string, number> = {};
-    for (const [res, amount] of Object.entries(baseCosts)) {
-      totalCosts[res] = amount!;
-    }
-    // Add upgrade costs for each level above 1
-    for (let lvl = 1; lvl < bldg.upgradeLevel; lvl++) {
-      const upgCost = getUpgradeCost(bldg.buildingType, lvl);
-      if (upgCost) {
-        for (const [res, amount] of Object.entries(upgCost)) {
-          totalCosts[res] = (totalCosts[res] ?? 0) + (amount as number);
-        }
-      }
-    }
-
-    const isDemolingWarehouse = this.warehouseIds.has(targetId);
-
-    if (this.warehouseIds.size > 0 && !(isDemolingWarehouse && this.warehouseIds.size === 1)) {
-      for (const [res, amount] of Object.entries(totalCosts)) {
-        const refund = Math.floor(amount * DEMOLISH_REFUND_PERCENT);
-        (this.warehousePool as Record<string, number>)[res] += refund;
-      }
-      this.broadcastWarehouseUpdate(send);
-    } else {
-      const res = this.world.getComponent<any>(player.entityId, C.Resources);
-      if (res) {
-        for (const [key, amount] of Object.entries(totalCosts)) {
-          const refund = Math.floor(amount * DEMOLISH_REFUND_PERCENT);
-          (res as unknown as Record<string, number>)[key] += refund;
-        }
-        send(player.client, {
-          type: MessageType.RESOURCE_UPDATE,
-          wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold, food: res.food,
-        });
-      }
-    }
-
-    if (isDemolingWarehouse) {
-      this.warehouseIds.delete(targetId);
-      if (this.warehouseIds.size === 0) {
-        this.warehousePool = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
-      }
-      this.broadcastWarehouseUpdate(send);
-    }
-
-    // Clean up bridge tile when demolished
-    this.cleanupBridge(targetId);
-
-    this.world.destroyEntity(targetId);
-    for (const p of this.players.values()) {
-      send(p.client, { type: MessageType.BUILD_DESTROYED, entityId: targetId } as any);
-    }
-    send(player.client, { type: MessageType.BUILD_CONFIRM, success: true } as BuildConfirmMessage);
+    this.buildings.handleDemolish(clientId, msg, send);
   }
 
   handleBuildUpgrade(clientId: string, msg: BuildUpgradeMessage, send: SendFn): void {
-    if (this.phase !== 'playing' || this.paused || this.gameOver) return;
-    const player = this.players.get(clientId);
-    if (!player || player.entityId === null) return;
-    if (this.world.hasComponent(player.entityId, C.Downed)) return;
-    if (this.respawnTimers.has(clientId)) return;
-
-    const targetId = msg.entityId;
-    if (!Number.isFinite(targetId)) return;
-    if (!this.world.hasEntity(targetId)) {
-      send(player.client, { type: MessageType.BUILD_UPGRADE_CONFIRM, success: false, reason: 'no_building' } as BuildUpgradeConfirmMessage);
-      return;
-    }
-    const bldg = this.world.getComponent<BuildingComponent>(targetId, C.Building);
-    if (!bldg) {
-      send(player.client, { type: MessageType.BUILD_UPGRADE_CONFIRM, success: false, reason: 'no_building' } as BuildUpgradeConfirmMessage);
-      return;
-    }
-
-    const maxLevel = BUILDING_MAX_LEVEL[bldg.buildingType] ?? 1;
-    if (bldg.upgradeLevel >= maxLevel) {
-      send(player.client, { type: MessageType.BUILD_UPGRADE_CONFIRM, success: false, reason: 'max_level' } as BuildUpgradeConfirmMessage);
-      return;
-    }
-
-    const cost = getUpgradeCost(bldg.buildingType, bldg.upgradeLevel);
-    if (!cost) {
-      send(player.client, { type: MessageType.BUILD_UPGRADE_CONFIRM, success: false, reason: 'max_level' } as BuildUpgradeConfirmMessage);
-      return;
-    }
-
-    if (!this.deductBuildingCost(bldg.buildingType, player, send, cost as Partial<Record<string, number>>)) {
-      send(player.client, { type: MessageType.BUILD_UPGRADE_CONFIRM, success: false, reason: 'insufficient_resources' } as BuildUpgradeConfirmMessage);
-      return;
-    }
-
-    // Upgrade the building
-    const oldLevel = bldg.upgradeLevel;
-    bldg.upgradeLevel = oldLevel + 1;
-    const newLevel = bldg.upgradeLevel;
-    const lvlIdx = newLevel - 1; // 0-based index into multiplier arrays
-
-    // Scale HP: increase max and fully repair
-    const hp = this.world.getComponent<HealthComponent>(targetId, C.Health)!;
-    const baseMaxHp = hp.max / UPGRADE_HP_MULT[oldLevel - 1];
-    const newMaxHp = Math.round(baseMaxHp * UPGRADE_HP_MULT[lvlIdx]);
-    hp.max = newMaxHp;
-    hp.current = hp.max;
-
-    // Scale production buildings
-    const prod = this.world.getComponent<ProductionComponent>(targetId, C.Production);
-    if (prod && lvlIdx < UPGRADE_PROD_INTERVAL.length) {
-      const baseInterval = prod.interval / UPGRADE_PROD_INTERVAL[oldLevel - 1];
-      prod.interval = baseInterval * UPGRADE_PROD_INTERVAL[lvlIdx];
-      const baseMax = prod.maxStored / UPGRADE_PROD_MAX[oldLevel - 1];
-      prod.maxStored = Math.round(baseMax * UPGRADE_PROD_MAX[lvlIdx]);
-    }
-
-    // Scale turrets
-    const turret = this.world.getComponent<TurretComponent>(targetId, C.Turret);
-    if (turret && lvlIdx < UPGRADE_ARROW_CD.length) {
-      if (bldg.buildingType === 'arrow_turret') {
-        const baseCd = turret.cooldown / UPGRADE_ARROW_CD[oldLevel - 1];
-        turret.cooldown = baseCd * UPGRADE_ARROW_CD[lvlIdx];
-        const baseDmg = turret.damage / UPGRADE_ARROW_DMG[oldLevel - 1];
-        turret.damage = Math.round(baseDmg * UPGRADE_ARROW_DMG[lvlIdx]);
-      } else if (bldg.buildingType === 'cannon_turret') {
-        const baseCd = turret.cooldown / UPGRADE_CANNON_CD[oldLevel - 1];
-        turret.cooldown = baseCd * UPGRADE_CANNON_CD[lvlIdx];
-        const baseDmg = turret.damage / UPGRADE_CANNON_DMG[oldLevel - 1];
-        turret.damage = Math.round(baseDmg * UPGRADE_CANNON_DMG[lvlIdx]);
-      }
-      turret.cooldownTimer = 0; // reset cooldown so upgraded turret fires immediately
-    }
-
-    // Scale spike trap damage
-    const trap = this.world.getComponent<SpikeTrapComponent>(targetId, C.SpikeTrap);
-    if (trap && lvlIdx < UPGRADE_TRAP_DMG.length) {
-      const baseDmg = trap.damage / UPGRADE_TRAP_DMG[oldLevel - 1];
-      trap.damage = Math.round(baseDmg * UPGRADE_TRAP_DMG[lvlIdx]);
-    }
-
-    // Scale light tower range
-    const lightReveal = this.world.getComponent<LightRevealComponent>(targetId, C.LightReveal);
-    if (lightReveal && lvlIdx < UPGRADE_LIGHT_RANGE.length) {
-      lightReveal.range = UPGRADE_LIGHT_RANGE[lvlIdx];
-    }
-
-    // Scale healing shrine
-    const healAura = this.world.getComponent<HealAuraComponent>(targetId, C.HealAura);
-    if (healAura) {
-      if (lvlIdx < UPGRADE_HEAL_RATE.length) healAura.healPerSecond = UPGRADE_HEAL_RATE[lvlIdx];
-      if (lvlIdx < UPGRADE_HEAL_RANGE.length) healAura.range = UPGRADE_HEAL_RANGE[lvlIdx];
-    }
-
-    // Scale barracks max guards
-    const barracks = this.world.getComponent<BarracksSpawnerComponent>(targetId, C.BarracksSpawner);
-    if (barracks && lvlIdx < BARRACKS_MAX_GUARDS.length) {
-      barracks.maxGuards = BARRACKS_MAX_GUARDS[lvlIdx];
-    }
-
-    send(player.client, {
-      type: MessageType.BUILD_UPGRADE_CONFIRM,
-      success: true,
-      entityId: targetId,
-      newLevel,
-    } as BuildUpgradeConfirmMessage);
+    this.buildings.handleUpgrade(clientId, msg, send);
   }
 
   handleBuildRepair(clientId: string, msg: BuildRepairMessage, send: SendFn): void {
-    if (this.phase !== 'playing' || this.paused || this.gameOver) return;
-    const player = this.players.get(clientId);
-    if (!player || player.entityId === null) return;
-    if (this.world.hasComponent(player.entityId, C.Downed)) return;
-    if (this.respawnTimers.has(clientId)) return;
-
-    const targetId = msg.entityId;
-    if (!Number.isFinite(targetId)) return;
-    if (!this.world.hasEntity(targetId)) {
-      send(player.client, { type: MessageType.BUILD_REPAIR_CONFIRM, success: false, reason: 'no_building' } as BuildRepairConfirmMessage);
-      return;
-    }
-    const bldg = this.world.getComponent<BuildingComponent>(targetId, C.Building);
-    if (!bldg) {
-      send(player.client, { type: MessageType.BUILD_REPAIR_CONFIRM, success: false, reason: 'no_building' } as BuildRepairConfirmMessage);
-      return;
-    }
-    const hp = this.world.getComponent<HealthComponent>(targetId, C.Health);
-    if (!hp || hp.current >= hp.max) {
-      send(player.client, { type: MessageType.BUILD_REPAIR_CONFIRM, success: false, reason: 'full_hp' } as BuildRepairConfirmMessage);
-      return;
-    }
-
-    const missingHp = hp.max - hp.current;
-    const cost = getRepairCost(bldg.buildingType, missingHp, hp.max);
-    if (!cost) {
-      send(player.client, { type: MessageType.BUILD_REPAIR_CONFIRM, success: false, reason: 'full_hp' } as BuildRepairConfirmMessage);
-      return;
-    }
-
-    if (!this.deductBuildingCost(bldg.buildingType, player, send, cost as Partial<Record<string, number>>)) {
-      send(player.client, { type: MessageType.BUILD_REPAIR_CONFIRM, success: false, reason: 'insufficient_resources' } as BuildRepairConfirmMessage);
-      return;
-    }
-
-    hp.current = hp.max;
-
-    send(player.client, {
-      type: MessageType.BUILD_REPAIR_CONFIRM,
-      success: true,
-      entityId: targetId,
-    } as BuildRepairConfirmMessage);
+    this.buildings.handleRepair(clientId, msg, send);
   }
 
-  /** Remove bridge from bridgePositions and movement bridgeTiles when destroyed/demolished. */
-  private cleanupBridge(entityId: number): void {
-    const bridge = this.world.getComponent<BridgeComponent>(entityId, C.Bridge);
-    if (bridge) {
-      const key = `${bridge.tileX},${bridge.tileY}`;
-      this.bridgePositions.delete(key);
-      this.movement.bridgeTiles.delete(key);
-    }
-  }
-
-  /** Each tick, auto-deposit personal resources into the warehouse pool for players near any warehouse. */
-  private tickWarehouseDeposit(send: SendFn): void {
-    if (this.warehouseIds.size === 0) return;
-
-    // Collect warehouse positions
-    const whPositions: PositionComponent[] = [];
-    for (const wid of this.warehouseIds) {
-      const pos = this.world.getComponent<PositionComponent>(wid, C.Position);
-      if (pos) whPositions.push(pos);
-    }
-    if (whPositions.length === 0) return;
-
-    const r2 = WAREHOUSE_DEPOSIT_RADIUS * WAREHOUSE_DEPOSIT_RADIUS;
-
-    for (const p of this.players.values()) {
-      if (p.entityId === null) continue;
-      const pPos = this.world.getComponent<PositionComponent>(p.entityId, C.Position);
-      if (!pPos) continue;
-
-      // Check proximity to any warehouse
-      let near = false;
-      for (const wPos of whPositions) {
-        const dx = pPos.x - wPos.x;
-        const dy = pPos.y - wPos.y;
-        if (dx * dx + dy * dy <= r2) { near = true; break; }
-      }
-      if (!near) continue;
-
-      const res = this.world.getComponent<ResourcesComponent>(p.entityId, C.Resources);
-      if (!res) continue;
-
-      let transferred = false;
-      for (const key of ['wood', 'stone', 'iron', 'diamond', 'gold', 'food'] as const) {
-        if (res[key] > 0) {
-          (this.warehousePool as Record<string, number>)[key] += res[key];
-          res[key] = 0;
-          transferred = true;
-        }
-      }
-      if (transferred) {
-        send(p.client, {
-          type: MessageType.RESOURCE_UPDATE,
-          wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold, food: res.food,
-        });
-        this.broadcastWarehouseUpdate(send);
-      }
-    }
-  }
-
-  /** Tick production buildings: accumulate resources and deposit to warehouse or store locally. */
-  private tickProduction(_dt: number, _send: SendFn): void {
-    for (const id of this.world.query(C.Production, C.Position)) {
-      const prod = this.world.getComponent<ProductionComponent>(id, C.Production)!;
-      prod.timer += _dt;
-      if (prod.timer < prod.interval) continue;
-      prod.timer -= prod.interval;
-
-      // Accumulate locally for F-key collection (primary and secondary share the same storage)
-      prod.stored = Math.min(prod.stored + prod.amount, prod.maxStored);
-    }
-  }
-
-  /** Tick turrets: find nearest enemy in range and fire projectiles. */
-  private tickTurrets(dt: number, send: SendFn): void {
-    for (const id of this.world.query(C.Turret, C.Position)) {
-      const turret = this.world.getComponent<TurretComponent>(id, C.Turret)!;
-      turret.cooldownTimer -= dt;
-      if (turret.cooldownTimer > 0) continue;
-
-      const tpos = this.world.getComponent<PositionComponent>(id, C.Position)!;
-      const bldg = this.world.getComponent<BuildingComponent>(id, C.Building);
-      const halfExt = buildingHalfExtent(bldg?.buildingType ?? 'arrow_turret');
-
-      // Find nearest enemy or portal in range
-      let bestId = -1;
-      let bestDist = turret.range * turret.range;
-      for (const eid of this.world.query(C.Position, C.Faction)) {
-        const ef = this.world.getComponent<FactionComponent>(eid, C.Faction)!;
-        if (ef.type !== 'enemy' && ef.type !== 'portal') continue;
-        // Turrets can't target hidden ghosts
-        const ghostSt = this.world.getComponent<GhostStateComponent>(eid, C.GhostState);
-        if (ghostSt?.hidden) continue;
-        const epos = this.world.getComponent<PositionComponent>(eid, C.Position)!;
-        const dx = epos.x - tpos.x;
-        const dy = epos.y - tpos.y;
-        const d2 = dx * dx + dy * dy;
-        if (d2 < bestDist) { bestDist = d2; bestId = eid; }
-      }
-
-      if (bestId < 0) continue;
-      turret.cooldownTimer = turret.cooldown;
-
-      // Spawn projectile aimed at target
-      const epos = this.world.getComponent<PositionComponent>(bestId, C.Position)!;
-      const dx = epos.x - tpos.x;
-      const dy = epos.y - tpos.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist < 0.01) continue;
-      const nx = dx / dist;
-      const ny = dy / dist;
-
-      // Offset spawn outside building AABB
-      const spawnOffset = halfExt + PROJECTILE_RADIUS + 2;
-      const px = tpos.x + nx * spawnOffset;
-      const py = tpos.y + ny * spawnOffset;
-
-      const projId = this.world.createEntity();
-      this.world.addComponent(projId, C.Position,   { x: px, y: py });
-      const projComp: any = { ownerId: id, damage: turret.damage, lifetime: RANGED_LIFETIME };
-
-      const isCannon = bldg?.buildingType === 'cannon_turret';
-      if (isCannon) {
-        // Mortar-style: fly to target position, then detonate AOE
-        const lvlIdx = (bldg!.upgradeLevel ?? 1) - 1;
-        projComp.aoeRadius = UPGRADE_CANNON_AOE[lvlIdx] ?? CANNON_AOE_BASE_RADIUS;
-        projComp.targetX = epos.x;
-        projComp.targetY = epos.y;
-        const flightTime = dist / turret.projectileSpeed;
-        projComp.flightTime = flightTime;
-        projComp.totalFlightTime = flightTime;
-        // Velocity toward target (for visual direction)
-        this.world.addComponent(projId, C.Velocity, { vx: nx * turret.projectileSpeed, vy: ny * turret.projectileSpeed });
-      } else {
-        // Arrow turret: straight-line projectile
-        this.world.addComponent(projId, C.Velocity, { vx: nx * turret.projectileSpeed, vy: ny * turret.projectileSpeed });
-      }
-
-      this.world.addComponent(projId, C.Projectile, projComp);
-      this.world.addComponent(projId, C.Faction,     { type: 'player' });
-
-      const spawnMsg: ProjectileSpawnMessage = {
-        type: MessageType.PROJECTILE_SPAWN,
-        projectileId: projId,
-        x: px, y: py,
-        vx: nx * turret.projectileSpeed, vy: ny * turret.projectileSpeed,
-        ownerSlot: -1, // turret indicator
-        ...(isCannon ? { targetX: epos.x, targetY: epos.y, totalFlightTime: dist / turret.projectileSpeed } : {}),
-      };
-      for (const p of this.players.values()) send(p.client, spawnMsg);
-    }
-  }
-
-  /** Update ghost visibility: ghosts are hidden by default, revealed by light towers (Part 3). */
-  private tickGhostVisibility(): void {
-    for (const eid of this.world.query(C.GhostState, C.Position)) {
-      const ghost = this.world.getComponent<GhostStateComponent>(eid, C.GhostState)!;
-      // Once revealed, ghosts stay permanently visible
-      if (!ghost.hidden) continue;
-
-      let revealed = false;
-
-      // Light towers reveal ghosts permanently
-      for (const lid of this.world.query(C.LightReveal, C.Position)) {
-        const lpos = this.world.getComponent<PositionComponent>(lid, C.Position)!;
-        const lr = this.world.getComponent<import('@shared/components').LightRevealComponent>(lid, C.LightReveal)!;
-        const epos = this.world.getComponent<PositionComponent>(eid, C.Position)!;
-        const dx = epos.x - lpos.x, dy = epos.y - lpos.y;
-        if (dx * dx + dy * dy <= lr.range * lr.range) {
-          revealed = true;
-          break;
-        }
-      }
-
-      // Players with ghost_sight ability reveal ghosts within 300px
-      if (!revealed) {
-        const epos = this.world.getComponent<PositionComponent>(eid, C.Position)!;
-        for (const p of this.players.values()) {
-          if (!p.entityId) continue;
-          const pBuffs = this.cards.playerBuffs.get(p.client.id);
-          if (!pBuffs?.abilities.includes('reveal_ghosts')) continue;
-          const ppos = this.world.getComponent<PositionComponent>(p.entityId, C.Position);
-          if (!ppos) continue;
-          const dx2 = epos.x - ppos.x, dy2 = epos.y - ppos.y;
-          if (dx2 * dx2 + dy2 * dy2 <= 300 * 300) { revealed = true; break; }
-        }
-      }
-
-      if (revealed) ghost.hidden = false;
-    }
-  }
-
-  /** Heal players within range of healing shrines. */
-  private tickHealAuras(dt: number): void {
-    for (const sid of this.world.query(C.HealAura, C.Position)) {
-      const aura = this.world.getComponent<HealAuraComponent>(sid, C.HealAura)!;
-      const spos = this.world.getComponent<PositionComponent>(sid, C.Position)!;
-      const rangeSq = aura.range * aura.range;
-      const healAmount = aura.healPerSecond * dt;
-
-      for (const pid of this.playerEntityIds) {
-        if (this.world.hasComponent(pid, C.Downed)) continue;
-        const ppos = this.world.getComponent<PositionComponent>(pid, C.Position);
-        const php = this.world.getComponent<HealthComponent>(pid, C.Health);
-        if (!ppos || !php || php.current >= php.max) continue;
-        const dx = ppos.x - spos.x, dy = ppos.y - spos.y;
-        if (dx * dx + dy * dy <= rangeSq) {
-          php.current = Math.min(php.max, php.current + healAmount);
-        }
-      }
-    }
-  }
-
-  /** Spawn and manage barracks guards. */
-  private tickBarracks(dt: number): void {
-    for (const bid of this.world.query(C.BarracksSpawner, C.Position)) {
-      const spawner = this.world.getComponent<BarracksSpawnerComponent>(bid, C.BarracksSpawner)!;
-      const bpos = this.world.getComponent<PositionComponent>(bid, C.Position)!;
-
-      // Clean up dead guards
-      spawner.guardIds = spawner.guardIds.filter(gid => this.world.hasEntity(gid));
-
-      if (spawner.guardIds.length < spawner.maxGuards) {
-        spawner.spawnTimer -= dt;
-        if (spawner.spawnTimer <= 0) {
-          spawner.spawnTimer = spawner.spawnInterval;
-          // Spawn guard outside the barracks footprint
-          const bHalf = buildingHalfExtent('barracks');
-          const spawnDist = bHalf + 16 + Math.random() * 20; // outside building edge
-          const angle = Math.random() * Math.PI * 2;
-          const gx = bpos.x + Math.cos(angle) * spawnDist;
-          const gy = bpos.y + Math.sin(angle) * spawnDist;
-          if (!this.isWalkable(gx, gy)) continue; // skip if bad position
-          const gid = this.spawnGuard(gx, gy, bid);
-          if (gid !== null) spawner.guardIds.push(gid);
-        }
-      }
-    }
-  }
-
-  /** Spawn a barracks guard entity. */
-  private spawnGuard(x: number, y: number, barracksId: number): number | null {
-    const id = this.world.createEntity();
-    this.world.addComponent(id, C.Position,          { x, y });
-    this.world.addComponent(id, C.Velocity,          { vx: 0, vy: 0 });
-    this.world.addComponent(id, C.Health,            { current: BARRACKS_GUARD_HP, max: BARRACKS_GUARD_HP });
-    this.world.addComponent(id, C.Speed,             { base: BARRACKS_GUARD_SPEED, multiplier: 1 });
-    this.world.addComponent(id, C.PlayerInput,       { dx: 0, dy: 0, sprint: false });
-    this.world.addComponent(id, C.Faction,           { type: 'guard' });
-    this.world.addComponent(id, C.Facing,            { angle: 0 });
-    this.world.addComponent(id, C.AttackCooldown,    { remaining: 0, max: 1.0 });
-    this.world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
-    this.world.addComponent(id, C.Guard,             { barracksId, patrolRadius: BARRACKS_GUARD_PATROL_RADIUS } as GuardComponent);
-    this.world.addComponent(id, C.EnemyStats, {
-      damage: BARRACKS_GUARD_DAMAGE, range: 40, knockback: 150, radius: 10,
-      rangedRange: 0, projectileSpeed: 0, rangedDamage: 0, rangedCooldown: 0,
-    });
-    return id;
-  }
-
-  /** Guard AI: patrol near barracks, chase and attack nearby enemies. */
-  private tickGuardAI(dt: number, send: SendFn): void {
-    const GUARD_DETECT_RANGE = 150;
-    const GUARD_DETECT_RANGE_SQ = GUARD_DETECT_RANGE * GUARD_DETECT_RANGE;
-    const GUARD_ATTACK_RANGE = 40;
-
-    for (const gid of this.world.query(C.Guard, C.Position, C.PlayerInput)) {
-      const guard = this.world.getComponent<GuardComponent>(gid, C.Guard)!;
-      const gpos = this.world.getComponent<PositionComponent>(gid, C.Position)!;
-      const ginp = this.world.getComponent<PlayerInputComponent>(gid, C.PlayerInput)!;
-
-      // Find nearest enemy
-      let nearestEnemyId = -1;
-      let nearestDist = Infinity;
-      for (const eid of this.world.query(C.Position, C.Faction)) {
-        const ef = this.world.getComponent<FactionComponent>(eid, C.Faction)!;
-        if (ef.type !== 'enemy') continue;
-        const epos = this.world.getComponent<PositionComponent>(eid, C.Position)!;
-        const dx = epos.x - gpos.x, dy = epos.y - gpos.y;
-        const d2 = dx * dx + dy * dy;
-        if (d2 < GUARD_DETECT_RANGE_SQ && d2 < nearestDist) {
-          nearestDist = d2;
-          nearestEnemyId = eid;
-        }
-      }
-
-      if (nearestEnemyId >= 0) {
-        // Chase enemy
-        const epos = this.world.getComponent<PositionComponent>(nearestEnemyId, C.Position)!;
-        const dx = epos.x - gpos.x, dy = epos.y - gpos.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-
-        if (dist <= GUARD_ATTACK_RANGE) {
-          // In range: stop and attack
-          ginp.dx = 0; ginp.dy = 0;
-          const facing = Math.atan2(dy, dx);
-          const facingComp = this.world.getComponent<import('@shared/components').FacingComponent>(gid, C.Facing);
-          if (facingComp) facingComp.angle = facing;
-
-          const stats = this.world.getComponent<EnemyStatsComponent>(gid, C.EnemyStats);
-          const overrides = stats
-            ? { damage: stats.damage, range: stats.range, knockback: stats.knockback }
-            : { damage: BARRACKS_GUARD_DAMAGE, range: 40, knockback: 150 };
-          const { hits, deaths } = this.combat.processMeleeAttack(this.world, gid, facing, undefined, overrides);
-
-          for (const hit of hits) {
-            const hitMsg = { type: MessageType.HIT, ...hit };
-            for (const p of this.players.values()) send(p.client, hitMsg);
-          }
-          this.destroyDeadEntities(deaths, undefined, send);
-        } else {
-          // Move toward enemy
-          ginp.dx = dx / dist; ginp.dy = dy / dist;
-        }
-      } else {
-        // Patrol: drift back toward barracks if too far
-        const bpos = this.world.getComponent<PositionComponent>(guard.barracksId, C.Position);
-        if (bpos) {
-          const dx = bpos.x - gpos.x, dy = bpos.y - gpos.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist > guard.patrolRadius) {
-            ginp.dx = dx / dist; ginp.dy = dy / dist;
-          } else {
-            ginp.dx = 0; ginp.dy = 0;
-          }
-        } else {
-          ginp.dx = 0; ginp.dy = 0;
-        }
-      }
-      ginp.sprint = false;
-    }
-  }
-
-  /** Tick spike traps: damage enemies walking over them and take self-damage. */
-  private tickSpikeTraps(dt: number, send: SendFn): void {
-    const trapDeaths: number[] = [];
-    const entityDeaths: number[] = [];
-    const attackerMap = new Map<number, number>();
-
-    for (const id of this.world.query(C.SpikeTrap, C.Position, C.Health)) {
-      const trap = this.world.getComponent<SpikeTrapComponent>(id, C.SpikeTrap)!;
-      const tpos = this.world.getComponent<PositionComponent>(id, C.Position)!;
-      const thp = this.world.getComponent<HealthComponent>(id, C.Health)!;
-      const trapHalf = buildingHalfExtent('spike_trap');
-      let trapDestroyed = false;
-
-      // Tick per-entity cooldowns
-      for (const [eid, remaining] of trap.enemyCooldowns) {
-        if (remaining > 0) trap.enemyCooldowns.set(eid, remaining - dt);
-      }
-
-      // Check all enemies and players for overlap
-      for (const eid of this.world.query(C.Position, C.Health, C.Faction)) {
-        const ef = this.world.getComponent<FactionComponent>(eid, C.Faction)!;
-        if (ef.type !== 'enemy' && ef.type !== 'player') continue;
-        // Skip downed players
-        if (this.world.hasComponent(eid, C.Downed)) continue;
-
-        const epos = this.world.getComponent<PositionComponent>(eid, C.Position)!;
-        const entityRadius = ef.type === 'player' ? PLAYER_RADIUS : ENEMY_RADIUS;
-
-        // AABB overlap: trapHalf + entity radius
-        const edx = Math.abs(epos.x - tpos.x);
-        const edy = Math.abs(epos.y - tpos.y);
-        if (edx > trapHalf + entityRadius || edy > trapHalf + entityRadius) continue;
-
-        // Check cooldown
-        const cd = trap.enemyCooldowns.get(eid) ?? 0;
-        if (cd > 0) continue;
-
-        // Deal damage
-        const ehp = this.world.getComponent<HealthComponent>(eid, C.Health);
-        if (!ehp) continue;
-        ehp.current = Math.max(0, ehp.current - trap.damage);
-        trap.enemyCooldowns.set(eid, trap.cooldown);
-
-        // Broadcast hit
-        const hitMsg: HitMessage = {
-          type: MessageType.HIT,
-          sourceId: id, targetId: eid,
-          damage: trap.damage, knockbackVx: 0, knockbackVy: 0,
-        };
-        for (const p of this.players.values()) send(p.client, hitMsg);
-
-        if (ehp.current <= 0) {
-          entityDeaths.push(eid);
-          attackerMap.set(eid, id);
-        }
-
-        // Self-damage
-        thp.current -= trap.selfDamage;
-        if (thp.current <= 0) {
-          trapDeaths.push(id);
-          trapDestroyed = true;
-          break;
-        }
-      }
-
-      if (trapDestroyed) continue;
-
-      // Clean stale entity cooldowns
-      for (const eid of trap.enemyCooldowns.keys()) {
-        if (!this.world.hasEntity(eid)) trap.enemyCooldowns.delete(eid);
-      }
-    }
-
-    if (entityDeaths.length > 0) this.destroyDeadEntities(entityDeaths, attackerMap, send);
-    if (trapDeaths.length > 0) this.destroyDeadEntities(trapDeaths, undefined, send);
-  }
-
-  /** Returns true if a building footprint at (cx, cy) overlaps an existing entity (buildings, resources, players, enemies). */
-  private footprintCollides(cx: number, cy: number, buildingType: string): boolean {
-    const newHalf = buildingHalfExtent(buildingType);
-    for (const id of this.world.query(C.Position, C.Faction)) {
-      const f = this.world.getComponent<FactionComponent>(id, C.Faction)!;
-      const pos = this.world.getComponent<PositionComponent>(id, C.Position)!;
-      let existingHalf: number;
-      if (f.type === 'building') {
-        const b = this.world.getComponent<BuildingComponent>(id, C.Building);
-        existingHalf = buildingHalfExtent(b?.buildingType ?? 'wall');
-      } else if (f.type === 'resource') {
-        existingHalf = RESOURCE_NODE_RADIUS;
-      } else if (f.type === 'player') {
-        if (this.world.hasComponent(id, C.Downed)) continue; // ignore downed players
-        existingHalf = PLAYER_RADIUS;
-      } else if (f.type === 'enemy') {
-        existingHalf = ENEMY_RADIUS;
-      } else {
-        continue; // skip portals, items, etc.
-      }
-      if (Math.abs(pos.x - cx) < newHalf + existingHalf && Math.abs(pos.y - cy) < newHalf + existingHalf) return true;
-    }
-    return false;
-  }
 
   /**
    * Called when a client presses E to interact with a nearby non-auto-pickup item.
@@ -2299,7 +1291,7 @@ export class GameSession {
     for (const hit of hits) {
       const hitMsg: HitMessage = { type: MessageType.HIT, ...hit };
       for (const p of this.players.values()) send(p.client, hitMsg);
-      this.trackDamage(hit.sourceId, hit.damage);
+      this.stats.trackDamage(hit.sourceId, hit.damage);
     }
 
     // Build attacker map so destroyDeadEntities can credit resource harvesting
@@ -2308,7 +1300,7 @@ export class GameSession {
       if (!attackerMap.has(hit.targetId)) attackerMap.set(hit.targetId, hit.sourceId);
     }
     // Remove dead non-player entities; player death handled in 4.11
-    this.destroyDeadEntities(deaths, attackerMap, send);
+    this.respawn.destroyDeadEntities(deaths, attackerMap, send);
   }
 
   private handleRangedAttack(
@@ -2360,143 +1352,11 @@ export class GameSession {
     for (const p of this.players.values()) send(p.client, spawn);
   }
 
-  /**
-   * Destroy dead non-player entities from the world.
-   * @param deaths     Entity IDs whose HP reached 0.
-   * @param attackerMap Optional map of deadId → sourceId for resource crediting.
-   * @param send       Required when attackerMap is provided (to send RESOURCE_UPDATE).
-   */
-  private destroyDeadEntities(
-    deaths: number[],
-    attackerMap?: Map<number, number>,
-    send?: SendFn,
-  ): void {
-    const processed = new Set<number>();
-    for (const deadId of deaths) {
-      if (processed.has(deadId)) continue;
-      processed.add(deadId);
-      // Player death → downed state (don't destroy the entity)
-      if (this.playerEntityIds.has(deadId)) {
-        if (send) this.checkPlayerDowned(deadId, send);
-        continue;
-      }
-      const faction = this.world.getComponent<FactionComponent>(deadId, C.Faction);
-
-      // Resource node → credit attacker
-      if (faction?.type === 'resource' && attackerMap && send) {
-        const rn = this.world.getComponent<ResourceNodeComponent>(deadId, C.ResourceNode);
-        const attackerId = attackerMap.get(deadId);
-        if (rn && attackerId !== undefined) {
-          this.creditResources(attackerId, rn.resourceType, rn.yield, send);
-        }
-        this.resourceNodeCount--;
-      }
-
-      // Enemy → spawn loot drops + track kill
-      if (faction?.type === 'enemy') {
-        this.spawnLootDrops(deadId);
-        this.enemyCount--;
-        this.enemiesKilled++;
-        // Track kill by type for meta stats
-        if (attackerMap) {
-          const attackerId = attackerMap.get(deadId);
-          if (attackerId !== undefined) {
-            const ev = this.world.getComponent<EnemyVariantComponent>(deadId, C.EnemyVariant);
-            this.trackKill(attackerId, ev?.variant ?? 'melee');
-          }
-        }
-      }
-
-      // Building → broadcast destruction, clean up warehouse, check campfire game-over
-      if (faction?.type === 'building' && send) {
-        const destroyedMsg: BuildDestroyedMessage = {
-          type: MessageType.BUILD_DESTROYED,
-          entityId: deadId,
-        };
-        for (const p of this.players.values()) send(p.client, destroyedMsg);
-
-        // Warehouse destroyed → drop 50% of supplies, then clean up
-        if (this.warehouseIds.has(deadId)) {
-          const wPos = this.world.getComponent<PositionComponent>(deadId, C.Position);
-          if (wPos) {
-            const DROP_FRACTION = 0.5;
-            const MAX_PER_DROP = 50;
-            for (const [res, amount] of Object.entries(this.warehousePool)) {
-              const dropAmount = Math.floor(amount * DROP_FRACTION);
-              if (dropAmount <= 0) continue;
-              // Deduct from pool
-              (this.warehousePool as Record<string, number>)[res] -= dropAmount;
-              // Spawn batched item drops
-              let remaining = dropAmount;
-              while (remaining > 0) {
-                const qty = Math.min(remaining, MAX_PER_DROP);
-                this.spawnItemDrop(wPos.x, wPos.y, res, qty, true);
-                remaining -= qty;
-              }
-            }
-          }
-          this.warehouseIds.delete(deadId);
-          if (this.warehouseIds.size === 0) {
-            this.warehousePool = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
-          }
-          this.broadcastWarehouseUpdate(send);
-        }
-
-        // Bridge destroyed → remove from bridge tiles
-        this.cleanupBridge(deadId);
-
-        // Barracks destroyed → destroy all its guards
-        const spawner = this.world.getComponent<BarracksSpawnerComponent>(deadId, C.BarracksSpawner);
-        if (spawner) {
-          for (const gid of spawner.guardIds) {
-            if (this.world.hasEntity(gid)) this.world.destroyEntity(gid);
-          }
-          spawner.guardIds.length = 0;
-        }
-
-        if (deadId === this.campfireEntityId && !this.gameOver) {
-          this.gameOver = true;
-          const campfireMsg: CampfireDestroyedMessage = {
-            type: MessageType.CAMPFIRE_DESTROYED,
-          };
-          for (const p of this.players.values()) send(p.client, campfireMsg);
-
-          const timePlayed = Math.floor(this.getElapsedSeconds());
-          const gameOverMsg: GameOverMessage = {
-            type: MessageType.GAME_OVER,
-            waveReached: this.currentWave,
-            reason: 'campfire_destroyed',
-            enemiesKilled: this.enemiesKilled,
-            timePlayed,
-          };
-          for (const p of this.players.values()) send(p.client, gameOverMsg);
-          this.fireRunEnd();
-        }
-      }
-
-      this.world.destroyEntity(deadId);
-    }
-  }
 
   /** Fire onRunEnd with per-player RunStats. Called once at game over. */
   private fireRunEnd(): void {
     if (!this.onRunEnd) return;
-    const timePlayed = Math.round(this.getElapsedSeconds());
-    const statsMap = new Map<string, import('@shared/MetaStats').RunStats>();
-    for (const p of this.players.values()) {
-      const pid = p.playerId;
-      statsMap.set(pid, {
-        damageDealt: this.damageByPlayer.get(pid) ?? 0,
-        resourcesGathered: this.resourcesByPlayer.get(pid) ?? { wood: 0, stone: 0, iron: 0, diamond: 0 },
-        enemiesKilled: Object.values(this.killsByPlayer.get(pid) ?? {}).reduce((a, b) => a + b, 0),
-        killsByType: this.killsByPlayer.get(pid) ?? {},
-        wavesSurvived: this.currentWave,
-        timePlayed,
-        buildingsBuilt: this.buildingsByPlayer.get(pid) ?? 0,
-      });
-    }
-    this.onRunEnd(statsMap);
-    // Delete save on game over
+    this.onRunEnd(this.stats.buildRunStats());
     this.onSaveDelete?.();
   }
 
@@ -2504,218 +1364,29 @@ export class GameSession {
 
   /** Send card offers to all players and start the auto-pick timer. */
   private sendCardOffers(send: SendFn): void {
-    for (const p of this.players.values()) {
-      const offer = this.cards.generateOffer();
-      this.cards.setPendingOffer(p.client.id, offer);
-      const msg: CardOfferMessage = { type: MessageType.CARD_OFFER, cards: offer };
-      send(p.client, msg);
-    }
-    this.cardOfferTimer = GameSession.CARD_OFFER_TIMEOUT;
-    this.setPaused(true); // Pause game during card selection
-    console.log(`[Cards] Card offers sent to ${this.players.size} player(s)`);
+    this.cardDispenser.sendOffers(send);
   }
 
-  /** Handle a CARD_PICK message from a player. */
   handleCardPick(clientId: string, msg: CardPickMessage, send: SendFn): void {
-    const player = this.players.get(clientId);
-    if (!player) return;
-
-    const card = this.cards.applyPick(clientId, msg.cardId);
-    if (!card) return;
-
-    // Apply immediate effects
-    this.applyCardToEntity(player, card, send);
-
-    // Broadcast to all players
-    const applied: CardAppliedMessage = {
-      type: MessageType.CARD_APPLIED,
-      displayName: player.displayName,
-      cardName: card.name,
-      category: card.category,
-      isTrap: card.category === 'trap',
-    };
-    for (const p of this.players.values()) send(p.client, applied);
-
-    // If no more pending offers, stop timer
-    let anyPending = false;
-    for (const p of this.players.values()) {
-      if (this.cards.hasPendingOffer(p.client.id)) { anyPending = true; break; }
-    }
-    if (!anyPending) {
-      this.cardOfferTimer = -1;
-      this.setPaused(false); // Unpause when all players have picked
-    }
+    this.cardDispenser.handlePick(clientId, msg, send);
   }
 
-  /** Tick the card auto-pick timer. Auto-picks for players who haven't chosen. */
-  private tickCardTimer(dt: number, send: SendFn): void {
-    if (this.cardOfferTimer < 0) return;
-    this.cardOfferTimer -= dt;
-    if (this.cardOfferTimer > 0) return;
-
-    this.cardOfferTimer = -1;
-    this.setPaused(false); // Unpause after auto-pick
-    // Auto-pick for all players who haven't chosen
-    for (const p of this.players.values()) {
-      if (!this.cards.hasPendingOffer(p.client.id)) continue;
-      const card = this.cards.autoPickNonTrap(p.client.id);
-      if (!card) continue;
-
-      this.applyCardToEntity(p, card, send);
-
-      const applied: CardAppliedMessage = {
-        type: MessageType.CARD_APPLIED,
-        displayName: p.displayName,
-        cardName: card.name,
-        category: card.category,
-        isTrap: card.category === 'trap',
+  /** Called by WaveController when a wave is cleared. */
+  private onWaveCleared(wave: number, send: SendFn): void {
+    // Card offers every 3 waves (after wave 3, 6, 9...)
+    if (wave >= 3 && wave % 3 === 0) {
+      this.sendCardOffers(send);
+    }
+    // Auto-save after wave clear
+    if (this.onSave) {
+      const saveData = this.serializeSave();
+      this.onSave(saveData);
+      const savedMsg: import('@shared/protocol').GameSavedMessage = {
+        type: MessageType.GAME_SAVED,
+        wave: saveData.currentWave,
+        slot: this.saveSlot,
       };
-      for (const pp of this.players.values()) send(pp.client, applied);
-    }
-  }
-
-  /** Apply a card's effects to the player's entity. */
-  private applyCardToEntity(
-    player: SessionPlayer,
-    card: import('@shared/CardDefinitions').CardDefinition,
-    send: SendFn,
-  ): void {
-    if (!player.entityId) return;
-    const eid = player.entityId;
-    const buffs = this.cards.getBuffs(player.client.id);
-    const effect = card.effect;
-
-    if (effect.type === 'stat_buff') {
-      if (effect.stat === 'speed') {
-        const spd = this.world.getComponent<import('@shared/components').SpeedComponent>(eid, C.Speed);
-        if (spd) spd.multiplier = buffs.speedMultiplier;
-      } else if (effect.stat === 'maxHp') {
-        const hp = this.world.getComponent<HealthComponent>(eid, C.Health);
-        if (hp) {
-          hp.max = PLAYER_MAX_HEALTH + buffs.maxHpBonus;
-          hp.current = Math.min(hp.current + effect.value, hp.max); // heal the bonus amount
-        }
-      }
-      // damage multiplier is applied at attack time (checked in combat)
-    } else if (effect.type === 'resource') {
-      this.creditResources(eid, effect.resource, effect.amount, send);
-    } else if (effect.type === 'trap_player' && effect.stat === 'speed') {
-      // Apply speed debuff to all players
-      for (const p of this.players.values()) {
-        if (!p.entityId) continue;
-        const pBuffs = this.cards.getBuffs(p.client.id);
-        const spd = this.world.getComponent<import('@shared/components').SpeedComponent>(p.entityId, C.Speed);
-        if (spd) spd.multiplier = pBuffs.speedMultiplier;
-      }
-    }
-  }
-
-  /** Tick HP regen from card buffs. */
-  private tickCardHpRegen(dt: number): void {
-    for (const p of this.players.values()) {
-      if (!p.entityId) continue;
-      const buffs = this.cards.playerBuffs.get(p.client.id);
-      if (!buffs || buffs.hpRegen <= 0) continue;
-      const hp = this.world.getComponent<HealthComponent>(p.entityId, C.Health);
-      if (!hp || hp.current >= hp.max || hp.current <= 0) continue;
-      // Don't regen while downed
-      if (this.world.hasComponent(p.entityId, C.Downed)) continue;
-      hp.current = Math.min(hp.max, hp.current + buffs.hpRegen * dt);
-    }
-  }
-
-  // ── Wave logic ──────────────────────────────────────────────────────────────
-
-  private tickWave(dt: number, send: (client: ConnectedClient, msg: object) => void): void {
-    if (this.wavePaused) return;
-
-    if (this.wavePhase === 'prep') {
-      this.prepTimer -= dt;
-
-      // Periodic drift correction - sync clients every WAVE_SYNC_INTERVAL
-      this.waveSyncTimer += dt;
-      if (this.waveSyncTimer >= GameSession.WAVE_SYNC_INTERVAL) {
-        this.waveSyncTimer = 0;
-        this.broadcastWaveTimerSync(send);
-      }
-
-      if (this.prepTimer <= 0) {
-        // Prep ended - spawn portals and go active
-        this.spawnPortals(this.currentWave);
-        this.wavePhase = 'active';
-
-        // Broadcast that portals are now live (prepDuration=0 signals "active now")
-        const waveActive: WaveStartMessage = {
-          type: MessageType.WAVE_START,
-          waveNumber: this.currentWave,
-          prepDuration: 0,
-        };
-        for (const p of this.players.values()) send(p.client, waveActive);
-      }
-    } else if (this.wavePhase === 'active') {
-      // Run portal spawn timers
-      const extraSpawns = Math.floor(this.currentWave / PORTAL_EXTRA_SPAWN_EVERY_N_WAVES);
-      const spawnRequests = this.portal.update(this.world, dt, extraSpawns);
-      for (const req of spawnRequests) {
-        if (this.isWalkable(req.x, req.y) && !this.overlapsBuilding(req.x, req.y, ENEMY_RADIUS)) {
-          this.spawnEnemy(req.x, req.y);
-        }
-      }
-
-      // Check if all portals are dead
-      let anyAlive = false;
-      for (const id of this.world.query(C.Portal, C.Health)) {
-        const hp = this.world.getComponent<HealthComponent>(id, C.Health)!;
-        if (hp.current > 0) {
-          anyAlive = true;
-        } else {
-          // Destroy dead portals
-          this.world.destroyEntity(id);
-        }
-      }
-
-      if (!anyAlive) {
-        // Wave cleared - broadcast WAVE_END, start next wave prep
-        const waveEnd: WaveEndMessage = {
-          type: MessageType.WAVE_END,
-          waveNumber: this.currentWave,
-          outcome: 'cleared',
-        };
-        for (const p of this.players.values()) send(p.client, waveEnd);
-
-        this.currentWave++;
-        this.wipeCount = 0; // Reset wipe count for new wave
-        this.wavePhase = 'prep';
-        this.prepTimer = WAVE_PREP_BETWEEN;
-
-        const waveStart: WaveStartMessage = {
-          type: MessageType.WAVE_START,
-          waveNumber: this.currentWave,
-          prepDuration: WAVE_PREP_BETWEEN,
-        };
-        for (const p of this.players.values()) send(p.client, waveStart);
-
-        console.log(`[Wave] Wave ${this.currentWave - 1} cleared! Next wave in ${WAVE_PREP_BETWEEN}s`);
-
-        // Card offers every 3 waves (after wave 3, 6, 9...)
-        const clearedWave = this.currentWave - 1;
-        if (clearedWave >= 3 && clearedWave % 3 === 0) {
-          this.sendCardOffers(send);
-        }
-
-        // Auto-save after wave clear
-        if (this.onSave) {
-          const saveData = this.serializeSave();
-          this.onSave(saveData);
-          // Notify all players
-          const savedMsg: import('@shared/protocol').GameSavedMessage = {
-            type: MessageType.GAME_SAVED,
-            wave: saveData.currentWave,
-            slot: this.saveSlot,
-          };
-          for (const p of this.players.values()) send(p.client, savedMsg);
-        }
-      }
+      for (const p of this.players.values()) send(p.client, savedMsg);
     }
   }
 
@@ -2741,261 +1412,25 @@ export class GameSession {
     }
   }
 
-  /** Snapshot the entire world state into a SaveData object. */
   serializeSave(): import('@shared/SaveFormat').SaveData {
-    const buildings: import('@shared/SaveFormat').SavedBuilding[] = [];
-    for (const id of this.world.query(C.Building, C.Position, C.Health)) {
-      const bld = this.world.getComponent<BuildingComponent>(id, C.Building)!;
-      const pos = this.world.getComponent<PositionComponent>(id, C.Position)!;
-      const hp = this.world.getComponent<HealthComponent>(id, C.Health)!;
-
-      const saved: import('@shared/SaveFormat').SavedBuilding = {
-        x: pos.x,
-        y: pos.y,
-        buildingType: bld.buildingType,
-        permanent: bld.permanent,
-        upgradeLevel: bld.upgradeLevel,
-        currentHp: hp.current,
-        maxHp: hp.max,
-      };
-
-      const prod = this.world.getComponent<ProductionComponent>(id, C.Production);
-      if (prod) {
-        saved.production = {
-          resourceType: prod.resourceType,
-          interval: prod.interval,
-          timer: prod.timer,
-          amount: prod.amount,
-          stored: prod.stored,
-          maxStored: prod.maxStored,
-          secondaryResourceType: prod.secondaryResourceType,
-          secondaryChance: prod.secondaryChance,
-        };
-      }
-
-      const turret = this.world.getComponent<TurretComponent>(id, C.Turret);
-      if (turret) {
-        saved.turret = {
-          range: turret.range,
-          cooldown: turret.cooldown,
-          damage: turret.damage,
-          projectileSpeed: turret.projectileSpeed,
-        };
-      }
-
-      const spike = this.world.getComponent<SpikeTrapComponent>(id, C.SpikeTrap);
-      if (spike) {
-        saved.spikeTrap = {
-          damage: spike.damage,
-          cooldown: spike.cooldown,
-          selfDamage: spike.selfDamage,
-        };
-      }
-
-      const bridge = this.world.getComponent<BridgeComponent>(id, C.Bridge);
-      if (bridge) {
-        saved.bridge = {
-          tileX: bridge.tileX,
-          tileY: bridge.tileY,
-        };
-      }
-
-      const lr = this.world.getComponent<LightRevealComponent>(id, C.LightReveal);
-      if (lr) saved.lightReveal = { range: lr.range };
-
-      const ha = this.world.getComponent<HealAuraComponent>(id, C.HealAura);
-      if (ha) saved.healAura = { range: ha.range, healPerSecond: ha.healPerSecond };
-
-      const bs = this.world.getComponent<BarracksSpawnerComponent>(id, C.BarracksSpawner);
-      if (bs) saved.barracksSpawner = { maxGuards: bs.maxGuards, spawnInterval: bs.spawnInterval };
-
-      buildings.push(saved);
-    }
-
-    const players: import('@shared/SaveFormat').SavedPlayer[] = [];
-    for (const p of this.players.values()) {
-      if (p.entityId === null) continue;
-      const pos = this.world.getComponent<PositionComponent>(p.entityId, C.Position);
-      const hp = this.world.getComponent<HealthComponent>(p.entityId, C.Health);
-      const res = this.world.getComponent<ResourcesComponent>(p.entityId, C.Resources);
-      if (!pos || !hp || !res) continue;
-
-      players.push({
-        playerId: p.playerId,
-        displayName: p.displayName,
-        slot: p.slot,
-        resources: { wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold, food: res.food },
-        hp: hp.current,
-        maxHp: hp.max,
-        x: pos.x,
-        y: pos.y,
-      });
-    }
-
-    // ── Serialize enemies ──────────────────────────────────────────────────────
-    const enemies: import('@shared/SaveFormat').SavedEnemy[] = [];
-    for (const id of this.world.query(C.Faction, C.Position, C.Health, C.EnemyVariant, C.EnemyStats)) {
-      const f = this.world.getComponent<FactionComponent>(id, C.Faction)!;
-      if (f.type !== 'enemy') continue;
-      const pos = this.world.getComponent<PositionComponent>(id, C.Position)!;
-      const hp = this.world.getComponent<HealthComponent>(id, C.Health)!;
-      const ev = this.world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant)!;
-      const es = this.world.getComponent<EnemyStatsComponent>(id, C.EnemyStats)!;
-      const spd = this.world.getComponent<import('@shared/components').SpeedComponent>(id, C.Speed);
-      const ghost = this.world.getComponent<GhostStateComponent>(id, C.GhostState);
-      enemies.push({
-        x: pos.x, y: pos.y,
-        variant: ev.variant,
-        currentHp: hp.current, maxHp: hp.max,
-        damage: es.damage, range: es.range, knockback: es.knockback, radius: es.radius,
-        rangedRange: es.rangedRange, projectileSpeed: es.projectileSpeed,
-        rangedDamage: es.rangedDamage, rangedCooldown: es.rangedCooldown,
-        speedBase: spd?.base ?? 80, speedMultiplier: spd?.multiplier ?? 1,
-        ghostHidden: ghost?.hidden,
-      });
-    }
-
-    // ── Serialize portals ────────────────────────────────────────────────────
-    const portals: import('@shared/SaveFormat').SavedPortal[] = [];
-    for (const id of this.world.query(C.Portal, C.Position, C.Health)) {
-      const pos = this.world.getComponent<PositionComponent>(id, C.Position)!;
-      const hp = this.world.getComponent<HealthComponent>(id, C.Health)!;
-      const portal = this.world.getComponent<PortalComponent>(id, C.Portal)!;
-      if (hp.current <= 0) continue;
-      portals.push({
-        x: pos.x, y: pos.y,
-        waveNumber: portal.waveNumber,
-        currentHp: hp.current, maxHp: hp.max,
-        spawnTimer: portal.spawnTimer, spawnInterval: portal.spawnInterval,
-      });
-    }
-
-    // ── Serialize resource nodes ─────────────────────────────────────────────
-    const resourceNodes: import('@shared/SaveFormat').SavedResourceNode[] = [];
-    for (const id of this.world.query(C.ResourceNode, C.Position, C.Health)) {
-      const pos = this.world.getComponent<PositionComponent>(id, C.Position)!;
-      const hp = this.world.getComponent<HealthComponent>(id, C.Health)!;
-      const rn = this.world.getComponent<ResourceNodeComponent>(id, C.ResourceNode)!;
-      if (hp.current <= 0) continue;
-      resourceNodes.push({
-        x: pos.x, y: pos.y,
-        resourceType: rn.resourceType, yield: rn.yield,
-        currentHp: hp.current, maxHp: hp.max,
-      });
-    }
-
-    // ── Serialize item drops ──────────────────────────────────────────────────
-    const itemDrops: import('@shared/SaveFormat').SavedItemDrop[] = [];
-    for (const id of this.world.query(C.ItemDrop, C.Position)) {
-      const pos = this.world.getComponent<PositionComponent>(id, C.Position)!;
-      const drop = this.world.getComponent<ItemDropComponent>(id, C.ItemDrop)!;
-      itemDrops.push({
-        x: pos.x, y: pos.y,
-        itemType: drop.itemType, quantity: drop.quantity,
-        autoPickup: drop.autoPickup, lifetime: drop.lifetime,
-      });
-    }
-
-    return {
-      formatVersion: 1,
-      seed: this.seed,
-      currentWave: this.currentWave,
-      wavePhase: this.wavePhase,
-      prepTimeRemaining: this.wavePhase === 'prep' ? this.prepTimer : undefined,
-      warehousePool: { ...this.warehousePool },
-      spawnOrigin: { ...this.spawnOrigin },
-      processedChunks: [...this.processedChunks],
-      enemiesKilled: this.enemiesKilled,
-      elapsedTime: this.getElapsedSeconds(),
-      buildings,
-      players,
-      enemies,
-      portals,
-      resourceNodes,
-      itemDrops,
-      hostPlayerId: this.hostPlayerId,
-      timestamp: Date.now(),
-    };
-  }
-
-  /** Validate save data before loading. Returns true if valid. */
-  private static validateSaveData(save: unknown): save is import('@shared/SaveFormat').SaveData {
-    if (!save || typeof save !== 'object') return false;
-    const s = save as Record<string, unknown>;
-    if (s.formatVersion !== 1) return false;
-    if (!Number.isFinite(s.currentWave) || !Number.isInteger(s.currentWave) || (s.currentWave as number) < 1) return false;
-    if (!Number.isFinite(s.seed) || !Number.isInteger(s.seed)) return false;
-    if (!Number.isFinite(s.enemiesKilled) || (s.enemiesKilled as number) < 0) return false;
-    if (!Number.isFinite(s.elapsedTime) || (s.elapsedTime as number) < 0) return false;
-    const wp = s.warehousePool;
-    if (!wp || typeof wp !== 'object') return false;
-    const pool = wp as Record<string, unknown>;
-    for (const key of ['wood', 'stone', 'iron', 'diamond', 'gold', 'food']) {
-      if (!Number.isFinite(pool[key]) || (pool[key] as number) < 0) return false;
-    }
-    const origin = s.spawnOrigin as Record<string, unknown> | undefined;
-    if (!origin || !Number.isFinite(origin.x) || !Number.isFinite(origin.y)) return false;
-    if (!Array.isArray(s.buildings)) return false;
-    const validBuildings = new Set(['campfire', 'wall', 'warehouse', 'lumbermill', 'quarry', 'mine', 'farm', 'arrow_turret', 'cannon_turret', 'spike_trap', 'bridge', 'light_tower', 'healing_shrine', 'barracks']);
-    for (const b of s.buildings as Record<string, unknown>[]) {
-      if (!b || typeof b !== 'object') return false;
-      if (!validBuildings.has(b.buildingType as string)) return false;
-      if (!Number.isFinite(b.x) || !Number.isFinite(b.y)) return false;
-      if (!Number.isFinite(b.currentHp) || (b.currentHp as number) <= 0) return false;
-      if (!Number.isFinite(b.maxHp) || (b.maxHp as number) <= 0) return false;
-      if (!Number.isInteger(b.upgradeLevel) || (b.upgradeLevel as number) < 1 || (b.upgradeLevel as number) > 5) return false;
-    }
-    if (!Array.isArray(s.players)) return false;
-    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    for (const p of s.players as Record<string, unknown>[]) {
-      if (!p || typeof p !== 'object') return false;
-      if (typeof p.playerId !== 'string' || !uuidRe.test(p.playerId)) return false;
-      if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return false;
-    }
-    return true;
+    return this.saveManager.serialize();
   }
 
   /** Load a save into the session. Called after construction but before start(). */
   loadSave(save: import('@shared/SaveFormat').SaveData, _send: SendFn): boolean {
-    if (!GameSession.validateSaveData(save)) {
+    const loaded = this.saveManager.load(save);
+    if (!loaded) {
       console.warn('[GameSession] Invalid save data — starting fresh');
       return false;
     }
     console.log(`[GameSession] Loading save: wave ${save.currentWave}, ${save.buildings.length} buildings, ${save.players.length} players`);
-    this.currentWave = save.currentWave;
-    this.warehousePool = { ...save.warehousePool };
-    this.spawnOrigin = { ...save.spawnOrigin };
-    this.processedChunks = new Set(save.processedChunks);
     this.enemiesKilled = save.enemiesKilled;
-    // elapsedTime is tracked via startTime offset
-    this.savedElapsedTime = save.elapsedTime;
-    // Migrate old 'mine' (stone) → 'quarry' for save compatibility
-    this.savedBuildings = save.buildings.map(b => {
-      if (b.buildingType === 'mine' && b.production?.resourceType === 'stone') {
-        return { ...b, buildingType: 'quarry' as const };
-      }
-      return b;
-    });
-    this.savedPlayers = save.players;
-    this.savedEnemies = save.enemies ?? [];
-    this.savedPortals = save.portals ?? [];
-    this.savedResourceNodes = save.resourceNodes ?? [];
-    this.savedItemDrops = save.itemDrops ?? [];
-    this.savedWavePhase = save.wavePhase ?? 'prep';
-    this.savedPrepTimeRemaining = save.prepTimeRemaining ?? null;
+    this.loadedSave = loaded;
     return true;
   }
 
   /** Stored save data for deferred restoration (applied during start()). */
-  private savedElapsedTime = 0;
-  private savedBuildings: import('@shared/SaveFormat').SavedBuilding[] = [];
-  private savedPlayers: import('@shared/SaveFormat').SavedPlayer[] = [];
-  private savedEnemies: import('@shared/SaveFormat').SavedEnemy[] = [];
-  private savedPortals: import('@shared/SaveFormat').SavedPortal[] = [];
-  private savedResourceNodes: import('@shared/SaveFormat').SavedResourceNode[] = [];
-  private savedItemDrops: import('@shared/SaveFormat').SavedItemDrop[] = [];
-  private savedWavePhase: 'idle' | 'prep' | 'active' | 'cleared' = 'prep';
-  private savedPrepTimeRemaining: number | null = null;
+  private loadedSave: LoadedSaveState | null = null;
 
   // ── Debug ───────────────────────────────────────────────────────────────────
 
@@ -3017,30 +1452,20 @@ export class GameSession {
       const ey = pos.y + Math.sin(angle) * dist;
       if (!this.isWalkable(ex, ey) || this.overlapsBuilding(ex, ey, ENEMY_RADIUS)) continue;
 
-      this.spawnEnemy(ex, ey);
+      this.waves.spawnEnemy(ex, ey);
       spawned++;
     }
     console.log(`[Debug] Spawned ${spawned}/${n} enemies around player ${player.slot}`);
   }
 
-  /** Skip the wave prep timer - immediately spawn portals and go active. */
   debugWaveSkip(send: (client: ConnectedClient, msg: object) => void): void {
     if (this.phase !== 'playing') return;
-    if (this.wavePhase !== 'prep') return;
-
-    this.prepTimer = 0; // tickWave will handle the transition on next tick
-    this.wavePaused = false; // un-pause if paused so the skip takes effect
-    this.broadcastWaveTimerSync(send);
-    console.log(`[Debug] Skipping wave ${this.currentWave} prep timer`);
+    this.waves.debugSkip(send);
   }
 
-  /** Toggle pause/resume on the wave timer (prep countdown + portal spawns). */
   debugWavePause(send: (client: ConnectedClient, msg: object) => void): void {
     if (this.phase !== 'playing') return;
-
-    this.wavePaused = !this.wavePaused;
-    this.broadcastWaveTimerSync(send);
-    console.log(`[Debug] Wave timer ${this.wavePaused ? 'PAUSED' : 'RESUMED'}`);
+    this.waves.debugPause(send);
   }
 
   debugGiveResources(clientId: string, send: (client: ConnectedClient, msg: object) => void): void {
@@ -3054,16 +1479,6 @@ export class GameSession {
     console.log(`[Debug] Gave +${amount} of all resources to ${clientId}`);
   }
 
-  /** Send authoritative wave timer state to all clients. */
-  private broadcastWaveTimerSync(send: (client: ConnectedClient, msg: object) => void): void {
-    const sync: WaveTimerSyncMessage = {
-      type: MessageType.WAVE_TIMER_SYNC,
-      waveNumber: this.currentWave,
-      remaining: this.wavePhase === 'prep' ? this.prepTimer : -1,
-      paused: this.wavePaused,
-    };
-    for (const p of this.players.values()) send(p.client, sync);
-  }
 
   // ── Pause voting ──────────────────────────────────────────────────────────
 
@@ -3182,7 +1597,7 @@ export class GameSession {
     if (this.phase !== 'playing') return;
 
     // Card timer must tick even while paused (card selection pauses the game)
-    this.tickCardTimer(dt, send);
+    this.cardDispenser.tickTimer(dt, send);
 
     if (this.paused) return;
     this.tick++;
@@ -3190,9 +1605,13 @@ export class GameSession {
     // Spawn resources near players (chunk-based, processed chunks are skipped)
     this.generateResourcesNearPlayers();
 
+    const _t0 = performance.now();
     this.combat.update(this.world, dt);
+    const _t1 = performance.now();
     const enemyResult = this.enemy.update(this.world, dt);
+    const _t2 = performance.now();
     this.movement.update(this.world, dt);
+    const _t3 = performance.now();
 
     // Broadcast enemy attack animations
     for (const ap of enemyResult.attackPerformed) {
@@ -3236,15 +1655,17 @@ export class GameSession {
     }
 
     // Destroy dead entities (players enter downed state, others are removed)
-    this.destroyDeadEntities(enemyResult.deaths, undefined, send);
+    this.respawn.destroyDeadEntities(enemyResult.deaths, undefined, send);
 
     // Projectile movement, collision, and cleanup
+    const _t4 = performance.now();
     const projResult = this.projectile.update(this.world, dt);
+    const _t5 = performance.now();
 
     for (const hit of projResult.hits) {
       const hitMsg: HitMessage = { type: MessageType.HIT, ...hit };
       for (const p of this.players.values()) send(p.client, hitMsg);
-      this.trackDamage(hit.sourceId, hit.damage);
+      this.stats.trackDamage(hit.sourceId, hit.damage);
     }
 
     for (const projId of projResult.destroyed) {
@@ -3268,7 +1689,7 @@ export class GameSession {
       if (!projAttackerMap.has(hit.targetId)) projAttackerMap.set(hit.targetId, hit.sourceId);
     }
     // Destroy dead non-player entities hit by projectiles
-    this.destroyDeadEntities(projResult.deaths, projAttackerMap, send);
+    this.respawn.destroyDeadEntities(projResult.deaths, projAttackerMap, send);
 
     // ── Item drop system (lifetime, scatter, auto-pickup) ──────────────────────
     const dropResult = this.itemDrop.update(this.world, dt, this.playerEntityIds);
@@ -3282,48 +1703,44 @@ export class GameSession {
 
     // ── Death & Respawn (4.11) ──────────────────────────────────────────────
     if (!this.gameOver) {
-      this.tickDownedPlayers(dt, send);
-      this.tickRespawnTimers(dt, send);
+      this.respawn.tickDownedPlayers(dt, send);
+      this.respawn.tickRespawnTimers(dt, send);
     }
 
-    // ── Warehouse auto-deposit ─────────────────────────────────────────────
-    this.tickWarehouseDeposit(send);
-
-    // ── Production, turrets, spike traps ────────────────────────────────────
-    this.tickProduction(dt, send);
-    if (!this.gameOver) this.tickTurrets(dt, send);
-    if (!this.gameOver) this.tickSpikeTraps(dt, send);
-
-    // ── Ghost visibility (revealed by light towers) ──────────────────────────
-    this.tickGhostVisibility();
-
-    // ── Healing shrines ─────────────────────────────────────────────────────
-    this.tickHealAuras(dt);
-
-    // ── Barracks guard spawning + AI ──────────────────────────────────────
-    this.tickBarracks(dt);
-    this.tickGuardAI(dt, send);
+    // ── Buildings (warehouse, production, turrets, traps, shrines, barracks) ──
+    const _t6 = performance.now();
+    if (!this.gameOver) this.buildings.tick(dt, send);
+    const _t7 = performance.now();
 
     // ── Card system ──────────────────────────────────────────────────────────
-    this.tickCardHpRegen(dt);
+    this.cardDispenser.tickHpRegen(dt);
 
     // ── Wave state machine ────────────────────────────────────────────────────
-    if (!this.gameOver) this.tickWave(dt, send);
+    const _t8 = performance.now();
+    if (!this.gameOver) this.waves.tick(dt, send);
+    const _t9 = performance.now();
+
+    // ── Update tick profiling (exponential moving average) ──────────────────
+    const _a = 0.1;
+    this.tickProfile.combat     = this.tickProfile.combat     * (1 - _a) + (_t1 - _t0) * _a;
+    this.tickProfile.enemy      = this.tickProfile.enemy      * (1 - _a) + (_t2 - _t1) * _a;
+    this.tickProfile.movement   = this.tickProfile.movement   * (1 - _a) + (_t3 - _t2) * _a;
+    this.tickProfile.projectile = this.tickProfile.projectile * (1 - _a) + (_t5 - _t4) * _a;
+    this.tickProfile.buildings  = this.tickProfile.buildings  * (1 - _a) + (_t7 - _t6) * _a;
+    this.tickProfile.waves      = this.tickProfile.waves      * (1 - _a) + (_t9 - _t8) * _a;
+    this.tickProfile.total      = this.tickProfile.total      * (1 - _a) + (_t9 - _t0) * _a;
 
     // ── Flush pending enemy intro messages ──────────────────────────────────
-    for (const intro of this.pendingIntroMessages) {
+    for (const intro of this.waveState.pendingIntros) {
       const msg = { type: MessageType.ENEMY_INTRO, variant: intro.variant, displayName: intro.displayName };
       for (const p of this.players.values()) send(p.client, msg);
     }
-    this.pendingIntroMessages.length = 0;
+    this.waveState.pendingIntros.length = 0;
 
     const delta = this.buildDelta();
     for (const p of this.players.values()) {
-      const playerDelta: DeltaMessage = {
-        ...delta,
-        lastSeq: p.lastSeq,
-      };
-      send(p.client, playerDelta);
+      delta.lastSeq = p.lastSeq;
+      send(p.client, delta);
     }
 
     // prevSnapshot is now updated inline by buildDelta()
@@ -3336,7 +1753,7 @@ export class GameSession {
     return { type: MessageType.SNAPSHOT, tick: this.tick, entities };
   }
 
-  private buildDelta(): Omit<DeltaMessage, 'lastSeq'> {
+  private buildDelta(): DeltaMessage {
     const current = this.gatherEntitySnapshots();
     const changed: EntitySnapshot[] = [];
     const removed: number[] = [];
@@ -3367,11 +1784,21 @@ export class GameSession {
       tick: this.tick,
       entities: changed,
       removed,
+      lastSeq: 0,
       serverStats: {
-        wave: this.currentWave,
-        enemyCount: this.enemyCount,
+        wave: this.waveState.currentWave,
+        enemyCount: this.waveState.enemyCount,
         portalCount,
         playerCount: this.players.size,
+        tickProfile: {
+          combat:     +this.tickProfile.combat.toFixed(2),
+          enemy:      +this.tickProfile.enemy.toFixed(2),
+          movement:   +this.tickProfile.movement.toFixed(2),
+          projectile: +this.tickProfile.projectile.toFixed(2),
+          buildings:  +this.tickProfile.buildings.toFixed(2),
+          waves:      +this.tickProfile.waves.toFixed(2),
+          total:      +this.tickProfile.total.toFixed(2),
+        },
       },
     };
   }
@@ -3472,314 +1899,4 @@ export class GameSession {
     );
   }
 
-  // ── Death & Respawn (4.11) ───────────────────────────────────────────────
-
-  /** Check if a player entity should enter downed state after taking lethal damage. */
-  private checkPlayerDowned(entityId: number, send: SendFn): void {
-    if (this.gameOver) return;
-    if (!this.playerEntityIds.has(entityId)) return;
-    if (this.world.hasComponent(entityId, C.Downed)) return; // already downed
-
-    // Skip if already dead and awaiting respawn
-    const spCheck = this.findSessionPlayerByEntity(entityId);
-    if (spCheck && this.respawnTimers.has(spCheck.client.id)) return;
-
-    const hp = this.world.getComponent<HealthComponent>(entityId, C.Health);
-    if (!hp || hp.current > 0) return;
-
-    const isSolo = this.players.size <= 1;
-
-    // Solo 2nd death: immediate game over (no timer)
-    if (isSolo && this.wipeCount >= 1) {
-      this.world.addComponent(entityId, C.Downed, {
-        bleedTimer: 0, reviveProgress: 0, reviverId: -1,
-      });
-      this.handlePartyWipe(send);
-      return;
-    }
-
-    // Solo 1st death: 15s respawn timer
-    // Co-op: 30s bleed-out, teammates can revive
-    const bleedTime = isSolo ? 15 : DOWNED_BLEED_TIME;
-
-    this.world.addComponent(entityId, C.Downed, {
-      bleedTimer: bleedTime,
-      reviveProgress: 0,
-      reviverId: -1,
-    });
-
-    // Zero out their input so they stop moving
-    const inp = this.world.getComponent<PlayerInputComponent>(entityId, C.PlayerInput);
-    if (inp) { inp.dx = 0; inp.dy = 0; inp.sprint = false; }
-
-    const sp = this.findSessionPlayerByEntity(entityId);
-    const msg: PlayerDownedMessage = {
-      type: MessageType.PLAYER_DOWNED,
-      entityId,
-      slot: sp?.slot ?? -1,
-      bleedTimer: bleedTime,
-    };
-    for (const p of this.players.values()) send(p.client, msg);
-    console.log(`[Death] Player ${sp?.slot ?? '?'} downed (${bleedTime}s ${isSolo ? 'respawn' : 'bleed-out'})`);
-
-    // Co-op: check if ALL players are now downed/dead → party wipe
-    if (!isSolo && this.countAlivePlayers() === 0) {
-      this.handlePartyWipe(send);
-    }
-  }
-
-  /** Tick bleed timers and revive progress for all downed players. */
-  private tickDownedPlayers(dt: number, send: SendFn): void {
-    for (const id of this.world.query(C.Downed, C.Position)) {
-      // Skip dead players awaiting respawn - they keep Downed but don't tick
-      const spDown = this.findSessionPlayerByEntity(id);
-      if (spDown && this.respawnTimers.has(spDown.client.id)) continue;
-
-      const downed = this.world.getComponent<DownedComponent>(id, C.Downed)!;
-
-      // Tick bleed-out timer
-      downed.bleedTimer -= dt;
-      if (downed.bleedTimer <= 0) {
-        // Solo: party wipe handles penalty + instant respawn
-        if (this.players.size <= 1) {
-          this.handlePartyWipe(send);
-        } else {
-          this.handlePlayerDeath(id, send);
-        }
-        continue;
-      }
-
-      // Check revive progress
-      if (downed.reviverId >= 0) {
-        const reviverPos = this.world.getComponent<PositionComponent>(downed.reviverId, C.Position);
-        const myPos = this.world.getComponent<PositionComponent>(id, C.Position);
-        const reviverDowned = this.world.hasComponent(downed.reviverId, C.Downed);
-
-        if (!reviverPos || !myPos || reviverDowned) {
-          // Reviver invalid - cancel
-          downed.reviverId = -1;
-          downed.reviveProgress = 0;
-          this.broadcastReviveProgress(id, 0, -1, send);
-        } else {
-          const rdx = reviverPos.x - myPos.x;
-          const rdy = reviverPos.y - myPos.y;
-          if (rdx * rdx + rdy * rdy > REVIVE_RANGE * REVIVE_RANGE) {
-            // Reviver moved out of range - cancel
-            downed.reviverId = -1;
-            downed.reviveProgress = 0;
-            this.broadcastReviveProgress(id, 0, -1, send);
-          } else {
-            // Revive in progress
-            downed.reviveProgress += dt;
-            this.broadcastReviveProgress(id, downed.reviveProgress / REVIVE_DURATION, downed.reviverId, send);
-
-            if (downed.reviveProgress >= REVIVE_DURATION) {
-              this.revivePlayer(id, send);
-            }
-          }
-        }
-      }
-    }
-  }
-
-  /** Broadcast revive progress to all clients. */
-  private broadcastReviveProgress(targetId: number, progress: number, reviverId: number, send: SendFn): void {
-    const msg: ReviveProgressMessage = {
-      type: MessageType.REVIVE_PROGRESS,
-      targetId,
-      progress: Math.min(1, progress),
-      reviverId,
-    };
-    for (const p of this.players.values()) send(p.client, msg);
-  }
-
-  /** Revive a downed player (restore HP, remove Downed component). */
-  private revivePlayer(entityId: number, send: SendFn): void {
-    const hp = this.world.getComponent<HealthComponent>(entityId, C.Health);
-    if (hp) {
-      hp.current = Math.round(hp.max * REVIVE_HP_PERCENT);
-    }
-    this.world.removeComponent(entityId, C.Downed);
-
-    const sp = this.findSessionPlayerByEntity(entityId);
-    const msg: PlayerRevivedMessage = {
-      type: MessageType.PLAYER_REVIVED,
-      entityId,
-      slot: sp?.slot ?? -1,
-      hp: hp?.current ?? 0,
-    };
-    for (const p of this.players.values()) send(p.client, msg);
-    console.log(`[Death] Player ${sp?.slot ?? '?'} revived at ${hp?.current ?? 0} HP`);
-  }
-
-  /** Handle full player death (bleed-out expired). Start respawn timer. */
-  private handlePlayerDeath(entityId: number, send: SendFn): void {
-    const sp = this.findSessionPlayerByEntity(entityId);
-    if (!sp) return;
-
-    // Keep Downed component so enemies ignore this entity until respawn.
-    // respawnPlayer() removes it when the player actually respawns.
-
-    // Zero velocity
-    const vel = this.world.getComponent<VelocityComponent>(entityId, C.Velocity);
-    if (vel) { vel.vx = 0; vel.vy = 0; }
-
-    // Start respawn timer
-    this.respawnTimers.set(sp.client.id, RESPAWN_DELAY);
-
-    const msg: PlayerDiedMessage = {
-      type: MessageType.PLAYER_DIED,
-      entityId,
-      slot: sp.slot,
-      respawnTimer: RESPAWN_DELAY,
-    };
-    for (const p of this.players.values()) send(p.client, msg);
-    console.log(`[Death] Player ${sp.slot} died - respawn in ${RESPAWN_DELAY}s`);
-  }
-
-  /** Tick respawn timers and respawn players when ready. */
-  private tickRespawnTimers(dt: number, send: SendFn): void {
-    for (const [clientId, timer] of this.respawnTimers) {
-      const remaining = timer - dt;
-      if (remaining <= 0) {
-        this.respawnTimers.delete(clientId);
-        this.respawnPlayer(clientId, send);
-      } else {
-        this.respawnTimers.set(clientId, remaining);
-      }
-    }
-  }
-
-  /** Respawn a player at the spawn origin with full HP. */
-  private respawnPlayer(clientId: string, send: SendFn): void {
-    const sp = this.players.get(clientId);
-    if (!sp || sp.entityId === null) return;
-
-    const hp = this.world.getComponent<HealthComponent>(sp.entityId, C.Health);
-    if (hp) { hp.current = hp.max; }
-
-    const pos = this.world.getComponent<PositionComponent>(sp.entityId, C.Position);
-    const OFFSET = 72;
-    const offsets = [
-      { dx: -OFFSET, dy: -OFFSET }, { dx:  OFFSET, dy: -OFFSET },
-      { dx: -OFFSET, dy:  OFFSET }, { dx:  OFFSET, dy:  OFFSET },
-    ];
-    const off = offsets[sp.slot] ?? { dx: -OFFSET, dy: -OFFSET };
-    if (pos) {
-      const candidate = this.findSafeSpawnNear(
-        this.spawnOrigin.x + off.dx,
-        this.spawnOrigin.y + off.dy,
-      );
-      pos.x = candidate.x;
-      pos.y = candidate.y;
-    }
-
-    // Clear any lingering Downed component
-    this.world.removeComponent(sp.entityId, C.Downed);
-
-    const msg: PlayerRespawnedMessage = {
-      type: MessageType.PLAYER_RESPAWNED,
-      entityId: sp.entityId,
-      slot: sp.slot,
-      x: pos?.x ?? 0,
-      y: pos?.y ?? 0,
-      hp: hp?.max ?? PLAYER_MAX_HEALTH,
-    };
-    for (const p of this.players.values()) send(p.client, msg);
-    console.log(`[Death] Player ${sp.slot} respawned at (${pos?.x ?? 0}, ${pos?.y ?? 0})`);
-  }
-
-  /** Count players that are alive (not downed, not waiting to respawn). */
-  private countAlivePlayers(): number {
-    let count = 0;
-    for (const p of this.players.values()) {
-      if (p.entityId === null) continue;
-      if (this.world.hasComponent(p.entityId, C.Downed)) continue;
-      if (this.respawnTimers.has(p.client.id)) continue;
-      const hp = this.world.getComponent<HealthComponent>(p.entityId, C.Health);
-      if (hp && hp.current > 0) count++;
-    }
-    return count;
-  }
-
-  /** Reverse lookup: entity ID → SessionPlayer. */
-  private findSessionPlayerByEntity(entityId: number): SessionPlayer | undefined {
-    for (const p of this.players.values()) {
-      if (p.entityId === entityId) return p;
-    }
-    return undefined;
-  }
-
-  // ── Wave Wipe (4.12) ─────────────────────────────────────────────────────
-
-  /** Handle a full party wipe (all players downed/dead simultaneously). */
-  private handlePartyWipe(send: SendFn): void {
-    this.wipeCount++;
-    console.log(`[Wipe] Party wipe #${this.wipeCount} on wave ${this.currentWave}`);
-
-    if (this.wipeCount >= 2) {
-      // 2nd wipe: game over - halt all death/respawn processing
-      this.gameOver = true;
-      this.respawnTimers.clear();
-      for (const sp of this.players.values()) {
-        if (sp.entityId !== null) this.world.removeComponent(sp.entityId, C.Downed);
-      }
-
-      const msg: GameOverMessage = {
-        type: MessageType.GAME_OVER,
-        waveReached: this.currentWave,
-        reason: '2nd party wipe - run over',
-        enemiesKilled: this.enemiesKilled,
-        timePlayed: Math.round(this.getElapsedSeconds()),
-      };
-      for (const p of this.players.values()) send(p.client, msg);
-      this.fireRunEnd();
-      return;
-    }
-
-    // 1st wipe: resource penalty + scatter drops + respawn all
-    const wipeMsg: PartyWipeMessage = {
-      type: MessageType.PARTY_WIPE,
-      wipeCount: this.wipeCount,
-      outcome: 'penalty',
-    };
-    for (const p of this.players.values()) send(p.client, wipeMsg);
-
-    // Deduct 25% of each resource and scatter as item drops near spawn
-    for (const sp of this.players.values()) {
-      if (sp.entityId === null) continue;
-      const res = this.world.getComponent<ResourcesComponent>(sp.entityId, C.Resources);
-      if (!res) continue;
-
-      for (const key of ['wood', 'stone', 'iron', 'diamond', 'gold', 'food'] as const) {
-        const loss = Math.floor(res[key] * WIPE_1_RESOURCE_LOSS_PERCENT);
-        if (loss > 0) {
-          res[key] -= loss;
-          const angle = Math.random() * Math.PI * 2;
-          const dist = 50 + Math.random() * 100;
-          this.spawnItemDrop(
-            this.spawnOrigin.x + Math.cos(angle) * dist,
-            this.spawnOrigin.y + Math.sin(angle) * dist,
-            key, loss, true,
-          );
-        }
-      }
-
-      // Send updated resource counts
-      const update: ResourceUpdateMessage = {
-        type: MessageType.RESOURCE_UPDATE,
-        wood: res.wood, stone: res.stone, iron: res.iron,
-        diamond: res.diamond, gold: res.gold, food: res.food,
-      };
-      send(sp.client, update);
-    }
-
-    // Respawn all players immediately
-    for (const [clientId, sp] of this.players) {
-      if (sp.entityId === null) continue;
-      this.world.removeComponent(sp.entityId, C.Downed);
-      this.respawnTimers.delete(clientId);
-      this.respawnPlayer(clientId, send);
-    }
-  }
 }

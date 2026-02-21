@@ -126,6 +126,15 @@ export class PlayerRendererSystem {
   private tagContainer: Container;
   /** Per-entity dirty flags: true when geometry needs rebuild, false when just position update suffices. */
   private dirty = new Map<EntityId, boolean>();
+  // Reusable entity classification sets (cleared and refilled each frame to avoid GC pressure)
+  private _playerIds   = new Set<EntityId>();
+  private _enemyIds    = new Set<EntityId>();
+  private _portalIds   = new Set<EntityId>();
+  private _resourceIds = new Set<EntityId>();
+  private _itemIds     = new Set<EntityId>();
+  private _buildingIds = new Set<EntityId>();
+  private _guardIds    = new Set<EntityId>();
+  private _living      = new Set<EntityId>();
   /** Per-entity: was entity flashing last frame? */
   private wasFlashing = new Map<EntityId, boolean>();
   /** Per-entity: was ghost hidden last frame? */
@@ -203,24 +212,29 @@ export class PlayerRendererSystem {
     smoothY = 0,
   ): void {
     // Collect all renderable entities: players, enemies, portals, resources, item drops
-    const playerIds = new Set(world.query(C.Position, C.PlayerIndex));
-    const factionEntities = world.query(C.Position, C.Faction);
-    const enemyIds    = new Set<number>();
-    const portalIds   = new Set<number>();
-    const resourceIds = new Set<number>();
-    const itemIds     = new Set<number>();
-    const buildingIds = new Set<number>();
-    const guardIds    = new Set<number>();
-    for (const id of factionEntities) {
-      const f = world.getComponent<FactionComponent>(id, C.Faction)!;
-      if (f.type === 'enemy') enemyIds.add(id);
-      else if (f.type === 'portal') portalIds.add(id);
-      else if (f.type === 'resource') resourceIds.add(id);
-      else if (f.type === 'item') itemIds.add(id);
-      else if (f.type === 'building') buildingIds.add(id);
-      else if (f.type === 'guard') guardIds.add(id);
+    // Reuse class-level Sets to avoid per-frame allocations
+    const playerIds = this._playerIds;    playerIds.clear();
+    const enemyIds = this._enemyIds;      enemyIds.clear();
+    const portalIds = this._portalIds;    portalIds.clear();
+    const resourceIds = this._resourceIds; resourceIds.clear();
+    const itemIds = this._itemIds;        itemIds.clear();
+    const buildingIds = this._buildingIds; buildingIds.clear();
+    const guardIds = this._guardIds;      guardIds.clear();
+    const living = this._living;          living.clear();
+
+    for (const id of world.query(C.Position, C.PlayerIndex)) {
+      playerIds.add(id);
+      living.add(id);
     }
-    const living = new Set([...playerIds, ...enemyIds, ...portalIds, ...resourceIds, ...itemIds, ...buildingIds, ...guardIds]);
+    for (const id of world.query(C.Position, C.Faction)) {
+      const f = world.getComponent<FactionComponent>(id, C.Faction)!;
+      if (f.type === 'enemy') { enemyIds.add(id); living.add(id); }
+      else if (f.type === 'portal') { portalIds.add(id); living.add(id); }
+      else if (f.type === 'resource') { resourceIds.add(id); living.add(id); }
+      else if (f.type === 'item') { itemIds.add(id); living.add(id); }
+      else if (f.type === 'building') { buildingIds.add(id); living.add(id); }
+      else if (f.type === 'guard') { guardIds.add(id); living.add(id); }
+    }
 
     // Remove sprites for entities that no longer exist; clean up all timers
     for (const [id, gfx] of this.sprites) {

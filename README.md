@@ -73,6 +73,23 @@ npm run server:dev   # Start only the game server (with auto-reload)
 
 The dev build connects to `localhost` automatically. To test the production server, type the server IP in the invite code field and click Join.
 
+### Testing
+
+Tests use [Vitest](https://vitest.dev/) and cover server-side systems (pathfinding, combat, enemy AI).
+
+```bash
+npm run test          # Run all tests once
+npm run test:watch    # Run tests in watch mode
+```
+
+Test files live alongside their source in `server/systems/` (e.g. `Pathfinding.test.ts`, `CombatSystem.test.ts`, `EnemySystem.test.ts`). Shared test helpers are in `server/systems/__testutil.ts`.
+
+### Debug Tools
+
+- **F4** — Debug console with views: `/core`, `/net`, `/server`, `/all`, `/logs`, `/help`
+- **F12** / **Ctrl+Shift+I** — Electron DevTools (dev mode only)
+- **Debug commands** — `/spawn [n]`, `/skipwave`, `/pausewave` (type in debug console)
+
 ---
 
 ## Releasing a New Version

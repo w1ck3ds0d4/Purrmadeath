@@ -7,6 +7,7 @@ import {
   PlayerInputComponent,
   FactionComponent,
   BuildingComponent,
+  EnemyStatsComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -161,7 +162,10 @@ export class MovementSystem {
         const faction = world.getComponent<FactionComponent>(otherId, C.Faction)!;
         // Resource nodes and buildings are handled as solid blocks in overlapsAny - skip here
         if (faction.type === 'resource' || faction.type === 'building') continue;
-        const otherR = getEntityRadius(faction.type);
+        // Use per-variant radius for enemies (e.g. giants have radius=20)
+        const otherR = (faction.type === 'enemy')
+          ? (world.getComponent<EnemyStatsComponent>(otherId, C.EnemyStats)?.radius ?? ENEMY_RADIUS)
+          : getEntityRadius(faction.type);
         if (otherR <= 0) continue;
 
         const otherPos = world.getComponent<PositionComponent>(otherId, C.Position)!;

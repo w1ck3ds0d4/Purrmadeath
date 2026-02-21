@@ -106,6 +106,8 @@ export interface FacingComponent {
 /** Which team an entity belongs to. Determines targetting and rendering. */
 export interface FactionComponent {
   type: 'player' | 'enemy' | 'portal' | 'resource' | 'item' | 'building' | 'guard';
+  /** Named enemy faction (e.g. 'bandits', 'undead'). Enemies of different factions fight each other. */
+  enemyFaction?: string;
 }
 
 /** Tracks remaining cooldown before the entity can attack again. */

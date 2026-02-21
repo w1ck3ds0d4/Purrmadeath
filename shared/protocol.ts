@@ -335,7 +335,10 @@ export interface DeltaMessage extends BaseMessage {
   /** Entity IDs removed since last tick. */
   removed: number[];
   /** Optional server-side stats for the debug console. */
-  serverStats?: { wave: number; enemyCount: number; portalCount: number; playerCount: number };
+  serverStats?: {
+    wave: number; enemyCount: number; portalCount: number; playerCount: number;
+    tickProfile?: { combat: number; enemy: number; movement: number; projectile: number; buildings: number; waves: number; total: number };
+  };
 }
 
 // ─── Input ────────────────────────────────────────────────────────────────────

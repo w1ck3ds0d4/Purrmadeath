@@ -274,7 +274,7 @@ export const MAX_ATTACK_POSITION_TOLERANCE = 80;
 
 /** Iterations of the entity-entity separation pass per tick.
  *  More iterations = better chain resolution, but costs O(n²) each. */
-export const ENTITY_SEPARATION_ITERATIONS = 2;
+export const ENTITY_SEPARATION_ITERATIONS = 3;
 
 // ─── Buildings (Phase 5) ────────────────────────────────────────────────
 

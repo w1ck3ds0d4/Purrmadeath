@@ -101,9 +101,13 @@ export class CombatSystem {
     for (const targetId of world.query(C.Position, C.Health)) {
       if (targetId === sourceId) continue;
 
-      // No friendly fire: skip same faction
+      // No friendly fire: skip same faction (but allow cross-faction enemy combat)
       const tgtFaction = world.getComponent<FactionComponent>(targetId, C.Faction);
-      if (srcFaction && tgtFaction && srcFaction.type === tgtFaction.type) continue;
+      if (srcFaction && tgtFaction && srcFaction.type === tgtFaction.type) {
+        // Allow enemies of different factions to damage each other
+        if (!(srcFaction.type === 'enemy' && srcFaction.enemyFaction && tgtFaction.enemyFaction
+              && srcFaction.enemyFaction !== tgtFaction.enemyFaction)) continue;
+      }
 
       // Skip downed players - they're already at 0 HP
       if (world.hasComponent(targetId, C.Downed)) continue;

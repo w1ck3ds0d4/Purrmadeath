@@ -12,6 +12,8 @@ import {
   AssassinDashComponent,
   VelocityComponent,
   SpeedComponent,
+  GuardComponent,
+  HealthComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -64,8 +66,21 @@ const WAYPOINT_REACH = 16; // half a tile
  * share the same physics and tile-collision as players.
  */
 /** Stuck detection: if enemy hasn't moved more than this distance in STUCK_TIME, apply wiggle. */
-const STUCK_DIST = 4;
-const STUCK_TIME = 2;
+const STUCK_DIST = 8;
+const STUCK_TIME = 1;
+
+/** Local obstacle avoidance: scan ahead for resources/portals and steer around them. */
+const AVOIDANCE_LOOK_AHEAD = 48;   // 1.5 tiles forward scan (px)
+const AVOIDANCE_MARGIN = 8;        // extra padding beyond collision radii (px)
+const AVOIDANCE_STRENGTH = 1.5;    // perpendicular blend multiplier
+
+/** Circle-vs-AABB overlap test (no push vector needed). */
+function circleAABBOverlap(cx: number, cy: number, cr: number, bx: number, by: number, bHalf: number): boolean {
+  const closestX = Math.max(bx - bHalf, Math.min(cx, bx + bHalf));
+  const closestY = Math.max(by - bHalf, Math.min(cy, by + bHalf));
+  const dx = cx - closestX, dy = cy - closestY;
+  return dx * dx + dy * dy < cr * cr;
+}
 
 export class EnemySystem {
   private paths = new Map<number, CachedPath>();
@@ -77,6 +92,10 @@ export class EnemySystem {
   private buildingEntities: { x: number; y: number; half: number }[] = [];
   /** Bridge tiles that override unwalkable terrain for pathfinding. */
   private bridgeTiles = new Set<number>();
+  /** Cached resource node positions for line-of-sight collision checks. */
+  private resourcePositions: { x: number; y: number }[] = [];
+  /** Cached portal positions for line-of-sight collision checks. */
+  private portalPositions: { x: number; y: number }[] = [];
   /** Stuck detection: tracks last-known positions and time since last significant move. */
   private stuckTimers = new Map<number, { x: number; y: number; timer: number }>();
 
@@ -142,6 +161,8 @@ export class EnemySystem {
     }
 
     // Block tiles occupied by resource nodes and portals so enemies path around them
+    this.resourcePositions.length = 0;
+    this.portalPositions.length = 0;
     for (const rid of world.query(C.Position, C.Faction)) {
       const rf = world.getComponent<FactionComponent>(rid, C.Faction)!;
       let rHalf: number;
@@ -153,6 +174,9 @@ export class EnemySystem {
         continue;
       }
       const rpos = world.getComponent<PositionComponent>(rid, C.Position)!;
+      // Cache positions for line-of-sight collision checks
+      if (rf.type === 'resource') this.resourcePositions.push(rpos);
+      else this.portalPositions.push(rpos);
       const rMinTx = Math.floor((rpos.x - rHalf) / TILE_SIZE);
       const rMaxTx = Math.floor((rpos.x + rHalf - 1) / TILE_SIZE);
       const rMinTy = Math.floor((rpos.y - rHalf) / TILE_SIZE);
@@ -174,12 +198,22 @@ export class EnemySystem {
 
     for (const id of world.query(C.Position, C.Faction, C.PlayerInput)) {
       const faction = world.getComponent<FactionComponent>(id, C.Faction)!;
-      if (faction.type !== 'enemy') continue;
+      if (faction.type !== 'enemy' && faction.type !== 'guard') continue;
+      const isGuard = faction.type === 'guard';
 
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
       const inp = world.getComponent<PlayerInputComponent>(id, C.PlayerInput)!;
       const ev = world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant);
       const variant = ev?.variant ?? 'melee';
+
+      // Get stats early so rangedRange is available for targeting decisions
+      const stats = world.getComponent<EnemyStatsComponent>(id, C.EnemyStats);
+      const meleeRange = stats?.range ?? ENEMY_MELEE_RANGE;
+      const rangedRange = stats?.rangedRange ?? (variant === 'ranger' ? ENEMY_RANGER_RANGE : 0);
+      const hasRanged = rangedRange > 0;
+      const enemyOverrides = stats
+        ? { damage: stats.damage, range: stats.range, knockback: stats.knockback }
+        : ENEMY_OVERRIDES_DEFAULT;
 
       // ── Assassin dash tick ─────────────────────────────────────────────────
       const dash = world.getComponent<AssassinDashComponent>(id, C.AssassinDash);
@@ -240,16 +274,84 @@ export class EnemySystem {
             const cy = Math.max(bpos.y - bHalf, Math.min(bpos.y + bHalf, pos.y));
             const pdx = cx - bpos.x, pdy = cy - bpos.y;
             const pLen = Math.sqrt(pdx * pdx + pdy * pdy);
-            const nx = pLen > 0 ? cx + (pdx / pLen) * NAV_MARGIN : cx + NAV_MARGIN;
-            const ny = pLen > 0 ? cy + (pdy / pLen) * NAV_MARGIN : cy;
+            let nx = pLen > 0 ? cx + (pdx / pLen) * NAV_MARGIN : cx + NAV_MARGIN;
+            let ny = pLen > 0 ? cy + (pdy / pLen) * NAV_MARGIN : cy;
+            // If nav point lands on unwalkable terrain (e.g. water), try 4 cardinal sides
+            if (!(TILE_DEFS[this.generator.getTile(Math.floor(nx / TILE_SIZE), Math.floor(ny / TILE_SIZE))]?.walkable ?? false)) {
+              const sides = [
+                { x: bpos.x + bHalf + NAV_MARGIN, y: bpos.y },
+                { x: bpos.x - bHalf - NAV_MARGIN, y: bpos.y },
+                { x: bpos.x, y: bpos.y + bHalf + NAV_MARGIN },
+                { x: bpos.x, y: bpos.y - bHalf - NAV_MARGIN },
+              ];
+              let bestDist = Infinity;
+              for (const side of sides) {
+                if (!(TILE_DEFS[this.generator.getTile(Math.floor(side.x / TILE_SIZE), Math.floor(side.y / TILE_SIZE))]?.walkable ?? false)) continue;
+                const sd = (side.x - pos.x) ** 2 + (side.y - pos.y) ** 2;
+                if (sd < bestDist) { nx = side.x; ny = side.y; bestDist = sd; }
+              }
+            }
             best = { id: bid, pos: bpos, nav: { x: nx, y: ny }, dist: edgeDist, half: bHalf };
           }
         }
         return best;
       };
 
-      // ── Variant-specific targeting ────────────────────────────────────────
-      if (variant === 'ghost') {
+      // Helper: find nearest hostile enemy (different enemyFaction, or guards target all enemies)
+      const findNearestHostileEnemy = (maxRange: number) => {
+        let best: { pos: PositionComponent; dist: number } | null = null;
+        for (const eid of world.query(C.Position, C.Faction)) {
+          if (eid === id) continue;
+          const ef = world.getComponent<FactionComponent>(eid, C.Faction)!;
+          if (isGuard) {
+            // Guards target all enemies
+            if (ef.type !== 'enemy') continue;
+          } else {
+            // Enemies target enemies of different factions, or guards
+            if (ef.type === 'guard') {
+              // Enemies can target guards
+            } else if (ef.type === 'enemy') {
+              if (!faction.enemyFaction || !ef.enemyFaction || faction.enemyFaction === ef.enemyFaction) continue;
+            } else {
+              continue;
+            }
+          }
+          if (world.hasComponent(eid, C.Downed)) continue;
+          const epos = world.getComponent<PositionComponent>(eid, C.Position)!;
+          const ddx = epos.x - pos.x, ddy = epos.y - pos.y;
+          const dist = Math.sqrt(ddx * ddx + ddy * ddy);
+          if (dist < maxRange && (!best || dist < best.dist)) {
+            best = { pos: epos, dist };
+          }
+        }
+        return best;
+      };
+
+      // ── Guard targeting: nearest enemy > patrol to barracks ────────────────
+      if (isGuard) {
+        const guard = world.getComponent<GuardComponent>(id, C.Guard);
+        const GUARD_DETECT_RANGE = 150;
+        const hostileEnemy = findNearestHostileEnemy(GUARD_DETECT_RANGE);
+        if (hostileEnemy) {
+          targetPos = hostileEnemy.pos;
+          navPos = hostileEnemy.pos;
+          targetDist = hostileEnemy.dist;
+        } else if (guard) {
+          // Patrol: return to barracks if too far
+          const bpos = world.getComponent<PositionComponent>(guard.barracksId, C.Position);
+          if (bpos) {
+            const dx = bpos.x - pos.x, dy = bpos.y - pos.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist > guard.patrolRadius) {
+              targetPos = bpos;
+              navPos = bpos;
+              targetDist = dist;
+            }
+          }
+        }
+      }
+      // ── Variant-specific targeting (enemies only) ──────────────────────────
+      else if (variant === 'ghost') {
         // Ghosts: only target players, phase through everything (no pathfinding)
         const nearest = findNearestPlayer(Infinity);
         if (nearest) {
@@ -291,14 +393,26 @@ export class EnemySystem {
           targetEntityId = campfire.id;
         }
 
-        // 2. Nearby players override campfire (distraction — only if very close)
-        const PLAYER_DISTRACT_RANGE = ENEMY_MELEE_RANGE * 2;
+        // 2. Nearby players override campfire (distraction range extends to rangedRange for ranged enemies)
+        const PLAYER_DISTRACT_RANGE = rangedRange > 0 ? rangedRange : ENEMY_MELEE_RANGE * 2;
         const closestPlayer = findNearestPlayer(ENEMY_AGGRO_RANGE);
         if (closestPlayer && (closestPlayer.dist < PLAYER_DISTRACT_RANGE || !targetPos)) {
           if (!targetPos || this.isDirectPathClear(pos.x, pos.y, closestPlayer.pos.x, closestPlayer.pos.y)) {
             targetPos = closestPlayer.pos;
             navPos = closestPlayer.pos;
             targetDist = closestPlayer.dist;
+            targetHalfExtent = 0;
+            targetEntityId = null;
+          }
+        }
+
+        // 2b. Hostile enemies of different factions (same priority as players)
+        if (faction.enemyFaction) {
+          const hostileEnemy = findNearestHostileEnemy(ENEMY_AGGRO_RANGE);
+          if (hostileEnemy && (hostileEnemy.dist < PLAYER_DISTRACT_RANGE || !targetPos)) {
+            targetPos = hostileEnemy.pos;
+            navPos = hostileEnemy.pos;
+            targetDist = hostileEnemy.dist;
             targetHalfExtent = 0;
             targetEntityId = null;
           }
@@ -318,16 +432,6 @@ export class EnemySystem {
       }
 
       if (targetPos && navPos) {
-        const stats = world.getComponent<EnemyStatsComponent>(id, C.EnemyStats);
-
-        // Per-entity stats (fallback to global defaults for legacy entities without EnemyStats)
-        const meleeRange = stats?.range ?? ENEMY_MELEE_RANGE;
-        const rangedRange = stats?.rangedRange ?? (variant === 'ranger' ? ENEMY_RANGER_RANGE : 0);
-        const hasRanged = rangedRange > 0;
-        const enemyOverrides = stats
-          ? { damage: stats.damage, range: stats.range, knockback: stats.knockback }
-          : ENEMY_OVERRIDES_DEFAULT;
-
         // For buildings: use edge distance for melee check (not center distance)
         let meleeCheckDist: number;
         if (targetHalfExtent > 0) {
@@ -339,8 +443,8 @@ export class EnemySystem {
           meleeCheckDist = Math.sqrt(ddx * ddx + ddy * ddy);
         }
 
-        // Ranged attack: fire at non-building targets within range
-        const canShootRanged = hasRanged && targetHalfExtent === 0 && meleeCheckDist <= rangedRange && meleeCheckDist > meleeRange;
+        // Ranged attack: fire at targets within range (players and buildings)
+        const canShootRanged = hasRanged && meleeCheckDist <= rangedRange && meleeCheckDist > meleeRange;
 
         if (canShootRanged) {
           // Stop and fire
@@ -425,6 +529,10 @@ export class EnemySystem {
 
             this.navigateToward(id, pos, navPos as PositionComponent, inp, dt, len, ddx, ddy);
 
+            // Local obstacle avoidance: steer around resource nodes and portals
+            const eRadius = stats?.radius ?? ENEMY_RADIUS;
+            this.applyObstacleAvoidance(pos, inp, navPos as { x: number; y: number }, eRadius);
+
             // Stuck detection: if enemy hasn't moved, apply perpendicular wiggle
             let stuck = this.stuckTimers.get(id);
             if (!stuck) {
@@ -437,11 +545,40 @@ export class EnemySystem {
             } else {
               stuck.timer += dt;
               if (stuck.timer > STUCK_TIME) {
-                const perp = (Math.random() < 0.5 ? 1 : -1);
-                inp.dx += -inp.dy * 0.7 * perp;
-                inp.dy += inp.dx * 0.7 * perp;
-                const wLen = Math.sqrt(inp.dx * inp.dx + inp.dy * inp.dy);
-                if (wLen > 0) { inp.dx /= wLen; inp.dy /= wLen; }
+                // Find nearest obstacle to push away from
+                let nearOX = 0, nearOY = 0, nearOD = Infinity;
+                let hasNear = false;
+                for (const node of this.resourcePositions) {
+                  const ox = node.x - pos.x, oy = node.y - pos.y;
+                  const od = ox * ox + oy * oy;
+                  if (od < nearOD) { nearOD = od; nearOX = ox; nearOY = oy; hasNear = true; }
+                }
+                for (const portal of this.portalPositions) {
+                  const ox = portal.x - pos.x, oy = portal.y - pos.y;
+                  const od = ox * ox + oy * oy;
+                  if (od < nearOD) { nearOD = od; nearOX = ox; nearOY = oy; hasNear = true; }
+                }
+                if (hasNear && nearOD < 64 * 64) {
+                  // Steer away from nearest obstacle, blended toward target
+                  const oDist = Math.sqrt(nearOD);
+                  const awayX = -nearOX / oDist, awayY = -nearOY / oDist;
+                  const tDx = navPos!.x - pos.x, tDy = navPos!.y - pos.y;
+                  const tLen = Math.sqrt(tDx * tDx + tDy * tDy);
+                  const tNx = tLen > 0 ? tDx / tLen : 0, tNy = tLen > 0 ? tDy / tLen : 0;
+                  inp.dx = awayX * 0.6 + tNx * 0.4;
+                  inp.dy = awayY * 0.6 + tNy * 0.4;
+                  const wLen = Math.sqrt(inp.dx * inp.dx + inp.dy * inp.dy);
+                  if (wLen > 0) { inp.dx /= wLen; inp.dy /= wLen; }
+                } else {
+                  // Fallback: random perpendicular wiggle
+                  const perp = (Math.random() < 0.5 ? 1 : -1);
+                  const origDx = inp.dx;
+                  inp.dx += -inp.dy * 1.0 * perp;
+                  inp.dy += origDx * 1.0 * perp;
+                  const wLen = Math.sqrt(inp.dx * inp.dx + inp.dy * inp.dy);
+                  if (wLen > 0) { inp.dx /= wLen; inp.dy /= wLen; }
+                }
+                this.paths.delete(id); // Force fresh A* replan on next tick
                 stuck.timer = 0;
               }
             }
@@ -585,25 +722,46 @@ export class EnemySystem {
     return cached;
   }
 
-  /** Simple ray-march check: are all tiles between start and end walkable and not blocked by buildings? */
+  /** Ray-march check: is the path clear of unwalkable tiles, buildings, resources, and portals? */
   private isDirectPathClear(sx: number, sy: number, ex: number, ey: number): boolean {
     const dx = ex - sx;
     const dy = ey - sy;
     const dist = Math.sqrt(dx * dx + dy * dy);
-    const steps = Math.ceil(dist / TILE_SIZE);
+    const steps = Math.ceil(dist / (TILE_SIZE / 2)); // 16px resolution
+    const r = ENEMY_RADIUS;
 
     for (let i = 0; i <= steps; i++) {
       const t = steps > 0 ? i / steps : 0;
       const wx = sx + dx * t;
       const wy = sy + dy * t;
-      const tx = Math.floor(wx / TILE_SIZE);
-      const ty = Math.floor(wy / TILE_SIZE);
-      const tk = tileKey(tx, ty);
-      // Bridge tiles override unwalkable terrain
-      if (!this.bridgeTiles.has(tk) && !(TILE_DEFS[this.generator.getTile(tx, ty)]?.walkable ?? false)) return false;
-      if (this.buildingBlockedTiles.has(tk)) return false;
+
+      // Check 4 corners (like overlapsAny tile check) to catch obstacles at edges
+      if (this.tileOrBlockedAt(wx - r, wy - r)) return false;
+      if (this.tileOrBlockedAt(wx + r, wy - r)) return false;
+      if (this.tileOrBlockedAt(wx - r, wy + r)) return false;
+      if (this.tileOrBlockedAt(wx + r, wy + r)) return false;
+
+      // Check actual entity collision volumes (not just tile occupancy)
+      for (const node of this.resourcePositions) {
+        if (circleAABBOverlap(wx, wy, r, node.x, node.y, RESOURCE_NODE_RADIUS)) return false;
+      }
+      for (const portal of this.portalPositions) {
+        const pdx = wx - portal.x, pdy = wy - portal.y;
+        const minDist = r + PORTAL_RADIUS;
+        if (pdx * pdx + pdy * pdy < minDist * minDist) return false;
+      }
     }
     return true;
+  }
+
+  /** Returns true if the world-pixel position is unwalkable or on a blocked tile. */
+  private tileOrBlockedAt(wx: number, wy: number): boolean {
+    const tx = Math.floor(wx / TILE_SIZE);
+    const ty = Math.floor(wy / TILE_SIZE);
+    const tk = tileKey(tx, ty);
+    if (this.bridgeTiles.has(tk)) return false;
+    if (!(TILE_DEFS[this.generator.getTile(tx, ty)]?.walkable ?? false)) return true;
+    return this.buildingBlockedTiles.has(tk);
   }
 
   /** Find the nearest building within melee range to break through. */
@@ -618,5 +776,71 @@ export class EnemySystem {
       }
     }
     return closest;
+  }
+
+  /** Steer inp.dx/dy around nearby resource nodes and portals to prevent jamming. */
+  private applyObstacleAvoidance(
+    pos: PositionComponent,
+    inp: PlayerInputComponent,
+    targetPos: { x: number; y: number },
+    enemyRadius: number,
+  ): void {
+    if (inp.dx === 0 && inp.dy === 0) return;
+
+    let bestDistSq = Infinity;
+    let bestObsX = 0, bestObsY = 0, bestObsRadius = 0;
+    let found = false;
+
+    // Scan resources
+    for (const node of this.resourcePositions) {
+      const toX = node.x - pos.x, toY = node.y - pos.y;
+      const dot = toX * inp.dx + toY * inp.dy;
+      if (dot <= 0) continue; // behind
+      const distSq = toX * toX + toY * toY;
+      const combined = enemyRadius + RESOURCE_NODE_RADIUS + AVOIDANCE_MARGIN;
+      if (distSq > (AVOIDANCE_LOOK_AHEAD + combined) ** 2) continue; // too far
+      const cross = Math.abs(toX * inp.dy - toY * inp.dx);
+      if (cross >= combined) continue; // beside path, not in it
+      if (distSq < bestDistSq) {
+        bestDistSq = distSq; bestObsX = toX; bestObsY = toY;
+        bestObsRadius = RESOURCE_NODE_RADIUS; found = true;
+      }
+    }
+
+    // Scan portals
+    for (const portal of this.portalPositions) {
+      const toX = portal.x - pos.x, toY = portal.y - pos.y;
+      const dot = toX * inp.dx + toY * inp.dy;
+      if (dot <= 0) continue;
+      const distSq = toX * toX + toY * toY;
+      const combined = enemyRadius + PORTAL_RADIUS + AVOIDANCE_MARGIN;
+      if (distSq > (AVOIDANCE_LOOK_AHEAD + combined) ** 2) continue;
+      const cross = Math.abs(toX * inp.dy - toY * inp.dx);
+      if (cross >= combined) continue;
+      if (distSq < bestDistSq) {
+        bestDistSq = distSq; bestObsX = toX; bestObsY = toY;
+        bestObsRadius = PORTAL_RADIUS; found = true;
+      }
+    }
+
+    if (!found) return;
+
+    const dist = Math.sqrt(bestDistSq);
+    // Two perpendicular directions around obstacle
+    const pAx = -bestObsY / dist, pAy = bestObsX / dist;
+    const pBx = bestObsY / dist, pBy = -bestObsX / dist;
+    // Pick the one toward target
+    const ttX = targetPos.x - pos.x, ttY = targetPos.y - pos.y;
+    const [perpX, perpY] = (pAx * ttX + pAy * ttY >= pBx * ttX + pBy * ttY)
+      ? [pAx, pAy] : [pBx, pBy];
+
+    // Strength: 1.0 when touching, fades at distance
+    const combined = enemyRadius + bestObsRadius + AVOIDANCE_MARGIN;
+    const strength = Math.max(0, Math.min(1, 1.0 - (dist - combined) / AVOIDANCE_LOOK_AHEAD));
+
+    inp.dx += perpX * strength * AVOIDANCE_STRENGTH;
+    inp.dy += perpY * strength * AVOIDANCE_STRENGTH;
+    const len = Math.sqrt(inp.dx * inp.dx + inp.dy * inp.dy);
+    if (len > 0) { inp.dx /= len; inp.dy /= len; }
   }
 }

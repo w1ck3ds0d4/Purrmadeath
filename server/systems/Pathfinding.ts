@@ -21,9 +21,9 @@ export interface CachedPath {
 }
 
 /** Maximum tiles to search in any direction from the start. */
-const MAX_SEARCH_TILES = 20;
+const MAX_SEARCH_TILES = 40;
 /** Maximum nodes in the open set before giving up. */
-const MAX_OPEN_SET = 800;
+const MAX_OPEN_SET = 2000;
 
 // 8-directional neighbors: cardinal + diagonal
 const DIRS: readonly [number, number][] = [

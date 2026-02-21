@@ -9,6 +9,7 @@ import {
   FactionComponent,
   BuildingComponent,
   EnemyVariantComponent,
+  EnemyStatsComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -110,6 +111,12 @@ export class MovementSystem {
       const speed = world.getComponent<SpeedComponent>(id, C.Speed)!;
       const inp   = world.getComponent<PlayerInputComponent>(id, C.PlayerInput)!;
 
+      // Determine collision radius: enemies/guards use their per-variant radius
+      const faction = world.getComponent<FactionComponent>(id, C.Faction);
+      const entityRadius = (faction?.type === 'enemy' || faction?.type === 'guard')
+        ? (world.getComponent<EnemyStatsComponent>(id, C.EnemyStats)?.radius ?? ENEMY_RADIUS)
+        : PLAYER_RADIUS;
+
       const maxSpeed = speed.base * speed.multiplier * (inp.sprint ? PLAYER_SPRINT_MULTIPLIER : 1);
 
       let dx = inp.dx;
@@ -138,13 +145,13 @@ export class MovementSystem {
       const ev = world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant);
       const isGhost = ev?.variant === 'ghost';
 
-      if (isGhost || !this.overlapsAny(nx, ny)) {
+      if (isGhost || !this.overlapsAny(nx, ny, entityRadius)) {
         pos.x = nx;
         pos.y = ny;
-      } else if (!this.overlapsAny(nx, pos.y)) {
+      } else if (!this.overlapsAny(nx, pos.y, entityRadius)) {
         pos.x = nx;
         vel.vy = 0;
-      } else if (!this.overlapsAny(pos.x, ny)) {
+      } else if (!this.overlapsAny(pos.x, ny, entityRadius)) {
         pos.y = ny;
         vel.vx = 0;
       } else {
@@ -157,11 +164,11 @@ export class MovementSystem {
       if (kb && (kb.vx !== 0 || kb.vy !== 0)) {
         const kx = pos.x + kb.vx * dt;
         const ky = pos.y + kb.vy * dt;
-        if (!this.overlapsAny(kx, ky)) {
+        if (!this.overlapsAny(kx, ky, entityRadius)) {
           pos.x = kx; pos.y = ky;
-        } else if (!this.overlapsAny(kx, pos.y)) {
+        } else if (!this.overlapsAny(kx, pos.y, entityRadius)) {
           pos.x = kx;
-        } else if (!this.overlapsAny(pos.x, ky)) {
+        } else if (!this.overlapsAny(pos.x, ky, entityRadius)) {
           pos.y = ky;
         }
         const decay = Math.max(0, 1 - 8 * dt);
@@ -188,7 +195,10 @@ export class MovementSystem {
       // Ghosts phase through everything — skip separation
       const evSep = world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant);
       if (evSep?.variant === 'ghost') continue;
-      const r = getEntityRadius(faction.type);
+      // Use per-variant radius for enemies/guards (e.g. giants have radius=20)
+      const r = (faction.type === 'enemy' || faction.type === 'guard')
+        ? (world.getComponent<EnemyStatsComponent>(id, C.EnemyStats)?.radius ?? ENEMY_RADIUS)
+        : getEntityRadius(faction.type);
       if (r <= 0) continue;
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
       const movable = faction.type === 'player' || faction.type === 'enemy' || faction.type === 'guard';
@@ -231,12 +241,12 @@ export class MovementSystem {
           }
 
           if (a.movable && b.movable) {
-            this.pushIfValid(a.pos, -pushX * 0.5, -pushY * 0.5);
-            this.pushIfValid(b.pos, pushX * 0.5, pushY * 0.5);
+            this.pushIfValid(a.pos, -pushX * 0.5, -pushY * 0.5, a.r);
+            this.pushIfValid(b.pos, pushX * 0.5, pushY * 0.5, b.r);
           } else if (a.movable) {
-            this.pushIfValid(a.pos, -pushX, -pushY);
+            this.pushIfValid(a.pos, -pushX, -pushY, a.r);
           } else {
-            this.pushIfValid(b.pos, pushX, pushY);
+            this.pushIfValid(b.pos, pushX, pushY, b.r);
           }
         }
       }
@@ -244,15 +254,15 @@ export class MovementSystem {
   }
 
   /** Push an entity by (dx, dy) but only if the new position is on walkable tiles. */
-  private pushIfValid(pos: PositionComponent, dx: number, dy: number): void {
+  private pushIfValid(pos: PositionComponent, dx: number, dy: number, entityRadius: number = PLAYER_RADIUS): void {
     const nx = pos.x + dx;
     const ny = pos.y + dy;
-    if (!this.overlapsAny(nx, ny)) {
+    if (!this.overlapsAny(nx, ny, entityRadius)) {
       pos.x = nx;
       pos.y = ny;
-    } else if (!this.overlapsAny(nx, pos.y)) {
+    } else if (!this.overlapsAny(nx, pos.y, entityRadius)) {
       pos.x = nx;
-    } else if (!this.overlapsAny(pos.x, ny)) {
+    } else if (!this.overlapsAny(pos.x, ny, entityRadius)) {
       pos.y = ny;
     }
     // If all blocked, don't push (entity stays overlapping rather than going into a wall)
@@ -296,8 +306,8 @@ export class MovementSystem {
     }
   }
 
-  private overlapsAny(px: number, py: number): boolean {
-    const r = PLAYER_RADIUS - 1;
+  private overlapsAny(px: number, py: number, entityRadius: number = PLAYER_RADIUS): boolean {
+    const r = entityRadius - 1;
     if (
       this.tileBlocksMovement(px - r, py - r) ||
       this.tileBlocksMovement(px + r, py - r) ||
@@ -307,19 +317,19 @@ export class MovementSystem {
 
     // Resource nodes act as solid blocks (circle-vs-AABB)
     for (const node of this.resourceCache) {
-      if (circleAABBPush(px, py, PLAYER_RADIUS, node.x, node.y, RESOURCE_NODE_RADIUS)) {
+      if (circleAABBPush(px, py, entityRadius, node.x, node.y, RESOURCE_NODE_RADIUS)) {
         return true;
       }
     }
     // Portals act as solid circles
     for (const portal of this.portalCache) {
       const dx = px - portal.x, dy = py - portal.y;
-      const minDist = PLAYER_RADIUS + PORTAL_RADIUS;
+      const minDist = entityRadius + PORTAL_RADIUS;
       if (dx * dx + dy * dy < minDist * minDist) return true;
     }
     // Buildings act as solid blocks (circle-vs-AABB)
     for (const bldg of this.buildingCache) {
-      if (circleAABBPush(px, py, PLAYER_RADIUS, bldg.x, bldg.y, bldg.halfExtent)) {
+      if (circleAABBPush(px, py, entityRadius, bldg.x, bldg.y, bldg.halfExtent)) {
         return true;
       }
     }
@@ -335,13 +345,6 @@ export class MovementSystem {
     // Bridge overrides unwalkable terrain
     if (this.bridgeTiles.has(`${tx},${ty}`)) return false;
     const tileId = this.generator.getTile(tx, ty);
-    if (TILE_DEFS[tileId]?.walkable ?? false) return false;
-    // Allow movement on unwalkable tiles adjacent to a bridge
-    // (so the player can smoothly transition onto/off a bridge)
-    if (this.bridgeTiles.has(`${tx - 1},${ty}`) ||
-        this.bridgeTiles.has(`${tx + 1},${ty}`) ||
-        this.bridgeTiles.has(`${tx},${ty - 1}`) ||
-        this.bridgeTiles.has(`${tx},${ty + 1}`)) return false;
-    return true;
+    return !(TILE_DEFS[tileId]?.walkable ?? false);
   }
 }

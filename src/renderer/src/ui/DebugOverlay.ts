@@ -12,6 +12,10 @@ export interface ServerStats {
   enemyCount: number;
   portalCount: number;
   playerCount: number;
+  tickProfile?: {
+    combat: number; enemy: number; movement: number;
+    projectile: number; buildings: number; waves: number; total: number;
+  };
 }
 
 export interface DebugInfo {
@@ -81,6 +85,7 @@ export class DebugOverlay {
       'overflow-y: auto',
       'max-height: 40vh',
       'white-space: pre-wrap',
+      'scrollbar-width: none',
     ].join('; ');
     this.el.appendChild(this.statsEl);
 
@@ -223,7 +228,7 @@ export class DebugOverlay {
     if (this.activeView === 'server' || this.activeView === 'all') {
       if (lines.length > 0) lines.push('');
       if (info.server) {
-        const { wave, enemyCount, portalCount, playerCount } = info.server;
+        const { wave, enemyCount, portalCount, playerCount, tickProfile } = info.server;
         lines.push(
           '── Server ──',
           `Wave:     ${wave}`,
@@ -231,6 +236,19 @@ export class DebugOverlay {
           `Portals:  ${portalCount}`,
           `Players:  ${playerCount}`,
         );
+        if (tickProfile) {
+          lines.push(
+            '',
+            '── Tick Profile (ms) ──',
+            `Total:      ${tickProfile.total.toFixed(2)}`,
+            `Enemy:      ${tickProfile.enemy.toFixed(2)}`,
+            `Combat:     ${tickProfile.combat.toFixed(2)}`,
+            `Movement:   ${tickProfile.movement.toFixed(2)}`,
+            `Projectile: ${tickProfile.projectile.toFixed(2)}`,
+            `Buildings:  ${tickProfile.buildings.toFixed(2)}`,
+            `Waves:      ${tickProfile.waves.toFixed(2)}`,
+          );
+        }
       } else {
         lines.push('── Server ──', 'No active session');
       }

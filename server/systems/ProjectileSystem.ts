@@ -158,9 +158,12 @@ export class ProjectileSystem {
         if (targetId === projId) continue;
         if (world.getComponent(targetId, C.Projectile)) continue;
 
-        // Skip same faction (no friendly fire)
+        // Skip same faction (no friendly fire), but allow cross-faction enemy combat
         const tgtFaction = world.getComponent<FactionComponent>(targetId, C.Faction);
-        if (projFaction && tgtFaction && projFaction.type === tgtFaction.type) continue;
+        if (projFaction && tgtFaction && projFaction.type === tgtFaction.type) {
+          if (!(projFaction.type === 'enemy' && projFaction.enemyFaction && tgtFaction.enemyFaction
+                && projFaction.enemyFaction !== tgtFaction.enemyFaction)) continue;
+        }
 
         // Enemy projectiles don't hit portals
         if (projFaction?.type === 'enemy' && tgtFaction?.type === 'portal') continue;
@@ -295,6 +298,9 @@ export class ProjectileSystem {
       const bldg = world.getComponent<BuildingComponent>(id, C.Building)!;
       // Spike traps and bridges don't block projectiles
       if (bldg.buildingType === 'spike_trap' || bldg.buildingType === 'bridge') continue;
+      // Damageable buildings (campfire, barracks, etc.) should take damage via entity
+      // collision, not silently block the projectile
+      if (world.hasComponent(id, C.Health)) continue;
       const bPos = world.getComponent<PositionComponent>(id, C.Position)!;
       const half = buildingHalfExtent(bldg.buildingType);
       // Expand AABB by projectile radius for swept check
