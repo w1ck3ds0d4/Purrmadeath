@@ -37,6 +37,8 @@ export const C = {
   HealAura:        'HealAura',
   BarracksSpawner: 'BarracksSpawner',
   Guard:           'Guard',
+  // ── Phase 7 ──────────────────────────────────────────────────────────────
+  Class:           'Class',
 } as const;
 
 // ─── Component interfaces ──────────────────────────────────────────────────────
@@ -339,4 +341,11 @@ export interface BarracksSpawnerComponent {
 export interface GuardComponent {
   barracksId: number;
   patrolRadius: number;
+}
+
+// ── Phase 7 ──────────────────────────────────────────────────────────────────
+
+/** Player class identity (warrior, ranger, mage). */
+export interface ClassComponent {
+  classType: string;
 }

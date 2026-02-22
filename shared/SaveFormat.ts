@@ -77,6 +77,8 @@ export interface SavedPlayer {
   maxHp: number;
   x: number;
   y: number;
+  /** Player class (defaults to 'warrior' for old saves). */
+  playerClass?: string;
 }
 
 export interface SavedEnemy {

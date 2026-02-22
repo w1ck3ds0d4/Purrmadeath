@@ -1,6 +1,8 @@
 import { World } from '@shared/ecs/World';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
 import { spawnPlayer, findSpawnPoint } from '@shared/world/PlayerSpawner';
+import { CLASS_STATS, DEFAULT_CLASS } from '@shared/ClassDefinitions';
+import type { PlayerClass } from '@shared/ClassDefinitions';
 import {
   C,
   PositionComponent,
@@ -31,7 +33,6 @@ import {
   ENEMY_BASE_SPEED,
   ENEMY_MAX_HEALTH,
   ENEMY_MELEE_COOLDOWN,
-  RANGED_DAMAGE,
   RANGED_COOLDOWN,
   RANGED_SPEED,
   RANGED_LIFETIME,
@@ -119,6 +120,8 @@ export interface SessionPlayer {
   entityId: number | null; // null while in lobby, set on game start
   /** Last input sequence number received from this client. */
   lastSeq: number;
+  /** Player class (warrior/ranger/mage). Defaults to 'warrior'. */
+  playerClass: PlayerClass;
 }
 
 export type SessionPhase = 'lobby' | 'playing';
@@ -391,6 +394,7 @@ export class GameSession {
     displayName: string,
     isHost: boolean,
     persistentId?: string,
+    playerClass?: PlayerClass,
   ): SessionPlayer {
     const slot = this.nextFreeSlot();
     const player: SessionPlayer = {
@@ -401,6 +405,7 @@ export class GameSession {
       isHost,
       entityId: null,
       lastSeq: 0,
+      playerClass: playerClass ?? DEFAULT_CLASS,
     };
     this.players.set(client.id, player);
     return player;
@@ -458,12 +463,25 @@ export class GameSession {
       displayName: p.displayName,
       slot: p.slot,
       isHost: p.isHost,
+      playerClass: p.playerClass,
     }));
   }
 
   /** Iterate all session player records (for broadcasting). */
   getPlayers(): IterableIterator<SessionPlayer> {
     return this.players.values();
+  }
+
+  /** Handle a CLASS_SELECT message from a lobby player. */
+  handleClassSelect(clientId: string, playerClass: PlayerClass, send: SendFn): void {
+    if (this.phase !== 'lobby') return;
+    const player = this.players.get(clientId);
+    if (!player) return;
+    if (!CLASS_STATS[playerClass]) return; // invalid class
+    player.playerClass = playerClass;
+    // Broadcast updated lobby state to all players
+    const state = { type: MessageType.SESSION_STATE, players: this.getLobbySlots() };
+    for (const p of this.players.values()) send(p.client, state);
   }
 
   // ── Game start ──────────────────────────────────────────────────────────────
@@ -500,11 +518,13 @@ export class GameSession {
       const sy = origin.y + off.dy;
       spawnPositions[player.slot] = [sx, sy];
 
+      const cs = CLASS_STATS[player.playerClass];
       player.entityId = spawnPlayer(
         this.world,
         this.generator,
         player.slot,
         { x: sx, y: sy },
+        { hp: cs.hp, speed: cs.speed, defense: cs.defense, stamina: cs.stamina, classType: player.playerClass },
       );
       this.playerEntityIds.add(player.entityId);
     }
@@ -626,7 +646,7 @@ export class GameSession {
         }
       }
 
-      // Restore player resources from save (match by playerId)
+      // Restore player resources and class from save (match by playerId)
       for (const p of this.players.values()) {
         if (p.entityId === null) continue;
         const savedP = save.players.find(sp => sp.playerId === p.playerId);
@@ -641,6 +661,10 @@ export class GameSession {
             pos.x = savedP.x;
             pos.y = savedP.y;
             spawnPositions[p.slot] = [savedP.x, savedP.y];
+          }
+          // Restore saved class (defaults to current selection if absent)
+          if (savedP.playerClass && CLASS_STATS[savedP.playerClass as PlayerClass]) {
+            p.playerClass = savedP.playerClass as PlayerClass;
           }
         }
       }
@@ -1136,7 +1160,9 @@ export class GameSession {
       }
     }
 
-    if (msg.attackType === 'ranged') {
+    // Route by server-authoritative class, not client-sent attackType
+    const classStats = CLASS_STATS[player.playerClass];
+    if (classStats.attackType === 'ranged') {
       this.handleRangedAttack(player, msg.facing, send);
     } else {
       this.handleMeleeAttack(player, msg, send);
@@ -1268,10 +1294,11 @@ export class GameSession {
     const cd = this.world.getComponent<AttackCooldownComponent>(entityId, C.AttackCooldown);
     if (cd && cd.remaining > TICK_MS / 1000) return;
 
-    // Apply card damage multiplier
+    // Apply card damage multiplier using class base damage
     const pBuffs = this.cards.playerBuffs.get(player.client.id);
     const dmgMult = (pBuffs?.damageMultiplier ?? 1) * this.cards.debuffs.playerDamageMult;
-    const meleeOverrides = dmgMult !== 1 ? { damage: Math.round(15 * dmgMult) } : undefined;
+    const classDmg = CLASS_STATS[player.playerClass].baseDamage;
+    const meleeOverrides = dmgMult !== 1 ? { damage: Math.round(classDmg * dmgMult) } : { damage: classDmg };
 
     const { hits, deaths } = this.combat.processMeleeAttack(
       this.world,
@@ -1334,10 +1361,11 @@ export class GameSession {
     const projId = this.world.createEntity();
     this.world.addComponent(projId, C.Position,   { x: spawnX, y: spawnY });
     this.world.addComponent(projId, C.Velocity,   { vx, vy });
-    // Apply card damage multiplier to ranged damage
+    // Apply card damage multiplier using class base damage
     const rBuffs = this.cards.playerBuffs.get(player.client.id);
     const rDmgMult = (rBuffs?.damageMultiplier ?? 1) * this.cards.debuffs.playerDamageMult;
-    const projDamage = rDmgMult !== 1 ? Math.round(RANGED_DAMAGE * rDmgMult) : RANGED_DAMAGE;
+    const rangedClassDmg = CLASS_STATS[player.playerClass].baseDamage;
+    const projDamage = Math.round(rangedClassDmg * rDmgMult);
     this.world.addComponent(projId, C.Projectile, { ownerId: entityId, damage: projDamage, lifetime: RANGED_LIFETIME });
     this.world.addComponent(projId, C.Faction,    { type: faction?.type ?? 'player' });
 
@@ -1880,6 +1908,9 @@ export class GameSession {
 
       // Downed state
       if (this.world.hasComponent(id, C.Downed)) snap.downed = true;
+
+      // Player class
+      if (playerEntry) snap.playerClass = playerEntry.playerClass;
 
       snaps.push(snap);
     }

@@ -25,7 +25,11 @@ import type {
   BuildDemolishMessage,
   BuildUpgradeMessage,
   BuildRepairMessage,
+  ClassSelectMessage,
+  PlayerKickMessage,
 } from '@shared/protocol';
+import { PLAYER_CLASSES } from '@shared/ClassDefinitions';
+import type { PlayerClass } from '@shared/ClassDefinitions';
 import { GAME_VERSION, RECONNECT_GRACE_MS } from '@shared/constants';
 import type { MetaStats } from '@shared/MetaStats';
 import { emptyMetaStats, mergeRunStats } from '@shared/MetaStats';
@@ -109,6 +113,8 @@ export class SessionManager {
     socket.on(MessageType.SAVE_DELETE,             (c, m) => this.onSaveDelete(c, m as import('@shared/protocol').SaveDeleteMessage));
     socket.on(MessageType.META_STATS_REQUEST,      (c) => this.onMetaStatsRequest(c));
     socket.on(MessageType.CARD_PICK,               (c, m) => this.session?.handleCardPick(c.id, m as CardPickMessage, (cl, msg) => this.socket.send(cl, msg)));
+    socket.on(MessageType.CLASS_SELECT,            (c, m) => this.onClassSelect(c, m as ClassSelectMessage));
+    socket.on(MessageType.PLAYER_KICK,             (c, m) => this.onPlayerKick(c, m as PlayerKickMessage));
     socket.onDisconnect((c) => this.onDisconnect(c));
 
     // Load persisted saves and meta stats from disk
@@ -316,7 +322,8 @@ export class SessionManager {
     };
 
     const displayName = this.displayNames.get(client.id) ?? `Player${client.id}`;
-    const player = this.session.addPlayer(client, displayName, /* isHost */ true, hostPlayerId);
+    const playerClass = this.validatePlayerClass(msg.playerClass);
+    const player = this.session.addPlayer(client, displayName, /* isHost */ true, hostPlayerId, playerClass);
 
     const ack: SessionAckMessage = {
       type: MessageType.SESSION_ACK,
@@ -397,7 +404,8 @@ export class SessionManager {
 
     const displayName = this.displayNames.get(client.id) ?? `Player${client.id}`;
     const joinerId = this.clientPlayerIds.get(client.id);
-    const player = this.session.addPlayer(client, displayName, /* isHost */ false, joinerId);
+    const joinClass = this.validatePlayerClass(msg.playerClass);
+    const player = this.session.addPlayer(client, displayName, /* isHost */ false, joinerId, joinClass);
 
     // Acknowledge to the joining player
     const ack: SessionAckMessage = {
@@ -415,7 +423,7 @@ export class SessionManager {
     // Notify all other players in the session
     const joined: PlayerJoinedMessage = {
       type: MessageType.PLAYER_JOINED,
-      player: { playerId: player.playerId, displayName, slot: player.slot, isHost: false },
+      player: { playerId: player.playerId, displayName, slot: player.slot, isHost: false, playerClass: player.playerClass },
     };
     this.broadcastToSession(joined, client.id);
     this.beacon.update({ playerCount: this.session.playerCount });
@@ -489,6 +497,56 @@ export class SessionManager {
 
   private onDebugSpawnEnemies(client: ConnectedClient, msg: DebugSpawnEnemiesMessage): void {
     this.session?.debugSpawnEnemies(client.id, msg.count);
+  }
+
+  private onClassSelect(client: ConnectedClient, msg: ClassSelectMessage): void {
+    if (!this.session) return;
+    const playerClass = this.validatePlayerClass(msg.playerClass);
+    this.session.handleClassSelect(client.id, playerClass, (c, m) => this.socket.send(c, m));
+  }
+
+  private onPlayerKick(client: ConnectedClient, msg: PlayerKickMessage): void {
+    if (!this.session) return;
+    const kicker = this.session.getPlayer(client.id);
+    if (!kicker?.isHost) {
+      this.socket.send(client, { type: MessageType.ERROR, code: 'NOT_HOST', message: 'Only the host can kick players' });
+      return;
+    }
+
+    // Find target by slot
+    const targetSlot = msg.slot;
+    let targetClientId: string | undefined;
+    for (const p of this.session.getPlayers()) {
+      if (p.slot === targetSlot) {
+        if (p.client.id === client.id) return; // Can't kick yourself
+        targetClientId = p.client.id;
+        break;
+      }
+    }
+    if (!targetClientId) return;
+
+    const target = this.session.getPlayer(targetClientId)!;
+    const targetClient = target.client;
+
+    // Notify kicked player
+    this.socket.send(targetClient, {
+      type: MessageType.SESSION_CLOSED,
+      reason: 'Kicked by host',
+    } as SessionClosedMessage);
+
+    // Remove and broadcast
+    this.finalizePlayerRemoval(targetClientId, target.displayName, false, target.slot, target.playerId);
+    console.log(`[Session] ${target.displayName} was kicked by ${kicker.displayName}`);
+
+    // Close their connection
+    targetClient.ws.close();
+  }
+
+  private validatePlayerClass(raw: unknown): PlayerClass {
+    if (typeof raw === 'string' && (PLAYER_CLASSES as readonly string[]).includes(raw)) {
+      return raw as PlayerClass;
+    }
+    return 'warrior';
   }
 
   private onPauseVote(client: ConnectedClient): void {

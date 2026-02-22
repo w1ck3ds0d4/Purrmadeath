@@ -11,6 +11,7 @@ import {
 import type {
   HandshakeAckMessage,
   SessionAckMessage,
+  SessionStateMessage,
   PlayerJoinedMessage,
   PlayerLeftMessage,
   SnapshotMessage,
@@ -98,7 +99,7 @@ export interface GameplayState {
   localResources: Record<string, number>;
   warehouseResources: { wood: number; stone: number; iron: number; diamond: number; gold: number; food: number };
   warehouseExists: boolean;
-  selectedWeapon: 0 | 1;
+  selectedClass: import('@shared/ClassDefinitions').PlayerClass;
   lastServerStats?: {
     wave: number; enemyCount: number; portalCount: number; playerCount: number;
     tickProfile?: { combat: number; enemy: number; movement: number; projectile: number; buildings: number; waves: number; total: number };
@@ -197,6 +198,12 @@ export function registerMessageHandlers(
     d.lobbyOverlay.updatePlayers(s.lobbyPlayers);
     d.lobbyOverlay.addChatMessage('←', `Player ${pl.slot + 1} left`);
     d.debug.log(`Player left: slot ${pl.slot + 1}`);
+  });
+
+  net.on(MessageType.SESSION_STATE, (msg) => {
+    const state = msg as SessionStateMessage;
+    s.lobbyPlayers = state.players;
+    d.lobbyOverlay.updatePlayers(s.lobbyPlayers);
   });
 
   // ── World state ─────────────────────────────────────────────────────────
@@ -560,6 +567,9 @@ export function registerMessageHandlers(
     console.warn(`[Net] Session closed: ${closed.reason}`);
     d.debug.log(`Session closed: ${closed.reason}`);
     d.stateMgr.transition(GameState.Menu);
+    if (closed.reason === 'Kicked by host') {
+      d.menuOverlay.showInfoDialog('You have been kicked by the host.');
+    }
   });
 
   // ── Transport callbacks ─────────────────────────────────────────────────

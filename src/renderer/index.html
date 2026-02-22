@@ -181,26 +181,58 @@
       /* ── Lobby screen ───────────────────────────────────────────────────── */
       #lobby-screen {
         align-items: stretch;
-        justify-content: flex-start;
-        padding: 48px;
+        justify-content: stretch;
+        padding: 0;
         gap: 0;
       }
 
-      .lobby-title {
-        font-family: 'Segoe UI', sans-serif;
-        font-size: 26px;
-        font-weight: 700;
-        color: #ccd8ea;
-        letter-spacing: 4px;
-        margin-bottom: 4px;
+      /* 3-column layout */
+      .lobby-layout {
+        display: flex;
+        flex: 1;
+        min-height: 0;
+        gap: 0;
+      }
+
+      .lobby-col {
+        display: flex;
+        flex-direction: column;
+        padding: 28px 24px;
+        border-right: 1px solid rgba(255, 255, 255, 0.06);
+      }
+
+      .lobby-col:last-child { border-right: none; }
+
+      .lobby-col-left {
+        width: 300px;
+        flex-shrink: 0;
+      }
+
+      .lobby-col-center {
+        flex: 1;
+        align-items: center;
+      }
+
+      .lobby-col-right {
+        width: 260px;
+        flex-shrink: 0;
+      }
+
+      .lobby-panel-title {
+        font-family: monospace;
+        font-size: 11px;
+        color: #4a5a6a;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        margin-bottom: 16px;
         user-select: none;
       }
 
-      /* Share row (code + IP copy buttons) */
+      /* Share row (code copy) */
       #lobby-share-row {
         display: flex;
         gap: 12px;
-        margin-bottom: 28px;
+        margin-bottom: 16px;
         flex-wrap: wrap;
       }
 
@@ -248,43 +280,23 @@
       .btn-copy:hover { color: #9bb8d8; border-color: rgba(255,255,255,0.25); }
       .btn-copy.copied { color: #6bcf7f; border-color: #6bcf7f; }
 
-      .lobby-layout {
-        display: flex;
-        gap: 28px;
-        flex: 1;
-        min-height: 0;
-      }
-
       /* Player list */
-      .lobby-panel {
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-      }
-
-      .lobby-panel-title {
-        font-family: monospace;
-        font-size: 11px;
-        color: #4a5a6a;
-        letter-spacing: 2px;
-        text-transform: uppercase;
-        margin-bottom: 4px;
-      }
-
       #lobby-player-list {
         list-style: none;
         display: flex;
         flex-direction: column;
-        gap: 8px;
-        min-width: 220px;
+        gap: 6px;
+        margin-bottom: 16px;
       }
 
       .lobby-slot {
         font-family: 'Segoe UI', sans-serif;
-        font-size: 15px;
-        padding: 10px 16px;
+        font-size: 14px;
+        padding: 8px 12px;
         border: 1px solid rgba(255, 255, 255, 0.07);
         background: rgba(255, 255, 255, 0.03);
+        display: flex;
+        align-items: center;
       }
 
       .lobby-slot.filled {
@@ -295,13 +307,45 @@
 
       .lobby-slot.empty { color: #3a4a5a; }
 
-      /* Chat */
+      .lobby-slot-class {
+        font-family: monospace;
+        font-size: 11px;
+        margin-left: 6px;
+        letter-spacing: 1px;
+      }
+
+      .btn-kick {
+        margin-left: auto;
+        padding: 2px 10px;
+        font-size: 11px;
+        background: rgba(200, 60, 60, 0.25);
+        color: #e06060;
+        border: 1px solid rgba(200, 60, 60, 0.4);
+        border-radius: 3px;
+        cursor: pointer;
+        font-family: 'Segoe UI', sans-serif;
+      }
+      .btn-kick:hover {
+        background: rgba(200, 60, 60, 0.45);
+        color: #ff8080;
+      }
+
+      /* Chat (inside left column, fills remaining space) */
       .lobby-chat {
         display: flex;
         flex-direction: column;
         flex: 1;
-        min-width: 0;
-        max-width: 340px;
+        min-height: 0;
+      }
+
+      .lobby-chat-label {
+        font-family: monospace;
+        font-size: 10px;
+        color: #4a5a6a;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        margin-bottom: 6px;
+        user-select: none;
       }
 
       #lobby-chat-log {
@@ -310,8 +354,8 @@
         background: rgba(0, 0, 0, 0.3);
         padding: 10px 12px;
         border: 1px solid rgba(255, 255, 255, 0.06);
-        margin-bottom: 8px;
-        max-height: 220px;
+        margin-bottom: 6px;
+        min-height: 80px;
       }
 
       .chat-line { font-family: monospace; font-size: 12px; color: #8a9ab0; margin: 2px 0; }
@@ -325,15 +369,76 @@
         border: 1px solid rgba(255, 255, 255, 0.14);
         padding: 9px 12px;
         outline: none;
+        flex-shrink: 0;
       }
 
       #lobby-chat-input:focus { border-color: rgba(255, 255, 255, 0.3); }
+
+      /* Class selector (center column) */
+      .class-selector {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+
+      .class-btn {
+        font-family: 'Segoe UI', monospace;
+        font-size: 13px;
+        color: #8a9ab0;
+        background: rgba(255, 255, 255, 0.04);
+        border: 2px solid rgba(255, 255, 255, 0.10);
+        padding: 12px 24px;
+        cursor: pointer;
+        letter-spacing: 1px;
+        transition: background 0.15s, border-color 0.15s, color 0.15s;
+        outline: none;
+        min-width: 120px;
+        text-align: center;
+      }
+
+      .class-btn:hover {
+        background: rgba(255, 255, 255, 0.10);
+        color: #d8e2ef;
+      }
+
+      .class-btn.selected {
+        color: #ffffff;
+        background: rgba(255, 255, 255, 0.12);
+        border-color: currentColor;
+      }
+
+      .class-btn[data-class="warrior"].selected { color: #cc9966; border-color: #cc9966; }
+      .class-btn[data-class="ranger"].selected  { color: #55cc77; border-color: #55cc77; }
+      .class-btn[data-class="mage"].selected    { color: #9966dd; border-color: #9966dd; }
+
+      .class-btn-stats {
+        display: block;
+        font-size: 10px;
+        color: #4a5a6a;
+        margin-top: 3px;
+        letter-spacing: 0;
+      }
+
+      .class-btn.selected .class-btn-stats { color: #6a7a8a; }
+
+      /* Game modifiers placeholder */
+      .lobby-placeholder {
+        font-family: monospace;
+        font-size: 13px;
+        color: #3a4a5a;
+        text-align: center;
+        margin-top: 40px;
+        user-select: none;
+      }
 
       /* Lobby bottom action row */
       .lobby-actions {
         display: flex;
         gap: 10px;
-        margin-top: 24px;
+        padding: 16px 24px 32px;
+        justify-content: flex-end;
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
       }
     </style>
   </head>
@@ -374,27 +479,48 @@
 
       <!-- ── Lobby Screen ───────────────────────────────────────────────────── -->
       <div id="lobby-screen" class="screen">
-        <p class="lobby-title">LOBBY</p>
-        <div id="lobby-share-row"></div>
-
         <div class="lobby-layout">
-          <!-- Player slots -->
-          <div class="lobby-panel">
-            <p class="lobby-panel-title">Players</p>
+          <!-- Left column: lobby info + players + chat -->
+          <div class="lobby-col lobby-col-left">
+            <p class="lobby-panel-title">Lobby Information</p>
+            <div id="lobby-share-row"></div>
             <ul id="lobby-player-list"></ul>
+            <div class="lobby-chat">
+              <p class="lobby-chat-label">Chat</p>
+              <div id="lobby-chat-log"></div>
+              <input id="lobby-chat-input" type="text" placeholder="Press Enter to chat…" maxlength="200" />
+            </div>
           </div>
 
-          <!-- Chat -->
-          <div class="lobby-chat">
-            <p class="lobby-panel-title">Chat</p>
-            <div id="lobby-chat-log"></div>
-            <input id="lobby-chat-input" type="text" placeholder="Press Enter to chat…" maxlength="200" />
+          <!-- Center column: class selector -->
+          <div class="lobby-col lobby-col-center">
+            <p class="lobby-panel-title">Player Classes</p>
+            <div id="class-selector" class="class-selector">
+              <button class="class-btn selected" data-class="warrior">
+                Warrior
+                <span class="class-btn-stats">120 HP · Sword · 18 dmg</span>
+              </button>
+              <button class="class-btn" data-class="ranger">
+                Ranger
+                <span class="class-btn-stats">80 HP · Bow · 12 dmg</span>
+              </button>
+              <button class="class-btn" data-class="mage">
+                Mage
+                <span class="class-btn-stats">70 HP · Staff · 14 dmg</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Right column: game modifiers (placeholder) -->
+          <div class="lobby-col lobby-col-right">
+            <p class="lobby-panel-title">Game Modifiers</p>
+            <p class="lobby-placeholder">Coming soon...</p>
           </div>
         </div>
 
         <div class="lobby-actions">
-          <button id="btn-lobby-start" class="menu-btn">Start Game</button>
           <button id="btn-lobby-leave" class="menu-btn muted">Leave</button>
+          <button id="btn-lobby-start" class="menu-btn">Start Game</button>
         </div>
       </div>
 

@@ -155,6 +155,10 @@ export class RemotePlayerSystem {
       if (snap.enemyVariant) {
         world.addComponent(snap.entityId, C.EnemyVariant, { variant: snap.enemyVariant } as EnemyVariantComponent);
       }
+      // Player class (for renderer differentiation)
+      if (snap.playerClass) {
+        world.addComponent(snap.entityId, C.Class, { classType: snap.playerClass });
+      }
       // Ghost visibility state
       if (snap.ghostHidden !== undefined) {
         world.addComponent(snap.entityId, C.GhostState, { hidden: snap.ghostHidden } as GhostStateComponent);

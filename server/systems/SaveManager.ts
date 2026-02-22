@@ -140,6 +140,7 @@ export function createSaveManager(deps: SaveManagerDeps) {
         maxHp: hp.max,
         x: pos.x,
         y: pos.y,
+        playerClass: p.playerClass,
       });
     }
 

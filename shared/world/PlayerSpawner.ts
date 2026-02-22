@@ -11,6 +11,15 @@ import {
   MELEE_COOLDOWN,
 } from '@shared/constants';
 
+/** Optional class-based stat overrides for player spawning. */
+export interface ClassStatOverrides {
+  hp: number;
+  speed: number;
+  defense: number;
+  stamina: number;
+  classType: string;
+}
+
 /**
  * Creates a player entity in the ECS world at a walkable spawn point near the origin.
  *
@@ -21,6 +30,7 @@ import {
  * @param playerIndex Slot 0–3 - determines player color and HUD position.
  * @param spawnPos    Optional override position (world pixels). When provided, skips
  *                    the spiral search - the server uses this to pass canonical positions.
+ * @param classStats  Optional class stat overrides (hp, speed, defense, stamina).
  * @returns The new entity ID.
  */
 export function spawnPlayer(
@@ -28,22 +38,32 @@ export function spawnPlayer(
   generator: WorldGenerator,
   playerIndex: number,
   spawnPos?: { x: number; y: number },
+  classStats?: ClassStatOverrides,
 ): number {
   const { x, y } = spawnPos ?? findSpawnPoint(generator);
   const id = world.createEntity();
 
+  const hp = classStats?.hp ?? PLAYER_MAX_HEALTH;
+  const speed = classStats?.speed ?? PLAYER_BASE_SPEED;
+  const defense = classStats?.defense ?? 0;
+  const stamina = classStats?.stamina ?? PLAYER_MAX_STAMINA;
+
   world.addComponent(id, C.Position,    { x, y });
   world.addComponent(id, C.Velocity,    { vx: 0, vy: 0 });
-  world.addComponent(id, C.Health,      { current: PLAYER_MAX_HEALTH,  max: PLAYER_MAX_HEALTH });
-  world.addComponent(id, C.Stamina,     { current: PLAYER_MAX_STAMINA, max: PLAYER_MAX_STAMINA, regenRate: PLAYER_STAMINA_REGEN, exhausted: false });
-  world.addComponent(id, C.Defense,     { flat: 0, percent: 0 });
-  world.addComponent(id, C.Speed,       { base: PLAYER_BASE_SPEED, multiplier: 1 });
+  world.addComponent(id, C.Health,      { current: hp, max: hp });
+  world.addComponent(id, C.Stamina,     { current: stamina, max: stamina, regenRate: PLAYER_STAMINA_REGEN, exhausted: false });
+  world.addComponent(id, C.Defense,     { flat: defense, percent: 0 });
+  world.addComponent(id, C.Speed,       { base: speed, multiplier: 1 });
   world.addComponent(id, C.PlayerIndex,        { index: playerIndex });
   world.addComponent(id, C.PlayerInput,        { dx: 0, dy: 0, sprint: false });
   world.addComponent(id, C.AttackCooldown,     { remaining: 0, max: MELEE_COOLDOWN });
   world.addComponent(id, C.Faction,             { type: 'player' });
   world.addComponent(id, C.KnockbackReceiver,  { vx: 0, vy: 0 });
   world.addComponent(id, C.Resources,          { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 });
+
+  if (classStats) {
+    world.addComponent(id, C.Class, { classType: classStats.classType });
+  }
 
   return id;
 }

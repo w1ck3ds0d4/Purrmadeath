@@ -55,14 +55,12 @@ import { DamageNumberSystem } from './systems/DamageNumberSystem';
 import { Minimap, MAP_SIZE, MAP_PADDING } from './ui/Minimap';
 import { StatsOverlay } from './ui/StatsOverlay';
 import { CardPickerOverlay } from './ui/CardPickerOverlay';
+import { CLASS_STATS, DEFAULT_CLASS } from '@shared/ClassDefinitions';
+import type { PlayerClass } from '@shared/ClassDefinitions';
 
 // Slow world pan behind menus (world pixels per millisecond)
 const BG_PAN_X = 0.05;
 const BG_PAN_Y = 0.025;
-
-// Weapon slot tables - indexed by selectedWeapon (0 = melee, 1 = ranged)
-const WEAPON_TYPES: readonly ('melee' | 'ranged')[] = ['melee', 'ranged'];
-const WEAPON_COOLDOWNS = [MELEE_COOLDOWN, RANGED_COOLDOWN] as const;
 
 // ── Environment: production uses VITE_SERVER_IP, dev defaults to localhost ───
 const serverIp = import.meta.env.VITE_SERVER_IP ?? 'localhost';
@@ -184,7 +182,7 @@ async function main(): Promise<void> {
 
   // ── Attack cooldown (client-side mirror of server AttackCooldown) ────────────
   let attackCooldown = 0;
-  let selectedWeapon: 0 | 1 = 0; // 0 = melee (Sword), 1 = ranged (Bow)
+  let selectedClass: PlayerClass = DEFAULT_CLASS;
 
   // ── Death / respawn state ──────────────────────────────────────────────────
   let localDowned   = false;
@@ -303,7 +301,7 @@ async function main(): Promise<void> {
     localEntityId = null;
     reconciler.localEntityId = null;
     isMultiplayer = false;
-    selectedWeapon = 0;
+    selectedClass = DEFAULT_CLASS;
     localDowned = false;
     localDead   = false;
     respawnTimer = 0;
@@ -416,7 +414,7 @@ async function main(): Promise<void> {
     get localResources() { return localResources; }, set localResources(v) { localResources = v; },
     get warehouseResources() { return warehouseResources; }, set warehouseResources(v) { warehouseResources = v; },
     get warehouseExists() { return warehouseExists; }, set warehouseExists(v) { warehouseExists = v; },
-    get selectedWeapon() { return selectedWeapon; }, set selectedWeapon(v) { selectedWeapon = v; },
+    get selectedClass() { return selectedClass; }, set selectedClass(v) { selectedClass = v; },
     get lastServerStats() { return lastServerStats; }, set lastServerStats(v) { lastServerStats = v; },
     get handshakeSent() { return handshakeSent; }, set handshakeSent(v) { handshakeSent = v; },
     get seed() { return seed; }, set seed(v) { seed = v; },
@@ -453,9 +451,9 @@ async function main(): Promise<void> {
     saveDisplayName(displayName);
     sendHandshakeIfNeeded(displayName);
     if (role === 'host') {
-      net.send({ type: MessageType.SESSION_CREATE, saveSlot });
+      net.send({ type: MessageType.SESSION_CREATE, saveSlot, playerClass: selectedClass });
     } else {
-      net.send({ type: MessageType.SESSION_JOIN, code: code ?? '' });
+      net.send({ type: MessageType.SESSION_JOIN, code: code ?? '', playerClass: selectedClass });
     }
   }
 
@@ -522,6 +520,11 @@ async function main(): Promise<void> {
       stateMgr.transition(GameState.Menu);
     },
     onChat: (text) => net.send({ type: MessageType.CHAT, text }),
+    onClassSelect: (playerClass) => {
+      selectedClass = playerClass;
+      net.send({ type: MessageType.CLASS_SELECT, playerClass });
+    },
+    onKick: (slot) => net.send({ type: MessageType.PLAYER_KICK, slot }),
   });
 
   // ── Start transport + show menu ────────────────────────────────────────────
@@ -599,9 +602,8 @@ async function main(): Promise<void> {
         localFacing = Math.atan2(worldMouseY - pos.y, worldMouseX - pos.x);
       }
 
-      // Weapon switching (number keys) — exit build mode when selecting a weapon
-      if (input.isJustPressed(Action.WeaponSlot1)) { selectedWeapon = 0; if (buildCtrl.active) buildCtrl.exitBuildMode(); }
-      if (input.isJustPressed(Action.WeaponSlot2)) { selectedWeapon = 1; if (buildCtrl.active) buildCtrl.exitBuildMode(); }
+      // Weapon slot 1 (number key) — exit build mode when selecting weapon
+      if (input.isJustPressed(Action.WeaponSlot1)) { if (buildCtrl.active) buildCtrl.exitBuildMode(); }
 
       // M key: toggle minimap
       if (input.isJustPressed(Action.ToggleMinimap)) minimap.toggle();
@@ -619,11 +621,12 @@ async function main(): Promise<void> {
       // tolerance (one server tick) so the client doesn't silently miss an attack
       // due to floating-point drift between variable-rate client and fixed-rate server.
       if (attackCooldown > 0) attackCooldown = Math.max(0, attackCooldown - dt);
+      const classAttackType = CLASS_STATS[selectedClass].attackType;
+      const classCooldown = classAttackType === 'melee' ? MELEE_COOLDOWN : RANGED_COOLDOWN;
       if (canAct && !buildCtrl.active && input.isJustPressed(Action.Attack) && localFacing !== null && pos && attackCooldown <= TICK_MS / 1000) {
-        const attackType = WEAPON_TYPES[selectedWeapon];
-        attackCooldown = WEAPON_COOLDOWNS[selectedWeapon];
-        net.send({ type: MessageType.ATTACK, attackType, facing: localFacing, x: pos.x, y: pos.y, t: performance.now() });
-        if (attackType === 'melee') {
+        attackCooldown = classCooldown;
+        net.send({ type: MessageType.ATTACK, attackType: classAttackType, facing: localFacing, x: pos.x, y: pos.y, t: performance.now() });
+        if (classAttackType === 'melee') {
           playerRenderer.notifyAttack(localEntityId!, localFacing);
           // Client-side melee hit prediction — flash targets in arc immediately
           const halfArc = MELEE_ARC / 2;
@@ -730,7 +733,8 @@ async function main(): Promise<void> {
 
     if (state === GameState.Playing) {
       hud.update(world, width, height);
-      weaponHotbar.update(selectedWeapon, attackCooldown, WEAPON_COOLDOWNS[selectedWeapon], width, height, buildCtrl.active);
+      const hotbarCooldown = CLASS_STATS[selectedClass].attackType === 'melee' ? MELEE_COOLDOWN : RANGED_COOLDOWN;
+      weaponHotbar.update(selectedClass, attackCooldown, hotbarCooldown, width, height, buildCtrl.active);
       minimap.update(world, localEntityId, camera.x, camera.y, width, height);
       coordsEl.textContent = `X: ${Math.round(camera.x)}  Y: ${Math.round(camera.y)}`;
     }

@@ -55,11 +55,26 @@ export class ServerSocket {
   /** Optional callback to look up a returning player's name by IP. */
   private nameLookup: NameLookup | null = null;
 
+  /** Resolves when the WSS is listening; rejects on bind error (e.g. EADDRINUSE). */
+  readonly ready: Promise<void>;
+
   constructor(port: number) {
     this.wss = new WebSocketServer({
       port,
       maxPayload: MAX_MESSAGE_BYTES,
     });
+
+    this.ready = new Promise<void>((resolve, reject) => {
+      this.wss.once('listening', resolve);
+      this.wss.once('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'EADDRINUSE') {
+          reject(new Error(`Port ${port} already in use — is another server running?`));
+        } else {
+          reject(err);
+        }
+      });
+    });
+
     this.setupServer();
     // Sweep for dead connections every 30 s
     setInterval(() => this.sweepDeadClients(), 30_000);
@@ -117,7 +132,9 @@ export class ServerSocket {
     if (!this.ipConnections.has(ip)) this.ipConnections.set(ip, new Set());
     this.ipConnections.get(ip)!.add(id);
 
-    console.log(`[Server] Client ${id} connected from ${ip} (${this.clients.size}/${MAX_CONNECTIONS})`);
+    const knownName = this.nameLookup?.(ip);
+    const whoConnect = knownName ? `"${knownName}"` : 'New player';
+    console.log(`[Server] ${whoConnect} connected from ${ip} (${this.clients.size}/${MAX_CONNECTIONS})`);
 
     const lastDisplayName = this.nameLookup?.(ip);
     this.send(client, {
@@ -130,7 +147,7 @@ export class ServerSocket {
 
     ws.on('message', (data) => {
       if (!this.checkRateLimit(client)) {
-        console.warn(`[Server] Client ${id} exceeded rate limit - disconnecting`);
+        console.warn(`[Server] ${this.nameLookup?.(ip) ?? `Client ${id}`} exceeded rate limit - disconnecting`);
         ws.close(1008, 'Rate limit exceeded');
         this.removeClient(id, client);
         return;
@@ -139,22 +156,24 @@ export class ServerSocket {
       try {
         const msg = JSON.parse(data.toString()) as BaseMessage;
         if (!this.isValidType(msg.type)) {
-          console.warn(`[Server] Client ${id} sent invalid message type`);
+          console.warn(`[Server] ${this.nameLookup?.(ip) ?? `Client ${id}`} sent invalid message type`);
           return;
         }
         this.dispatch(client, msg);
       } catch {
-        console.warn(`[Server] Unparseable message from client ${id}`);
+        console.warn(`[Server] Unparseable message from ${this.nameLookup?.(ip) ?? `Client ${id}`}`);
       }
     });
 
     ws.on('close', () => {
+      const whoDisconnect = this.nameLookup?.(ip);
       this.removeClient(id, client);
-      console.log(`[Server] Client ${id} disconnected (${this.clients.size}/${MAX_CONNECTIONS})`);
+      const tag = whoDisconnect ? `"${whoDisconnect}"` : `Client ${id}`;
+      console.log(`[Server] ${tag} disconnected (${this.clients.size}/${MAX_CONNECTIONS})`);
     });
 
     ws.on('error', (err) => {
-      console.error(`[Server] Client ${id} error: ${err.message}`);
+      console.error(`[Server] ${this.nameLookup?.(ip) ?? `Client ${id}`} error: ${err.message}`);
       this.removeClient(id, client);
     });
   }

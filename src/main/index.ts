@@ -198,12 +198,15 @@ function createWindow(): void {
     show: false,
     title: 'Purrmadeath',
     backgroundColor: '#0a0a0f',
+    autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
       nodeIntegration: false,
       contextIsolation: true,
     },
   });
+
+  win.setMenuBarVisibility(false);
 
   win.maximize();
   win.show();

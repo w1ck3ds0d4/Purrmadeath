@@ -160,6 +160,12 @@ export enum MessageType {
   CARD_OFFER   = 'CARD_OFFER',
   CARD_PICK    = 'CARD_PICK',
   CARD_APPLIED = 'CARD_APPLIED',
+
+  // ── Phase 7 ────────────────────────────────────────────────────────────────
+  /** Client → Server: player selects a class in the lobby. */
+  CLASS_SELECT = 'CLASS_SELECT',
+  /** Client (host) → Server: kick a player from the lobby by slot. */
+  PLAYER_KICK = 'PLAYER_KICK',
 }
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
@@ -206,12 +212,16 @@ export interface SessionCreateMessage extends BaseMessage {
   type: typeof MessageType.SESSION_CREATE;
   /** Optional save slot (1-3) to resume from. Omit for new game. */
   saveSlot?: number;
+  /** Player's chosen class (defaults to 'warrior' if absent). */
+  playerClass?: import('./ClassDefinitions').PlayerClass;
 }
 
 export interface SessionJoinMessage extends BaseMessage {
   type: typeof MessageType.SESSION_JOIN;
   /** 4-letter invite code (case-insensitive). Empty string = join any active session (dev/LAN). */
   code: string;
+  /** Player's chosen class (defaults to 'warrior' if absent). */
+  playerClass?: import('./ClassDefinitions').PlayerClass;
 }
 
 export interface SessionLeaveMessage extends BaseMessage {
@@ -241,6 +251,8 @@ export interface LobbySlot {
   displayName: string;
   slot: number;
   isHost: boolean;
+  /** Player's chosen class. Defaults to 'warrior' if absent. */
+  playerClass?: import('./ClassDefinitions').PlayerClass;
 }
 
 export interface PlayerJoinedMessage extends BaseMessage {
@@ -318,6 +330,8 @@ export interface EntitySnapshot {
   ghostHidden?: boolean;
   /** Non-standard enemy radius (e.g. giant = 20). Only sent when != default 10. */
   enemyRadius?: number;
+  /** Player class type (warrior/ranger/mage). Only present for player faction. */
+  playerClass?: string;
 }
 
 /** Full world snapshot sent on game start or player rejoin. */
@@ -734,6 +748,20 @@ export interface CardAppliedMessage extends BaseMessage {
   isTrap: boolean;
 }
 
+// ── Phase 7 ──────────────────────────────────────────────────────────────────
+
+/** Client → Server: player selects a class in the lobby. */
+export interface ClassSelectMessage extends BaseMessage {
+  type: typeof MessageType.CLASS_SELECT;
+  playerClass: import('./ClassDefinitions').PlayerClass;
+}
+
+/** Client (host) → Server: kick a player by slot index. */
+export interface PlayerKickMessage extends BaseMessage {
+  type: typeof MessageType.PLAYER_KICK;
+  slot: number;
+}
+
 // ─── Union ────────────────────────────────────────────────────────────────────
 
 export type AnyMessage =
@@ -796,4 +824,6 @@ export type AnyMessage =
   | CardOfferMessage
   | CardPickMessage
   | CardAppliedMessage
+  | ClassSelectMessage
+  | PlayerKickMessage
   | BaseMessage;

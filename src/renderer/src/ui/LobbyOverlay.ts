@@ -1,10 +1,19 @@
 import type { LobbySlot } from '@shared/protocol';
+import { CLASS_DISPLAY_NAMES } from '@shared/ClassDefinitions';
+import type { PlayerClass } from '@shared/ClassDefinitions';
+
+const CLASS_BADGE_COLORS: Record<string, string> = {
+  warrior: '#cc9966',
+  ranger:  '#55cc77',
+  mage:    '#9966dd',
+};
 
 /**
  * Manages the HTML lobby panel.
  *
  * The lobby shows:
  *   - Share row: session code + host IP, each with a Copy button
+ *   - Class selector (Warrior / Ranger / Mage)
  *   - Player slots (1–4)
  *   - A Start button (host only)
  *   - A Leave button
@@ -17,10 +26,15 @@ export class LobbyOverlay {
   private chatLog:    HTMLElement;
   private chatInput:  HTMLInputElement;
   private startBtn:   HTMLElement;
+  private classButtons: HTMLElement[];
+
+  private isHost = false;
 
   private onStart: (() => void) | null = null;
   private onLeave: (() => void) | null = null;
   private onChat:  ((text: string) => void) | null = null;
+  private onClassSelect: ((playerClass: PlayerClass) => void) | null = null;
+  private onKick: ((slot: number) => void) | null = null;
 
   constructor() {
     this.screen     = this.require('lobby-screen');
@@ -29,6 +43,17 @@ export class LobbyOverlay {
     this.chatLog    = this.require('lobby-chat-log');
     this.chatInput  = this.require('lobby-chat-input') as HTMLInputElement;
     this.startBtn   = this.require('btn-lobby-start');
+
+    // Class selector buttons
+    const selector = this.require('class-selector');
+    this.classButtons = Array.from(selector.querySelectorAll('.class-btn')) as HTMLElement[];
+    for (const btn of this.classButtons) {
+      btn.addEventListener('click', () => {
+        const cls = btn.dataset.class as PlayerClass;
+        this.selectClass(cls);
+        this.onClassSelect?.(cls);
+      });
+    }
 
     this.startBtn.addEventListener('click', () => this.onStart?.());
     this.require('btn-lobby-leave').addEventListener('click', () => this.onLeave?.());
@@ -45,17 +70,29 @@ export class LobbyOverlay {
     });
   }
 
+  /** Visually highlight the selected class button. */
+  selectClass(cls: PlayerClass): void {
+    for (const btn of this.classButtons) {
+      btn.classList.toggle('selected', btn.dataset.class === cls);
+    }
+  }
+
   setCallbacks(cbs: {
     onStart: () => void;
     onLeave: () => void;
     onChat:  (text: string) => void;
+    onClassSelect: (playerClass: PlayerClass) => void;
+    onKick: (slot: number) => void;
   }): void {
     this.onStart = cbs.onStart;
     this.onLeave = cbs.onLeave;
     this.onChat  = cbs.onChat;
+    this.onClassSelect = cbs.onClassSelect;
+    this.onKick = cbs.onKick;
   }
 
   show(sessionId: string, code: string, isHost: boolean): void {
+    this.isHost = isHost;
     this.screen.style.display = 'flex';
     this.startBtn.style.display = isHost ? '' : 'none';
 
@@ -111,7 +148,25 @@ export class LobbyOverlay {
       const li = document.createElement('li');
       li.className = 'lobby-slot';
       if (slot) {
-        li.textContent = `P${i + 1}  ${slot.displayName}${slot.isHost ? ' (host)' : ''}`;
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = `P${i + 1}  ${slot.displayName}${slot.isHost ? ' (host)' : ''}`;
+        li.appendChild(nameSpan);
+        // Class badge
+        if (slot.playerClass) {
+          const badge = document.createElement('span');
+          badge.className = 'lobby-slot-class';
+          badge.textContent = CLASS_DISPLAY_NAMES[slot.playerClass as PlayerClass] ?? slot.playerClass;
+          badge.style.color = CLASS_BADGE_COLORS[slot.playerClass] ?? '#8a9ab0';
+          li.appendChild(badge);
+        }
+        // Kick button (host only, not on own slot)
+        if (this.isHost && !slot.isHost) {
+          const kickBtn = document.createElement('button');
+          kickBtn.className = 'btn-kick';
+          kickBtn.textContent = 'Kick';
+          kickBtn.addEventListener('click', () => this.onKick?.(slot.slot));
+          li.appendChild(kickBtn);
+        }
         li.classList.add('filled');
       } else {
         li.textContent = `P${i + 1}  - waiting…`;

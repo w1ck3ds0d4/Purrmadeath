@@ -298,6 +298,25 @@ export class MenuOverlay {
     document.getElementById('overlay')!.appendChild(backdrop);
   }
 
+  /** Show an info dialog with a single OK button. */
+  showInfoDialog(message: string): void {
+    const backdrop = document.createElement('div');
+    backdrop.style.cssText = 'position:absolute;inset:0;z-index:50;background:rgba(4,4,10,0.8);display:flex;align-items:center;justify-content:center;';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:rgba(10,10,20,0.95);border:1px solid rgba(255,255,255,0.14);padding:24px 32px;max-width:400px;text-align:center;font-family:monospace;color:#ccd8ea;';
+    const msg = document.createElement('p');
+    msg.style.cssText = 'font-size:14px;margin-bottom:20px;line-height:1.5;';
+    msg.textContent = message;
+    const okBtn = document.createElement('button');
+    okBtn.className = 'menu-btn';
+    okBtn.style.cssText = 'width:120px;';
+    okBtn.textContent = 'OK';
+    okBtn.addEventListener('click', () => backdrop.remove());
+    box.append(msg, okBtn);
+    backdrop.appendChild(box);
+    document.getElementById('overlay')!.appendChild(backdrop);
+  }
+
   private require(id: string): HTMLElement {
     const el = document.getElementById(id);
     if (!el) throw new Error(`MenuOverlay: missing element #${id} in the DOM`);
