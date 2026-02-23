@@ -77,6 +77,12 @@ export const CARD_POOL: CardDefinition[] = [
     category: 'ability', rarity: 'rare',
     effect: { type: 'ability', ability: 'reveal_ghosts' },
   },
+  {
+    id: 'rapid_strikes', name: 'Rapid Strikes',
+    description: 'Hold attack button to auto-attack',
+    category: 'ability', rarity: 'epic',
+    effect: { type: 'ability', ability: 'hold_attack' },
+  },
 
   // ── Resources ──
   {

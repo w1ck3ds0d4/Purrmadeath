@@ -40,6 +40,10 @@ export const C = {
   // ── Phase 7 ──────────────────────────────────────────────────────────────
   Class:           'Class',
   DodgeRoll:       'DodgeRoll',
+  SkillCooldowns:  'SkillCooldowns',
+  ActiveBuffs:     'ActiveBuffs',
+  BurnDot:         'BurnDot',
+  SlowEffect:      'SlowEffect',
 } as const;
 
 // ─── Component interfaces ──────────────────────────────────────────────────────
@@ -368,4 +372,37 @@ export interface GuardComponent {
 /** Player class identity (warrior, ranger, mage). */
 export interface ClassComponent {
   classType: string;
+}
+
+/** Per-player active ability cooldown tracking. */
+export interface SkillCooldownsComponent {
+  /** abilityId → seconds remaining. */
+  cooldowns: Record<string, number>;
+}
+
+/** Temporary timed buffs from active abilities (Shield Wall, War Cry, etc.). */
+export interface ActiveBuffsComponent {
+  buffs: Array<{
+    id: string;
+    remaining: number;
+    effect: Record<string, number>;
+  }>;
+}
+
+/** Burn damage-over-time applied by pyromancer attacks. */
+export interface BurnDotComponent {
+  /** Damage per second. */
+  dps: number;
+  /** Seconds remaining. */
+  remaining: number;
+  /** Source entity ID (for kill credit). */
+  sourceId: number;
+}
+
+/** Temporary slow effect applied by frost/trapper attacks. */
+export interface SlowEffectComponent {
+  /** Speed multiplier reduction (e.g. 0.20 = 20% slower). */
+  factor: number;
+  /** Seconds remaining. */
+  remaining: number;
 }

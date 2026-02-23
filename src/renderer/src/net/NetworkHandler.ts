@@ -45,6 +45,9 @@ import type {
   MetaStatsResponseMessage,
   CardOfferMessage,
   CardAppliedMessage,
+  CardSyncMessage,
+  SkillStateMessage,
+  AbilityEffectMessage,
   LobbySlot,
 } from '@shared/protocol';
 import type { SaveSlotInfo } from '@shared/SaveFormat';
@@ -73,6 +76,8 @@ import type { BuildGhostRenderer } from '../render/BuildGhostRenderer';
 import type { WarehouseHUD } from '../ui/WarehouseHUD';
 import type { StatsOverlay } from '../ui/StatsOverlay';
 import type { CardPickerOverlay } from '../ui/CardPickerOverlay';
+import type { SkillTreeOverlay } from '../ui/SkillTreeOverlay';
+import type { AbilityVFXSystem } from '../systems/AbilityVFXSystem';
 
 // ── Shared mutable state ────────────────────────────────────────────────────
 
@@ -107,6 +112,11 @@ export interface GameplayState {
   };
   handshakeSent: boolean;
   seed: number;
+  skillAllocated: Set<string>;
+  skillPoints: number;
+  onSkillStateUpdate?: () => void;
+  cardAbilities: string[];
+  pickedCardIds: string[];
 }
 
 // ── Dependencies ────────────────────────────────────────────────────────────
@@ -136,6 +146,8 @@ export interface NetworkHandlerDeps {
   buildGhost: BuildGhostRenderer;
   warehouseHUD: WarehouseHUD;
   cardPicker: CardPickerOverlay;
+  skillTree: SkillTreeOverlay;
+  abilityVFX: AbilityVFXSystem;
   statsOverlay: StatsOverlay;
   combinedResources: () => Record<string, number>;
   electronAPI?: { checkForUpdates?: () => void };
@@ -181,6 +193,16 @@ export function registerMessageHandlers(
     s.lobbyPlayers       = ack.players;
     s.seed               = ack.seed;
     d.initGameWorld(ack.seed);
+
+    // Check if local player's class is locked from a loaded save
+    const localSlotData = ack.players.find(p => p.slot === ack.slot);
+    if (localSlotData?.classLocked) {
+      if (localSlotData.playerClass) s.selectedClass = localSlotData.playerClass;
+      d.lobbyOverlay.setClassLocked(true);
+      d.lobbyOverlay.selectClass(s.selectedClass);
+    } else {
+      d.lobbyOverlay.setClassLocked(false);
+    }
 
     d.stateMgr.transition(GameState.Lobby);
   });
@@ -338,6 +360,41 @@ export function registerMessageHandlers(
     d.chatOverlay.addMessage('System', -1, `${applied.displayName} picked ${prefix}: ${applied.cardName}`);
     d.cardPicker.hide();
     d.waveHUD.setPaused(false);
+    // Sync card abilities for the local player
+    if (applied.abilities) s.cardAbilities = applied.abilities;
+    // Track picked card
+    if (applied.cardId && !s.pickedCardIds.includes(applied.cardId)) {
+      s.pickedCardIds = [...s.pickedCardIds, applied.cardId];
+    }
+  });
+
+  net.on(MessageType.CARD_SYNC, (msg) => {
+    const sync = msg as CardSyncMessage;
+    s.cardAbilities = sync.abilities;
+    s.pickedCardIds = sync.pickedCardIds;
+  });
+
+  // ── Skills ──────────────────────────────────────────────────────────────
+
+  net.on(MessageType.SKILL_STATE, (msg) => {
+    const ss = msg as SkillStateMessage;
+    s.skillAllocated = new Set(ss.allocated);
+    s.skillPoints = ss.skillPoints;
+    // Sync ability cooldowns from server
+    if (ss.abilityCooldowns) {
+      // abilityCooldowns are keyed by abilityId — caller maps them to slots
+    }
+    s.onSkillStateUpdate?.();
+    d.skillTree.updateState(s.skillAllocated, s.skillPoints);
+  });
+
+  net.on(MessageType.ABILITY_EFFECT, (msg) => {
+    const effect = msg as AbilityEffectMessage;
+    d.abilityVFX.trigger(
+      effect.abilityId, effect.x, effect.y,
+      effect.radius, effect.duration, effect.facing,
+      effect.targetX, effect.targetY,
+    );
   });
 
   // ── Resources ───────────────────────────────────────────────────────────

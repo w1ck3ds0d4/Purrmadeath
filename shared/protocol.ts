@@ -148,6 +148,10 @@ export enum MessageType {
   DEBUG_WAVE_PAUSE = 'DEBUG_WAVE_PAUSE',
   /** Client → Server: give resources to the sender (dev tool). */
   DEBUG_GIVE_RESOURCES = 'DEBUG_GIVE_RESOURCES',
+  /** Client → Server: give a specific card to the sender (dev tool). */
+  DEBUG_GIVE_CARD = 'DEBUG_GIVE_CARD',
+  /** Client → Server: give skill points to the sender (dev tool). */
+  DEBUG_GIVE_SKILL_POINTS = 'DEBUG_GIVE_SKILL_POINTS',
 
   // ── Phase 6 ────────────────────────────────────────────────────────────────
   /** Server → all: a new enemy type appeared for the first time this run. */
@@ -160,12 +164,24 @@ export enum MessageType {
   CARD_OFFER   = 'CARD_OFFER',
   CARD_PICK    = 'CARD_PICK',
   CARD_APPLIED = 'CARD_APPLIED',
+  /** Server → Client: sync card abilities + picked card IDs after save load. */
+  CARD_SYNC    = 'CARD_SYNC',
 
   // ── Phase 7 ────────────────────────────────────────────────────────────────
   /** Client → Server: player selects a class in the lobby. */
   CLASS_SELECT = 'CLASS_SELECT',
   /** Client (host) → Server: kick a player from the lobby by slot. */
   PLAYER_KICK = 'PLAYER_KICK',
+
+  // ── Skill Tree ──────────────────────────────────────────────────────────────
+  /** Client → Server: allocate a skill point to a node. */
+  SKILL_ALLOCATE = 'SKILL_ALLOCATE',
+  /** Server → Client: full skill allocation state. */
+  SKILL_STATE = 'SKILL_STATE',
+  /** Client → Server: activate an ability (Q/E/R). */
+  ABILITY_USE = 'ABILITY_USE',
+  /** Server → all: broadcast ability visual effect. */
+  ABILITY_EFFECT = 'ABILITY_EFFECT',
 }
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
@@ -253,6 +269,8 @@ export interface LobbySlot {
   isHost: boolean;
   /** Player's chosen class. Defaults to 'warrior' if absent. */
   playerClass?: import('./ClassDefinitions').PlayerClass;
+  /** True if this player's class is locked from a loaded save. */
+  classLocked?: boolean;
 }
 
 export interface PlayerJoinedMessage extends BaseMessage {
@@ -544,6 +562,16 @@ export interface DebugSpawnEnemiesMessage extends BaseMessage {
   count?: number;
 }
 
+export interface DebugGiveCardMessage extends BaseMessage {
+  type: typeof MessageType.DEBUG_GIVE_CARD;
+  cardId: string;
+}
+
+export interface DebugGiveSkillPointsMessage extends BaseMessage {
+  type: typeof MessageType.DEBUG_GIVE_SKILL_POINTS;
+  count?: number;
+}
+
 // ─── Death & Respawn (4.11) ──────────────────────────────────────────────────
 
 /** Server → all: a player has been downed (HP reached 0). */
@@ -752,9 +780,19 @@ export interface CardPickMessage extends BaseMessage {
 export interface CardAppliedMessage extends BaseMessage {
   type: typeof MessageType.CARD_APPLIED;
   displayName: string;
+  cardId: string;
   cardName: string;
   category: import('./CardDefinitions').CardCategory;
   isTrap: boolean;
+  /** Synced abilities list for the receiving player (only present for ability-type cards). */
+  abilities?: string[];
+}
+
+/** Server → Client: restore card abilities + picked IDs from a loaded save. */
+export interface CardSyncMessage extends BaseMessage {
+  type: typeof MessageType.CARD_SYNC;
+  abilities: string[];
+  pickedCardIds: string[];
 }
 
 // ── Phase 7 ──────────────────────────────────────────────────────────────────
@@ -769,6 +807,47 @@ export interface ClassSelectMessage extends BaseMessage {
 export interface PlayerKickMessage extends BaseMessage {
   type: typeof MessageType.PLAYER_KICK;
   slot: number;
+}
+
+// ── Skill Tree Messages ──────────────────────────────────────────────────────
+
+/** Client → Server: allocate a skill point to a node. */
+export interface SkillAllocateMessage extends BaseMessage {
+  type: typeof MessageType.SKILL_ALLOCATE;
+  nodeId: string;
+}
+
+/** Server → Client: full skill allocation state (sent after allocation or on join). */
+export interface SkillStateMessage extends BaseMessage {
+  type: typeof MessageType.SKILL_STATE;
+  allocated: string[];
+  skillPoints: number;
+  abilityCooldowns: Record<string, number>;
+}
+
+/** Client → Server: activate an ability (Q/E/R). */
+export interface AbilityUseMessage extends BaseMessage {
+  type: typeof MessageType.ABILITY_USE;
+  abilityId: string;
+  facing: number;
+  x: number;
+  y: number;
+  targetX?: number;
+  targetY?: number;
+}
+
+/** Server → all: broadcast ability visual effect. */
+export interface AbilityEffectMessage extends BaseMessage {
+  type: typeof MessageType.ABILITY_EFFECT;
+  abilityId: string;
+  sourceId: number;
+  x: number;
+  y: number;
+  targetX?: number;
+  targetY?: number;
+  facing?: number;
+  duration?: number;
+  radius?: number;
 }
 
 // ─── Union ────────────────────────────────────────────────────────────────────
@@ -835,4 +914,8 @@ export type AnyMessage =
   | CardAppliedMessage
   | ClassSelectMessage
   | PlayerKickMessage
+  | SkillAllocateMessage
+  | SkillStateMessage
+  | AbilityUseMessage
+  | AbilityEffectMessage
   | BaseMessage;

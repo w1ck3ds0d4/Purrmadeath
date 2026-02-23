@@ -29,6 +29,7 @@ export class LobbyOverlay {
   private classButtons: HTMLElement[];
 
   private isHost = false;
+  private locked = false;
 
   private onStart: (() => void) | null = null;
   private onLeave: (() => void) | null = null;
@@ -49,6 +50,7 @@ export class LobbyOverlay {
     this.classButtons = Array.from(selector.querySelectorAll('.class-btn')) as HTMLElement[];
     for (const btn of this.classButtons) {
       btn.addEventListener('click', () => {
+        if (this.locked) return;
         const cls = btn.dataset.class as PlayerClass;
         this.selectClass(cls);
         this.onClassSelect?.(cls);
@@ -74,6 +76,15 @@ export class LobbyOverlay {
   selectClass(cls: PlayerClass): void {
     for (const btn of this.classButtons) {
       btn.classList.toggle('selected', btn.dataset.class === cls);
+    }
+  }
+
+  /** Lock or unlock class selection (locked = from a loaded save). */
+  setClassLocked(locked: boolean): void {
+    this.locked = locked;
+    for (const btn of this.classButtons) {
+      (btn as HTMLButtonElement).style.opacity = locked ? '0.4' : '';
+      (btn as HTMLButtonElement).style.cursor = locked ? 'not-allowed' : 'pointer';
     }
   }
 
@@ -139,6 +150,7 @@ export class LobbyOverlay {
 
   hide(): void {
     this.screen.style.display = 'none';
+    this.setClassLocked(false);
   }
 
   updatePlayers(slots: LobbySlot[]): void {

@@ -303,4 +303,9 @@ export class CardPickerOverlay {
   get isVisible(): boolean {
     return this.phase !== 'hidden';
   }
+
+  /** True only during the picking phase (when player must choose a card). */
+  get isPicking(): boolean {
+    return this.phase === 'picking';
+  }
 }

@@ -14,6 +14,7 @@ import {
   SpeedComponent,
   GuardComponent,
   HealthComponent,
+  GhostStateComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -317,6 +318,11 @@ export class EnemySystem {
             }
           }
           if (world.hasComponent(eid, C.Downed)) continue;
+          // Guards can't see hidden ghosts
+          if (isGuard) {
+            const egs = world.getComponent<GhostStateComponent>(eid, C.GhostState);
+            if (egs?.hidden) continue;
+          }
           const epos = world.getComponent<PositionComponent>(eid, C.Position)!;
           const ddx = epos.x - pos.x, ddy = epos.y - pos.y;
           const dist = Math.sqrt(ddx * ddx + ddy * ddy);

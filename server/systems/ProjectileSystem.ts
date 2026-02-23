@@ -171,6 +171,9 @@ export class ProjectileSystem {
             const tf = world.getComponent<FactionComponent>(tid, C.Faction);
             if (tf?.type !== 'enemy') continue;
             if (world.hasComponent(tid, C.Downed)) continue;
+            // Hidden ghosts are invisible to homing
+            const homingGhost = world.getComponent<GhostStateComponent>(tid, C.GhostState);
+            if (homingGhost?.hidden) continue;
             const tp = world.getComponent<PositionComponent>(tid, C.Position)!;
             const hdx = tp.x - pos.x, hdy = tp.y - pos.y;
             const d2 = hdx * hdx + hdy * hdy;

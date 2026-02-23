@@ -1,4 +1,5 @@
 import type { SaveSlotInfo } from '@shared/SaveFormat';
+import { CARD_POOL, CATEGORY_COLORS, RARITY_BORDER_COLORS, type CardDefinition } from '@shared/CardDefinitions';
 
 /**
  * Manages the HTML overlay panels for the main menu, save slot picker, and pause screen.
@@ -29,6 +30,9 @@ export class MenuOverlay {
   private saveSlotList: HTMLElement;
   private onSlotSelected: ((slot: number) => void) | null = null;
   private onDeleteSlot: ((slot: number) => void) | null = null;
+
+  // Card browser
+  private cardScreen: HTMLElement;
 
   constructor() {
     this.menuScreen  = this.require('menu-screen');
@@ -79,6 +83,31 @@ export class MenuOverlay {
     // Settings stub - deferred to Phase 9
     this.require('btn-settings').addEventListener('click', () => {
       console.log('[Settings] Not implemented yet - Phase 9');
+    });
+
+    // Card browser screen
+    this.cardScreen = document.createElement('div');
+    this.cardScreen.className = 'screen';
+    this.cardScreen.id = 'card-browser-screen';
+    this.cardScreen.style.cssText = 'display:none;flex-direction:column;align-items:center;padding:24px;overflow-y:auto;';
+    this.cardScreen.innerHTML = `
+      <h2 style="font-family:'Segoe UI',sans-serif;font-size:30px;font-weight:700;color:#ccd8ea;letter-spacing:4px;margin-bottom:8px;user-select:none;">CARDS</h2>
+      <p style="font-family:monospace;font-size:12px;color:#6a7a8a;margin-bottom:24px;user-select:none;">All cards in the pool</p>
+      <div id="card-browser-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;width:100%;max-width:800px;margin-bottom:16px;"></div>
+      <button id="btn-card-back" class="menu-btn muted" style="margin-top:8px;width:360px;">Back</button>
+    `;
+    document.getElementById('overlay')!.appendChild(this.cardScreen);
+
+    this.cardScreen.querySelector('#btn-card-back')!.addEventListener('click', () => {
+      this.cardScreen.style.display = 'none';
+      this.menuScreen.style.display = 'flex';
+    });
+
+    this.populateCardGrid();
+
+    this.require('btn-cards').addEventListener('click', () => {
+      this.menuScreen.style.display = 'none';
+      this.cardScreen.style.display = 'flex';
     });
   }
 
@@ -147,6 +176,7 @@ export class MenuOverlay {
     this.menuScreen.style.display  = 'flex';
     this.pauseScreen.style.display = 'none';
     this.saveSlotScreen.style.display = 'none';
+    this.cardScreen.style.display = 'none';
     // Hide stats screen if it exists
     const statsScreen = document.getElementById('stats-screen');
     if (statsScreen) statsScreen.style.display = 'none';
@@ -176,6 +206,7 @@ export class MenuOverlay {
     this.menuScreen.style.display  = 'none';
     this.pauseScreen.style.display = 'none';
     this.saveSlotScreen.style.display = 'none';
+    this.cardScreen.style.display = 'none';
   }
 
   /** Show save slot picker - called after SAVE_SLOTS_REQUEST is sent. */
@@ -315,6 +346,61 @@ export class MenuOverlay {
     box.append(msg, okBtn);
     backdrop.appendChild(box);
     document.getElementById('overlay')!.appendChild(backdrop);
+  }
+
+  private populateCardGrid(): void {
+    const grid = this.cardScreen.querySelector('#card-browser-grid')!;
+
+    // Group cards by category
+    const categories: Array<{ key: string; label: string }> = [
+      { key: 'buff', label: 'BUFFS' },
+      { key: 'ability', label: 'ABILITIES' },
+      { key: 'resource', label: 'RESOURCES' },
+      { key: 'trap', label: 'TRAPS' },
+    ];
+
+    for (const cat of categories) {
+      const cards = CARD_POOL.filter(c => c.category === cat.key);
+      if (cards.length === 0) continue;
+
+      // Category header spanning full width
+      const header = document.createElement('div');
+      header.style.cssText = `grid-column:1/-1;font-family:'Segoe UI',sans-serif;font-size:14px;font-weight:700;letter-spacing:2px;user-select:none;margin-top:8px;color:#${CATEGORY_COLORS[cat.key as keyof typeof CATEGORY_COLORS].toString(16).padStart(6, '0')};`;
+      header.textContent = cat.label;
+      grid.appendChild(header);
+
+      for (const card of cards) {
+        grid.appendChild(this.createCardElement(card));
+      }
+    }
+  }
+
+  private createCardElement(card: CardDefinition): HTMLElement {
+    const el = document.createElement('div');
+    const catColor = '#' + CATEGORY_COLORS[card.category].toString(16).padStart(6, '0');
+    const rarBorder = RARITY_BORDER_COLORS[card.rarity];
+    const rarLabel = card.rarity.toUpperCase();
+
+    const rarColor = card.rarity === 'epic' ? '#aa44ff' : card.rarity === 'rare' ? '#4a90d9' : '#8a8a8a';
+
+    el.style.cssText = `
+      background: rgba(20, 20, 35, 0.9);
+      border: 1px solid ${rarBorder};
+      border-left: 3px solid ${catColor};
+      padding: 10px 14px;
+      display: flex; flex-direction: column; gap: 4px;
+      user-select: none;
+    `;
+
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-family:'Segoe UI',sans-serif;font-size:13px;font-weight:600;color:#ccd8ea;">${card.name}</span>
+        <span style="font-family:monospace;font-size:10px;color:${rarColor};letter-spacing:1px;">${rarLabel}</span>
+      </div>
+      <div style="font-family:monospace;font-size:11px;color:#8a9ab0;">${card.description}</div>
+    `;
+
+    return el;
   }
 
   private require(id: string): HTMLElement {

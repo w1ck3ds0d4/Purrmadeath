@@ -60,11 +60,19 @@ export function createCardDispenser(deps: CardDispenserDeps) {
     const applied: CardAppliedMessage = {
       type: MessageType.CARD_APPLIED,
       displayName: player.displayName,
+      cardId: card.id,
       cardName: card.name,
       category: card.category,
       isTrap: card.category === 'trap',
     };
-    for (const p of players.values()) send(p.client, applied);
+    for (const p of players.values()) {
+      // Include abilities list only for the picking player
+      if (p.client.id === clientId && card.effect.type === 'ability') {
+        send(p.client, { ...applied, abilities: [...cards.getBuffs(clientId).abilities] });
+      } else {
+        send(p.client, applied);
+      }
+    }
 
     let anyPending = false;
     for (const p of players.values()) {
@@ -93,11 +101,18 @@ export function createCardDispenser(deps: CardDispenserDeps) {
       const applied: CardAppliedMessage = {
         type: MessageType.CARD_APPLIED,
         displayName: p.displayName,
+        cardId: card.id,
         cardName: card.name,
         category: card.category,
         isTrap: card.category === 'trap',
       };
-      for (const pp of players.values()) send(pp.client, applied);
+      for (const pp of players.values()) {
+        if (pp.client.id === p.client.id && card.effect.type === 'ability') {
+          send(pp.client, { ...applied, abilities: [...cards.getBuffs(p.client.id).abilities] });
+        } else {
+          send(pp.client, applied);
+        }
+      }
     }
   }
 

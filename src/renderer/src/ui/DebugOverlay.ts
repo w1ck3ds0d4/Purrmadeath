@@ -277,6 +277,8 @@ export class DebugOverlay {
         '/spawn [n]  Spawn n enemies (default 5)',
         '/skipwave   Skip wave prep timer',
         '/pausewave  Pause/resume wave timer',
+        '/card <id>  Give a card by ID',
+        '/sp [n]     Give n skill points (default 1)',
         '/clear      Close stats panel',
         '/help       This help text',
       );
@@ -324,6 +326,8 @@ export class DebugOverlay {
       case '/skipwave':
       case '/pausewave':
       case '/give':
+      case '/card':
+      case '/sp':
         this.cheatHandler?.(cmd, args);
         this.log(`Executed: ${raw}`);
         break;

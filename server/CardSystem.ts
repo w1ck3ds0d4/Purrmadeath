@@ -34,13 +34,15 @@ export class CardSystem {
   /** Session-wide debuffs from trap cards. */
   readonly debuffs: SessionDebuffs = emptyDebuffs();
   /** Cards already picked this session (to avoid exact duplicates). */
-  private pickedCardIds = new Set<string>();
+  private _pickedCardIds = new Set<string>();
+  /** Read-only access to picked card IDs. */
+  get pickedCardIds(): ReadonlySet<string> { return this._pickedCardIds; }
   /** Pending offers: clientId → card IDs offered. */
   private pendingOffers = new Map<string, string[]>();
 
   /** Generate an offer of 3 cards for a player. At most 1 trap card. */
   generateOffer(): CardDefinition[] {
-    const available = CARD_POOL.filter(c => !this.pickedCardIds.has(c.id));
+    const available = CARD_POOL.filter(c => !this._pickedCardIds.has(c.id));
     if (available.length === 0) {
       // All cards picked — allow repeats
       return this.pickWeighted(CARD_POOL, 3);
@@ -62,7 +64,7 @@ export class CardSystem {
     const card = CARD_POOL.find(c => c.id === cardId);
     if (!card) return null;
 
-    this.pickedCardIds.add(cardId);
+    this._pickedCardIds.add(cardId);
     this.applyEffect(clientId, card.effect);
     return card;
   }
@@ -91,11 +93,30 @@ export class CardSystem {
     return b;
   }
 
+  /** Serialize card state for a player (for save system). */
+  serialize(clientId: string): { buffs: PlayerBuffs; pickedCards: string[] } {
+    return {
+      buffs: { ...this.getBuffs(clientId), abilities: [...this.getBuffs(clientId).abilities] },
+      pickedCards: [...this._pickedCardIds],
+    };
+  }
+
+  /** Restore card state for a player from save data. */
+  restore(clientId: string, buffs: PlayerBuffs, pickedCards: string[]): void {
+    this.playerBuffs.set(clientId, { ...buffs, abilities: [...buffs.abilities] });
+    for (const id of pickedCards) this._pickedCardIds.add(id);
+  }
+
+  /** Restore session-wide debuffs from save data. */
+  restoreDebuffs(debuffs: SessionDebuffs): void {
+    Object.assign(this.debuffs, debuffs);
+  }
+
   /** Clear all state (for session reset). */
   reset(): void {
     this.playerBuffs.clear();
     this.pendingOffers.clear();
-    this.pickedCardIds.clear();
+    this._pickedCardIds.clear();
     Object.assign(this.debuffs, emptyDebuffs());
   }
 

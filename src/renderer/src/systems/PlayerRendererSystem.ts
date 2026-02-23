@@ -259,8 +259,18 @@ export class PlayerRendererSystem {
 
     // Detect selection change (marks old and new selected buildings as dirty)
     if (this.selectedBuildingId !== this.lastSelectedId) {
-      if (this.lastSelectedId !== null) this.dirty.set(this.lastSelectedId, true);
-      if (this.selectedBuildingId !== null) this.dirty.set(this.selectedBuildingId, true);
+      // Reset old selection zIndex
+      if (this.lastSelectedId !== null) {
+        this.dirty.set(this.lastSelectedId, true);
+        const oldGfx = this.sprites.get(this.lastSelectedId);
+        if (oldGfx) oldGfx.zIndex = 0;
+      }
+      // Raise new selection zIndex above other buildings
+      if (this.selectedBuildingId !== null) {
+        this.dirty.set(this.selectedBuildingId, true);
+        const newGfx = this.sprites.get(this.selectedBuildingId);
+        if (newGfx) newGfx.zIndex = 5;
+      }
       this.lastSelectedId = this.selectedBuildingId;
     }
 

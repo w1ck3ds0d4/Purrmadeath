@@ -27,6 +27,8 @@ import type {
   BuildRepairMessage,
   ClassSelectMessage,
   PlayerKickMessage,
+  SkillAllocateMessage,
+  AbilityUseMessage,
 } from '@shared/protocol';
 import { PLAYER_CLASSES } from '@shared/ClassDefinitions';
 import type { PlayerClass } from '@shared/ClassDefinitions';
@@ -107,12 +109,16 @@ export class SessionManager {
     socket.on(MessageType.DEBUG_WAVE_SKIP,     (c) => this.onDebugAction(c, () => this.session?.debugWaveSkip((cl, msg) => this.socket.send(cl, msg))));
     socket.on(MessageType.DEBUG_WAVE_PAUSE,    (c) => this.onDebugAction(c, () => this.session?.debugWavePause((cl, msg) => this.socket.send(cl, msg))));
     socket.on(MessageType.DEBUG_GIVE_RESOURCES, (c) => this.onDebugAction(c, () => this.session?.debugGiveResources(c.id, (cl, msg) => this.socket.send(cl, msg))));
+    socket.on(MessageType.DEBUG_GIVE_CARD, (c, m) => this.onDebugAction(c, () => this.session?.debugGiveCard(c.id, (m as import('@shared/protocol').DebugGiveCardMessage).cardId, (cl, msg) => this.socket.send(cl, msg))));
+    socket.on(MessageType.DEBUG_GIVE_SKILL_POINTS, (c, m) => this.onDebugAction(c, () => this.session?.debugGiveSkillPoints(c.id, (m as import('@shared/protocol').DebugGiveSkillPointsMessage).count ?? 1, (cl, msg) => this.socket.send(cl, msg))));
     socket.on(MessageType.CHAT,                 (c, m) => this.onChat(c, m as ChatSendMessage));
     socket.on(MessageType.PAUSE_VOTE,            (c) => this.onPauseVote(c));
     socket.on(MessageType.SAVE_SLOTS_REQUEST,    (c) => this.onSaveSlotsRequest(c));
     socket.on(MessageType.SAVE_DELETE,             (c, m) => this.onSaveDelete(c, m as import('@shared/protocol').SaveDeleteMessage));
     socket.on(MessageType.META_STATS_REQUEST,      (c) => this.onMetaStatsRequest(c));
     socket.on(MessageType.CARD_PICK,               (c, m) => this.session?.handleCardPick(c.id, m as CardPickMessage, (cl, msg) => this.socket.send(cl, msg)));
+    socket.on(MessageType.SKILL_ALLOCATE,          (c, m) => this.session?.handleSkillAllocate(c.id, m as SkillAllocateMessage, (cl, msg) => this.socket.send(cl, msg)));
+    socket.on(MessageType.ABILITY_USE,             (c, m) => this.session?.handleAbilityUse(c.id, m as AbilityUseMessage, (cl, msg) => this.socket.send(cl, msg)));
     socket.on(MessageType.CLASS_SELECT,            (c, m) => this.onClassSelect(c, m as ClassSelectMessage));
     socket.on(MessageType.PLAYER_KICK,             (c, m) => this.onPlayerKick(c, m as PlayerKickMessage));
     socket.onDisconnect((c) => this.onDisconnect(c));

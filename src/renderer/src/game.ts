@@ -31,7 +31,7 @@ import { registerMessageHandlers, type GameplayState } from './net/NetworkHandle
 import { createBuildController } from './systems/BuildController';
 
 import { World } from '@shared/ecs/World';
-import { C, PositionComponent, FactionComponent, BuildingComponent, DodgeRollComponent, StaminaComponent, PlayerInputComponent, FacingComponent } from '@shared/components';
+import { C, PositionComponent, FactionComponent, BuildingComponent, DodgeRollComponent, StaminaComponent, PlayerInputComponent, FacingComponent, GhostStateComponent } from '@shared/components';
 
 import { InputManager, Action } from './input/InputManager';
 import { GameStateManager, GameState } from './state/GameStateManager';
@@ -58,11 +58,15 @@ import { BuildGhostRenderer } from './render/BuildGhostRenderer';
 import { WarehouseHUD } from './ui/WarehouseHUD';
 import { DamageNumberSystem } from './systems/DamageNumberSystem';
 import { HitParticleSystem } from './systems/HitParticleSystem';
+import { AbilityVFXSystem } from './systems/AbilityVFXSystem';
 import { Minimap, MAP_SIZE, MAP_PADDING } from './ui/Minimap';
 import { StatsOverlay } from './ui/StatsOverlay';
 import { CardPickerOverlay } from './ui/CardPickerOverlay';
+import { SkillTreeOverlay } from './ui/SkillTreeOverlay';
 import { CLASS_STATS, DEFAULT_CLASS } from '@shared/ClassDefinitions';
+import { getActiveAbilities, type SkillActiveAbility, type AbilityParams } from '@shared/SkillDefinitions';
 import type { PlayerClass } from '@shared/ClassDefinitions';
+import { Graphics } from 'pixi.js';
 
 // Slow world pan behind menus (world pixels per millisecond)
 const BG_PAN_X = 0.05;
@@ -110,6 +114,7 @@ async function main(): Promise<void> {
   const projectileRenderer = new ProjectileRendererSystem(tileRenderer.worldContainer);
   const damageNumbers = new DamageNumberSystem(tileRenderer.worldContainer);
   const hitParticles  = new HitParticleSystem(tileRenderer.worldContainer);
+  const abilityVFX    = new AbilityVFXSystem(tileRenderer.worldContainer);
   const hud          = new HUD(renderer.stage);
   const weaponHotbar = new WeaponHotbar(renderer.stage);
   const minimap      = new Minimap(renderer.stage);
@@ -191,6 +196,55 @@ async function main(): Promise<void> {
   let attackCooldown = 0;
   let selectedClass: PlayerClass = DEFAULT_CLASS;
 
+  // ── Skill tree state ────────────────────────────────────────────────────────
+  let skillAllocated = new Set<string>();
+  let skillPoints = 0;
+  /** Cached active abilities from skill allocation. */
+  let activeAbilities: SkillActiveAbility[] = [];
+  /** Client-side ability cooldowns [Q, E, R] — ticked down locally, synced from server. */
+  let abilityCooldowns = [0, 0, 0];
+  let abilityCooldownMaxes = [0, 0, 0];
+
+  // ── Ability targeting ──────────────────────────────────────────────────────
+  let targetingSlot = -1; // 0-2 ability index, or -1
+  let targetingGfx: Graphics | null = null;
+
+  const TARGETING_COLORS: Record<string, { fill: number; stroke: number }> = {
+    rain_of_arrows: { fill: 0x44dd66, stroke: 0x66ff88 },
+    explosive_trap: { fill: 0xff6600, stroke: 0xff9933 },
+    meteor:         { fill: 0xff4400, stroke: 0xff7722 },
+    blizzard:       { fill: 0x66aaff, stroke: 0x99ccff },
+    shadow_step:    { fill: 0x6644cc, stroke: 0x8866ff },
+    teleport:       { fill: 0xaa66ff, stroke: 0xcc99ff },
+  };
+
+  type TargetMode = 'self' | 'ground' | 'direction';
+  function getTargetMode(params: AbilityParams): TargetMode {
+    switch (params.type) {
+      case 'whirlwind': case 'shield_wall': case 'war_cry': return 'self';
+      case 'shadow_step': case 'teleport': return 'direction';
+      default: return 'ground';
+    }
+  }
+  function getAbilityRadius(params: AbilityParams): number {
+    if ('radius' in params) return (params as any).radius;
+    return 60;
+  }
+  function getAbilityMaxDist(params: AbilityParams): number {
+    if (params.type === 'shadow_step') return params.distance;
+    if (params.type === 'teleport') return params.maxDistance;
+    return 150;
+  }
+  function cancelTargeting(): void {
+    targetingSlot = -1;
+    if (targetingGfx) targetingGfx.visible = false;
+    document.getElementById('game')!.style.cursor = '';
+  }
+
+  // ── Card abilities (synced from server on card pick) ────────────────────────
+  let cardAbilities: string[] = [];
+  let pickedCardIds: string[] = [];
+
   // ── Death / respawn state ──────────────────────────────────────────────────
   let localDowned   = false;
   let localDead     = false;
@@ -229,6 +283,7 @@ async function main(): Promise<void> {
 
   const statsOverlay = new StatsOverlay();
   const cardPicker = new CardPickerOverlay();
+  const skillTree = new SkillTreeOverlay();
   const lobbyOverlay = new LobbyOverlay();
   const pauseBanner  = new PauseBanner();
   const waveHUD      = new WaveHUD();
@@ -277,6 +332,12 @@ async function main(): Promise<void> {
       case '/give':
         net.send({ type: MessageType.DEBUG_GIVE_RESOURCES });
         break;
+      case '/card':
+        if (args[0]) net.send({ type: MessageType.DEBUG_GIVE_CARD, cardId: args[0] });
+        break;
+      case '/sp':
+        net.send({ type: MessageType.DEBUG_GIVE_SKILL_POINTS, count: parseInt(args[0]) || 1 });
+        break;
     }
   });
 
@@ -295,15 +356,18 @@ async function main(): Promise<void> {
 
   // ── State: Menu ─────────────────────────────────────────────────────────────
   stateMgr.onEnter(GameState.Menu, () => {
+    cancelTargeting();
     menuOverlay.showMenu();
     lobbyOverlay.hide();
     pauseBanner.hide();
     waveHUD.hide();
     hud.setVisible(false);
     weaponHotbar.setVisible(false);
+    skillTree.hide();
     world.clear();
     playerRenderer.destroy();
     projectileRenderer.destroy();
+    abilityVFX.destroy();
     remotePlayerSys.destroy();
     localEntityId = null;
     reconciler.localEntityId = null;
@@ -316,11 +380,19 @@ async function main(): Promise<void> {
     gameStartTime = 0;
     serverElapsedTime = 0;
     waveActive = false;
+    skillAllocated = new Set();
+    skillPoints = 0;
+    activeAbilities = [];
+    abilityCooldowns = [0, 0, 0];
+    abilityCooldownMaxes = [0, 0, 0];
+    cardAbilities = [];
+    pickedCardIds = [];
     waveHUD.setPaused(false);
     coordsEl.style.display = 'none';
     deathOverlay.hide();
     gameOverOverlay.hide();
-    chatOverlay.hide();
+    chatOverlay.setActive(false);
+    minimap.setVisible(false);
     debug.hide();
     resourceHUD.setResources(0, 0, 0, 0, 0, 0);
     resourceHUD.hide();
@@ -353,6 +425,8 @@ async function main(): Promise<void> {
     weaponHotbar.setVisible(true);
     waveHUD.setVisible(true);
     resourceHUD.setVisible(true);
+    minimap.setVisible(true);
+    chatOverlay.setActive(true);
 
     // Clear menu background chunks from the tile renderer
     for (const key of menuStreamedKeys) {
@@ -425,6 +499,14 @@ async function main(): Promise<void> {
     get lastServerStats() { return lastServerStats; }, set lastServerStats(v) { lastServerStats = v; },
     get handshakeSent() { return handshakeSent; }, set handshakeSent(v) { handshakeSent = v; },
     get seed() { return seed; }, set seed(v) { seed = v; },
+    get skillAllocated() { return skillAllocated; }, set skillAllocated(v) { skillAllocated = v; },
+    get skillPoints() { return skillPoints; }, set skillPoints(v) { skillPoints = v; },
+    onSkillStateUpdate: () => {
+      // Rebuild active abilities from updated allocation
+      activeAbilities = getActiveAbilities({ allocated: skillAllocated, skillPoints });
+    },
+    get cardAbilities() { return cardAbilities; }, set cardAbilities(v) { cardAbilities = v; },
+    get pickedCardIds() { return pickedCardIds; }, set pickedCardIds(v) { pickedCardIds = v; },
   };
 
   registerMessageHandlers(net, handlerState, {
@@ -438,7 +520,7 @@ async function main(): Promise<void> {
     },
     stateMgr, menuOverlay, lobbyOverlay, pauseBanner, waveHUD, resourceHUD,
     deathOverlay, gameOverOverlay, chatOverlay, debug, buildOverlay, buildGhost,
-    warehouseHUD, cardPicker, statsOverlay, combinedResources, electronAPI,
+    warehouseHUD, cardPicker, skillTree, statsOverlay, abilityVFX, combinedResources, electronAPI,
   });
 
   // ── Session action helper ─────────────────────────────────────────────────
@@ -543,10 +625,12 @@ async function main(): Promise<void> {
     const dt    = Math.min(ticker.deltaMS / 1000, 0.05); // cap at 50ms to reduce prediction divergence
     const state = stateMgr.current;
 
-    // ESC: close build mode first, otherwise send pause vote
+    // ESC: close build mode first, then check targeting/skill tree (in Playing block), otherwise pause
     if (input.isJustPressed(Action.Pause)) {
       if (buildCtrl.active && state === GameState.Playing) {
         buildCtrl.exitBuildMode();
+      } else if (state === GameState.Playing && (targetingSlot >= 0 || skillTree.isVisible)) {
+        // Handled in the Playing block below (targeting cancel / skill tree close)
       } else if (!localGameOver && !chatOverlay.isOpen && (state === GameState.Playing || state === GameState.Paused)) {
         net.send({ type: MessageType.PAUSE_VOTE });
       }
@@ -560,7 +644,25 @@ async function main(): Promise<void> {
 
     // Playing: local prediction + send input
     if (state === GameState.Playing && localEntityId !== null) {
-      const canAct = !localDowned && !localDead && !localGameOver && !chatOverlay.isOpen && !cardPicker.isVisible;
+      // K key: toggle skill tree overlay (works even when canAct is false)
+      if (input.isJustPressed(Action.SkillTree)) {
+        if (skillTree.isVisible) skillTree.hide();
+        else if (!localDowned && !localDead && !localGameOver && !cardPicker.isVisible) {
+          skillTree.show(selectedClass, skillAllocated, skillPoints, (nodeId) => {
+            net.send({ type: MessageType.SKILL_ALLOCATE, nodeId });
+          }, pickedCardIds);
+        }
+      }
+      // ESC: cancel targeting first, then close skill tree, then pause
+      if (input.isJustPressed(Action.Pause)) {
+        if (targetingSlot >= 0) cancelTargeting();
+        else if (skillTree.isVisible) skillTree.hide();
+      }
+
+      const canAct = !localDowned && !localDead && !localGameOver && !chatOverlay.isOpen && !cardPicker.isPicking;
+
+      // Auto-cancel targeting when player can't act
+      if (!canAct && targetingSlot >= 0) cancelTargeting();
 
       // 1. Map keyboard → PlayerInput component (only local entity has it)
       if (canAct) inputSystem.update(world);
@@ -611,10 +713,10 @@ async function main(): Promise<void> {
       // 5. Render players - compute mouse-facing angle for local player
       const pos = world.getComponent<PositionComponent>(localEntityId, C.Position);
       let localFacing: number | null = null;
+      const { width: sw2, height: sh2 } = renderer.screen;
+      const worldMouseX = camera.viewX + (mouseX - sw2  / 2) / camera.zoom;
+      const worldMouseY = camera.viewY + (mouseY - sh2 / 2) / camera.zoom;
       if (pos) {
-        const { width, height } = renderer.screen;
-        const worldMouseX = camera.viewX + (mouseX - width  / 2) / camera.zoom;
-        const worldMouseY = camera.viewY + (mouseY - height / 2) / camera.zoom;
         localFacing = Math.atan2(worldMouseY - pos.y, worldMouseX - pos.x);
       }
 
@@ -622,7 +724,10 @@ async function main(): Promise<void> {
       if (input.isJustPressed(Action.WeaponSlot1)) { if (buildCtrl.active) buildCtrl.exitBuildMode(); }
 
       // B key: toggle build mode
-      if (canAct && input.isJustPressed(Action.BuildMode)) buildCtrl.toggle();
+      if (canAct && input.isJustPressed(Action.BuildMode)) {
+        if (targetingSlot >= 0) cancelTargeting();
+        buildCtrl.toggle();
+      }
 
       // Scroll wheel cycles building type
       buildCtrl.handleScroll(input.scrollDelta);
@@ -636,8 +741,11 @@ async function main(): Promise<void> {
       if (attackCooldown > 0) attackCooldown = Math.max(0, attackCooldown - dt);
       const classAttackType = CLASS_STATS[selectedClass].attackType;
       const classCooldown = classAttackType === 'melee' ? MELEE_COOLDOWN : RANGED_COOLDOWN;
-      if (canAct && !buildCtrl.active && input.isJustPressed(Action.Attack) && localFacing !== null && pos && attackCooldown <= TICK_MS / 1000) {
-        attackCooldown = classCooldown;
+      const hasHoldAttack = cardAbilities.includes('hold_attack');
+      const holdAttackCooldown = 0.1; // 10 attacks per second when holding
+      const attackInput = hasHoldAttack ? input.isHeld(Action.Attack) : input.isJustPressed(Action.Attack);
+      if (canAct && !buildCtrl.active && targetingSlot < 0 && attackInput && localFacing !== null && pos && attackCooldown <= TICK_MS / 1000) {
+        attackCooldown = hasHoldAttack ? Math.max(classCooldown, holdAttackCooldown) : classCooldown;
         net.send({ type: MessageType.ATTACK, attackType: classAttackType, facing: localFacing, x: pos.x, y: pos.y, t: performance.now() });
         if (classAttackType === 'melee') {
           playerRenderer.notifyAttack(localEntityId!, localFacing);
@@ -647,6 +755,8 @@ async function main(): Promise<void> {
             if (targetId === localEntityId) continue;
             const tf = world.getComponent<FactionComponent>(targetId, C.Faction);
             if (tf?.type === 'player' || tf?.type === 'resource') continue;
+            const gs = world.getComponent<GhostStateComponent>(targetId, C.GhostState);
+            if (gs?.hidden) continue;
             const tp = world.getComponent<PositionComponent>(targetId, C.Position)!;
             const tdx = tp.x - pos.x;
             const tdy = tp.y - pos.y;
@@ -689,6 +799,117 @@ async function main(): Promise<void> {
         }
       }
 
+      // ── Ability targeting system ──────────────────────────────────────────────
+
+      // Cancel targeting: right-click
+      if (targetingSlot >= 0 && input.isJustPressed(Action.Cancel)) {
+        cancelTargeting();
+      }
+
+      // Q/E/R: enter targeting or instant-cast
+      if (canAct && !buildCtrl.active && localFacing !== null && pos) {
+        const abilityKeys = [Action.SkillQ, Action.SkillE, Action.SkillR] as const;
+        for (let ai = 0; ai < 3; ai++) {
+          if (input.isJustPressed(abilityKeys[ai]) && activeAbilities[ai] && abilityCooldowns[ai] <= 0.05) {
+            const ab = activeAbilities[ai];
+            const mode = getTargetMode(ab.params);
+
+            if (mode === 'self') {
+              // Self-cast: fire immediately
+              abilityCooldowns[ai] = ab.cooldown;
+              abilityCooldownMaxes[ai] = ab.cooldown;
+              net.send({
+                type: MessageType.ABILITY_USE,
+                abilityId: ab.abilityId,
+                facing: localFacing,
+                x: pos.x, y: pos.y,
+              });
+            } else if (targetingSlot === ai) {
+              // Same key again: cancel targeting
+              cancelTargeting();
+            } else {
+              // Enter targeting mode
+              targetingSlot = ai;
+              if (!targetingGfx) {
+                targetingGfx = new Graphics();
+                targetingGfx.zIndex = 14;
+                tileRenderer.worldContainer.addChild(targetingGfx);
+              }
+              targetingGfx.visible = true;
+              document.getElementById('game')!.style.cursor = 'crosshair';
+            }
+          }
+        }
+      }
+
+      // Confirm targeting: left click
+      if (targetingSlot >= 0 && input.isJustPressed(Action.Attack) && pos && localFacing !== null) {
+        const ai = targetingSlot;
+        const ab = activeAbilities[ai];
+        if (ab && abilityCooldowns[ai] <= 0.05) {
+          abilityCooldowns[ai] = ab.cooldown;
+          abilityCooldownMaxes[ai] = ab.cooldown;
+          net.send({
+            type: MessageType.ABILITY_USE,
+            abilityId: ab.abilityId,
+            facing: localFacing,
+            x: pos.x, y: pos.y,
+            targetX: worldMouseX,
+            targetY: worldMouseY,
+          });
+        }
+        cancelTargeting();
+      }
+
+      // Render targeting indicator
+      if (targetingSlot >= 0 && targetingGfx && pos) {
+        targetingGfx.clear();
+        const ab = activeAbilities[targetingSlot];
+        if (ab) {
+          const mode = getTargetMode(ab.params);
+          const colors = TARGETING_COLORS[ab.abilityId] ?? { fill: 0xffffff, stroke: 0xffffff };
+
+          if (mode === 'ground') {
+            const radius = getAbilityRadius(ab.params);
+            targetingGfx.circle(worldMouseX, worldMouseY, radius);
+            targetingGfx.fill({ color: colors.fill, alpha: 0.12 });
+            targetingGfx.circle(worldMouseX, worldMouseY, radius);
+            targetingGfx.stroke({ color: colors.stroke, alpha: 0.5, width: 2 });
+            // Crosshair at center
+            const ch = 6;
+            targetingGfx.moveTo(worldMouseX - ch, worldMouseY);
+            targetingGfx.lineTo(worldMouseX + ch, worldMouseY);
+            targetingGfx.stroke({ color: colors.stroke, alpha: 0.7, width: 1 });
+            targetingGfx.moveTo(worldMouseX, worldMouseY - ch);
+            targetingGfx.lineTo(worldMouseX, worldMouseY + ch);
+            targetingGfx.stroke({ color: colors.stroke, alpha: 0.7, width: 1 });
+          } else {
+            // Direction: line from player to clamped destination
+            const dx = worldMouseX - pos.x, dy = worldMouseY - pos.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const maxDist = getAbilityMaxDist(ab.params);
+            const clampedDist = Math.min(dist, maxDist);
+            const angle = Math.atan2(dy, dx);
+            const endX = pos.x + Math.cos(angle) * clampedDist;
+            const endY = pos.y + Math.sin(angle) * clampedDist;
+            targetingGfx.moveTo(pos.x, pos.y);
+            targetingGfx.lineTo(endX, endY);
+            targetingGfx.stroke({ color: colors.stroke, alpha: 0.5, width: 2 });
+            targetingGfx.circle(endX, endY, 8);
+            targetingGfx.fill({ color: colors.fill, alpha: 0.3 });
+            targetingGfx.circle(endX, endY, 8);
+            targetingGfx.stroke({ color: colors.stroke, alpha: 0.6, width: 1 });
+          }
+        }
+      } else if (targetingGfx) {
+        targetingGfx.clear();
+      }
+
+      // Tick ability cooldowns
+      for (let ai = 0; ai < 3; ai++) {
+        if (abilityCooldowns[ai] > 0) abilityCooldowns[ai] = Math.max(0, abilityCooldowns[ai] - dt);
+      }
+
       playerRenderer.selectedBuildingId = buildCtrl.selectedId;
       playerRenderer.update(world, localEntityId, localFacing, dt, reconciler.smoothX, reconciler.smoothY);
       deathOverlay.update(dt);
@@ -710,6 +931,8 @@ async function main(): Promise<void> {
         for (const eid of world.query(C.Position, C.Faction)) {
           const ef = world.getComponent<FactionComponent>(eid, C.Faction);
           if (ef?.type !== 'enemy') continue;
+          const hgs = world.getComponent<GhostStateComponent>(eid, C.GhostState);
+          if (hgs?.hidden) continue;
           const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
           const hdx = ep.x - proj.x, hdy = ep.y - proj.y;
           const d2 = hdx * hdx + hdy * hdy;
@@ -731,6 +954,7 @@ async function main(): Promise<void> {
       projectileRenderer.update(dt);
       damageNumbers.update(dt);
       hitParticles.update(dt);
+      abilityVFX.update(dt);
 
       // Client-side projectile hit prediction — swept collision along path
       const projHits: number[] = [];
@@ -740,6 +964,8 @@ async function main(): Promise<void> {
         for (const targetId of world.query(C.Position, C.Health, C.Faction)) {
           const tf = world.getComponent<FactionComponent>(targetId, C.Faction);
           if (!tf || tf.type === 'player' || tf.type === 'item' || tf.type === 'building') continue;
+          const pgs = world.getComponent<GhostStateComponent>(targetId, C.GhostState);
+          if (pgs?.hidden) continue;
           const tp = world.getComponent<PositionComponent>(targetId, C.Position)!;
           const tgtRadius = tf.type === 'resource' ? RESOURCE_NODE_RADIUS : ENEMY_RADIUS;
           // Shrink radius slightly so client prediction only fires when server would definitely agree
@@ -766,6 +992,7 @@ async function main(): Promise<void> {
       for (const id of projHits) projectileRenderer.remove(id);
 
       projectileRenderer.render(camera.viewX, camera.viewY, camera.zoom, sw, sh);
+      abilityVFX.render(camera.viewX, camera.viewY, camera.zoom, sw, sh);
 
       // 7. Camera follows local player (with smooth correction offset)
       reconciler.decaySmooth(dt);
@@ -803,7 +1030,21 @@ async function main(): Promise<void> {
     if (state === GameState.Playing) {
       hud.update(world, width, height);
       const hotbarCooldown = CLASS_STATS[selectedClass].attackType === 'melee' ? MELEE_COOLDOWN : RANGED_COOLDOWN;
-      weaponHotbar.update(selectedClass, attackCooldown, hotbarCooldown, width, height, buildCtrl.active);
+      // Build unlocked slots set from active abilities (slots 1-3 for Q/E/R)
+      const unlockedSlots = new Set([0, 5]); // weapon + build always
+      const abilityNames: string[] = [];
+      for (let ai = 0; ai < 3; ai++) {
+        if (activeAbilities[ai]) {
+          unlockedSlots.add(1 + ai);
+          abilityNames.push(activeAbilities[ai].name);
+        } else {
+          abilityNames.push('');
+        }
+      }
+      weaponHotbar.update(
+        selectedClass, attackCooldown, hotbarCooldown, width, height, buildCtrl.active,
+        unlockedSlots, abilityNames, abilityCooldowns, abilityCooldownMaxes, targetingSlot,
+      );
       minimap.update(world, localEntityId, camera.x, camera.y, width, height);
       coordsEl.textContent = `X: ${Math.round(camera.x)}  Y: ${Math.round(camera.y)}`;
     }

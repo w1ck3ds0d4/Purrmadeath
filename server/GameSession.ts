@@ -2,6 +2,7 @@ import { World } from '@shared/ecs/World';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
 import { spawnPlayer, findSpawnPoint } from '@shared/world/PlayerSpawner';
 import { CLASS_STATS, DEFAULT_CLASS } from '@shared/ClassDefinitions';
+import { CARD_POOL } from '@shared/CardDefinitions';
 import type { PlayerClass } from '@shared/ClassDefinitions';
 import {
   C,
@@ -27,6 +28,7 @@ import {
 import type {
   ResourceType, BuildingType, EnemyVariantType, EnemyStatsComponent, GhostStateComponent,
   LightRevealComponent, HealAuraComponent, BarracksSpawnerComponent, FacingComponent,
+  BurnDotComponent, SlowEffectComponent, SpeedComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -97,6 +99,8 @@ import type {
   BuildRepairMessage,
   AoeExplosionMessage,
   CardPickMessage,
+  SkillAllocateMessage,
+  AbilityUseMessage,
 } from '@shared/protocol';
 import { ItemDropSystem, PickupResult } from './systems/ItemDropSystem';
 import type { ConnectedClient } from './net/ServerSocket';
@@ -106,6 +110,7 @@ import { CombatSystem } from './systems/CombatSystem';
 import { ProjectileSystem } from './systems/ProjectileSystem';
 import { PortalSystem } from './systems/PortalSystem';
 import { CardSystem } from './CardSystem';
+import { createSkillSystem, type SkillSystem } from './SkillSystem';
 import { createBuildingSystem, type BuildingSystem } from './systems/BuildingSystem';
 import { createWaveController, type WaveController, type WaveState } from './systems/WaveController';
 import { createCardDispenser, type CardDispenser, type CardState } from './systems/CardDispenser';
@@ -126,6 +131,8 @@ export interface SessionPlayer {
   lastSeq: number;
   /** Player class (warrior/ranger/mage). Defaults to 'warrior'. */
   playerClass: PlayerClass;
+  /** True if class is locked from a loaded save. */
+  classLocked: boolean;
 }
 
 export type SessionPhase = 'lobby' | 'playing';
@@ -166,6 +173,7 @@ export class GameSession {
   private portal: PortalSystem;
   private itemDrop: ItemDropSystem;
   private cards: CardSystem;
+  private skills!: SkillSystem;
   private buildings!: BuildingSystem;
   private saveManager!: SaveManager;
   private respawn!: RespawnManager;
@@ -278,6 +286,11 @@ export class GameSession {
     this.portal = new PortalSystem();
     this.itemDrop = new ItemDropSystem();
     this.cards = new CardSystem();
+    this.skills = createSkillSystem({
+      world: this.world,
+      players: this.players,
+      generator: this.generator,
+    });
 
     this.buildings = createBuildingSystem({
       world: this.world,
@@ -401,15 +414,27 @@ export class GameSession {
     playerClass?: PlayerClass,
   ): SessionPlayer {
     const slot = this.nextFreeSlot();
+    const pid = persistentId ?? client.id;
+
+    // Check if this player exists in the loaded save — lock their class
+    let lockedClass: PlayerClass | null = null;
+    if (this.loadedSave) {
+      const savedP = this.loadedSave.players.find(sp => sp.playerId === pid);
+      if (savedP?.playerClass && CLASS_STATS[savedP.playerClass as PlayerClass]) {
+        lockedClass = savedP.playerClass as PlayerClass;
+      }
+    }
+
     const player: SessionPlayer = {
       client,
-      playerId: persistentId ?? client.id,
+      playerId: pid,
       displayName,
       slot,
       isHost,
       entityId: null,
       lastSeq: 0,
-      playerClass: playerClass ?? DEFAULT_CLASS,
+      playerClass: lockedClass ?? playerClass ?? DEFAULT_CLASS,
+      classLocked: lockedClass !== null,
     };
     this.players.set(client.id, player);
     return player;
@@ -468,6 +493,7 @@ export class GameSession {
       slot: p.slot,
       isHost: p.isHost,
       playerClass: p.playerClass,
+      classLocked: p.classLocked || undefined,
     }));
   }
 
@@ -481,6 +507,7 @@ export class GameSession {
     if (this.phase !== 'lobby') return;
     const player = this.players.get(clientId);
     if (!player) return;
+    if (player.classLocked) return; // class locked from save
     if (!CLASS_STATS[playerClass]) return; // invalid class
     player.playerClass = playerClass;
     // Broadcast updated lobby state to all players
@@ -670,6 +697,15 @@ export class GameSession {
           if (savedP.playerClass && CLASS_STATS[savedP.playerClass as PlayerClass]) {
             p.playerClass = savedP.playerClass as PlayerClass;
           }
+          // Restore skill tree allocations
+          if (savedP.skillNodes) {
+            this.skills.restore(p.client.id, savedP.skillNodes, savedP.skillPoints ?? 0);
+            this.skills.applyPassivesToEntity(p.client.id);
+          }
+          // Restore card buffs
+          if (savedP.cardBuffs) {
+            this.cards.restore(p.client.id, savedP.cardBuffs, savedP.pickedCards ?? []);
+          }
         }
       }
 
@@ -791,6 +827,23 @@ export class GameSession {
           type: MessageType.RESOURCE_UPDATE,
           wood: res.wood, stone: res.stone, iron: res.iron,
           diamond: res.diamond, gold: res.gold, food: res.food,
+        });
+      }
+    }
+
+    // Send initial skill state to each player
+    for (const p of this.players.values()) {
+      this.skills.sendState(p.client.id, send);
+    }
+
+    // Send card abilities sync (needed after save restore — no CARD_APPLIED was sent)
+    if (hasSave) {
+      for (const p of this.players.values()) {
+        const buffs = this.cards.playerBuffs.get(p.client.id);
+        send(p.client, {
+          type: MessageType.CARD_SYNC,
+          abilities: buffs?.abilities ?? [],
+          pickedCardIds: [...this.cards.pickedCardIds],
         });
       }
     }
@@ -1322,9 +1375,10 @@ export class GameSession {
     const cd = this.world.getComponent<AttackCooldownComponent>(entityId, C.AttackCooldown);
     if (cd && cd.remaining > TICK_MS / 1000) return;
 
-    // Apply card damage multiplier using class base damage
+    // Apply card + skill damage multipliers using class base damage
     const pBuffs = this.cards.playerBuffs.get(player.client.id);
-    const dmgMult = (pBuffs?.damageMultiplier ?? 1) * this.cards.debuffs.playerDamageMult;
+    const sBuffs = this.skills.getSkillBuffs(player.client.id);
+    const dmgMult = (pBuffs?.damageMultiplier ?? 1) * sBuffs.damageMultiplier * this.cards.debuffs.playerDamageMult;
     const classDmg = CLASS_STATS[player.playerClass].baseDamage;
     const meleeOverrides = dmgMult !== 1 ? { damage: Math.round(classDmg * dmgMult) } : { damage: classDmg };
 
@@ -1350,6 +1404,9 @@ export class GameSession {
       for (const p of this.players.values()) send(p.client, hitMsg);
       this.stats.trackDamage(hit.sourceId, hit.damage);
     }
+
+    // Apply on-hit special effects (lifesteal, burn, slow)
+    this.applyOnHitEffects(player.client.id, entityId, hits);
 
     // Build attacker map so destroyDeadEntities can credit resource harvesting
     const attackerMap = new Map<number, number>();
@@ -1389,9 +1446,10 @@ export class GameSession {
     const projId = this.world.createEntity();
     this.world.addComponent(projId, C.Position,   { x: spawnX, y: spawnY });
     this.world.addComponent(projId, C.Velocity,   { vx, vy });
-    // Apply card damage multiplier using class base damage
+    // Apply card + skill damage multipliers using class base damage
     const rBuffs = this.cards.playerBuffs.get(player.client.id);
-    const rDmgMult = (rBuffs?.damageMultiplier ?? 1) * this.cards.debuffs.playerDamageMult;
+    const rSBuffs = this.skills.getSkillBuffs(player.client.id);
+    const rDmgMult = (rBuffs?.damageMultiplier ?? 1) * rSBuffs.damageMultiplier * this.cards.debuffs.playerDamageMult;
     const rangedClassDmg = CLASS_STATS[player.playerClass].baseDamage;
     const projDamage = Math.round(rangedClassDmg * rDmgMult);
     const projData: ProjectileComponent = { ownerId: entityId, damage: projDamage, lifetime: RANGED_LIFETIME };
@@ -1416,6 +1474,77 @@ export class GameSession {
   }
 
 
+  // ── On-hit special effects (lifesteal, burn, slow) ─────────────────────────
+
+  /**
+   * Apply skill-based on-hit effects for a player's hits.
+   * Called after melee attacks and projectile hits.
+   */
+  private applyOnHitEffects(
+    clientId: string,
+    attackerEntityId: number,
+    hits: import('./systems/CombatSystem').HitResult[],
+  ): void {
+    if (hits.length === 0) return;
+    const buffs = this.skills.getSkillBuffs(clientId);
+
+    for (const hit of hits) {
+      // Skip resource nodes and buildings — only apply effects to enemies
+      const tgtFaction = this.world.getComponent<FactionComponent>(hit.targetId, C.Faction);
+      if (!tgtFaction || tgtFaction.type !== 'enemy') continue;
+
+      // Lifesteal: heal attacker by fraction of damage dealt
+      if (buffs.lifesteal > 0) {
+        const hp = this.world.getComponent<HealthComponent>(attackerEntityId, C.Health);
+        if (hp) hp.current = Math.min(hp.max, hp.current + hit.damage * buffs.lifesteal);
+      }
+
+      // Burn DOT: attach/refresh BurnDot component on target
+      if (buffs.burnDot > 0 && this.world.getComponent<HealthComponent>(hit.targetId, C.Health)) {
+        const existing = this.world.getComponent<BurnDotComponent>(hit.targetId, C.BurnDot);
+        if (existing) {
+          existing.dps = Math.max(existing.dps, buffs.burnDot);
+          existing.remaining = 3; // refresh duration
+        } else {
+          this.world.addComponent<BurnDotComponent>(hit.targetId, C.BurnDot, {
+            dps: buffs.burnDot, remaining: 3, sourceId: attackerEntityId,
+          });
+        }
+      }
+
+      // Slow on hit: attach/refresh SlowEffect component on target
+      if (buffs.slowOnHit > 0) {
+        const existing = this.world.getComponent<SlowEffectComponent>(hit.targetId, C.SlowEffect);
+        if (!existing) {
+          // Apply slow by reducing speed multiplier
+          const speed = this.world.getComponent<SpeedComponent>(hit.targetId, C.Speed);
+          if (speed) speed.multiplier *= (1 - buffs.slowOnHit);
+          this.world.addComponent<SlowEffectComponent>(hit.targetId, C.SlowEffect, {
+            factor: buffs.slowOnHit, remaining: 2,
+          });
+        }
+      }
+    }
+  }
+
+  /**
+   * Apply thorns damage when a player entity takes damage.
+   * Called from the enemy attack path.
+   */
+  private applyThorns(
+    targetClientId: string,
+    _targetEntityId: number,
+    attackerEntityId: number,
+  ): void {
+    const buffs = this.skills.getSkillBuffs(targetClientId);
+    if (buffs.thornsDamage <= 0) return;
+
+    const hp = this.world.getComponent<HealthComponent>(attackerEntityId, C.Health);
+    if (hp) {
+      hp.current = Math.max(0, hp.current - buffs.thornsDamage);
+    }
+  }
+
   /** Fire onRunEnd with per-player RunStats. Called once at game over. */
   private fireRunEnd(): void {
     if (!this.onRunEnd) return;
@@ -1434,8 +1563,41 @@ export class GameSession {
     this.cardDispenser.handlePick(clientId, msg, send);
   }
 
+  // ── Skill system ────────────────────────────────────────────────────────────
+
+  handleSkillAllocate(clientId: string, msg: SkillAllocateMessage, send: SendFn): void {
+    if (this.phase !== 'playing') return;
+    this.skills.handleAllocate(clientId, msg.nodeId, send);
+  }
+
+  handleAbilityUse(clientId: string, msg: AbilityUseMessage, send: SendFn): void {
+    if (this.phase !== 'playing' || this.paused) return;
+    const player = this.players.get(clientId);
+    if (!player || player.entityId === null) return;
+    if (this.world.hasComponent(player.entityId, C.Downed)) return;
+    if (this.respawnTimers.has(clientId)) return;
+
+    const { hits, deaths } = this.skills.handleAbilityUse(clientId, msg, send);
+
+    // Broadcast hits + handle deaths (same pattern as melee/ranged)
+    for (const hit of hits) {
+      const hitMsg: HitMessage = { type: MessageType.HIT, ...hit };
+      for (const p of this.players.values()) send(p.client, hitMsg);
+      this.stats.trackDamage(hit.sourceId, hit.damage);
+    }
+    const attackerMap = new Map<number, number>();
+    for (const hit of hits) {
+      if (!attackerMap.has(hit.targetId)) attackerMap.set(hit.targetId, hit.sourceId);
+    }
+    this.respawn.destroyDeadEntities(deaths, attackerMap, send);
+  }
+
   /** Called by WaveController when a wave is cleared. */
   private onWaveCleared(wave: number, send: SendFn): void {
+    // Grant 1 skill point to every alive player
+    for (const p of this.players.values()) {
+      if (p.entityId != null) this.skills.grantSkillPoint(p.client.id, send);
+    }
     // Card offers every 3 waves (after wave 3, 6, 9...)
     if (wave >= 3 && wave % 3 === 0) {
       this.sendCardOffers(send);
@@ -1476,7 +1638,24 @@ export class GameSession {
   }
 
   serializeSave(): import('@shared/SaveFormat').SaveData {
-    return this.saveManager.serialize();
+    const data = this.saveManager.serialize();
+    // Inject skill + card data into saved players
+    for (const sp of data.players) {
+      for (const p of this.players.values()) {
+        if (p.playerId === sp.playerId) {
+          const sd = this.skills.serialize(p.client.id);
+          sp.skillNodes = sd.skillNodes;
+          sp.skillPoints = sd.skillPoints;
+          const cd = this.cards.serialize(p.client.id);
+          sp.cardBuffs = cd.buffs;
+          sp.pickedCards = cd.pickedCards;
+          break;
+        }
+      }
+    }
+    // Save session-wide card debuffs
+    data.cardDebuffs = { ...this.cards.debuffs };
+    return data;
   }
 
   /** Load a save into the session. Called after construction but before start(). */
@@ -1488,6 +1667,10 @@ export class GameSession {
     }
     console.log(`[GameSession] Loading save: wave ${save.currentWave}, ${save.buildings.length} buildings, ${save.players.length} players`);
     this.enemiesKilled = save.enemiesKilled;
+    // Restore session-wide card debuffs
+    if (save.cardDebuffs) {
+      this.cards.restoreDebuffs(save.cardDebuffs);
+    }
     this.loadedSave = loaded;
     return true;
   }
@@ -1540,6 +1723,71 @@ export class GameSession {
       this.creditResources(player.entityId, res, amount, send);
     }
     console.log(`[Debug] Gave +${amount} of all resources to ${clientId}`);
+  }
+
+  debugGiveCard(clientId: string, cardId: string, send: SendFn): void {
+    if (this.phase !== 'playing') return;
+    const player = this.players.get(clientId);
+    if (!player || player.entityId === null) return;
+
+    const card = CARD_POOL.find(c => c.id === cardId);
+    if (!card) {
+      console.log(`[Debug] Unknown card ID: ${cardId}`);
+      return;
+    }
+
+    // Directly apply the card effect (bypasses offer/pick flow)
+    this.cards.getBuffs(clientId); // ensure buffs exist
+    // Manually apply effect
+    const effect = card.effect;
+    const buffs = this.cards.getBuffs(clientId);
+    switch (effect.type) {
+      case 'stat_buff':
+        switch (effect.stat) {
+          case 'damage':  buffs.damageMultiplier *= (1 + effect.value); break;
+          case 'speed':   buffs.speedMultiplier *= (1 + effect.value); break;
+          case 'maxHp':   buffs.maxHpBonus += effect.value; break;
+          case 'hpRegen': buffs.hpRegen += effect.value; break;
+        }
+        break;
+      case 'ability':
+        if (!buffs.abilities.includes(effect.ability)) buffs.abilities.push(effect.ability);
+        break;
+      case 'resource':
+        this.creditResources(player.entityId, effect.resource, effect.amount, send);
+        break;
+    }
+
+    // Sync abilities to client
+    send(player.client, {
+      type: MessageType.CARD_SYNC,
+      abilities: buffs.abilities,
+      pickedCardIds: [...this.cards.pickedCardIds, cardId],
+    });
+
+    // Broadcast pick to chat
+    const applied: import('@shared/protocol').CardAppliedMessage = {
+      type: MessageType.CARD_APPLIED,
+      displayName: player.displayName,
+      cardId: card.id,
+      cardName: card.name,
+      category: card.category,
+      isTrap: false,
+      abilities: [...buffs.abilities],
+    };
+    for (const p of this.players.values()) send(p.client, applied);
+    console.log(`[Debug] Gave card "${card.name}" to ${player.displayName}`);
+  }
+
+  debugGiveSkillPoints(clientId: string, count: number, send: SendFn): void {
+    if (this.phase !== 'playing') return;
+    const player = this.players.get(clientId);
+    if (!player) return;
+    const n = Math.min(Math.max(1, count), 50);
+    for (let i = 0; i < n; i++) {
+      this.skills.grantSkillPoint(clientId, send);
+    }
+    console.log(`[Debug] Gave ${n} skill point(s) to ${player.displayName}`);
   }
 
 
@@ -1693,10 +1941,19 @@ export class GameSession {
       for (const p of this.players.values()) send(p.client, performed);
     }
 
-    // Broadcast enemy hit results
+    // Broadcast enemy hit results + apply thorns
     for (const hit of enemyResult.hits) {
       const hitMsg: HitMessage = { type: MessageType.HIT, ...hit };
       for (const p of this.players.values()) send(p.client, hitMsg);
+    }
+    // Thorns: if an enemy hit a player with thorns, reflect damage back
+    for (const hit of enemyResult.hits) {
+      for (const p of this.players.values()) {
+        if (p.entityId === hit.targetId) {
+          this.applyThorns(p.client.id, p.entityId, hit.sourceId);
+          break;
+        }
+      }
     }
 
     // Spawn ranged enemy projectiles (uses per-entity stats from EnemySystem)
@@ -1736,6 +1993,13 @@ export class GameSession {
       const hitMsg: HitMessage = { type: MessageType.HIT, ...hit };
       for (const p of this.players.values()) send(p.client, hitMsg);
       this.stats.trackDamage(hit.sourceId, hit.damage);
+    }
+
+    // Apply on-hit effects for player-owned projectile hits
+    for (const p of this.players.values()) {
+      if (p.entityId === null) continue;
+      const playerHits = projResult.hits.filter(h => h.sourceId === p.entityId);
+      if (playerHits.length > 0) this.applyOnHitEffects(p.client.id, p.entityId, playerHits);
     }
 
     for (const projId of projResult.destroyed) {
@@ -1784,6 +2048,9 @@ export class GameSession {
 
     // ── Card system ──────────────────────────────────────────────────────────
     this.cardDispenser.tickHpRegen(dt);
+
+    // ── Skill system (cooldowns, buffs, DOTs) ────────────────────────────────
+    if (!this.gameOver) this.skills.tick(dt);
 
     // ── Wave state machine ────────────────────────────────────────────────────
     const _t8 = performance.now();

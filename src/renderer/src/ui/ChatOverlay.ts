@@ -47,6 +47,8 @@ export class ChatOverlay {
       'flex-direction: column',
       'gap: 2px',
       'margin-bottom: 4px',
+      'max-height: 200px',
+      'overflow-y: auto',
     ].join('; ');
     this.el.appendChild(this.feedEl);
 
@@ -119,6 +121,15 @@ export class ChatOverlay {
     this.feedEl.innerHTML = '';
   }
 
+  /** Hide/show the entire chat container (used on menu transitions). */
+  setActive(active: boolean): void {
+    this.el.style.display = active ? 'flex' : 'none';
+    if (!active) {
+      this.hide();
+      this.history.length = 0;
+    }
+  }
+
   addMessage(displayName: string, slot: number, text: string): void {
     this.history.push({ displayName, slot, text });
     if (this.history.length > MAX_HISTORY) this.history.shift();
@@ -130,6 +141,7 @@ export class ChatOverlay {
       while (this.feedEl.children.length > MAX_HISTORY) {
         this.feedEl.removeChild(this.feedEl.firstChild!);
       }
+      this.feedEl.scrollTop = this.feedEl.scrollHeight;
     } else {
       // Chat closed - show as a temporary fading message
       const line = this.appendLine(displayName, slot, text, true);
@@ -137,6 +149,7 @@ export class ChatOverlay {
       while (this.feedEl.children.length > 6) {
         this.feedEl.removeChild(this.feedEl.firstChild!);
       }
+      this.feedEl.scrollTop = this.feedEl.scrollHeight;
       // Fade out after delay, then remove
       setTimeout(() => {
         line.style.opacity = '0';

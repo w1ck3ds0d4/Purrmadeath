@@ -18,6 +18,8 @@ export interface SaveData {
   portals?: SavedPortal[];
   resourceNodes?: SavedResourceNode[];
   itemDrops?: SavedItemDrop[];
+  /** Session-wide card debuffs from trap cards. */
+  cardDebuffs?: { playerDamageMult: number; enemySpeedMult: number; enemyDamageMult: number };
   hostPlayerId: string;
   timestamp: number;
 }
@@ -79,6 +81,20 @@ export interface SavedPlayer {
   y: number;
   /** Player class (defaults to 'warrior' for old saves). */
   playerClass?: string;
+  /** Allocated skill node IDs (defaults to empty for old saves). */
+  skillNodes?: string[];
+  /** Unspent skill points (defaults to 0 for old saves). */
+  skillPoints?: number;
+  /** Card buff state (defaults to empty for old saves). */
+  cardBuffs?: {
+    damageMultiplier: number;
+    speedMultiplier: number;
+    maxHpBonus: number;
+    hpRegen: number;
+    abilities: string[];
+  };
+  /** IDs of cards picked by this player. */
+  pickedCards?: string[];
 }
 
 export interface SavedEnemy {
