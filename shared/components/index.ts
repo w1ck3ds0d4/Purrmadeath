@@ -39,6 +39,7 @@ export const C = {
   Guard:           'Guard',
   // ── Phase 7 ──────────────────────────────────────────────────────────────
   Class:           'Class',
+  DodgeRoll:       'DodgeRoll',
 } as const;
 
 // ─── Component interfaces ──────────────────────────────────────────────────────
@@ -158,6 +159,12 @@ export interface ProjectileComponent {
   flightTime?: number;
   /** Total flight time (for arc calculation). */
   totalFlightTime?: number;
+  /** If true, projectile passes through enemies instead of being destroyed on first hit. */
+  pierce?: boolean;
+  /** Entity IDs already hit by this piercing projectile (prevents double-hitting). */
+  hitEntities?: number[];
+  /** If true, projectile homes in on nearest enemy (mage). */
+  homing?: boolean;
 }
 
 // ── Phase 4.8+ components ─────────────────────────────────────────────────────
@@ -316,6 +323,19 @@ export interface AssassinDashComponent {
   dashDuration: number;
   dashing: boolean;
   dashTimer: number;
+}
+
+/** Player dodge roll state. */
+export interface DodgeRollComponent {
+  /** Seconds remaining in the dodge (invincible while > 0). */
+  timer: number;
+  /** Total dodge duration (for animation progress). */
+  duration: number;
+  /** Dash velocity direction (normalized). */
+  dashVx: number;
+  dashVy: number;
+  /** Seconds remaining before another dodge is allowed. */
+  cooldown: number;
 }
 
 /** Light tower ghost-reveal aura. */

@@ -8,6 +8,7 @@ import {
   FactionComponent,
   BuildingComponent,
   EnemyStatsComponent,
+  DodgeRollComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -18,6 +19,7 @@ import {
   RESOURCE_NODE_RADIUS,
   ENTITY_SEPARATION_ITERATIONS,
   buildingHalfExtent,
+  DODGE_ROLL_SPEED,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import { ChunkManager } from '../world/ChunkManager';
@@ -99,27 +101,33 @@ export class MovementSystem {
       const speed = world.getComponent<SpeedComponent>(id, C.Speed)!;
       const inp   = world.getComponent<PlayerInputComponent>(id, C.PlayerInput)!;
 
-      const maxSpeed = speed.base * speed.multiplier * (inp.sprint ? PLAYER_SPRINT_MULTIPLIER : 1);
-
-      // Normalize diagonal so 45° doesn't move faster than cardinal
-      let dx = inp.dx;
-      let dy = inp.dy;
-      if (dx !== 0 && dy !== 0) {
-        const inv = 1 / Math.SQRT2;
-        dx *= inv;
-        dy *= inv;
-      }
-
-      // Smooth acceleration toward target velocity; friction when coasting
-      if (inp.dx !== 0) {
-        vel.vx += (dx * maxSpeed - vel.vx) * Math.min(ACCEL * dt, 1);
+      const dodgeRoll = world.getComponent<DodgeRollComponent>(id, C.DodgeRoll);
+      if (dodgeRoll && dodgeRoll.timer > 0) {
+        vel.vx = dodgeRoll.dashVx * DODGE_ROLL_SPEED;
+        vel.vy = dodgeRoll.dashVy * DODGE_ROLL_SPEED;
       } else {
-        vel.vx *= Math.max(0, 1 - FRICTION * dt);
-      }
-      if (inp.dy !== 0) {
-        vel.vy += (dy * maxSpeed - vel.vy) * Math.min(ACCEL * dt, 1);
-      } else {
-        vel.vy *= Math.max(0, 1 - FRICTION * dt);
+        const maxSpeed = speed.base * speed.multiplier * (inp.sprint ? PLAYER_SPRINT_MULTIPLIER : 1);
+
+        // Normalize diagonal so 45° doesn't move faster than cardinal
+        let dx = inp.dx;
+        let dy = inp.dy;
+        if (dx !== 0 && dy !== 0) {
+          const inv = 1 / Math.SQRT2;
+          dx *= inv;
+          dy *= inv;
+        }
+
+        // Smooth acceleration toward target velocity; friction when coasting
+        if (inp.dx !== 0) {
+          vel.vx += (dx * maxSpeed - vel.vx) * Math.min(ACCEL * dt, 1);
+        } else {
+          vel.vx *= Math.max(0, 1 - FRICTION * dt);
+        }
+        if (inp.dy !== 0) {
+          vel.vy += (dy * maxSpeed - vel.vy) * Math.min(ACCEL * dt, 1);
+        } else {
+          vel.vy *= Math.max(0, 1 - FRICTION * dt);
+        }
       }
 
       // Wall-slide collision: try full move → X-only → Y-only

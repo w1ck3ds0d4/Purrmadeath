@@ -22,6 +22,13 @@ export class Camera {
   /** Screen pixels per world pixel. >1 = zoomed in, <1 = zoomed out. */
   zoom = 1.5;
 
+  // ── Screen shake ────────────────────────────────────────────────────────────
+  private shakeIntensity = 0;
+  private shakeDuration = 0;
+  private shakeTimer = 0;
+  private shakeOffsetX = 0;
+  private shakeOffsetY = 0;
+
   // ── Look-around state ────────────────────────────────────────────────────────
   private lookOffsetX = 0;
   private lookOffsetY = 0;
@@ -57,17 +64,44 @@ export class Camera {
       this.lookOffsetX += (0 - this.lookOffsetX) * s;
       this.lookOffsetY += (0 - this.lookOffsetY) * s;
     }
+
+    // Screen shake offset
+    if (this.shakeTimer > 0) {
+      this.shakeTimer -= dt;
+      const st = Math.max(0, this.shakeTimer / this.shakeDuration);
+      const offset = this.shakeIntensity * st;
+      this.shakeOffsetX = (Math.random() - 0.5) * 2 * offset;
+      this.shakeOffsetY = (Math.random() - 0.5) * 2 * offset;
+      if (this.shakeTimer <= 0) {
+        this.shakeIntensity = 0;
+        this.shakeDuration = 0;
+        this.shakeOffsetX = 0;
+        this.shakeOffsetY = 0;
+      }
+    } else {
+      this.shakeOffsetX = 0;
+      this.shakeOffsetY = 0;
+    }
+  }
+
+  // ── Screen shake ───────────────────────────────────────────────────────────
+
+  shake(intensity: number, duration: number): void {
+    // Stack by taking the max intensity
+    this.shakeIntensity = Math.max(this.shakeIntensity, intensity);
+    this.shakeDuration = Math.max(this.shakeDuration, duration);
+    this.shakeTimer = this.shakeDuration;
   }
 
   // ── Derived view position ───────────────────────────────────────────────────
 
-  /** The world X the camera is actually rendering (camera position + look-around offset). */
+  /** The world X the camera is actually rendering (camera position + look-around offset + shake). */
   get viewX(): number {
-    return this.x + this.lookOffsetX;
+    return this.x + this.lookOffsetX + this.shakeOffsetX;
   }
 
   get viewY(): number {
-    return this.y + this.lookOffsetY;
+    return this.y + this.lookOffsetY + this.shakeOffsetY;
   }
 
   // ── Input binding ───────────────────────────────────────────────────────────

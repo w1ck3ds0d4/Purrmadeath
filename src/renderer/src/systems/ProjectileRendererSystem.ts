@@ -15,6 +15,10 @@ interface ProjectileVisual {
   startX?: number;
   startY?: number;
   elapsed?: number;
+  /** True if projectile pierces through targets (ranger). */
+  pierce?: boolean;
+  /** True if projectile homes in on nearest enemy (mage). */
+  homing?: boolean;
 }
 
 const TRAIL_LEN = 10; // pixels behind the body
@@ -46,7 +50,7 @@ export class ProjectileRendererSystem {
   }
 
   spawn(id: number, x: number, y: number, vx: number, vy: number, ownerSlot: number,
-        targetX?: number, targetY?: number, totalFlightTime?: number): void {
+        targetX?: number, targetY?: number, totalFlightTime?: number, pierce?: boolean, homing?: boolean): void {
     const vis: ProjectileVisual = { x, y, vx, vy, ownerSlot };
     if (targetX != null && targetY != null && totalFlightTime != null) {
       vis.targetX = targetX;
@@ -56,6 +60,8 @@ export class ProjectileRendererSystem {
       vis.startY = y;
       vis.elapsed = 0;
     }
+    if (pierce) vis.pierce = true;
+    if (homing) vis.homing = true;
     this.projectiles.set(id, vis);
   }
 
@@ -114,10 +120,14 @@ export class ProjectileRendererSystem {
       if (p.x < cameraX - halfW - margin || p.x > cameraX + halfW + margin ||
           p.y < cameraY - halfH - margin || p.y > cameraY + halfH + margin) continue;
 
-      // Turret projectiles (ownerSlot = -1) gray/blue, ranger enemy projectiles (ownerSlot = -2) purple
-      const color = p.ownerSlot === -1 ? 0x9999bb
-        : p.ownerSlot === -2 ? 0xdd7722
-        : (PLAYER_COLORS[p.ownerSlot] ?? 0xffffff);
+      // Color by projectile type: ranger=green, mage=white, turret=gray, enemy=orange, default=player color
+      let color: number;
+      if (p.pierce) color = 0x44dd66;
+      else if (p.homing) color = 0xeeeeff;
+      else if (p.ownerSlot === -1) color = 0x9999bb;
+      else if (p.ownerSlot === -2) color = 0xdd7722;
+      else color = PLAYER_COLORS[p.ownerSlot] ?? 0xffffff;
+
       const speed = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
       if (speed === 0) continue;
 
@@ -125,30 +135,51 @@ export class ProjectileRendererSystem {
       const dx = p.vx / speed;
       const dy = p.vy / speed;
 
-      // Trail line (behind the body) - world coordinates
-      const tailX = p.x - dx * TRAIL_LEN;
-      const tailY = p.y - dy * TRAIL_LEN;
-      this.gfx.moveTo(tailX, tailY);
-      this.gfx.lineTo(p.x, p.y);
-      this.gfx.stroke({ color, alpha: 0.4, width: 2 });
-
-      // Body circle - world coordinates
-      // Mortar projectiles: draw larger with parabolic arc scale (bigger at midpoint)
-      let bodyRadius = PROJECTILE_RADIUS;
+      // Mortar projectiles: draw larger with parabolic arc scale
       if (p.targetX != null && p.totalFlightTime != null && p.elapsed != null) {
         const t = Math.min(p.elapsed / p.totalFlightTime, 1);
-        // Parabolic arc: scale peaks at 2.5x at midpoint
         const arcScale = 1 + 1.5 * 4 * t * (1 - t);
-        bodyRadius = PROJECTILE_RADIUS * arcScale;
-        // Draw shadow on ground
+        const bodyRadius = PROJECTILE_RADIUS * arcScale;
         this.gfx.circle(p.x, p.y, PROJECTILE_RADIUS * 0.8);
         this.gfx.fill({ color: 0x000000, alpha: 0.2 });
-        // Offset body upward to simulate height
-        const arcHeight = 30 * 4 * t * (1 - t); // peaks at 30px "height"
+        const arcHeight = 30 * 4 * t * (1 - t);
         this.gfx.circle(p.x, p.y - arcHeight, bodyRadius);
         this.gfx.fill({ color: 0xff6600, alpha: 0.9 });
+      } else if (p.homing) {
+        // Mage: glowing orb with outer glow (white base — will be tinted by element later)
+        this.gfx.circle(p.x, p.y, PROJECTILE_RADIUS * 2.5);
+        this.gfx.fill({ color: 0xffffff, alpha: 0.15 });
+        this.gfx.circle(p.x, p.y, PROJECTILE_RADIUS * 1.5);
+        this.gfx.fill({ color: 0xeeeeff, alpha: 0.9 });
+        // Short sparkle trail
+        const tailX = p.x - dx * TRAIL_LEN * 0.8;
+        const tailY = p.y - dy * TRAIL_LEN * 0.8;
+        this.gfx.moveTo(tailX, tailY);
+        this.gfx.lineTo(p.x, p.y);
+        this.gfx.stroke({ color: 0xddddff, alpha: 0.5, width: 3 });
+      } else if (p.pierce) {
+        // Ranger: elongated arrow with long trail
+        const tailX = p.x - dx * TRAIL_LEN * 2;
+        const tailY = p.y - dy * TRAIL_LEN * 2;
+        this.gfx.moveTo(tailX, tailY);
+        this.gfx.lineTo(p.x, p.y);
+        this.gfx.stroke({ color: 0x44dd66, alpha: 0.35, width: 2 });
+        // Pointed head (diamond shape)
+        const nx = -dy, ny = dx; // perpendicular
+        this.gfx.moveTo(p.x + dx * 5, p.y + dy * 5);
+        this.gfx.lineTo(p.x + nx * 2.5, p.y + ny * 2.5);
+        this.gfx.lineTo(p.x - dx * 3, p.y - dy * 3);
+        this.gfx.lineTo(p.x - nx * 2.5, p.y - ny * 2.5);
+        this.gfx.closePath();
+        this.gfx.fill({ color: 0x44dd66, alpha: 0.9 });
       } else {
-        this.gfx.circle(p.x, p.y, bodyRadius);
+        // Default: circle + trail (warrior / turret / enemy)
+        const tailX = p.x - dx * TRAIL_LEN;
+        const tailY = p.y - dy * TRAIL_LEN;
+        this.gfx.moveTo(tailX, tailY);
+        this.gfx.lineTo(p.x, p.y);
+        this.gfx.stroke({ color, alpha: 0.4, width: 2 });
+        this.gfx.circle(p.x, p.y, PROJECTILE_RADIUS);
         this.gfx.fill({ color, alpha: 0.9 });
       }
     }

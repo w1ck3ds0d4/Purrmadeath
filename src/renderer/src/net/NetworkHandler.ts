@@ -54,6 +54,7 @@ import type { Camera } from '../render/Camera';
 import type { PlayerRendererSystem } from '../systems/PlayerRendererSystem';
 import type { ProjectileRendererSystem } from '../systems/ProjectileRendererSystem';
 import type { DamageNumberSystem } from '../systems/DamageNumberSystem';
+import type { HitParticleSystem } from '../systems/HitParticleSystem';
 import type { RemotePlayerSystem } from '../systems/RemotePlayerSystem';
 import type { MovementSystem } from '../systems/MovementSystem';
 import type { GameStateManager } from '../state/GameStateManager';
@@ -116,6 +117,7 @@ export interface NetworkHandlerDeps {
   playerRenderer: PlayerRendererSystem;
   projectileRenderer: ProjectileRendererSystem;
   damageNumbers: DamageNumberSystem;
+  hitParticles: HitParticleSystem;
   reconciler: Reconciler;
   remotePlayerSys: RemotePlayerSystem;
   getMovementSystem: () => MovementSystem | null;
@@ -258,22 +260,29 @@ export function registerMessageHandlers(
 
   net.on(MessageType.HIT, (msg) => {
     const hit = msg as HitMessage;
+    const crit = hit.crit === true;
     d.playerRenderer.notifyHit(hit.targetId);
 
-    const pos = d.world.getComponent<PositionComponent>(hit.targetId, C.Position);
-    if (pos) {
+    const tgtPos = d.world.getComponent<PositionComponent>(hit.targetId, C.Position);
+    if (tgtPos) {
       const faction = d.world.getComponent<FactionComponent>(hit.targetId, C.Faction);
       const color = faction?.type === 'building' ? 0xffa040
                   : faction?.type === 'resource' ? 0xffffff
                   : 0xff4444;
-      d.damageNumbers.add(pos.x, pos.y - 10, hit.damage, color);
+      d.damageNumbers.add(tgtPos.x, tgtPos.y - 10, hit.damage, color, crit);
+      d.hitParticles.burst(tgtPos.x, tgtPos.y, crit ? 8 : 4);
+
+      // Screen shake when the local player is hit
+      if (hit.targetId === s.localEntityId) {
+        d.camera.shake(crit ? 6 : 3, crit ? 0.15 : 0.1);
+      }
     }
   });
 
   net.on(MessageType.PROJECTILE_SPAWN, (msg) => {
     const ps = msg as ProjectileSpawnMessage;
     d.projectileRenderer.spawn(ps.projectileId, ps.x, ps.y, ps.vx, ps.vy, ps.ownerSlot,
-      ps.targetX, ps.targetY, ps.totalFlightTime);
+      ps.targetX, ps.targetY, ps.totalFlightTime, ps.pierce, ps.homing);
   });
 
   net.on(MessageType.PROJECTILE_REMOVE, (msg) => {

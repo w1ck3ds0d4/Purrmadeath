@@ -332,6 +332,8 @@ export interface EntitySnapshot {
   enemyRadius?: number;
   /** Player class type (warrior/ranger/mage). Only present for player faction. */
   playerClass?: string;
+  /** True when entity is mid-dodge-roll (invincible + ghost visual). */
+  dodging?: boolean;
 }
 
 /** Full world snapshot sent on game start or player rejoin. */
@@ -370,6 +372,8 @@ export interface InputMessage extends BaseMessage {
   sprint: boolean;
   /** Timestamp (performance.now()) the input was sampled. */
   t: number;
+  /** True on the frame the player initiates a dodge roll. */
+  dodge?: boolean;
 }
 
 // ─── Combat ───────────────────────────────────────────────────────────────────
@@ -404,6 +408,7 @@ export interface HitMessage extends BaseMessage {
   damage: number;
   knockbackVx: number;
   knockbackVy: number;
+  crit?: boolean;
 }
 
 /** Server → all: a new projectile was created (ranged attack). */
@@ -424,6 +429,10 @@ export interface ProjectileSpawnMessage extends BaseMessage {
   targetY?: number;
   /** Total flight time for mortar arc (seconds). */
   totalFlightTime?: number;
+  /** True if projectile pierces through targets (ranger). */
+  pierce?: boolean;
+  /** True if projectile homes in on nearest enemy (mage). */
+  homing?: boolean;
 }
 
 /** Server → all: a projectile was destroyed. */

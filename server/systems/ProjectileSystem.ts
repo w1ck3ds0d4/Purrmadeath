@@ -12,6 +12,7 @@ import {
   EnemyStatsComponent,
   GhostStateComponent,
   EnemyVariantComponent,
+  DodgeRollComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -21,6 +22,11 @@ import {
   ENEMY_RADIUS,
   RESOURCE_NODE_RADIUS,
   buildingHalfExtent,
+  CRIT_CHANCE,
+  CRIT_MULTIPLIER,
+  GATHERING_DAMAGE,
+  HOMING_TURN_RATE,
+  HOMING_DETECT_RANGE,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
@@ -101,6 +107,8 @@ export class ProjectileSystem {
             const tgtFaction = world.getComponent<FactionComponent>(targetId, C.Faction);
             if (tgtFaction?.type !== 'enemy') continue;
             if (world.hasComponent(targetId, C.Downed)) continue;
+            const drM = world.getComponent<DodgeRollComponent>(targetId, C.DodgeRoll);
+            if (drM && drM.timer > 0) continue;
             const tgtPos = world.getComponent<PositionComponent>(targetId, C.Position)!;
             const tgtRadius = world.getComponent<EnemyStatsComponent>(targetId, C.EnemyStats)?.radius ?? ENEMY_RADIUS;
             const collisionDist = PROJECTILE_RADIUS + tgtRadius;
@@ -135,7 +143,7 @@ export class ProjectileSystem {
             const aoeHp = world.getComponent<HealthComponent>(aoeTarget, C.Health)!;
             let aoeDmg: number;
             if (aoeFaction?.type === 'resource') {
-              aoeDmg = proj.damage;
+              aoeDmg = GATHERING_DAMAGE;
             } else {
               const aoeDef = world.getComponent<DefenseComponent>(aoeTarget, C.Defense);
               aoeDmg = proj.damage;
@@ -149,6 +157,38 @@ export class ProjectileSystem {
           destroyed.push(projId);
         }
         continue; // Skip normal collision logic for mortar projectiles
+      }
+
+      // Homing: steer toward nearest enemy before moving
+      if (proj.homing) {
+        const speed = Math.sqrt(vel.vx * vel.vx + vel.vy * vel.vy);
+        if (speed > 0) {
+          let bestDist2 = HOMING_DETECT_RANGE * HOMING_DETECT_RANGE;
+          let bestTarget: PositionComponent | null = null;
+          for (const tid of targets) {
+            if (tid === projId || tid === proj.ownerId) continue;
+            if (world.getComponent(tid, C.Projectile)) continue;
+            const tf = world.getComponent<FactionComponent>(tid, C.Faction);
+            if (tf?.type !== 'enemy') continue;
+            if (world.hasComponent(tid, C.Downed)) continue;
+            const tp = world.getComponent<PositionComponent>(tid, C.Position)!;
+            const hdx = tp.x - pos.x, hdy = tp.y - pos.y;
+            const d2 = hdx * hdx + hdy * hdy;
+            if (d2 < bestDist2 && d2 > 0) { bestDist2 = d2; bestTarget = tp; }
+          }
+          if (bestTarget) {
+            const desired = Math.atan2(bestTarget.y - pos.y, bestTarget.x - pos.x);
+            const current = Math.atan2(vel.vy, vel.vx);
+            let diff = desired - current;
+            if (diff > Math.PI) diff -= 2 * Math.PI;
+            if (diff < -Math.PI) diff += 2 * Math.PI;
+            const maxTurn = HOMING_TURN_RATE * dt;
+            const turn = Math.max(-maxTurn, Math.min(maxTurn, diff));
+            const newAngle = current + turn;
+            vel.vx = Math.cos(newAngle) * speed;
+            vel.vy = Math.sin(newAngle) * speed;
+          }
+        }
       }
 
       // Remember old position for swept collision
@@ -211,6 +251,10 @@ export class ProjectileSystem {
         // Skip downed players - they're already at 0 HP
         if (world.hasComponent(targetId, C.Downed)) continue;
 
+        // Dodging entities are invincible
+        const drP = world.getComponent<DodgeRollComponent>(targetId, C.DodgeRoll);
+        if (drP && drP.timer > 0) continue;
+
         // Hidden ghosts are untargetable by player/guard projectiles
         if (projFaction?.type !== 'enemy') {
           const ghostSt = world.getComponent<GhostStateComponent>(targetId, C.GhostState);
@@ -228,21 +272,31 @@ export class ProjectileSystem {
             : (world.getComponent<EnemyStatsComponent>(targetId, C.EnemyStats)?.radius ?? ENEMY_RADIUS);
         const collisionDist = PROJECTILE_RADIUS + tgtRadius;
 
+        // Skip entities already hit by this piercing projectile
+        if (proj.pierce && proj.hitEntities?.includes(targetId)) continue;
+
         // Swept collision: closest point on path segment to target center
         const d2 = segPointDist2(oldX, oldY, pos.x, pos.y, tgtPos.x, tgtPos.y);
         if (d2 > collisionDist * collisionDist) continue;
 
         // Apply damage with defense reduction
-        // Resource nodes: cannon AOE deals full damage, normal projectiles deal 1
         const hp  = world.getComponent<HealthComponent>(targetId, C.Health)!;
         let damage: number;
         if (isResource) {
-          damage = (proj.aoeRadius && proj.aoeRadius > 0) ? proj.damage : 1;
+          damage = GATHERING_DAMAGE;
         } else {
           const def = world.getComponent<DefenseComponent>(targetId, C.Defense);
           damage = proj.damage;
           if (def) damage = Math.max(0, Math.round((damage - def.flat) * (1 - def.percent)));
         }
+
+        // Critical hit (player/guard projectiles only)
+        let crit = false;
+        if (projFaction?.type === 'player' && Math.random() < CRIT_CHANCE) {
+          damage = Math.round(damage * CRIT_MULTIPLIER);
+          crit = true;
+        }
+
         hp.current = Math.max(0, hp.current - damage);
 
         // Knockback - direction from projectile to target (giants are immune)
@@ -262,7 +316,7 @@ export class ProjectileSystem {
           }
         }
 
-        hits.push({ sourceId: proj.ownerId, targetId, damage, knockbackVx, knockbackVy });
+        hits.push({ sourceId: proj.ownerId, targetId, damage, knockbackVx, knockbackVy, crit: crit || undefined });
         if (hp.current <= 0) deaths.push(targetId);
 
         // AOE explosion: damage all enemies within radius (cannon turret)
@@ -276,13 +330,15 @@ export class ProjectileSystem {
             // AOE hits enemies and resource nodes
             if (aoeFaction?.type !== 'enemy' && aoeFaction?.type !== 'resource') continue;
             if (world.hasComponent(aoeTarget, C.Downed)) continue;
+            const drA = world.getComponent<DodgeRollComponent>(aoeTarget, C.DodgeRoll);
+            if (drA && drA.timer > 0) continue;
             const aoePos = world.getComponent<PositionComponent>(aoeTarget, C.Position)!;
             const adx = aoePos.x - pos.x, ady = aoePos.y - pos.y;
             if (adx * adx + ady * ady > aoeR2) continue;
             const aoeHp = world.getComponent<HealthComponent>(aoeTarget, C.Health)!;
             let aoeDmg: number;
             if (aoeFaction?.type === 'resource') {
-              aoeDmg = proj.damage;
+              aoeDmg = GATHERING_DAMAGE;
             } else {
               const aoeDef = world.getComponent<DefenseComponent>(aoeTarget, C.Defense);
               aoeDmg = proj.damage;
@@ -294,8 +350,13 @@ export class ProjectileSystem {
           }
         }
 
-        hitSomething = true;
-        break; // No piercing - first hit destroys the projectile
+        if (proj.pierce) {
+          if (!proj.hitEntities) proj.hitEntities = [];
+          proj.hitEntities.push(targetId);
+        } else {
+          hitSomething = true;
+          break;
+        }
       }
 
       if (hitSomething) {

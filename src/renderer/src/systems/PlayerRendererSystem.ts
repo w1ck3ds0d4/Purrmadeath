@@ -13,6 +13,7 @@ import {
   EnemyVariantComponent,
   GhostStateComponent,
   EnemyStatsComponent,
+  DodgeRollComponent,
 } from '@shared/components';
 import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, ENEMY_MELEE_RANGE, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, buildingHalfExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RANGE } from '@shared/constants';
 import { FACTION_COLORS, type EnemyFaction } from '@shared/EnemyVariants';
@@ -144,6 +145,8 @@ export class PlayerRendererSystem {
   private wasDowned = new Map<EntityId, boolean>();
   /** Per-entity: last revive progress value. */
   private lastReviveProg = new Map<EntityId, number>();
+  /** Per-entity: was entity dodging last frame? */
+  private wasDodging = new Map<EntityId, boolean>();
   /** Last selected building ID (to detect selection changes). */
   private lastSelectedId: number | null = null;
 
@@ -249,6 +252,7 @@ export class PlayerRendererSystem {
         this.wasFlashing.delete(id);
         this.wasGhostHidden.delete(id);
         this.wasDowned.delete(id);
+        this.wasDodging.delete(id);
         this.lastReviveProg.delete(id);
       }
     }
@@ -313,6 +317,13 @@ export class PlayerRendererSystem {
         if (hidden !== prevHidden) needsRedraw = true;
         this.wasGhostHidden.set(id, hidden);
       }
+
+      // Dodge roll visual change
+      const dodgeRoll = world.getComponent<DodgeRollComponent>(id, C.DodgeRoll);
+      const isDodging = dodgeRoll != null && dodgeRoll.timer > 0;
+      const prevDodging = this.wasDodging.get(id) ?? false;
+      if (isDodging !== prevDodging) needsRedraw = true;
+      this.wasDodging.set(id, isDodging);
 
       // Update tracking state
       this.wasFlashing.set(id, isFlashing);
@@ -714,6 +725,9 @@ export class PlayerRendererSystem {
 
       }
 
+      // Dodge roll ghost effect: reduce alpha when dodging
+      gfx.alpha = isDodging ? 0.4 : 1;
+
       // Apply smooth offset to local player sprite so corrections don't cause
       // visible backward jerks (the camera already uses the same offset).
       if (id === localEntityId) {
@@ -878,6 +892,7 @@ export class PlayerRendererSystem {
     this.wasFlashing.clear();
     this.wasGhostHidden.clear();
     this.wasDowned.clear();
+    this.wasDodging.clear();
     this.lastReviveProg.clear();
     for (const [, tag] of this.productionTags) {
       this.tagContainer.removeChild(tag.bg);

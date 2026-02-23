@@ -21,10 +21,12 @@ import {
   SpikeTrapComponent,
   BridgeComponent,
   EnemyVariantComponent,
+  DodgeRollComponent,
+  ProjectileComponent,
 } from '@shared/components';
 import type {
   ResourceType, BuildingType, EnemyVariantType, EnemyStatsComponent, GhostStateComponent,
-  LightRevealComponent, HealAuraComponent, BarracksSpawnerComponent,
+  LightRevealComponent, HealAuraComponent, BarracksSpawnerComponent, FacingComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -65,6 +67,8 @@ import {
   ENEMY_RANGER_PROJECTILE_SPEED,
   ENEMY_RANGER_SPEED,
   ENEMY_RANGER_HEALTH,
+  DODGE_ROLL_DURATION,
+  DODGE_ROLL_COOLDOWN,
 } from '@shared/constants';
 import { RESOURCE_STATS, RESOURCE_SPAWN_TABLE, TILE_SPAWN_CHANCE } from '@shared/data/ResourceSpawnTable';
 import { LOOT_TABLES } from '@shared/data/LootTables';
@@ -1123,6 +1127,30 @@ export class GameSession {
     inp.dy = Math.max(-1, Math.min(1, dy));
     inp.sprint = msg.sprint === true;
 
+    // Dodge roll
+    if (msg.dodge) {
+      const existingDodge = this.world.getComponent<DodgeRollComponent>(player.entityId!, C.DodgeRoll);
+      if (!existingDodge || (existingDodge.timer <= 0 && existingDodge.cooldown <= 0)) {
+        const dinp = this.world.getComponent<PlayerInputComponent>(player.entityId!, C.PlayerInput);
+        let dvx = dinp?.dx ?? 0;
+        let dvy = dinp?.dy ?? 0;
+        const len = Math.sqrt(dvx * dvx + dvy * dvy);
+        if (len > 0) { dvx /= len; dvy /= len; }
+        else {
+          const facing = this.world.getComponent<FacingComponent>(player.entityId!, C.Facing);
+          dvx = Math.cos(facing?.angle ?? 0);
+          dvy = Math.sin(facing?.angle ?? 0);
+        }
+        this.world.addComponent(player.entityId!, C.DodgeRoll, {
+          timer: DODGE_ROLL_DURATION,
+          duration: DODGE_ROLL_DURATION,
+          dashVx: dvx,
+          dashVy: dvy,
+          cooldown: DODGE_ROLL_COOLDOWN,
+        });
+      }
+    }
+
     const seq = Number(msg.seq);
     if (Number.isFinite(seq) && seq > player.lastSeq) player.lastSeq = seq;
   }
@@ -1366,7 +1394,10 @@ export class GameSession {
     const rDmgMult = (rBuffs?.damageMultiplier ?? 1) * this.cards.debuffs.playerDamageMult;
     const rangedClassDmg = CLASS_STATS[player.playerClass].baseDamage;
     const projDamage = Math.round(rangedClassDmg * rDmgMult);
-    this.world.addComponent(projId, C.Projectile, { ownerId: entityId, damage: projDamage, lifetime: RANGED_LIFETIME });
+    const projData: ProjectileComponent = { ownerId: entityId, damage: projDamage, lifetime: RANGED_LIFETIME };
+    if (player.playerClass === 'ranger') projData.pierce = true;
+    if (player.playerClass === 'mage') projData.homing = true;
+    this.world.addComponent(projId, C.Projectile, projData);
     this.world.addComponent(projId, C.Faction,    { type: faction?.type ?? 'player' });
 
     // Broadcast spawn to all clients
@@ -1378,6 +1409,8 @@ export class GameSession {
       vx,
       vy,
       ownerSlot: player.slot,
+      pierce: projData.pierce || undefined,
+      homing: projData.homing || undefined,
     };
     for (const p of this.players.values()) send(p.client, spawn);
   }
@@ -1643,6 +1676,13 @@ export class GameSession {
     this.movement.update(this.world, dt);
     const _t3 = performance.now();
 
+    // Tick dodge roll timers
+    for (const id of this.world.query(C.DodgeRoll)) {
+      const dr = this.world.getComponent<DodgeRollComponent>(id, C.DodgeRoll)!;
+      if (dr.timer > 0) dr.timer = Math.max(0, dr.timer - dt);
+      if (dr.cooldown > 0) dr.cooldown = Math.max(0, dr.cooldown - dt);
+    }
+
     // Broadcast enemy attack animations
     for (const ap of enemyResult.attackPerformed) {
       const performed: AttackPerformedMessage = {
@@ -1906,6 +1946,10 @@ export class GameSession {
         if (eStats && eStats.radius !== 10) snap.enemyRadius = eStats.radius;
       }
 
+      // Dodge roll state
+      const dodgeRoll = this.world.getComponent<DodgeRollComponent>(id, C.DodgeRoll);
+      if (dodgeRoll && dodgeRoll.timer > 0) snap.dodging = true;
+
       // Downed state
       if (this.world.hasComponent(id, C.Downed)) snap.downed = true;
 
@@ -1923,6 +1967,7 @@ export class GameSession {
       prev.vx !== curr.vx || prev.vy !== curr.vy ||
       prev.hp !== curr.hp ||
       prev.downed !== curr.downed ||
+      prev.dodging !== curr.dodging ||
       prev.resourceType !== curr.resourceType ||
       prev.itemType !== curr.itemType ||
       prev.buildingType !== curr.buildingType ||

@@ -10,6 +10,7 @@ import {
   BuildingComponent,
   EnemyVariantComponent,
   EnemyStatsComponent,
+  DodgeRollComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -20,6 +21,7 @@ import {
   RESOURCE_NODE_RADIUS,
   ENTITY_SEPARATION_ITERATIONS,
   buildingHalfExtent,
+  DODGE_ROLL_SPEED,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
@@ -117,25 +119,32 @@ export class MovementSystem {
         ? (world.getComponent<EnemyStatsComponent>(id, C.EnemyStats)?.radius ?? ENEMY_RADIUS)
         : PLAYER_RADIUS;
 
-      const maxSpeed = speed.base * speed.multiplier * (inp.sprint ? PLAYER_SPRINT_MULTIPLIER : 1);
-
-      let dx = inp.dx;
-      let dy = inp.dy;
-      if (dx !== 0 && dy !== 0) {
-        const inv = 1 / Math.SQRT2;
-        dx *= inv;
-        dy *= inv;
-      }
-
-      if (inp.dx !== 0) {
-        vel.vx += (dx * maxSpeed - vel.vx) * Math.min(ACCEL * dt, 1);
+      // Dodge roll override: during active dodge, force velocity to dash direction
+      const dodgeRoll = world.getComponent<DodgeRollComponent>(id, C.DodgeRoll);
+      if (dodgeRoll && dodgeRoll.timer > 0) {
+        vel.vx = dodgeRoll.dashVx * DODGE_ROLL_SPEED;
+        vel.vy = dodgeRoll.dashVy * DODGE_ROLL_SPEED;
       } else {
-        vel.vx *= Math.max(0, 1 - FRICTION * dt);
-      }
-      if (inp.dy !== 0) {
-        vel.vy += (dy * maxSpeed - vel.vy) * Math.min(ACCEL * dt, 1);
-      } else {
-        vel.vy *= Math.max(0, 1 - FRICTION * dt);
+        const maxSpeed = speed.base * speed.multiplier * (inp.sprint ? PLAYER_SPRINT_MULTIPLIER : 1);
+
+        let dx = inp.dx;
+        let dy = inp.dy;
+        if (dx !== 0 && dy !== 0) {
+          const inv = 1 / Math.SQRT2;
+          dx *= inv;
+          dy *= inv;
+        }
+
+        if (inp.dx !== 0) {
+          vel.vx += (dx * maxSpeed - vel.vx) * Math.min(ACCEL * dt, 1);
+        } else {
+          vel.vx *= Math.max(0, 1 - FRICTION * dt);
+        }
+        if (inp.dy !== 0) {
+          vel.vy += (dy * maxSpeed - vel.vy) * Math.min(ACCEL * dt, 1);
+        } else {
+          vel.vy *= Math.max(0, 1 - FRICTION * dt);
+        }
       }
 
       // Wall-slide collision (ghosts phase through everything)

@@ -19,6 +19,11 @@ import {
   RESOURCE_NODE_RADIUS,
   GAME_VERSION,
   TICK_MS,
+  DODGE_ROLL_DURATION,
+  DODGE_ROLL_COOLDOWN,
+  DODGE_ROLL_STAMINA_COST,
+  HOMING_TURN_RATE,
+  HOMING_DETECT_RANGE,
 } from '@shared/constants';
 import type { LobbySlot } from '@shared/protocol';
 import type { SaveSlotInfo } from '@shared/SaveFormat';
@@ -26,7 +31,7 @@ import { registerMessageHandlers, type GameplayState } from './net/NetworkHandle
 import { createBuildController } from './systems/BuildController';
 
 import { World } from '@shared/ecs/World';
-import { C, PositionComponent, FactionComponent, BuildingComponent } from '@shared/components';
+import { C, PositionComponent, FactionComponent, BuildingComponent, DodgeRollComponent, StaminaComponent, PlayerInputComponent, FacingComponent } from '@shared/components';
 
 import { InputManager, Action } from './input/InputManager';
 import { GameStateManager, GameState } from './state/GameStateManager';
@@ -52,6 +57,7 @@ import { BuildModeOverlay } from './ui/BuildModeOverlay';
 import { BuildGhostRenderer } from './render/BuildGhostRenderer';
 import { WarehouseHUD } from './ui/WarehouseHUD';
 import { DamageNumberSystem } from './systems/DamageNumberSystem';
+import { HitParticleSystem } from './systems/HitParticleSystem';
 import { Minimap, MAP_SIZE, MAP_PADDING } from './ui/Minimap';
 import { StatsOverlay } from './ui/StatsOverlay';
 import { CardPickerOverlay } from './ui/CardPickerOverlay';
@@ -103,6 +109,7 @@ async function main(): Promise<void> {
   const playerRenderer = new PlayerRendererSystem(tileRenderer.worldContainer);
   const projectileRenderer = new ProjectileRendererSystem(tileRenderer.worldContainer);
   const damageNumbers = new DamageNumberSystem(tileRenderer.worldContainer);
+  const hitParticles  = new HitParticleSystem(tileRenderer.worldContainer);
   const hud          = new HUD(renderer.stage);
   const weaponHotbar = new WeaponHotbar(renderer.stage);
   const minimap      = new Minimap(renderer.stage);
@@ -421,7 +428,7 @@ async function main(): Promise<void> {
   };
 
   registerMessageHandlers(net, handlerState, {
-    world, camera, playerRenderer, projectileRenderer, damageNumbers, reconciler, remotePlayerSys,
+    world, camera, playerRenderer, projectileRenderer, damageNumbers, hitParticles, reconciler, remotePlayerSys,
     getMovementSystem: () => movementSystem,
     initGameWorld: (newSeed: number) => {
       generator = new WorldGenerator(newSeed);
@@ -592,6 +599,15 @@ async function main(): Promise<void> {
       remotePlayerSys.interpolate(world, dt);
       waveHUD.update(dt);
 
+      // Tick local dodge roll timer
+      if (localEntityId !== null) {
+        const dr = world.getComponent<DodgeRollComponent>(localEntityId, C.DodgeRoll);
+        if (dr) {
+          if (dr.timer > 0) dr.timer = Math.max(0, dr.timer - dt);
+          if (dr.cooldown > 0) dr.cooldown = Math.max(0, dr.cooldown - dt);
+        }
+      }
+
       // 5. Render players - compute mouse-facing angle for local player
       const pos = world.getComponent<PositionComponent>(localEntityId, C.Position);
       let localFacing: number | null = null;
@@ -604,9 +620,6 @@ async function main(): Promise<void> {
 
       // Weapon slot 1 (number key) — exit build mode when selecting weapon
       if (input.isJustPressed(Action.WeaponSlot1)) { if (buildCtrl.active) buildCtrl.exitBuildMode(); }
-
-      // M key: toggle minimap
-      if (input.isJustPressed(Action.ToggleMinimap)) minimap.toggle();
 
       // B key: toggle build mode
       if (canAct && input.isJustPressed(Action.BuildMode)) buildCtrl.toggle();
@@ -651,6 +664,31 @@ async function main(): Promise<void> {
         net.send({ type: MessageType.INTERACT, x: pos.x, y: pos.y, t: performance.now() });
       }
 
+      // Space: dodge roll
+      if (input.isJustPressed(Action.DodgeRoll) && localEntityId !== null) {
+        const stamina = world.getComponent<StaminaComponent>(localEntityId, C.Stamina);
+        const existingDodge = world.getComponent<DodgeRollComponent>(localEntityId, C.DodgeRoll);
+        if (stamina && stamina.current >= DODGE_ROLL_STAMINA_COST &&
+            (!existingDodge || (existingDodge.timer <= 0 && existingDodge.cooldown <= 0))) {
+          stamina.current -= DODGE_ROLL_STAMINA_COST;
+          const dinp = world.getComponent<PlayerInputComponent>(localEntityId, C.PlayerInput);
+          let dvx = dinp?.dx ?? 0, dvy = dinp?.dy ?? 0;
+          const len = Math.sqrt(dvx * dvx + dvy * dvy);
+          if (len > 0) { dvx /= len; dvy /= len; }
+          else {
+            const facing = world.getComponent<FacingComponent>(localEntityId, C.Facing);
+            dvx = Math.cos(facing?.angle ?? 0);
+            dvy = Math.sin(facing?.angle ?? 0);
+          }
+          world.addComponent(localEntityId, C.DodgeRoll, {
+            timer: DODGE_ROLL_DURATION, duration: DODGE_ROLL_DURATION,
+            dashVx: dvx, dashVy: dvy, cooldown: DODGE_ROLL_COOLDOWN,
+          });
+          // Send dodge immediately (not throttled to tick rate)
+          net.send({ type: MessageType.INPUT, seq: 0, dx: dinp?.dx ?? 0, dy: dinp?.dy ?? 0, sprint: dinp?.sprint ?? false, t: performance.now(), dodge: true });
+        }
+      }
+
       playerRenderer.selectedBuildingId = buildCtrl.selectedId;
       playerRenderer.update(world, localEntityId, localFacing, dt, reconciler.smoothX, reconciler.smoothY);
       deathOverlay.update(dt);
@@ -662,8 +700,37 @@ async function main(): Promise<void> {
       for (const [pid, p] of projectileRenderer.getProjectiles()) {
         projOldPos.set(pid, { x: p.x, y: p.y });
       }
+      // Client-side homing: steer homing projectiles toward nearest enemy
+      for (const [, proj] of projectileRenderer.getProjectiles()) {
+        if (!proj.homing) continue;
+        const speed = Math.sqrt(proj.vx * proj.vx + proj.vy * proj.vy);
+        if (speed === 0) continue;
+        let bestD2 = HOMING_DETECT_RANGE * HOMING_DETECT_RANGE;
+        let bestX = 0, bestY = 0, found = false;
+        for (const eid of world.query(C.Position, C.Faction)) {
+          const ef = world.getComponent<FactionComponent>(eid, C.Faction);
+          if (ef?.type !== 'enemy') continue;
+          const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
+          const hdx = ep.x - proj.x, hdy = ep.y - proj.y;
+          const d2 = hdx * hdx + hdy * hdy;
+          if (d2 < bestD2 && d2 > 0) { bestD2 = d2; bestX = ep.x; bestY = ep.y; found = true; }
+        }
+        if (found) {
+          const desired = Math.atan2(bestY - proj.y, bestX - proj.x);
+          const current = Math.atan2(proj.vy, proj.vx);
+          let diff = desired - current;
+          if (diff > Math.PI) diff -= 2 * Math.PI;
+          if (diff < -Math.PI) diff += 2 * Math.PI;
+          const maxTurn = HOMING_TURN_RATE * dt;
+          const turn = Math.max(-maxTurn, Math.min(maxTurn, diff));
+          const angle = current + turn;
+          proj.vx = Math.cos(angle) * speed;
+          proj.vy = Math.sin(angle) * speed;
+        }
+      }
       projectileRenderer.update(dt);
       damageNumbers.update(dt);
+      hitParticles.update(dt);
 
       // Client-side projectile hit prediction — swept collision along path
       const projHits: number[] = [];
@@ -689,8 +756,10 @@ async function main(): Promise<void> {
           const ex = tp.x - cx, ey = tp.y - cy;
           if (ex * ex + ey * ey <= minDist * minDist) {
             playerRenderer.notifyHit(targetId);
-            projHits.push(projId);
-            break;
+            if (!proj.pierce) {
+              projHits.push(projId);
+              break;
+            }
           }
         }
       }

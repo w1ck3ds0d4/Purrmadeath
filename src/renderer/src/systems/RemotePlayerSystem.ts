@@ -11,6 +11,7 @@ import {
   EnemyVariantComponent,
   GhostStateComponent,
   EnemyStatsComponent,
+  DodgeRollComponent,
 } from '@shared/components';
 import type { SnapshotMessage, DeltaMessage, EntitySnapshot } from '@shared/protocol';
 
@@ -214,6 +215,17 @@ export class RemotePlayerSystem {
           prod.stored = snap.productionStored;
           if (snap.productionMax !== undefined) prod.maxStored = snap.productionMax;
         }
+      }
+
+      // Dodge roll state
+      if (snap.dodging) {
+        if (!world.hasComponent(snap.entityId, C.DodgeRoll)) {
+          world.addComponent(snap.entityId, C.DodgeRoll, {
+            timer: 1, duration: 1, dashVx: 0, dashVy: 0, cooldown: 0,
+          } as DodgeRollComponent);
+        }
+      } else if (world.hasComponent(snap.entityId, C.DodgeRoll)) {
+        world.removeComponent(snap.entityId, C.DodgeRoll);
       }
 
       // On full snapshot (rejoin), hard-snap position

@@ -11,8 +11,9 @@ import {
   EnemyStatsComponent,
   GhostStateComponent,
   EnemyVariantComponent,
+  DodgeRollComponent,
 } from '@shared/components';
-import { MELEE_RANGE, MELEE_ARC, MELEE_DAMAGE, MELEE_KNOCKBACK, TICK_MS, PLAYER_RADIUS, ENEMY_RADIUS, buildingHalfExtent } from '@shared/constants';
+import { MELEE_RANGE, MELEE_ARC, MELEE_DAMAGE, MELEE_KNOCKBACK, TICK_MS, PLAYER_RADIUS, ENEMY_RADIUS, buildingHalfExtent, CRIT_CHANCE, CRIT_MULTIPLIER, GATHERING_DAMAGE } from '@shared/constants';
 
 export interface HitResult {
   sourceId: number;
@@ -20,6 +21,7 @@ export interface HitResult {
   damage: number;
   knockbackVx: number;
   knockbackVy: number;
+  crit?: boolean;
 }
 
 /** Optional per-call overrides for enemy melee (or future weapon variants). */
@@ -112,6 +114,10 @@ export class CombatSystem {
       // Skip downed players - they're already at 0 HP
       if (world.hasComponent(targetId, C.Downed)) continue;
 
+      // Dodging entities are invincible
+      const dodgeRoll = world.getComponent<DodgeRollComponent>(targetId, C.DodgeRoll);
+      if (dodgeRoll && dodgeRoll.timer > 0) continue;
+
       // Hidden ghosts are untargetable by player/guard melee
       if (srcFaction?.type !== 'enemy') {
         const ghostSt = world.getComponent<GhostStateComponent>(targetId, C.GhostState);
@@ -161,8 +167,21 @@ export class CombatSystem {
       // Damage with defense reduction
       const hp  = world.getComponent<HealthComponent>(targetId, C.Health)!;
       const def = world.getComponent<DefenseComponent>(targetId, C.Defense);
-      let dmg = meleeDamage;
-      if (def) dmg = Math.max(0, Math.round((dmg - def.flat) * (1 - def.percent)));
+      let dmg: number;
+      if (tgtFaction?.type === 'resource') {
+        dmg = GATHERING_DAMAGE;
+      } else {
+        dmg = meleeDamage;
+        if (def) dmg = Math.max(0, Math.round((dmg - def.flat) * (1 - def.percent)));
+      }
+
+      // Critical hit (players only)
+      let crit = false;
+      if (srcFaction?.type === 'player' && Math.random() < CRIT_CHANCE) {
+        dmg = Math.round(dmg * CRIT_MULTIPLIER);
+        crit = true;
+      }
+
       hp.current = Math.max(0, hp.current - dmg);
 
       // Knockback impulse - direction from attacker to target (giants are immune)
@@ -179,7 +198,7 @@ export class CombatSystem {
         }
       }
 
-      hits.push({ sourceId, targetId, damage: dmg, knockbackVx, knockbackVy });
+      hits.push({ sourceId, targetId, damage: dmg, knockbackVx, knockbackVy, crit: crit || undefined });
       if (hp.current <= 0) deaths.push(targetId);
     }
 

@@ -17,7 +17,7 @@ export enum Action {
   Demolish,
   Upgrade,
   Repair,
-  ToggleMinimap,
+  DodgeRoll,
 }
 
 // One or more key strings per action (Set.has is O(1)).
@@ -36,7 +36,7 @@ const DEFAULT_BINDINGS: Readonly<Record<Action, readonly string[]>> = {
   [Action.Demolish]:           ['x'],
   [Action.Upgrade]:            ['v'],
   [Action.Repair]:             ['g'],
-  [Action.ToggleMinimap]:      ['m'],
+  [Action.DodgeRoll]:          [' '],
 };
 
 export class InputManager {

@@ -83,6 +83,16 @@ export const PLAYER_SPRINT_MULTIPLIER = 1.5;
 /** Stamina drained per second while sprinting. */
 export const PLAYER_SPRINT_STAMINA_DRAIN = 30;
 
+// ─── Dodge Roll ──────────────────────────────────────────────────────────────
+export const DODGE_ROLL_DURATION = 0.2;
+export const DODGE_ROLL_COOLDOWN = 0.6;
+export const DODGE_ROLL_SPEED = 450;
+export const DODGE_ROLL_STAMINA_COST = 25;
+
+// ─── Critical Hits ───────────────────────────────────────────────────────────
+export const CRIT_CHANCE = 0.10;
+export const CRIT_MULTIPLIER = 2.0;
+
 // ─── Enemy ────────────────────────────────────────────────────────────────────
 
 /** Collision radius of an enemy in world pixels. */
@@ -173,6 +183,10 @@ export const RANGED_LIFETIME = 1.25;
 export const RANGED_KNOCKBACK = 0;
 /** Collision radius of a projectile in world pixels. */
 export const PROJECTILE_RADIUS = 4;
+/** Homing projectile turn rate in radians per second (mage). */
+export const HOMING_TURN_RATE = 8;
+/** Homing projectile detection range in world pixels. */
+export const HOMING_DETECT_RANGE = 300;
 
 // ─── Waves & Portals ─────────────────────────────────────────────────────
 
@@ -216,6 +230,9 @@ export const PORTAL_RADIUS = 18;
 
 /** Collision/render radius of a resource node in world pixels. */
 export const RESOURCE_NODE_RADIUS = 14;
+
+/** Flat damage all classes deal to resource nodes (normalizes gathering speed). */
+export const GATHERING_DAMAGE = 15;
 
 export const TREE_MAX_HEALTH = 30;
 export const TREE_WOOD_YIELD = 5;

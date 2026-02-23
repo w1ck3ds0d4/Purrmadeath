@@ -24,18 +24,22 @@ export class DamageNumberSystem {
   }
 
   /** Spawn a floating damage number at world coordinates. */
-  add(worldX: number, worldY: number, damage: number, color: number = 0xff4444): void {
+  add(worldX: number, worldY: number, damage: number, color: number = 0xff4444, crit = false): void {
     // Small random horizontal offset to prevent stacking
     const offsetX = (Math.random() - 0.5) * 20;
     const offsetY = (Math.random() - 0.5) * 10;
 
+    const displayColor = crit ? 0xffdd44 : color;
+    const displayText = crit ? `-${Math.round(damage)}!` : `-${Math.round(damage)}`;
+    const displaySize = crit ? 18 : FONT_SIZE;
+
     const text = new Text({
-      text: `-${Math.round(damage)}`,
+      text: displayText,
       style: {
-        fontSize: FONT_SIZE,
+        fontSize: displaySize,
         fontFamily: 'monospace',
         fontWeight: 'bold',
-        fill: color,
+        fill: displayColor,
         stroke: { color: 0x000000, width: 3 },
       },
     });
