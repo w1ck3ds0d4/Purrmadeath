@@ -1,3 +1,4 @@
+import { BUILDING_COSTS } from '@shared/constants';
 import { World } from '@shared/ecs/World';
 import {
   C,
@@ -243,7 +244,7 @@ export function createSaveManager(deps: SaveManagerDeps) {
     const origin = s.spawnOrigin as Record<string, unknown> | undefined;
     if (!origin || !Number.isFinite(origin.x) || !Number.isFinite(origin.y)) return false;
     if (!Array.isArray(s.buildings)) return false;
-    const validBuildings = new Set(['campfire', 'wall', 'warehouse', 'lumbermill', 'quarry', 'mine', 'farm', 'arrow_turret', 'cannon_turret', 'spike_trap', 'bridge', 'light_tower', 'healing_shrine', 'barracks']);
+    const validBuildings = new Set(Object.keys(BUILDING_COSTS));
     for (const b of s.buildings as Record<string, unknown>[]) {
       if (!b || typeof b !== 'object') return false;
       if (!validBuildings.has(b.buildingType as string)) return false;

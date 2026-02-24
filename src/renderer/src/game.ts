@@ -54,6 +54,7 @@ import { GameOverOverlay } from './ui/GameOverOverlay';
 import { UpdateBanner } from './ui/UpdateBanner';
 import { ChatOverlay } from './ui/ChatOverlay';
 import { BuildModeOverlay } from './ui/BuildModeOverlay';
+import { BuildMenuOverlay } from './ui/BuildMenuOverlay';
 import { BuildGhostRenderer } from './render/BuildGhostRenderer';
 import { WarehouseHUD } from './ui/WarehouseHUD';
 import { DamageNumberSystem } from './systems/DamageNumberSystem';
@@ -63,6 +64,7 @@ import { Minimap, MAP_SIZE, MAP_PADDING } from './ui/Minimap';
 import { StatsOverlay } from './ui/StatsOverlay';
 import { CardPickerOverlay } from './ui/CardPickerOverlay';
 import { SkillTreeOverlay } from './ui/SkillTreeOverlay';
+import { PotionShopOverlay } from './ui/PotionShopOverlay';
 import { CLASS_STATS, DEFAULT_CLASS } from '@shared/ClassDefinitions';
 import { getActiveAbilities, type SkillActiveAbility, type AbilityParams } from '@shared/SkillDefinitions';
 import type { PlayerClass } from '@shared/ClassDefinitions';
@@ -245,6 +247,14 @@ async function main(): Promise<void> {
   let cardAbilities: string[] = [];
   let pickedCardIds: string[] = [];
 
+  // ── Potion state (synced from server) ──────────────────────────────────────
+  let potionEquipped: string | null = null;
+  let potionUnlocked: string[] = [];
+  let potionCharges = 0;
+  let potionMaxCharges = 0;
+  let potionCooldown = 0;
+  let potionCooldownMax = 0;
+
   // ── Death / respawn state ──────────────────────────────────────────────────
   let localDowned   = false;
   let localDead     = false;
@@ -298,7 +308,9 @@ async function main(): Promise<void> {
   const chatOverlay = new ChatOverlay();
   const buildOverlay = new BuildModeOverlay();
   const buildGhost   = new BuildGhostRenderer(tileRenderer.worldContainer);
+  const buildMenu    = new BuildMenuOverlay();
   const warehouseHUD = new WarehouseHUD();
+  const potionShopOverlay = new PotionShopOverlay();
 
   const updateBanner = new UpdateBanner();
   window.electronAPI?.onUpdateAvailable(() => updateBanner.showDownloading());
@@ -306,6 +318,37 @@ async function main(): Promise<void> {
 
   // Wire in-game chat
   chatOverlay.onSend((text) => net.send({ type: MessageType.CHAT, text }));
+
+  // Wire potion shop overlay
+  potionShopOverlay.setCallbacks({
+    onUnlock: (potionType, shopEntityId) => {
+      net.send({ type: MessageType.POTION_UNLOCK, potionType, shopEntityId });
+    },
+    onEquip: (potionType) => {
+      net.send({ type: MessageType.POTION_EQUIP, potionType });
+    },
+    onRestock: (shopEntityId) => {
+      net.send({ type: MessageType.POTION_RESTOCK, shopEntityId });
+    },
+    onClose: () => {
+      potionShopOverlay.hide();
+    },
+  });
+
+  // Wire build menu overlay
+  buildMenu.setCallbacks({
+    onSelect: (type) => {
+      buildMenu.hide();
+      buildCtrl.selectBuilding(type);
+      buildOverlay.update(type, combinedResources());
+      buildOverlay.show();
+      buildGhost.show();
+    },
+    onClose: () => {
+      buildMenu.hide();
+      buildCtrl.exitBuildMode();
+    },
+  });
 
   // Enter key opens chat during gameplay
   document.addEventListener('keydown', (e) => {
@@ -357,6 +400,7 @@ async function main(): Promise<void> {
   // ── State: Menu ─────────────────────────────────────────────────────────────
   stateMgr.onEnter(GameState.Menu, () => {
     cancelTargeting();
+    camera.lookEnabled = false;
     menuOverlay.showMenu();
     lobbyOverlay.hide();
     pauseBanner.hide();
@@ -387,6 +431,14 @@ async function main(): Promise<void> {
     abilityCooldownMaxes = [0, 0, 0];
     cardAbilities = [];
     pickedCardIds = [];
+    potionEquipped = null;
+    potionUnlocked = [];
+    potionCharges = 0;
+    potionMaxCharges = 0;
+    potionCooldown = 0;
+    potionCooldownMax = 0;
+    potionShopOverlay.hide();
+    buildMenu.hide();
     waveHUD.setPaused(false);
     coordsEl.style.display = 'none';
     deathOverlay.hide();
@@ -427,6 +479,7 @@ async function main(): Promise<void> {
     resourceHUD.setVisible(true);
     minimap.setVisible(true);
     chatOverlay.setActive(true);
+    camera.lookEnabled = true;
 
     // Clear menu background chunks from the tile renderer
     for (const key of menuStreamedKeys) {
@@ -489,8 +542,8 @@ async function main(): Promise<void> {
     get localDead() { return localDead; }, set localDead(v) { localDead = v; },
     get respawnTimer() { return respawnTimer; }, set respawnTimer(v) { respawnTimer = v; },
     get localGameOver() { return localGameOver; }, set localGameOver(v) { localGameOver = v; },
-    get buildModeActive() { return buildCtrl.active; }, set buildModeActive(v) { buildCtrl.active = v; },
-    get selectedBuildingIdx() { return buildCtrl.selectedIdx; }, set selectedBuildingIdx(v) { buildCtrl.selectedIdx = v; },
+    get buildModeActive() { return buildCtrl.phase !== 'inactive'; }, set buildModeActive(v) { if (!v) buildCtrl.exitBuildMode(); },
+    get placingType() { return buildCtrl.placingType; }, set placingType(_v) { /* read-only from handler side */ },
     get selectedBuildingId() { return buildCtrl.selectedId; }, set selectedBuildingId(v) { buildCtrl.selectedId = v; },
     get localResources() { return localResources; }, set localResources(v) { localResources = v; },
     get warehouseResources() { return warehouseResources; }, set warehouseResources(v) { warehouseResources = v; },
@@ -507,6 +560,12 @@ async function main(): Promise<void> {
     },
     get cardAbilities() { return cardAbilities; }, set cardAbilities(v) { cardAbilities = v; },
     get pickedCardIds() { return pickedCardIds; }, set pickedCardIds(v) { pickedCardIds = v; },
+    get potionEquipped() { return potionEquipped; }, set potionEquipped(v) { potionEquipped = v; },
+    get potionUnlocked() { return potionUnlocked; }, set potionUnlocked(v) { potionUnlocked = v; },
+    get potionCharges() { return potionCharges; }, set potionCharges(v) { potionCharges = v; },
+    get potionMaxCharges() { return potionMaxCharges; }, set potionMaxCharges(v) { potionMaxCharges = v; },
+    get potionCooldown() { return potionCooldown; }, set potionCooldown(v) { potionCooldown = v; },
+    get potionCooldownMax() { return potionCooldownMax; }, set potionCooldownMax(v) { potionCooldownMax = v; },
   };
 
   registerMessageHandlers(net, handlerState, {
@@ -520,7 +579,7 @@ async function main(): Promise<void> {
     },
     stateMgr, menuOverlay, lobbyOverlay, pauseBanner, waveHUD, resourceHUD,
     deathOverlay, gameOverOverlay, chatOverlay, debug, buildOverlay, buildGhost,
-    warehouseHUD, cardPicker, skillTree, statsOverlay, abilityVFX, combinedResources, electronAPI,
+    warehouseHUD, cardPicker, skillTree, statsOverlay, abilityVFX, potionShopOverlay, buildMenu, combinedResources, electronAPI,
   });
 
   // ── Session action helper ─────────────────────────────────────────────────
@@ -625,9 +684,12 @@ async function main(): Promise<void> {
     const dt    = Math.min(ticker.deltaMS / 1000, 0.05); // cap at 50ms to reduce prediction divergence
     const state = stateMgr.current;
 
-    // ESC: close build mode first, then check targeting/skill tree (in Playing block), otherwise pause
+    // ESC: close potion shop / build mode first, then check targeting/skill tree (in Playing block), otherwise pause
     if (input.isJustPressed(Action.Pause)) {
-      if (buildCtrl.active && state === GameState.Playing) {
+      if (potionShopOverlay.isVisible && state === GameState.Playing) {
+        potionShopOverlay.hide();
+      } else if (buildCtrl.phase !== 'inactive' && state === GameState.Playing) {
+        buildMenu.hide();
         buildCtrl.exitBuildMode();
       } else if (state === GameState.Playing && (targetingSlot >= 0 || skillTree.isVisible)) {
         // Handled in the Playing block below (targeting cancel / skill tree close)
@@ -659,7 +721,7 @@ async function main(): Promise<void> {
         else if (skillTree.isVisible) skillTree.hide();
       }
 
-      const canAct = !localDowned && !localDead && !localGameOver && !chatOverlay.isOpen && !cardPicker.isPicking;
+      const canAct = !localDowned && !localDead && !localGameOver && !chatOverlay.isOpen && !cardPicker.isPicking && !potionShopOverlay.isVisible && !buildMenu.isVisible;
 
       // Auto-cancel targeting when player can't act
       if (!canAct && targetingSlot >= 0) cancelTargeting();
@@ -721,19 +783,37 @@ async function main(): Promise<void> {
       }
 
       // Weapon slot 1 (number key) — exit build mode when selecting weapon
-      if (input.isJustPressed(Action.WeaponSlot1)) { if (buildCtrl.active) buildCtrl.exitBuildMode(); }
-
-      // B key: toggle build mode
-      if (canAct && input.isJustPressed(Action.BuildMode)) {
-        if (targetingSlot >= 0) cancelTargeting();
-        buildCtrl.toggle();
+      if (input.isJustPressed(Action.WeaponSlot1)) {
+        if (buildCtrl.phase !== 'inactive') { buildMenu.hide(); buildCtrl.exitBuildMode(); }
       }
 
-      // Scroll wheel cycles building type
-      buildCtrl.handleScroll(input.scrollDelta);
+      // B key: build mode state machine
+      if (canAct && input.isJustPressed(Action.BuildMode)) {
+        if (targetingSlot >= 0) cancelTargeting();
+        const phase = buildCtrl.phase;
+        if (phase === 'inactive') {
+          buildCtrl.openPicker();
+          buildMenu.show(combinedResources());
+        } else if (phase === 'placing') {
+          buildOverlay.hide();
+          buildGhost.hide();
+          buildCtrl.reopenPicker();
+          buildMenu.show(combinedResources());
+        } else {
+          // picker open → close everything
+          buildMenu.hide();
+          buildCtrl.exitBuildMode();
+        }
+      }
+
+      // Right-click: cancel build placement
+      if (buildCtrl.phase === 'placing' && input.isJustPressed(Action.Cancel)) {
+        buildMenu.hide();
+        buildCtrl.exitBuildMode();
+      }
 
       // Build ghost update + placement + selection + demolish + upgrade + repair
-      if (buildCtrl.active && pos) buildCtrl.update();
+      if (buildCtrl.phase === 'placing' && pos) buildCtrl.update();
 
       // Attack: client-side cooldown mirrors server AttackCooldown. Allow a small
       // tolerance (one server tick) so the client doesn't silently miss an attack
@@ -744,7 +824,7 @@ async function main(): Promise<void> {
       const hasHoldAttack = cardAbilities.includes('hold_attack');
       const holdAttackCooldown = 0.1; // 10 attacks per second when holding
       const attackInput = hasHoldAttack ? input.isHeld(Action.Attack) : input.isJustPressed(Action.Attack);
-      if (canAct && !buildCtrl.active && targetingSlot < 0 && attackInput && localFacing !== null && pos && attackCooldown <= TICK_MS / 1000) {
+      if (canAct && buildCtrl.phase === 'inactive' && targetingSlot < 0 && attackInput && localFacing !== null && pos && attackCooldown <= TICK_MS / 1000) {
         attackCooldown = hasHoldAttack ? Math.max(classCooldown, holdAttackCooldown) : classCooldown;
         net.send({ type: MessageType.ATTACK, attackType: classAttackType, facing: localFacing, x: pos.x, y: pos.y, t: performance.now() });
         if (classAttackType === 'melee') {
@@ -769,9 +849,19 @@ async function main(): Promise<void> {
         }
       }
 
-      // E-interact: pick up nearby non-auto-pickup items (also initiates revive)
+      // F-interact: pick up nearby non-auto-pickup items (also initiates revive)
       if (input.isJustPressed(Action.Interact) && pos) {
-        net.send({ type: MessageType.INTERACT, x: pos.x, y: pos.y, t: performance.now() });
+        // Close potion shop if open, otherwise send interact
+        if (potionShopOverlay.isVisible) {
+          potionShopOverlay.hide();
+        } else {
+          net.send({ type: MessageType.INTERACT, x: pos.x, y: pos.y, t: performance.now() });
+        }
+      }
+
+      // Key '3': use potion
+      if (canAct && input.isJustPressed(Action.UsePotion) && potionEquipped && potionCharges > 0 && potionCooldown <= 0) {
+        net.send({ type: MessageType.POTION_USE });
       }
 
       // Space: dodge roll
@@ -807,7 +897,7 @@ async function main(): Promise<void> {
       }
 
       // Q/E/R: enter targeting or instant-cast
-      if (canAct && !buildCtrl.active && localFacing !== null && pos) {
+      if (canAct && buildCtrl.phase === 'inactive' && localFacing !== null && pos) {
         const abilityKeys = [Action.SkillQ, Action.SkillE, Action.SkillR] as const;
         for (let ai = 0; ai < 3; ai++) {
           if (input.isJustPressed(abilityKeys[ai]) && activeAbilities[ai] && abilityCooldowns[ai] <= 0.05) {
@@ -906,6 +996,7 @@ async function main(): Promise<void> {
       }
 
       // Tick ability cooldowns
+      if (potionCooldown > 0) potionCooldown = Math.max(0, potionCooldown - dt);
       for (let ai = 0; ai < 3; ai++) {
         if (abilityCooldowns[ai] > 0) abilityCooldowns[ai] = Math.max(0, abilityCooldowns[ai] - dt);
       }
@@ -1032,6 +1123,7 @@ async function main(): Promise<void> {
       const hotbarCooldown = CLASS_STATS[selectedClass].attackType === 'melee' ? MELEE_COOLDOWN : RANGED_COOLDOWN;
       // Build unlocked slots set from active abilities (slots 1-3 for Q/E/R)
       const unlockedSlots = new Set([0, 5]); // weapon + build always
+      if (potionEquipped) unlockedSlots.add(4); // potion slot
       const abilityNames: string[] = [];
       for (let ai = 0; ai < 3; ai++) {
         if (activeAbilities[ai]) {
@@ -1042,8 +1134,9 @@ async function main(): Promise<void> {
         }
       }
       weaponHotbar.update(
-        selectedClass, attackCooldown, hotbarCooldown, width, height, buildCtrl.active,
+        selectedClass, attackCooldown, hotbarCooldown, width, height, buildCtrl.phase !== 'inactive',
         unlockedSlots, abilityNames, abilityCooldowns, abilityCooldownMaxes, targetingSlot,
+        potionEquipped, potionCharges, potionMaxCharges, potionCooldown, potionCooldownMax,
       );
       minimap.update(world, localEntityId, camera.x, camera.y, width, height);
       coordsEl.textContent = `X: ${Math.round(camera.x)}  Y: ${Math.round(camera.y)}`;

@@ -209,7 +209,7 @@ export interface ResourcesComponent {
 
 export type BuildingType = 'campfire' | 'wall' | 'warehouse' | 'lumbermill' | 'quarry' | 'mine' | 'farm'
   | 'arrow_turret' | 'cannon_turret' | 'spike_trap' | 'bridge'
-  | 'light_tower' | 'healing_shrine' | 'barracks';
+  | 'light_tower' | 'healing_shrine' | 'barracks' | 'potion_shop';
 
 /** Tags an entity as a player-built (or pre-placed) structure. */
 export interface BuildingComponent {

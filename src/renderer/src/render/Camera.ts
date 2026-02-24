@@ -22,6 +22,9 @@ export class Camera {
   /** Screen pixels per world pixel. >1 = zoomed in, <1 = zoomed out. */
   zoom = 1.5;
 
+  /** Set to true to allow look-around (ALT). Disabled while on menus. */
+  lookEnabled = false;
+
   // ── Screen shake ────────────────────────────────────────────────────────────
   private shakeIntensity = 0;
   private shakeDuration = 0;
@@ -124,7 +127,7 @@ export class Camera {
       if (e.key === 'Alt') {
         // Prevent Alt from triggering the Electron / browser menu
         e.preventDefault();
-        if (!this.isLooking) {
+        if (!this.isLooking && this.lookEnabled) {
           this.isLooking = true;
           // Anchor the look to wherever the mouse currently is
           this.lookAnchorX = this.mouseX;

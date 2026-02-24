@@ -1,6 +1,8 @@
 import { Container, Graphics, Text } from 'pixi.js';
 import { CLASS_STATS } from '@shared/ClassDefinitions';
 import type { PlayerClass } from '@shared/ClassDefinitions';
+import { POTION_POOL } from '@shared/PotionDefinitions';
+import type { PotionType } from '@shared/PotionDefinitions';
 
 const SLOT_SIZE = 48;
 const SLOT_GAP  = 6;
@@ -33,6 +35,7 @@ export class WeaponHotbar {
   private gfx: Graphics;
   private keyTexts: Text[] = [];
   private labelTexts: Text[] = [];
+  private chargeTexts: Text[] = [];
 
   constructor(stage: Container) {
     this.container = new Container();
@@ -49,10 +52,18 @@ export class WeaponHotbar {
         text: SLOT_LABELS[i],
         style: { fontSize: 12, fill: locked ? 0x3a3a4a : 0xd8e2ef, fontFamily: 'monospace' },
       });
+      // Small charge counter (used for potion slot)
+      const chargeText = new Text({
+        text: '',
+        style: { fontSize: 10, fill: 0xe8c96a, fontFamily: 'monospace' },
+      });
+      chargeText.visible = false;
       this.keyTexts.push(keyText);
       this.labelTexts.push(labelText);
+      this.chargeTexts.push(chargeText);
       this.container.addChild(keyText);
       this.container.addChild(labelText);
+      this.container.addChild(chargeText);
     }
 
     stage.addChild(this.container);
@@ -75,6 +86,12 @@ export class WeaponHotbar {
     abilityCooldownMaxes?: number[],
     /** Which ability slot (0-2) is in targeting mode, or -1. */
     targetingSlot = -1,
+    /** Potion slot data. */
+    potionEquipped: string | null = null,
+    potionCharges = 0,
+    potionMaxCharges = 0,
+    potionCooldown = 0,
+    potionCooldownMax = 0,
   ): void {
     this.gfx.clear();
 
@@ -90,6 +107,14 @@ export class WeaponHotbar {
         if (abilityNames[s]) this.labelTexts[1 + s].text = abilityNames[s];
         else this.labelTexts[1 + s].text = SLOT_LABELS[1 + s];
       }
+    }
+
+    // Update potion slot label
+    if (potionEquipped) {
+      const def = POTION_POOL[potionEquipped as PotionType];
+      this.labelTexts[4].text = def?.shortName ?? 'Potion';
+    } else {
+      this.labelTexts[4].text = SLOT_LABELS[4];
     }
 
     const startX = (screenW - HOTBAR_TOTAL_W) / 2;
@@ -112,6 +137,14 @@ export class WeaponHotbar {
       // Cooldown overlay — weapon slot
       if (i === 0 && cooldown > 0 && cooldownMax > 0) {
         const ratio = cooldown / cooldownMax;
+        const fillH = SLOT_SIZE * ratio;
+        this.gfx.rect(x, y, SLOT_SIZE, fillH);
+        this.gfx.fill({ color: COOLDOWN_OVERLAY, alpha: 0.45 });
+      }
+
+      // Cooldown overlay — potion slot
+      if (i === 4 && potionCooldown > 0 && potionCooldownMax > 0) {
+        const ratio = potionCooldown / potionCooldownMax;
         const fillH = SLOT_SIZE * ratio;
         this.gfx.rect(x, y, SLOT_SIZE, fillH);
         this.gfx.fill({ color: COOLDOWN_OVERLAY, alpha: 0.45 });
@@ -156,9 +189,20 @@ export class WeaponHotbar {
       const lt = this.labelTexts[i];
       lt.position.set(
         x + (SLOT_SIZE - lt.width) / 2,
-        y + (SLOT_SIZE - lt.height) / 2 + 4,
+        y + (SLOT_SIZE - lt.height) / 2 + (i === 4 && potionEquipped ? 0 : 4),
       );
       lt.style.fill = locked ? 0x3a3a4a : (isSelected ? 0xffffff : 0x8a9ab0);
+
+      // Charge counter (potion slot only)
+      const ct = this.chargeTexts[i];
+      if (i === 4 && potionEquipped && !locked) {
+        ct.visible = true;
+        ct.text = `${potionCharges}/${potionMaxCharges}`;
+        ct.position.set(x + (SLOT_SIZE - ct.width) / 2, y + SLOT_SIZE - 14);
+        ct.style.fill = potionCharges > 0 ? 0xe8c96a : 0x5a5a6a;
+      } else {
+        ct.visible = false;
+      }
     }
   }
 

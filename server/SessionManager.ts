@@ -29,6 +29,9 @@ import type {
   PlayerKickMessage,
   SkillAllocateMessage,
   AbilityUseMessage,
+  PotionUnlockMessage,
+  PotionEquipMessage,
+  PotionRestockMessage,
 } from '@shared/protocol';
 import { PLAYER_CLASSES } from '@shared/ClassDefinitions';
 import type { PlayerClass } from '@shared/ClassDefinitions';
@@ -121,6 +124,10 @@ export class SessionManager {
     socket.on(MessageType.ABILITY_USE,             (c, m) => this.session?.handleAbilityUse(c.id, m as AbilityUseMessage, (cl, msg) => this.socket.send(cl, msg)));
     socket.on(MessageType.CLASS_SELECT,            (c, m) => this.onClassSelect(c, m as ClassSelectMessage));
     socket.on(MessageType.PLAYER_KICK,             (c, m) => this.onPlayerKick(c, m as PlayerKickMessage));
+    socket.on(MessageType.POTION_UNLOCK,           (c, m) => this.session?.handlePotionUnlock(c.id, m as PotionUnlockMessage, (cl, msg) => this.socket.send(cl, msg)));
+    socket.on(MessageType.POTION_EQUIP,            (c, m) => this.session?.handlePotionEquip(c.id, m as PotionEquipMessage, (cl, msg) => this.socket.send(cl, msg)));
+    socket.on(MessageType.POTION_RESTOCK,          (c, m) => this.session?.handlePotionRestock(c.id, m as PotionRestockMessage, (cl, msg) => this.socket.send(cl, msg)));
+    socket.on(MessageType.POTION_USE,              (c) => this.session?.handlePotionUse(c.id, (cl, msg) => this.socket.send(cl, msg)));
     socket.onDisconnect((c) => this.onDisconnect(c));
 
     // Load persisted saves and meta stats from disk

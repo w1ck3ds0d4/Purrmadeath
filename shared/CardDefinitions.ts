@@ -116,6 +116,13 @@ export const CARD_POOL: CardDefinition[] = [
     effect: { type: 'resource', resource: 'food', amount: 40 },
   },
 
+  {
+    id: 'alchemists_pouch', name: "Alchemist's Pouch",
+    description: '+1 max potion charge',
+    category: 'ability', rarity: 'rare',
+    effect: { type: 'ability', ability: 'extra_potion_charge' },
+  },
+
   // ── Traps (negative effects) ──
   {
     id: 'cursed_claws', name: 'Cursed Claws',

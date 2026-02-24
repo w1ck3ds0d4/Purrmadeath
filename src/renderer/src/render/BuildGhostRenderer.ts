@@ -1,5 +1,6 @@
 import { Container, Graphics } from 'pixi.js';
 import { snapBuildingPosition, buildingHalfExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RANGE } from '@shared/constants';
+import { POTION_SHOP_INTERACT_RANGE } from '@shared/PotionDefinitions';
 
 const VALID_COLOR   = 0x44cc66;
 const INVALID_COLOR = 0xcc4444;
@@ -10,6 +11,7 @@ const BUILDING_RANGES: Record<string, number> = {
   cannon_turret: CANNON_TURRET_RANGE,
   light_tower: UPGRADE_LIGHT_RANGE[0],
   healing_shrine: UPGRADE_HEAL_RANGE[0],
+  potion_shop: POTION_SHOP_INTERACT_RANGE,
 };
 
 /** Per-type range circle color. */
@@ -18,6 +20,7 @@ const RANGE_COLORS: Record<string, number> = {
   cannon_turret: 0x44aaff,
   light_tower: 0xffdd44,
   healing_shrine: 0x44ff88,
+  potion_shop: 0xaa66ff,
 };
 
 /**

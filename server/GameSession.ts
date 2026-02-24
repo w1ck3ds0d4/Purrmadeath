@@ -117,6 +117,7 @@ import { createCardDispenser, type CardDispenser, type CardState } from './syste
 import { createSaveManager, type SaveManager, type LoadedSaveState } from './systems/SaveManager';
 import { createRespawnManager, type RespawnManager } from './systems/RespawnManager';
 import { createStatsCollector, type StatsCollector } from './systems/StatsCollector';
+import { createPotionSystem, type PotionSystem } from './systems/PotionSystem';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -175,6 +176,7 @@ export class GameSession {
   private cards: CardSystem;
   private skills!: SkillSystem;
   private buildings!: BuildingSystem;
+  private potions!: PotionSystem;
   private saveManager!: SaveManager;
   private respawn!: RespawnManager;
   private stats!: StatsCollector;
@@ -309,6 +311,16 @@ export class GameSession {
       isWalkable: (wx, wy) => this.isWalkable(wx, wy),
       spawnBuilding: (x, y, type, maxHp, permanent) => this.spawnBuilding(x, y, type as any, maxHp, permanent),
       destroyDeadEntities: (deaths, attackerMap, send) => this.respawn.destroyDeadEntities(deaths, attackerMap, send),
+    });
+
+    this.potions = createPotionSystem({
+      world: this.world,
+      players: this.players as any,
+      warehousePool: this.warehousePool,
+      warehouseIds: this.warehouseIds,
+      cards: this.cards,
+      broadcastWarehouseUpdate: (send) => this.buildings.broadcastWarehouseUpdate(send),
+      isActive: () => this.phase === 'playing' && !this.paused && !this.gameOver,
     });
 
     this.waves = createWaveController({
@@ -483,6 +495,8 @@ export class GameSession {
     player.client = newClient;
     // Keep persistent playerId (UUID) — only update the map key to new client ID
     this.players.set(newClient.id, player);
+    // Remap potion state to new client ID
+    this.potions.remapClient(oldClientId, newClient.id);
     return player;
   }
 
@@ -706,6 +720,10 @@ export class GameSession {
           if (savedP.cardBuffs) {
             this.cards.restore(p.client.id, savedP.cardBuffs, savedP.pickedCards ?? []);
           }
+          // Restore potion state
+          if (savedP.potionState) {
+            this.potions.restore(p.client.id, savedP.potionState);
+          }
         }
       }
 
@@ -845,6 +863,13 @@ export class GameSession {
           abilities: buffs?.abilities ?? [],
           pickedCardIds: [...this.cards.pickedCardIds],
         });
+      }
+    }
+
+    // Send potion state sync (needed after save restore)
+    if (hasSave) {
+      for (const p of this.players.values()) {
+        this.potions.sendPotionState(p.client.id, send);
       }
     }
 
@@ -1338,6 +1363,21 @@ export class GameSession {
       }
     }
 
+    // Check for nearby potion shop (F-key opens shop overlay)
+    for (const bid of this.world.query(C.Building, C.Position)) {
+      const bldg = this.world.getComponent<BuildingComponent>(bid, C.Building);
+      if (bldg?.buildingType !== 'potion_shop') continue;
+      const bpos = this.world.getComponent<PositionComponent>(bid, C.Position)!;
+      const half = buildingHalfExtent('potion_shop');
+      const shopRange = half + ITEM_DROP_INTERACT_RADIUS;
+      const sdx = bpos.x - playerPos.x;
+      const sdy = bpos.y - playerPos.y;
+      if (sdx * sdx + sdy * sdy <= shopRange * shopRange) {
+        this.potions.handleShopOpen(clientId, bid, send);
+        return;
+      }
+    }
+
     // Find nearest non-auto-pickup ItemDrop within interact radius
     const interactR2 = ITEM_DROP_INTERACT_RADIUS * ITEM_DROP_INTERACT_RADIUS;
     let bestId = -1;
@@ -1375,10 +1415,13 @@ export class GameSession {
     const cd = this.world.getComponent<AttackCooldownComponent>(entityId, C.AttackCooldown);
     if (cd && cd.remaining > TICK_MS / 1000) return;
 
-    // Apply card + skill damage multipliers using class base damage
+    // Apply card + skill + potion damage multipliers using class base damage
     const pBuffs = this.cards.playerBuffs.get(player.client.id);
     const sBuffs = this.skills.getSkillBuffs(player.client.id);
-    const dmgMult = (pBuffs?.damageMultiplier ?? 1) * sBuffs.damageMultiplier * this.cards.debuffs.playerDamageMult;
+    const ab = this.world.getComponent<import('@shared/components').ActiveBuffsComponent>(entityId, C.ActiveBuffs);
+    const potionDmgBuff = ab?.buffs.find(b => b.id === 'potion_damage');
+    const potionDmgMult = potionDmgBuff ? (1 + (potionDmgBuff.effect.damageMultiplier ?? 0)) : 1;
+    const dmgMult = (pBuffs?.damageMultiplier ?? 1) * sBuffs.damageMultiplier * this.cards.debuffs.playerDamageMult * potionDmgMult;
     const classDmg = CLASS_STATS[player.playerClass].baseDamage;
     const meleeOverrides = dmgMult !== 1 ? { damage: Math.round(classDmg * dmgMult) } : { damage: classDmg };
 
@@ -1446,10 +1489,13 @@ export class GameSession {
     const projId = this.world.createEntity();
     this.world.addComponent(projId, C.Position,   { x: spawnX, y: spawnY });
     this.world.addComponent(projId, C.Velocity,   { vx, vy });
-    // Apply card + skill damage multipliers using class base damage
+    // Apply card + skill + potion damage multipliers using class base damage
     const rBuffs = this.cards.playerBuffs.get(player.client.id);
     const rSBuffs = this.skills.getSkillBuffs(player.client.id);
-    const rDmgMult = (rBuffs?.damageMultiplier ?? 1) * rSBuffs.damageMultiplier * this.cards.debuffs.playerDamageMult;
+    const rAb = this.world.getComponent<import('@shared/components').ActiveBuffsComponent>(entityId, C.ActiveBuffs);
+    const rPotionDmg = rAb?.buffs.find(b => b.id === 'potion_damage');
+    const rPotionDmgMult = rPotionDmg ? (1 + (rPotionDmg.effect.damageMultiplier ?? 0)) : 1;
+    const rDmgMult = (rBuffs?.damageMultiplier ?? 1) * rSBuffs.damageMultiplier * this.cards.debuffs.playerDamageMult * rPotionDmgMult;
     const rangedClassDmg = CLASS_STATS[player.playerClass].baseDamage;
     const projDamage = Math.round(rangedClassDmg * rDmgMult);
     const projData: ProjectileComponent = { ownerId: entityId, damage: projDamage, lifetime: RANGED_LIFETIME };
@@ -1592,6 +1638,29 @@ export class GameSession {
     this.respawn.destroyDeadEntities(deaths, attackerMap, send);
   }
 
+  // ── Potion handlers ──────────────────────────────────────────────────────────
+
+  handlePotionUnlock(clientId: string, msg: import('@shared/protocol').PotionUnlockMessage, send: SendFn): void {
+    this.potions.handleUnlock(clientId, msg, send);
+  }
+
+  handlePotionEquip(clientId: string, msg: import('@shared/protocol').PotionEquipMessage, send: SendFn): void {
+    this.potions.handleEquip(clientId, msg, send);
+  }
+
+  handlePotionRestock(clientId: string, msg: import('@shared/protocol').PotionRestockMessage, send: SendFn): void {
+    this.potions.handleRestock(clientId, msg, send);
+  }
+
+  handlePotionUse(clientId: string, send: SendFn): void {
+    if (this.phase !== 'playing' || this.paused) return;
+    const player = this.players.get(clientId);
+    if (!player || player.entityId === null) return;
+    if (this.world.hasComponent(player.entityId, C.Downed)) return;
+    if (this.respawnTimers.has(clientId)) return;
+    this.potions.handleUse(clientId, send);
+  }
+
   /** Called by WaveController when a wave is cleared. */
   private onWaveCleared(wave: number, send: SendFn): void {
     // Grant 1 skill point to every alive player
@@ -1649,6 +1718,7 @@ export class GameSession {
           const cd = this.cards.serialize(p.client.id);
           sp.cardBuffs = cd.buffs;
           sp.pickedCards = cd.pickedCards;
+          sp.potionState = this.potions.serialize(p.client.id);
           break;
         }
       }
@@ -2051,6 +2121,9 @@ export class GameSession {
 
     // ── Skill system (cooldowns, buffs, DOTs) ────────────────────────────────
     if (!this.gameOver) this.skills.tick(dt);
+
+    // ── Potion system (cooldowns, buff expiry) ──────────────────────────────
+    if (!this.gameOver) this.potions.tick(dt, send);
 
     // ── Wave state machine ────────────────────────────────────────────────────
     const _t8 = performance.now();

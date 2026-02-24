@@ -5,7 +5,6 @@ import {
   TILE_SIZE,
   BUILDING_COSTS,
   BUILDING_SIZES,
-  PLACEABLE_BUILDINGS,
   buildingHalfExtent,
   snapBuildingPosition,
   PLAYER_RADIUS,
@@ -37,61 +36,62 @@ export interface BuildControllerDeps {
 
 // ── Factory ─────────────────────────────────────────────────────────────────
 
+export type BuildPhase = 'inactive' | 'picker' | 'placing';
+
 export function createBuildController(deps: BuildControllerDeps) {
   const { world, input, buildOverlay, buildGhost } = deps;
 
-  let active = false;
-  let selectedIdx = 0;
+  let phase: BuildPhase = 'inactive';
+  let placingType = '';
   let selectedId: number | null = null;
 
+  function openPicker(): void {
+    phase = 'picker';
+    selectedId = null;
+    buildOverlay.hide();
+    buildGhost.hide();
+  }
+
+  function selectBuilding(buildingType: string): void {
+    phase = 'placing';
+    placingType = buildingType;
+    selectedId = null;
+  }
+
+  function reopenPicker(): void {
+    phase = 'picker';
+    selectedId = null;
+    buildOverlay.hide();
+    buildGhost.hide();
+  }
+
   function exitBuildMode(): void {
-    active = false;
+    phase = 'inactive';
+    placingType = '';
     selectedId = null;
     buildOverlay.hide();
     buildGhost.hide();
   }
 
   function reset(): void {
-    active = false;
+    phase = 'inactive';
+    placingType = '';
     selectedId = null;
-    selectedIdx = 0;
     buildOverlay.hide();
     buildGhost.hide();
   }
 
-  function toggle(): void {
-    active = !active;
-    selectedId = null;
-    if (active) {
-      buildOverlay.show();
-      buildOverlay.update(PLACEABLE_BUILDINGS[selectedIdx], deps.combinedResources());
-      buildGhost.show();
-    } else {
-      buildOverlay.hide();
-      buildGhost.hide();
-    }
-  }
-
-  function handleScroll(scrollDelta: number): void {
-    if (!active || scrollDelta === 0) return;
-    const dir = scrollDelta > 0 ? 1 : -1;
-    selectedIdx = (selectedIdx + dir + PLACEABLE_BUILDINGS.length) % PLACEABLE_BUILDINGS.length;
-    selectedId = null;
-    buildOverlay.update(PLACEABLE_BUILDINGS[selectedIdx], deps.combinedResources());
-  }
-
   function update(): void {
-    if (!active) return;
+    if (phase !== 'placing') return;
     const { x: wmx, y: wmy } = deps.getMouseWorld();
-    const currentBuilding = PLACEABLE_BUILDINGS[selectedIdx];
 
     // Snap to grid
-    const { x: snapX, y: snapY } = snapBuildingPosition(wmx, wmy, currentBuilding);
-    const newHalf = buildingHalfExtent(currentBuilding);
-    const tiles = BUILDING_SIZES[currentBuilding] ?? 1;
+    const { x: snapX, y: snapY } = snapBuildingPosition(wmx, wmy, placingType);
+    const newHalf = buildingHalfExtent(placingType);
+    const tiles = BUILDING_SIZES[placingType] ?? 1;
 
     // Cost affordability
-    const costs = BUILDING_COSTS[currentBuilding] ?? {};
+    const costs = BUILDING_COSTS[placingType] ?? {};
     const wRes = deps.getWarehouseExists()
       ? deps.getWarehouseResources() as Record<string, number>
       : {} as Record<string, number>;
@@ -104,7 +104,7 @@ export function createBuildController(deps: BuildControllerDeps) {
 
     // Multi-tile walkability check
     const chunks = deps.getChunks();
-    const isBridge = currentBuilding === 'bridge';
+    const isBridge = placingType === 'bridge';
     if (ghostValid && chunks) {
       const startTX = Math.floor((snapX - newHalf) / TILE_SIZE);
       const startTY = Math.floor((snapY - newHalf) / TILE_SIZE);
@@ -135,7 +135,7 @@ export function createBuildController(deps: BuildControllerDeps) {
       }
     }
 
-    buildGhost.update(wmx, wmy, ghostValid, currentBuilding);
+    buildGhost.update(wmx, wmy, ghostValid, placingType);
 
     // Click: select existing building or place new one
     if (input.isJustPressed(Action.Attack)) {
@@ -152,7 +152,7 @@ export function createBuildController(deps: BuildControllerDeps) {
         const hp = world.getComponent<HealthComponent>(clicked, C.Health);
         buildOverlay.updateSelection(bComp.buildingType, bComp.upgradeLevel, deps.combinedResources(), hp?.current, hp?.max);
       } else if (ghostValid) {
-        deps.send({ type: MessageType.BUILD_PLACE, buildingType: currentBuilding, x: wmx, y: wmy });
+        deps.send({ type: MessageType.BUILD_PLACE, buildingType: placingType, x: wmx, y: wmy });
         selectedId = null;
       }
     }
@@ -161,7 +161,7 @@ export function createBuildController(deps: BuildControllerDeps) {
     if (input.isJustPressed(Action.Demolish) && selectedId !== null) {
       deps.send({ type: MessageType.BUILD_DEMOLISH, entityId: selectedId });
       selectedId = null;
-      buildOverlay.update(PLACEABLE_BUILDINGS[selectedIdx], deps.combinedResources());
+      buildOverlay.update(placingType, deps.combinedResources());
     }
 
     // V: upgrade
@@ -169,7 +169,7 @@ export function createBuildController(deps: BuildControllerDeps) {
       deps.send({ type: MessageType.BUILD_UPGRADE, entityId: selectedId });
     }
 
-    // R: repair
+    // G: repair
     if (input.isJustPressed(Action.Repair) && selectedId !== null) {
       deps.send({ type: MessageType.BUILD_REPAIR, entityId: selectedId });
     }
@@ -177,7 +177,7 @@ export function createBuildController(deps: BuildControllerDeps) {
     // Deselect if building no longer exists
     if (selectedId !== null && !world.hasEntity(selectedId)) {
       selectedId = null;
-      buildOverlay.update(PLACEABLE_BUILDINGS[selectedIdx], deps.combinedResources());
+      buildOverlay.update(placingType, deps.combinedResources());
     }
 
     // Live HP update for selected building
@@ -188,16 +188,15 @@ export function createBuildController(deps: BuildControllerDeps) {
   }
 
   return {
-    get active() { return active; },
-    set active(v: boolean) { active = v; },
-    get selectedIdx() { return selectedIdx; },
-    set selectedIdx(v: number) { selectedIdx = v; },
+    get phase() { return phase; },
+    get placingType() { return placingType; },
     get selectedId() { return selectedId; },
     set selectedId(v: number | null) { selectedId = v; },
+    openPicker,
+    selectBuilding,
+    reopenPicker,
     exitBuildMode,
     reset,
-    toggle,
-    handleScroll,
     update,
   };
 }

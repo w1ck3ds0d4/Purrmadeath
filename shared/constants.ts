@@ -308,7 +308,7 @@ export const BUILDING_HALF_EXTENT = TILE_SIZE / 2; // 16px
 export const BUILDING_SIZES: Record<string, number> = {
   wall: 1, campfire: 3, warehouse: 3, lumbermill: 2, quarry: 2, mine: 2, farm: 2,
   arrow_turret: 1, cannon_turret: 2, spike_trap: 1, bridge: 1,
-  light_tower: 1, healing_shrine: 1, barracks: 2,
+  light_tower: 1, healing_shrine: 1, barracks: 2, potion_shop: 2,
 };
 
 /** Half-extent in world pixels for a building of the given type. */
@@ -366,6 +366,8 @@ export const LIGHT_TOWER_MAX_HEALTH = 120;
 export const HEALING_SHRINE_MAX_HEALTH = 100;
 /** Barracks HP. */
 export const BARRACKS_MAX_HEALTH = 200;
+/** Potion shop HP. */
+export const POTION_SHOP_MAX_HEALTH = 150;
 
 /** Radius (px) for auto-depositing player resources into the warehouse. */
 export const WAREHOUSE_DEPOSIT_RADIUS = 80;
@@ -374,7 +376,7 @@ export const WAREHOUSE_DEPOSIT_RADIUS = 80;
 export const DEMOLISH_REFUND_PERCENT = 0.5;
 
 /** Per-building-type resource costs for placement. */
-export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'iron' | 'diamond', number>>> = {
+export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'iron' | 'diamond' | 'food', number>>> = {
   campfire:       { wood: 20, stone: 15, iron: 5 },
   wall:           { wood: 5 },
   warehouse:      { wood: 10, stone: 5 },
@@ -389,13 +391,14 @@ export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'i
   light_tower:    { stone: 8, iron: 3 },
   healing_shrine: { stone: 10, iron: 5 },
   barracks:       { wood: 15, iron: 10 },
+  potion_shop:    { wood: 15, stone: 10, food: 5 },
 };
 
 /** Ordered list of building types the player can cycle through in build mode. */
 export const PLACEABLE_BUILDINGS: string[] = [
   'wall', 'warehouse', 'lumbermill', 'quarry', 'mine', 'farm',
   'arrow_turret', 'cannon_turret', 'spike_trap', 'bridge',
-  'light_tower', 'healing_shrine',
+  'light_tower', 'healing_shrine', 'potion_shop',
 ];
 
 // ─── Production Buildings ──────────────────────────────────────────────────
@@ -458,7 +461,7 @@ export const BUILDING_MAX_LEVEL: Record<BuildingType, number> = {
   campfire: 5, bridge: 1,
   wall: 3, warehouse: 3, lumbermill: 3, quarry: 3, mine: 3, farm: 3,
   arrow_turret: 3, cannon_turret: 3, spike_trap: 3,
-  light_tower: 3, healing_shrine: 3, barracks: 3,
+  light_tower: 3, healing_shrine: 3, barracks: 3, potion_shop: 3,
 };
 
 /** Cost multiplier for each upgrade level (index 0 = level 2, index 1 = level 3, etc.). */
@@ -515,15 +518,15 @@ export const BARRACKS_GUARD_PATROL_RADIUS = 150;
 export function getUpgradeCost(
   buildingType: BuildingType,
   currentLevel: number,
-): Partial<Record<'wood' | 'stone' | 'iron' | 'diamond', number>> | null {
+): Partial<Record<'wood' | 'stone' | 'iron' | 'diamond' | 'food', number>> | null {
   const maxLevel = BUILDING_MAX_LEVEL[buildingType];
   if (currentLevel >= maxLevel) return null;
   const baseCost = BUILDING_COSTS[buildingType];
   if (!baseCost) return null;
   const mult = UPGRADE_COST_MULTIPLIERS[currentLevel - 1]; // level 1→2 uses index 0
-  const cost: Partial<Record<'wood' | 'stone' | 'iron' | 'diamond', number>> = {};
+  const cost: Partial<Record<'wood' | 'stone' | 'iron' | 'diamond' | 'food', number>> = {};
   for (const [res, amount] of Object.entries(baseCost)) {
-    cost[res as 'wood' | 'stone' | 'iron' | 'diamond'] = Math.ceil((amount as number) * mult);
+    cost[res as 'wood' | 'stone' | 'iron' | 'diamond' | 'food'] = Math.ceil((amount as number) * mult);
   }
   return cost;
 }
@@ -536,17 +539,17 @@ export function getRepairCost(
   buildingType: BuildingType,
   missingHp: number,
   maxHp: number,
-): Partial<Record<'wood' | 'stone' | 'iron' | 'diamond', number>> | null {
+): Partial<Record<'wood' | 'stone' | 'iron' | 'diamond' | 'food', number>> | null {
   if (missingHp <= 0) return null;
   const baseCost = BUILDING_COSTS[buildingType];
   if (!baseCost) return null;
   const fraction = missingHp / maxHp;
-  const cost: Partial<Record<'wood' | 'stone' | 'iron' | 'diamond', number>> = {};
+  const cost: Partial<Record<'wood' | 'stone' | 'iron' | 'diamond' | 'food', number>> = {};
   let hasAnyCost = false;
   for (const [res, amount] of Object.entries(baseCost)) {
     const val = Math.ceil((amount as number) * fraction);
     if (val > 0) {
-      cost[res as 'wood' | 'stone' | 'iron' | 'diamond'] = val;
+      cost[res as 'wood' | 'stone' | 'iron' | 'diamond' | 'food'] = val;
       hasAnyCost = true;
     }
   }

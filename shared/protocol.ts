@@ -182,6 +182,20 @@ export enum MessageType {
   ABILITY_USE = 'ABILITY_USE',
   /** Server → all: broadcast ability visual effect. */
   ABILITY_EFFECT = 'ABILITY_EFFECT',
+
+  // ── Potions ──────────────────────────────────────────────────────────────
+  /** Server → Client: potion shop state (sent when player opens shop). */
+  POTION_SHOP_STATE = 'POTION_SHOP_STATE',
+  /** Client → Server: unlock a potion at a shop. */
+  POTION_UNLOCK = 'POTION_UNLOCK',
+  /** Client → Server: equip a potion to hotbar slot 4. */
+  POTION_EQUIP = 'POTION_EQUIP',
+  /** Client → Server: restock charges at a shop. */
+  POTION_RESTOCK = 'POTION_RESTOCK',
+  /** Client → Server: use the currently equipped potion. */
+  POTION_USE = 'POTION_USE',
+  /** Server → Client: full potion state sync (after use, equip, restock, save load). */
+  POTION_STATE = 'POTION_STATE',
 }
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
@@ -850,6 +864,54 @@ export interface AbilityEffectMessage extends BaseMessage {
   radius?: number;
 }
 
+// ── Potions ──────────────────────────────────────────────────────────────────
+
+/** Server → Client: full shop state when player opens a potion shop. */
+export interface PotionShopStateMessage extends BaseMessage {
+  type: typeof MessageType.POTION_SHOP_STATE;
+  shopEntityId: number;
+  shopLevel: number;
+  unlockedPotions: string[];
+  equippedPotion: string | null;
+  charges: number;
+  maxCharges: number;
+}
+
+/** Client → Server: unlock a potion. */
+export interface PotionUnlockMessage extends BaseMessage {
+  type: typeof MessageType.POTION_UNLOCK;
+  potionType: string;
+  shopEntityId: number;
+}
+
+/** Client → Server: equip a potion to slot 4. */
+export interface PotionEquipMessage extends BaseMessage {
+  type: typeof MessageType.POTION_EQUIP;
+  potionType: string;
+}
+
+/** Client → Server: restock charges at a shop. */
+export interface PotionRestockMessage extends BaseMessage {
+  type: typeof MessageType.POTION_RESTOCK;
+  shopEntityId: number;
+}
+
+/** Client → Server: use equipped potion. */
+export interface PotionUseMessage extends BaseMessage {
+  type: typeof MessageType.POTION_USE;
+}
+
+/** Server → Client: full potion state sync. */
+export interface PotionStateMessage extends BaseMessage {
+  type: typeof MessageType.POTION_STATE;
+  equippedPotion: string | null;
+  unlockedPotions: string[];
+  charges: number;
+  maxCharges: number;
+  cooldown: number;
+  cooldownMax: number;
+}
+
 // ─── Union ────────────────────────────────────────────────────────────────────
 
 export type AnyMessage =
@@ -918,4 +980,10 @@ export type AnyMessage =
   | SkillStateMessage
   | AbilityUseMessage
   | AbilityEffectMessage
+  | PotionShopStateMessage
+  | PotionUnlockMessage
+  | PotionEquipMessage
+  | PotionRestockMessage
+  | PotionUseMessage
+  | PotionStateMessage
   | BaseMessage;

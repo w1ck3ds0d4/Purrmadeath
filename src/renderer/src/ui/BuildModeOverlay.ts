@@ -81,7 +81,7 @@ export class BuildModeOverlay {
 
     const hint = document.createElement('div');
     hint.style.cssText = 'font-size: 11px; color: #6a7a8a;';
-    hint.textContent = 'Scroll to change \u00B7 B to exit \u00B7 Click to select \u00B7 X demolish \u00B7 V upgrade \u00B7 G repair';
+    hint.textContent = 'B to reopen menu \u00B7 Click to select \u00B7 X demolish \u00B7 V upgrade \u00B7 G repair';
     this.el.appendChild(hint);
 
     document.getElementById('overlay')!.appendChild(this.el);
@@ -188,6 +188,9 @@ export class BuildModeOverlay {
         break;
       case 'healing_shrine':
         stats = `Heal: ${UPGRADE_HEAL_RATE[i]} HP/s  |  Range: ${UPGRADE_HEAL_RANGE[i]}px`;
+        break;
+      case 'potion_shop':
+        stats = 'Brew and equip potions';
         break;
       default: {
         const prod = PROD_RESOURCE[buildingType];

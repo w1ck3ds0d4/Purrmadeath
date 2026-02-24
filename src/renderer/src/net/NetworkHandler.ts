@@ -6,7 +6,6 @@ import {
   PLAYER_MAX_STAMINA,
   PLAYER_STAMINA_REGEN,
   GAME_VERSION,
-  PLACEABLE_BUILDINGS,
 } from '@shared/constants';
 import type {
   HandshakeAckMessage,
@@ -48,6 +47,8 @@ import type {
   CardSyncMessage,
   SkillStateMessage,
   AbilityEffectMessage,
+  PotionShopStateMessage,
+  PotionStateMessage,
   LobbySlot,
 } from '@shared/protocol';
 import type { SaveSlotInfo } from '@shared/SaveFormat';
@@ -78,6 +79,8 @@ import type { StatsOverlay } from '../ui/StatsOverlay';
 import type { CardPickerOverlay } from '../ui/CardPickerOverlay';
 import type { SkillTreeOverlay } from '../ui/SkillTreeOverlay';
 import type { AbilityVFXSystem } from '../systems/AbilityVFXSystem';
+import type { PotionShopOverlay, PotionShopData } from '../ui/PotionShopOverlay';
+import type { BuildMenuOverlay } from '../ui/BuildMenuOverlay';
 
 // ── Shared mutable state ────────────────────────────────────────────────────
 
@@ -100,7 +103,7 @@ export interface GameplayState {
   respawnTimer: number;
   localGameOver: boolean;
   buildModeActive: boolean;
-  selectedBuildingIdx: number;
+  placingType: string;
   selectedBuildingId: number | null;
   localResources: Record<string, number>;
   warehouseResources: { wood: number; stone: number; iron: number; diamond: number; gold: number; food: number };
@@ -117,6 +120,12 @@ export interface GameplayState {
   onSkillStateUpdate?: () => void;
   cardAbilities: string[];
   pickedCardIds: string[];
+  potionEquipped: string | null;
+  potionUnlocked: string[];
+  potionCharges: number;
+  potionMaxCharges: number;
+  potionCooldown: number;
+  potionCooldownMax: number;
 }
 
 // ── Dependencies ────────────────────────────────────────────────────────────
@@ -149,6 +158,8 @@ export interface NetworkHandlerDeps {
   skillTree: SkillTreeOverlay;
   abilityVFX: AbilityVFXSystem;
   statsOverlay: StatsOverlay;
+  potionShopOverlay: PotionShopOverlay;
+  buildMenu: BuildMenuOverlay;
   combinedResources: () => Record<string, number>;
   electronAPI?: { checkForUpdates?: () => void };
 }
@@ -397,16 +408,43 @@ export function registerMessageHandlers(
     );
   });
 
+  // ── Potions ────────────────────────────────────────────────────────────
+
+  net.on(MessageType.POTION_SHOP_STATE, (msg) => {
+    const ps = msg as PotionShopStateMessage;
+    const shopData: PotionShopData = {
+      shopEntityId: ps.shopEntityId,
+      shopLevel: ps.shopLevel,
+      unlockedPotions: ps.unlockedPotions,
+      equippedPotion: ps.equippedPotion,
+      charges: ps.charges,
+      maxCharges: ps.maxCharges,
+    };
+    d.potionShopOverlay.show(shopData, d.combinedResources());
+  });
+
+  net.on(MessageType.POTION_STATE, (msg) => {
+    const ps = msg as PotionStateMessage;
+    s.potionEquipped = ps.equippedPotion;
+    s.potionUnlocked = ps.unlockedPotions;
+    s.potionCharges = ps.charges;
+    s.potionMaxCharges = ps.maxCharges;
+    s.potionCooldown = ps.cooldown;
+    s.potionCooldownMax = ps.cooldownMax;
+    // Refresh potion shop if open (e.g. after equip)
+    d.potionShopOverlay.refreshState(ps.equippedPotion, ps.unlockedPotions, ps.charges, ps.maxCharges, d.combinedResources());
+  });
+
   // ── Resources ───────────────────────────────────────────────────────────
 
   net.on(MessageType.RESOURCE_UPDATE, (msg) => {
     const ru = msg as ResourceUpdateMessage;
     d.resourceHUD.setResources(ru.wood, ru.stone, ru.iron, ru.diamond, ru.gold, ru.food);
     s.localResources = { wood: ru.wood, stone: ru.stone, iron: ru.iron, diamond: ru.diamond, gold: ru.gold, food: ru.food };
-    if (s.buildModeActive) {
-      const currentBuilding = PLACEABLE_BUILDINGS[s.selectedBuildingIdx];
-      d.buildOverlay.update(currentBuilding, d.combinedResources());
+    if (s.buildModeActive && s.placingType) {
+      d.buildOverlay.update(s.placingType, d.combinedResources());
     }
+    d.potionShopOverlay.updateResources(d.combinedResources());
   });
 
   net.on(MessageType.WAREHOUSE_UPDATE, (msg) => {
@@ -419,10 +457,10 @@ export function registerMessageHandlers(
     } else {
       d.warehouseHUD.hide();
     }
-    if (s.buildModeActive) {
-      const currentBuilding = PLACEABLE_BUILDINGS[s.selectedBuildingIdx];
-      d.buildOverlay.update(currentBuilding, d.combinedResources());
+    if (s.buildModeActive && s.placingType) {
+      d.buildOverlay.update(s.placingType, d.combinedResources());
     }
+    d.potionShopOverlay.updateResources(d.combinedResources());
   });
 
   // ── Pause / Social ──────────────────────────────────────────────────────
@@ -468,6 +506,7 @@ export function registerMessageHandlers(
       s.selectedBuildingId = null;
       d.buildOverlay.hide();
       d.buildGhost.hide();
+      d.buildMenu.hide();
       d.deathOverlay.showDowned(pd.bleedTimer, !s.isMultiplayer);
     }
   });
@@ -542,6 +581,7 @@ export function registerMessageHandlers(
     s.selectedBuildingId = null;
     d.buildOverlay.hide();
     d.buildGhost.hide();
+    d.buildMenu.hide();
     d.deathOverlay.hide();
     d.gameOverOverlay.show({
       waveReached: go.waveReached,

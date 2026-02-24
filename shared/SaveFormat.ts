@@ -95,6 +95,13 @@ export interface SavedPlayer {
   };
   /** IDs of cards picked by this player. */
   pickedCards?: string[];
+  /** Potion system state. */
+  potionState?: {
+    equippedPotion: string | null;
+    unlockedPotions: string[];
+    charges: number;
+    maxCharges: number;
+  };
 }
 
 export interface SavedEnemy {
