@@ -1,0 +1,15 @@
+{
+  "name": "purrmadeath",
+  "version": "0.0.1",
+  "description": "2D roguelike factory infinite game with cats",
+  "scripts": {
+    "start": "parcel index.html --port 3001",
+    "build": "parcel build index.html --dist-dir dist"
+  },
+  "dependencies": {
+    "pixi.js": "^8.0.0"
+  },
+  "devDependencies": {
+    "parcel": "^2.10.0"
+  }
+}
