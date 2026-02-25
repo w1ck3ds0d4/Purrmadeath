@@ -377,6 +377,27 @@ export class GameSession {
       getCampfireEntityId: () => this.campfireEntityId,
       getElapsedSeconds: () => this.getElapsedSeconds(),
       getBuildings: () => this.buildings,
+      getReviveHpBonus: (entityId) => {
+        for (const p of this.players.values()) {
+          if (p.entityId === entityId) return this.cards.getBuffs(p.client.id).reviveHpBonus;
+        }
+        return 0;
+      },
+      getSelfRevives: (entityId) => {
+        for (const p of this.players.values()) {
+          if (p.entityId === entityId) return this.cards.getBuffs(p.client.id).selfRevives;
+        }
+        return 0;
+      },
+      consumeSelfRevive: (entityId) => {
+        for (const p of this.players.values()) {
+          if (p.entityId === entityId) {
+            const buffs = this.cards.getBuffs(p.client.id);
+            if (buffs.selfRevives > 0) buffs.selfRevives--;
+            return;
+          }
+        }
+      },
       creditResources: (eid, res, amt, send) => this.creditResources(eid, res, amt, send),
       spawnLootDrops: (deadId) => this.spawnLootDrops(deadId),
       spawnItemDrop: (x, y, item, qty, auto) => this.spawnItemDrop(x, y, item, qty, auto),
@@ -1130,8 +1151,19 @@ export class GameSession {
     const ev = this.world.getComponent<EnemyVariantComponent>(deadEntityId, C.EnemyVariant);
     const tableKey = ev?.variant && LOOT_TABLES[ev.variant] ? ev.variant : 'basic_enemy';
     const drops = this.rollLootTable(tableKey);
+
+    // Card loot multipliers (Scavenger = all drops, Bounty Hunter = gold only)
+    const lootMult = this.cards.debuffs.lootMultiplier;
+    const goldMult = this.cards.debuffs.goldDropMult;
+
     for (const drop of drops) {
-      this.spawnItemDrop(pos.x, pos.y, drop.itemType, drop.quantity, drop.autoPickup);
+      let qty = drop.quantity;
+      if (drop.itemType === 'gold') {
+        qty = Math.round(qty * lootMult * goldMult);
+      } else {
+        qty = Math.round(qty * lootMult);
+      }
+      if (qty > 0) this.spawnItemDrop(pos.x, pos.y, drop.itemType, qty, drop.autoPickup);
     }
   }
 
@@ -1279,7 +1311,7 @@ export class GameSession {
           duration: DODGE_ROLL_DURATION,
           dashVx: dvx,
           dashVy: dvy,
-          cooldown: DODGE_ROLL_COOLDOWN,
+          cooldown: DODGE_ROLL_COOLDOWN * this.cards.debuffs.dodgeCooldownMult,
         });
       }
     }
@@ -1478,7 +1510,32 @@ export class GameSession {
     const potionDmgMult = potionDmgBuff ? (1 + (potionDmgBuff.effect.damageMultiplier ?? 0)) : 1;
     const dmgMult = (pBuffs?.damageMultiplier ?? 1) * sBuffs.damageMultiplier * this.cards.debuffs.playerDamageMult * potionDmgMult;
     const classDmg = CLASS_STATS[player.playerClass].baseDamage;
-    const meleeOverrides = dmgMult !== 1 ? { damage: Math.round(classDmg * dmgMult) } : { damage: classDmg };
+
+    // Last Stand: +30% damage when below 25% HP
+    let lastStandMult = 1;
+    if (pBuffs?.abilities.includes('last_stand')) {
+      const hp = this.world.getComponent<HealthComponent>(entityId, C.Health);
+      if (hp && hp.current > 0 && hp.current / hp.max < 0.25) lastStandMult = 1.30;
+    }
+
+    // Co-op damage cards
+    let coopMult = 1;
+    if (pBuffs?.abilities.includes('pack_hunter') || pBuffs?.abilities.includes('lone_wolf')) {
+      const nearbyAllies = this.countNearbyAllies(entityId, 200);
+      if (pBuffs.abilities.includes('pack_hunter') && nearbyAllies > 0) {
+        coopMult *= 1 + 0.05 * nearbyAllies;
+      }
+      if (pBuffs.abilities.includes('lone_wolf') && nearbyAllies === 0) {
+        coopMult *= 1.15;
+      }
+    }
+
+    const meleeOverrides: import('./systems/CombatSystem').MeleeOverrides = {
+      damage: Math.round(classDmg * dmgMult * lastStandMult * coopMult),
+      critChance: pBuffs?.critChance ?? 0,
+      critMultiplier: pBuffs?.critMultiplier ?? 0,
+      knockbackMult: pBuffs?.knockbackMult ?? 1,
+    };
 
     const { hits, deaths } = this.combat.processMeleeAttack(
       this.world,
@@ -1552,8 +1609,26 @@ export class GameSession {
     const rPotionDmgMult = rPotionDmg ? (1 + (rPotionDmg.effect.damageMultiplier ?? 0)) : 1;
     const rDmgMult = (rBuffs?.damageMultiplier ?? 1) * rSBuffs.damageMultiplier * this.cards.debuffs.playerDamageMult * rPotionDmgMult;
     const rangedClassDmg = CLASS_STATS[player.playerClass].baseDamage;
-    const projDamage = Math.round(rangedClassDmg * rDmgMult);
-    const projData: ProjectileComponent = { ownerId: entityId, damage: projDamage, lifetime: RANGED_LIFETIME };
+    // Last Stand: +30% damage when below 25% HP
+    let rLastStandMult = 1;
+    if (rBuffs?.abilities.includes('last_stand')) {
+      const rHp = this.world.getComponent<HealthComponent>(entityId, C.Health);
+      if (rHp && rHp.current > 0 && rHp.current / rHp.max < 0.25) rLastStandMult = 1.30;
+    }
+    // Co-op damage cards
+    let rCoopMult = 1;
+    if (rBuffs?.abilities.includes('pack_hunter') || rBuffs?.abilities.includes('lone_wolf')) {
+      const rNearby = this.countNearbyAllies(entityId, 200);
+      if (rBuffs.abilities.includes('pack_hunter') && rNearby > 0) rCoopMult *= 1 + 0.05 * rNearby;
+      if (rBuffs.abilities.includes('lone_wolf') && rNearby === 0) rCoopMult *= 1.15;
+    }
+    const projDamage = Math.round(rangedClassDmg * rDmgMult * rLastStandMult * rCoopMult);
+    const projData: ProjectileComponent = {
+      ownerId: entityId, damage: projDamage, lifetime: RANGED_LIFETIME,
+      critChance: rBuffs?.critChance ?? 0,
+      critMultiplier: rBuffs?.critMultiplier ?? 0,
+      knockbackMult: rBuffs?.knockbackMult ?? 1,
+    };
     if (player.playerClass === 'ranger') projData.pierce = true;
     if (player.playerClass === 'mage') projData.homing = true;
     this.world.addComponent(projId, C.Projectile, projData);
@@ -1575,6 +1650,39 @@ export class GameSession {
   }
 
 
+  // ── Co-op helpers ──────────────────────────────────────────────────────────
+
+  /** Count living player allies within `range` pixels of an entity (excludes self). */
+  private countNearbyAllies(entityId: number, range: number): number {
+    const srcPos = this.world.getComponent<PositionComponent>(entityId, C.Position);
+    if (!srcPos) return 0;
+    const r2 = range * range;
+    let count = 0;
+    for (const p of this.players.values()) {
+      if (p.entityId === null || p.entityId === entityId) continue;
+      if (this.world.hasComponent(p.entityId, C.Downed)) continue;
+      const pos = this.world.getComponent<PositionComponent>(p.entityId, C.Position);
+      if (!pos) continue;
+      const dx = pos.x - srcPos.x, dy = pos.y - srcPos.y;
+      if (dx * dx + dy * dy <= r2) count++;
+    }
+    return count;
+  }
+
+  /** Soul Link: damage isolated players at 3 HP/s. Called each tick. */
+  private tickSoulLink(dt: number): void {
+    for (const [clientId, sp] of this.players) {
+      if (sp.entityId === null) continue;
+      if (this.world.hasComponent(sp.entityId, C.Downed)) continue;
+      const buffs = this.cards.playerBuffs.get(clientId);
+      if (!buffs?.abilities.includes('soul_link')) continue;
+      const nearbyAllies = this.countNearbyAllies(sp.entityId, 200);
+      if (nearbyAllies > 0) continue;
+      const hp = this.world.getComponent<HealthComponent>(sp.entityId, C.Health);
+      if (hp && hp.current > 0) hp.current = Math.max(0, hp.current - 3 * dt);
+    }
+  }
+
   // ── On-hit special effects (lifesteal, burn, slow) ─────────────────────────
 
   /**
@@ -1589,15 +1697,20 @@ export class GameSession {
     if (hits.length === 0) return;
     const buffs = this.skills.getSkillBuffs(clientId);
 
+    // Card-based lifesteal (stacks with skill lifesteal)
+    const cardBuffs = this.cards.playerBuffs.get(clientId);
+    const cardLifesteal = cardBuffs?.abilities.includes('lifesteal') ? 0.10 : 0;
+
     for (const hit of hits) {
       // Skip resource nodes and buildings — only apply effects to enemies
       const tgtFaction = this.world.getComponent<FactionComponent>(hit.targetId, C.Faction);
       if (!tgtFaction || tgtFaction.type !== 'enemy') continue;
 
-      // Lifesteal: heal attacker by fraction of damage dealt
-      if (buffs.lifesteal > 0) {
+      // Lifesteal: heal attacker by fraction of damage dealt (skill + card)
+      const totalLifesteal = buffs.lifesteal + cardLifesteal;
+      if (totalLifesteal > 0) {
         const hp = this.world.getComponent<HealthComponent>(attackerEntityId, C.Health);
-        if (hp) hp.current = Math.min(hp.max, hp.current + hit.damage * buffs.lifesteal);
+        if (hp) hp.current = Math.min(hp.max, hp.current + hit.damage * totalLifesteal);
       }
 
       // Burn DOT: attach/refresh BurnDot component on target
@@ -1637,12 +1750,14 @@ export class GameSession {
     _targetEntityId: number,
     attackerEntityId: number,
   ): void {
-    const buffs = this.skills.getSkillBuffs(targetClientId);
-    if (buffs.thornsDamage <= 0) return;
+    const skillBuffs = this.skills.getSkillBuffs(targetClientId);
+    const cardBuffs = this.cards.playerBuffs.get(targetClientId);
+    const totalThorns = skillBuffs.thornsDamage + (cardBuffs?.thornsDamage ?? 0);
+    if (totalThorns <= 0) return;
 
     const hp = this.world.getComponent<HealthComponent>(attackerEntityId, C.Health);
     if (hp) {
-      hp.current = Math.max(0, hp.current - buffs.thornsDamage);
+      hp.current = Math.max(0, hp.current - totalThorns);
     }
   }
 
@@ -2039,6 +2154,10 @@ export class GameSession {
     // Spawn resources near players (chunk-based, processed chunks are skipped)
     this.generateResourcesNearPlayers();
 
+    // Sync session-wide building damage mult to combat systems
+    this.combat.buildingDamageMult = this.cards.debuffs.buildingDamageMult;
+    this.projectile.buildingDamageMult = this.cards.debuffs.buildingDamageMult;
+
     const _t0 = performance.now();
     this.combat.update(this.world, dt);
     const _t1 = performance.now();
@@ -2149,7 +2268,14 @@ export class GameSession {
     this.respawn.destroyDeadEntities(projResult.deaths, projAttackerMap, send);
 
     // ── Item drop system (lifetime, scatter, auto-pickup) ──────────────────────
-    const dropResult = this.itemDrop.update(this.world, dt, this.playerEntityIds);
+    // Build per-player pickup radius multiplier map from card buffs
+    const pickupMults = new Map<number, number>();
+    for (const [cid, sp] of this.players) {
+      if (sp.entityId === null) continue;
+      const pb = this.cards.playerBuffs.get(cid);
+      if (pb && pb.pickupRadiusMult !== 1) pickupMults.set(sp.entityId, pb.pickupRadiusMult);
+    }
+    const dropResult = this.itemDrop.update(this.world, dt, this.playerEntityIds, pickupMults);
     for (const pickup of dropResult.pickups) {
       this.creditResources(pickup.playerId, pickup.itemType, pickup.quantity, send);
       this.world.destroyEntity(pickup.dropId);
@@ -2171,6 +2297,7 @@ export class GameSession {
 
     // ── Card system ──────────────────────────────────────────────────────────
     this.cardDispenser.tickHpRegen(dt);
+    if (!this.gameOver) this.tickSoulLink(dt);
 
     // ── Skill system (cooldowns, buffs, DOTs) ────────────────────────────────
     if (!this.gameOver) this.skills.tick(dt);

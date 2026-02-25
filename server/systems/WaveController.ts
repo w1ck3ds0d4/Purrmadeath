@@ -62,7 +62,7 @@ export interface WaveControllerDeps {
   state: WaveState;
   players: Map<string, SessionPlayer>;
   cards: {
-    debuffs: { enemyDamageMult: number; enemySpeedMult: number; guaranteedTitans: number };
+    debuffs: { enemyDamageMult: number; enemySpeedMult: number; enemyKnockbackMult: number; guaranteedTitans: number };
   };
   maxEnemies: number;
   waveSyncInterval: number;
@@ -177,7 +177,7 @@ export function createWaveController(deps: WaveControllerDeps) {
     world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
     world.addComponent(id, C.EnemyVariant, { variant });
     world.addComponent(id, C.EnemyStats, {
-      damage: scaledDmg, range: base.range, knockback: base.knockback, radius: base.radius,
+      damage: scaledDmg, range: base.range, knockback: Math.round(base.knockback * cards.debuffs.enemyKnockbackMult), radius: base.radius,
       rangedRange: base.rangedRange ?? 0, projectileSpeed: base.projectileSpeed ?? 0,
       rangedDamage: Math.round((base.rangedDamage ?? 0) * dmgMult * cards.debuffs.enemyDamageMult),
       rangedCooldown: base.rangedCooldown ?? base.cooldown,
@@ -256,7 +256,7 @@ export function createWaveController(deps: WaveControllerDeps) {
       world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
       world.addComponent(id, C.EnemyVariant, { variant: 'titan' });
       world.addComponent(id, C.EnemyStats, {
-        damage: scaledDmg, range: base.range, knockback: base.knockback, radius: base.radius,
+        damage: scaledDmg, range: base.range, knockback: Math.round(base.knockback * cards.debuffs.enemyKnockbackMult), radius: base.radius,
         rangedRange: 0, projectileSpeed: 0, rangedDamage: 0, rangedCooldown: base.cooldown,
       });
       world.addComponent(id, C.TitanRally, { active: false, range: 350, speedBuff: 1.5 } as TitanRallyComponent);

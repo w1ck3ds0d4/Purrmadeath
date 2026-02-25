@@ -77,7 +77,10 @@ export interface BuildingSystemDeps {
   playerEntityIds: Set<number>;
   respawnTimers: Map<string, number>;
   buildingsByPlayer: Map<string, number>;
-  cards: { playerBuffs: Map<string, { abilities: string[] }> };
+  cards: {
+    playerBuffs: Map<string, { abilities: string[] }>;
+    debuffs: { turretCooldownMult: number; productionIntervalMult: number; buildingRegenRate: number };
+  };
   isActive: () => boolean; // phase === 'playing' && !paused && !gameOver
   isWalkable: (wx: number, wy: number) => boolean;
   spawnBuilding: (x: number, y: number, type: string, maxHp: number, permanent: boolean) => number;
@@ -550,11 +553,13 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
   }
 
   function tickProduction(dt: number): void {
+    const intervalMult = cards.debuffs.productionIntervalMult;
     for (const id of world.query(C.Production, C.Position)) {
       const prod = world.getComponent<ProductionComponent>(id, C.Production)!;
       prod.timer += dt;
-      if (prod.timer < prod.interval) continue;
-      prod.timer -= prod.interval;
+      const effectiveInterval = prod.interval * intervalMult;
+      if (prod.timer < effectiveInterval) continue;
+      prod.timer -= effectiveInterval;
       prod.stored = Math.min(prod.stored + prod.amount, prod.maxStored);
     }
   }
@@ -583,7 +588,7 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       }
 
       if (bestId < 0) continue;
-      turret.cooldownTimer = turret.cooldown;
+      turret.cooldownTimer = turret.cooldown * cards.debuffs.turretCooldownMult;
 
       const epos = world.getComponent<PositionComponent>(bestId, C.Position)!;
       const dx = epos.x - tpos.x, dy = epos.y - tpos.y;
@@ -717,6 +722,16 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     return id;
   }
 
+  function tickBuildingRegen(dt: number): void {
+    const rate = cards.debuffs.buildingRegenRate;
+    if (rate <= 0) return;
+    for (const id of world.query(C.Building, C.Health)) {
+      const hp = world.getComponent<HealthComponent>(id, C.Health)!;
+      if (hp.current >= hp.max || hp.current <= 0) continue;
+      hp.current = Math.min(hp.max, hp.current + rate * dt);
+    }
+  }
+
   function tickSpikeTraps(dt: number, send: SendFn): void {
     const trapDeaths: number[] = [];
     const entityDeaths: number[] = [];
@@ -801,6 +816,7 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       tickHealAuras(dt);
       tickBarracks(dt);
       tickSpikeTraps(dt, send);
+      tickBuildingRegen(dt);
     },
   };
 }

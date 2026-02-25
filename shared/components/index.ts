@@ -134,6 +134,8 @@ export interface AttackCooldownComponent {
 export interface KnockbackReceiverComponent {
   vx: number;
   vy: number;
+  /** Knockback resistance 0–1 (card buff). 0 = no resist, 1 = immune. */
+  resist?: number;
 }
 
 /** Tags an entity as a portal that spawns enemies during a wave. */
@@ -170,6 +172,12 @@ export interface ProjectileComponent {
   hitEntities?: number[];
   /** If true, projectile homes in on nearest enemy (mage). */
   homing?: boolean;
+  /** Per-projectile crit chance from card buffs. */
+  critChance?: number;
+  /** Per-projectile crit multiplier from card buffs. */
+  critMultiplier?: number;
+  /** Per-projectile knockback multiplier from card buffs. */
+  knockbackMult?: number;
 }
 
 // ── Phase 4.8+ components ─────────────────────────────────────────────────────

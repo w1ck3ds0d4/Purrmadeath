@@ -29,18 +29,21 @@ export class ItemDropSystem {
     world: World,
     dt: number,
     playerEntityIds: ReadonlySet<number>,
+    playerPickupMults?: Map<number, number>,
   ): { pickups: PickupResult[]; expired: number[] } {
     const pickups: PickupResult[] = [];
     const expired: number[] = [];
 
-    // Cache player positions once (O(P) not O(D*P))
-    const playerPositions: { id: number; x: number; y: number }[] = [];
+    // Cache player positions + per-player pickup radius squared
+    const playerPositions: { id: number; x: number; y: number; r2: number }[] = [];
     for (const pid of playerEntityIds) {
       const pos = world.getComponent<PositionComponent>(pid, C.Position);
-      if (pos) playerPositions.push({ id: pid, x: pos.x, y: pos.y });
+      if (pos) {
+        const mult = playerPickupMults?.get(pid) ?? 1;
+        const r = ITEM_DROP_PICKUP_RADIUS * mult;
+        playerPositions.push({ id: pid, x: pos.x, y: pos.y, r2: r * r });
+      }
     }
-
-    const pickupR2 = ITEM_DROP_PICKUP_RADIUS * ITEM_DROP_PICKUP_RADIUS;
 
     for (const id of world.query(C.ItemDrop, C.Position)) {
       const drop = world.getComponent<ItemDropComponent>(id, C.ItemDrop)!;
@@ -74,7 +77,7 @@ export class ItemDropSystem {
         for (const pp of playerPositions) {
           const dx = pos.x - pp.x;
           const dy = pos.y - pp.y;
-          if (dx * dx + dy * dy <= pickupR2) {
+          if (dx * dx + dy * dy <= pp.r2) {
             pickups.push({
               dropId: id,
               playerId: pp.id,

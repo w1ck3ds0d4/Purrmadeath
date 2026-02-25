@@ -3,7 +3,7 @@ import {
   C,
   HealthComponent,
 } from '@shared/components';
-import type { SpeedComponent } from '@shared/components';
+import type { SpeedComponent, DefenseComponent, StaminaComponent, KnockbackReceiverComponent } from '@shared/components';
 import { PLAYER_MAX_HEALTH } from '@shared/constants';
 import { MessageType } from '@shared/protocol';
 import type { CardOfferMessage, CardAppliedMessage, CardPickMessage } from '@shared/protocol';
@@ -135,15 +135,44 @@ export function createCardDispenser(deps: CardDispenserDeps) {
           hp.max = PLAYER_MAX_HEALTH + buffs.maxHpBonus;
           hp.current = Math.min(hp.current + effect.value, hp.max);
         }
+      } else if (effect.stat === 'defense') {
+        const def = world.getComponent<DefenseComponent>(eid, C.Defense);
+        if (def) def.flat = buffs.defenseBonus;
+      } else if (effect.stat === 'maxStamina') {
+        const stam = world.getComponent<StaminaComponent>(eid, C.Stamina);
+        if (stam) { stam.max += effect.value; stam.current = Math.min(stam.current + effect.value, stam.max); }
+      } else if (effect.stat === 'staminaRegenMult') {
+        // Stamina regen is applied per-tick from buffs, no ECS change needed
+      } else if (effect.stat === 'knockbackResist') {
+        const kb = world.getComponent<KnockbackReceiverComponent>(eid, C.KnockbackReceiver);
+        if (kb) kb.resist = buffs.knockbackResist;
       }
+      // critChance, critMultiplier, knockbackMult: read from buffs at attack time, no ECS change
     } else if (effect.type === 'resource') {
       creditResources(eid, effect.resource, effect.amount, send);
-    } else if (effect.type === 'trap_player' && effect.stat === 'speed') {
-      for (const p of players.values()) {
-        if (!p.entityId) continue;
-        const pBuffs = cards.getBuffs(p.client.id);
-        const spd = world.getComponent<SpeedComponent>(p.entityId, C.Speed);
-        if (spd) spd.multiplier = pBuffs.speedMultiplier;
+    } else if (effect.type === 'trap_player') {
+      if (effect.stat === 'speed') {
+        for (const p of players.values()) {
+          if (!p.entityId) continue;
+          const pBuffs = cards.getBuffs(p.client.id);
+          const spd = world.getComponent<SpeedComponent>(p.entityId, C.Speed);
+          if (spd) spd.multiplier = pBuffs.speedMultiplier;
+        }
+      } else if (effect.stat === 'maxHp') {
+        // Reduce max HP for all players
+        for (const p of players.values()) {
+          if (!p.entityId) continue;
+          const pBuffs = cards.getBuffs(p.client.id);
+          const hp = world.getComponent<HealthComponent>(p.entityId, C.Health);
+          if (hp) {
+            hp.max = Math.max(1, PLAYER_MAX_HEALTH + pBuffs.maxHpBonus - cards.debuffs.playerMaxHpPenalty);
+            hp.current = Math.min(hp.current, hp.max);
+          }
+        }
+      } else if (effect.stat === 'attackSpeed') {
+        // Attack speed debuff applied per-tick from debuffs, no instant ECS change needed
+      } else if (effect.stat === 'staminaRegen') {
+        // Stamina regen debuff applied per-tick from debuffs, no instant ECS change needed
       }
     } else if (effect.type === 'multi') {
       for (const sub of effect.effects) applyEffectToEntity(player, sub, send);

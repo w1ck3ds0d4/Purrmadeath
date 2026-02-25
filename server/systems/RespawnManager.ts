@@ -58,6 +58,9 @@ export interface RespawnManagerDeps {
   getCampfireEntityId: () => number;
   getElapsedSeconds: () => number;
   getBuildings: () => BuildingSystem;
+  getReviveHpBonus: (entityId: number) => number;
+  getSelfRevives: (entityId: number) => number;
+  consumeSelfRevive: (entityId: number) => void;
   creditResources: (entityId: number, resource: string, amount: number, send: SendFn) => void;
   spawnLootDrops: (deadEntityId: number) => void;
   spawnItemDrop: (x: number, y: number, itemType: string, quantity: number, autoPickup: boolean) => void;
@@ -110,7 +113,8 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
 
   function revivePlayer(entityId: number, send: SendFn): void {
     const hp = world.getComponent<HealthComponent>(entityId, C.Health);
-    if (hp) hp.current = Math.round(hp.max * REVIVE_HP_PERCENT);
+    const reviveBonus = deps.getReviveHpBonus(entityId);
+    if (hp) hp.current = Math.round(hp.max * Math.min(1, REVIVE_HP_PERCENT + reviveBonus));
     world.removeComponent(entityId, C.Downed);
 
     const sp = findSessionPlayerByEntity(entityId);
@@ -259,6 +263,14 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
 
     const hp = world.getComponent<HealthComponent>(entityId, C.Health);
     if (!hp || hp.current > 0) return;
+
+    // Spare Life: consume a self-revive instead of downing
+    if (deps.getSelfRevives(entityId) > 0) {
+      deps.consumeSelfRevive(entityId);
+      const reviveBonus = deps.getReviveHpBonus(entityId);
+      hp.current = Math.round(hp.max * Math.min(1, REVIVE_HP_PERCENT + reviveBonus));
+      return;
+    }
 
     const isSolo = players.size <= 1;
 

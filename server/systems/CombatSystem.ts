@@ -31,6 +31,12 @@ export interface MeleeOverrides {
   knockback?: number;
   /** If true, attack hits all targets in range (360° AoE, ignores arc check). */
   aoe?: boolean;
+  /** Per-player crit chance from card buffs (0–1). */
+  critChance?: number;
+  /** Per-player crit multiplier from card buffs (additive on top of base). */
+  critMultiplier?: number;
+  /** Per-player knockback multiplier from card buffs. */
+  knockbackMult?: number;
 }
 
 /**
@@ -45,6 +51,9 @@ export interface MeleeOverrides {
  * update - called each tick to tick down cooldowns.
  */
 export class CombatSystem {
+  /** Session-wide building damage multiplier (Thick Walls / Shoddy Construction cards). */
+  buildingDamageMult = 1;
+
   /** Tick down all attack cooldowns. */
   update(world: World, dt: number): void {
     for (const id of world.query(C.AttackCooldown)) {
@@ -175,25 +184,34 @@ export class CombatSystem {
       } else {
         dmg = meleeDamage;
         if (def) dmg = Math.max(0, Math.round((dmg - def.flat) * (1 - def.percent)));
+        // Building damage multiplier (Thick Walls / Shoddy Construction)
+        if (tgtFaction?.type === 'building') dmg = Math.round(dmg * this.buildingDamageMult);
       }
 
-      // Critical hit (players only)
+      // Critical hit (players only) — card buffs add to base crit
       let crit = false;
-      if (srcFaction?.type === 'player' && Math.random() < CRIT_CHANCE) {
-        dmg = Math.round(dmg * CRIT_MULTIPLIER);
-        crit = true;
+      if (srcFaction?.type === 'player') {
+        const totalCritChance = CRIT_CHANCE + (overrides?.critChance ?? 0);
+        if (Math.random() < totalCritChance) {
+          const totalCritMult = CRIT_MULTIPLIER + (overrides?.critMultiplier ?? 0);
+          dmg = Math.round(dmg * totalCritMult);
+          crit = true;
+        }
       }
 
       hp.current = Math.max(0, hp.current - dmg);
 
-      // Knockback impulse - direction from attacker to target (giants are immune)
+      // Knockback impulse - direction from attacker to target (giants/titans are immune)
       let knockbackVx = 0;
       let knockbackVy = 0;
       const tgtVariant = world.getComponent<EnemyVariantComponent>(targetId, C.EnemyVariant);
       if (meleeKnockback > 0 && tgtVariant?.variant !== 'giant' && tgtVariant?.variant !== 'titan') {
-        knockbackVx = (dx / dist) * meleeKnockback;
-        knockbackVy = (dy / dist) * meleeKnockback;
+        const kbMult = overrides?.knockbackMult ?? 1;
         const kb = world.getComponent<KnockbackReceiverComponent>(targetId, C.KnockbackReceiver);
+        const resist = kb?.resist ?? 0;
+        const finalKb = meleeKnockback * kbMult * (1 - resist);
+        knockbackVx = (dx / dist) * finalKb;
+        knockbackVy = (dy / dist) * finalKb;
         if (kb) {
           kb.vx += knockbackVx;
           kb.vy += knockbackVy;

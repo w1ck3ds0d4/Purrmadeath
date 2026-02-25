@@ -65,6 +65,9 @@ function segPointDist2(ax: number, ay: number, bx: number, by: number, px: numbe
 }
 
 export class ProjectileSystem {
+  /** Session-wide building damage multiplier (Thick Walls / Shoddy Construction cards). */
+  buildingDamageMult = 1;
+
   constructor(private readonly generator: WorldGenerator) {}
 
   update(world: World, dt: number): ProjectileTickResult {
@@ -291,28 +294,37 @@ export class ProjectileSystem {
           const def = world.getComponent<DefenseComponent>(targetId, C.Defense);
           damage = proj.damage;
           if (def) damage = Math.max(0, Math.round((damage - def.flat) * (1 - def.percent)));
+          // Building damage multiplier (Thick Walls / Shoddy Construction)
+          if (tgtFaction?.type === 'building') damage = Math.round(damage * this.buildingDamageMult);
         }
 
-        // Critical hit (player/guard projectiles only)
+        // Critical hit (player/guard projectiles only) — card buffs on projectile
         let crit = false;
-        if (projFaction?.type === 'player' && Math.random() < CRIT_CHANCE) {
-          damage = Math.round(damage * CRIT_MULTIPLIER);
-          crit = true;
+        if (projFaction?.type === 'player') {
+          const totalCritChance = CRIT_CHANCE + (proj.critChance ?? 0);
+          if (Math.random() < totalCritChance) {
+            const totalCritMult = CRIT_MULTIPLIER + (proj.critMultiplier ?? 0);
+            damage = Math.round(damage * totalCritMult);
+            crit = true;
+          }
         }
 
         hp.current = Math.max(0, hp.current - damage);
 
-        // Knockback - direction from projectile to target (giants are immune)
+        // Knockback - direction from projectile to target (giants/titans are immune)
         let knockbackVx = 0;
         let knockbackVy = 0;
         const dx = tgtPos.x - pos.x;
         const dy = tgtPos.y - pos.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
         const tgtVariant = world.getComponent<EnemyVariantComponent>(targetId, C.EnemyVariant);
-        if (RANGED_KNOCKBACK > 0 && dist > 0 && tgtVariant?.variant !== 'giant') {
-          knockbackVx = (dx / dist) * RANGED_KNOCKBACK;
-          knockbackVy = (dy / dist) * RANGED_KNOCKBACK;
+        if (RANGED_KNOCKBACK > 0 && dist > 0 && tgtVariant?.variant !== 'giant' && tgtVariant?.variant !== 'titan') {
+          const kbMult = proj.knockbackMult ?? 1;
           const kb = world.getComponent<KnockbackReceiverComponent>(targetId, C.KnockbackReceiver);
+          const resist = kb?.resist ?? 0;
+          const finalKb = RANGED_KNOCKBACK * kbMult * (1 - resist);
+          knockbackVx = (dx / dist) * finalKb;
+          knockbackVy = (dy / dist) * finalKb;
           if (kb) {
             kb.vx += knockbackVx;
             kb.vy += knockbackVy;
