@@ -382,6 +382,7 @@ export class GameSession {
       spawnItemDrop: (x, y, item, qty, auto) => this.spawnItemDrop(x, y, item, qty, auto),
       findSafeSpawnNear: (wx, wy) => this.findSafeSpawnNear(wx, wy),
       trackKill: (eid, variant) => this.stats.trackKill(eid, variant),
+      onTitanKilled: (deadId, send) => this.handleTitanCardDrop(send),
       fireRunEnd: () => this.fireRunEnd(),
     });
 
@@ -752,6 +753,10 @@ export class GameSession {
           this.world.addComponent(id, C.AssassinDash, {
             cooldown: 0, maxCooldown: 20, dashSpeed: 500, dashDuration: 0.3, dashing: false, dashTimer: 0,
           });
+        }
+        if (se.variant === 'titan') {
+          const isRallying = se.currentHp <= se.maxHp * 0.5;
+          this.world.addComponent(id, C.TitanRally, { active: isRallying, range: 350, speedBuff: 1.5 });
         }
         this.waveState.enemyCount++;
       }
@@ -1130,7 +1135,57 @@ export class GameSession {
     }
   }
 
-  /** Find the playerId (UUID) for a given entity ID. */
+  /** Handle card drop chance when a Titan is killed (25% chance for a random non-trap card). */
+  private handleTitanCardDrop(send: SendFn): void {
+    if (Math.random() > 0.25) return; // 25% drop chance
+
+    // Pick a random non-trap card from the pool
+    const nonTrapCards = CARD_POOL.filter(c => c.category !== 'trap');
+    if (nonTrapCards.length === 0) return;
+    const card = nonTrapCards[Math.floor(Math.random() * nonTrapCards.length)];
+
+    // Pick a random living player to receive the card
+    const livingPlayers = [...this.players.values()].filter(p => p.entityId !== null);
+    if (livingPlayers.length === 0) return;
+    const recipient = livingPlayers[Math.floor(Math.random() * livingPlayers.length)];
+
+    // Apply card effect directly (bypass offer system)
+    this.cards.forceApplyCard(recipient.client.id, card);
+
+    // Apply ECS side-effects (speed, maxHp, resources)
+    if (recipient.entityId) {
+      const buffs = this.cards.getBuffs(recipient.client.id);
+      const effect = card.effect;
+      // Handle multi effects
+      const applyEcs = (e: typeof effect) => {
+        if (e.type === 'stat_buff' && e.stat === 'speed') {
+          const spd = this.world.getComponent<import('@shared/components').SpeedComponent>(recipient.entityId!, C.Speed);
+          if (spd) spd.multiplier = buffs.speedMultiplier;
+        } else if (e.type === 'stat_buff' && e.stat === 'maxHp') {
+          const hp = this.world.getComponent<import('@shared/components').HealthComponent>(recipient.entityId!, C.Health);
+          if (hp) { hp.max = PLAYER_MAX_HEALTH + buffs.maxHpBonus; hp.current = Math.min(hp.current + e.value, hp.max); }
+        } else if (e.type === 'resource') {
+          this.creditResources(recipient.entityId!, e.resource, e.amount, send);
+        } else if (e.type === 'multi') {
+          for (const sub of e.effects) applyEcs(sub);
+        }
+      };
+      applyEcs(effect);
+    }
+
+    // Broadcast the card to all players
+    const applied: import('@shared/protocol').CardAppliedMessage = {
+      type: MessageType.CARD_APPLIED,
+      displayName: recipient.displayName,
+      cardId: card.id,
+      cardName: card.name,
+      category: card.category,
+      isTrap: false,
+      abilities: [...this.cards.getBuffs(recipient.client.id).abilities],
+    };
+    for (const p of this.players.values()) send(p.client, applied);
+    console.log(`[Titan] Dropped card "${card.name}" to ${recipient.displayName}`);
+  }
 
   /**
    * Credit a player's resource counter and send RESOURCE_UPDATE.
@@ -1802,51 +1857,49 @@ export class GameSession {
 
     const card = CARD_POOL.find(c => c.id === cardId);
     if (!card) {
-      console.log(`[Debug] Unknown card ID: ${cardId}`);
+      console.log(`[Debug] Unknown card ID: ${cardId}. Use /cards to list all IDs.`);
       return;
     }
 
-    // Directly apply the card effect (bypasses offer/pick flow)
-    this.cards.getBuffs(clientId); // ensure buffs exist
-    // Manually apply effect
-    const effect = card.effect;
+    // Apply card via CardSystem (handles all effect types including multi, traps, legendaries)
+    this.cards.forceApplyCard(clientId, card);
+
+    // Apply ECS side-effects (speed, maxHp, resources, etc.)
     const buffs = this.cards.getBuffs(clientId);
-    switch (effect.type) {
-      case 'stat_buff':
-        switch (effect.stat) {
-          case 'damage':  buffs.damageMultiplier *= (1 + effect.value); break;
-          case 'speed':   buffs.speedMultiplier *= (1 + effect.value); break;
-          case 'maxHp':   buffs.maxHpBonus += effect.value; break;
-          case 'hpRegen': buffs.hpRegen += effect.value; break;
+    const applyEcs = (e: import('@shared/CardDefinitions').CardEffect) => {
+      if (e.type === 'stat_buff' && e.stat === 'speed') {
+        const spd = this.world.getComponent<import('@shared/components').SpeedComponent>(player.entityId!, C.Speed);
+        if (spd) spd.multiplier = buffs.speedMultiplier;
+      } else if (e.type === 'stat_buff' && e.stat === 'maxHp') {
+        const hp = this.world.getComponent<import('@shared/components').HealthComponent>(player.entityId!, C.Health);
+        if (hp) { hp.max = PLAYER_MAX_HEALTH + buffs.maxHpBonus; hp.current = Math.min(hp.current + e.value, hp.max); }
+      } else if (e.type === 'resource') {
+        this.creditResources(player.entityId!, e.resource, e.amount, send);
+      } else if (e.type === 'trap_player' && e.stat === 'speed') {
+        for (const p of this.players.values()) {
+          if (!p.entityId) continue;
+          const pBuffs = this.cards.getBuffs(p.client.id);
+          const spd = this.world.getComponent<import('@shared/components').SpeedComponent>(p.entityId, C.Speed);
+          if (spd) spd.multiplier = pBuffs.speedMultiplier;
         }
-        break;
-      case 'ability':
-        if (!buffs.abilities.includes(effect.ability)) buffs.abilities.push(effect.ability);
-        break;
-      case 'resource':
-        this.creditResources(player.entityId, effect.resource, effect.amount, send);
-        break;
-    }
+      } else if (e.type === 'multi') {
+        for (const sub of e.effects) applyEcs(sub);
+      }
+    };
+    applyEcs(card.effect);
 
-    // Sync abilities to client
-    send(player.client, {
-      type: MessageType.CARD_SYNC,
-      abilities: buffs.abilities,
-      pickedCardIds: [...this.cards.pickedCardIds, cardId],
-    });
-
-    // Broadcast pick to chat
+    // Broadcast to all players
     const applied: import('@shared/protocol').CardAppliedMessage = {
       type: MessageType.CARD_APPLIED,
       displayName: player.displayName,
       cardId: card.id,
       cardName: card.name,
       category: card.category,
-      isTrap: false,
+      isTrap: card.category === 'trap',
       abilities: [...buffs.abilities],
     };
     for (const p of this.players.values()) send(p.client, applied);
-    console.log(`[Debug] Gave card "${card.name}" to ${player.displayName}`);
+    console.log(`[Debug] Gave card "${card.name}" (${card.rarity}) to ${player.displayName}`);
   }
 
   debugGiveSkillPoints(clientId: string, count: number, send: SendFn): void {

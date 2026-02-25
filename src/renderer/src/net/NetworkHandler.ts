@@ -309,6 +309,11 @@ export function registerMessageHandlers(
       if (hit.targetId === s.localEntityId) {
         d.camera.shake(crit ? 6 : 3, crit ? 0.15 : 0.1);
       }
+
+      // Screen shake when the local player lands a critical hit
+      if (hit.sourceId === s.localEntityId && crit) {
+        d.camera.shake(4, 0.12);
+      }
     }
   });
 

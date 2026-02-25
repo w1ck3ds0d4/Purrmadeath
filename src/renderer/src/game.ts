@@ -348,6 +348,10 @@ async function main(): Promise<void> {
       buildMenu.hide();
       buildCtrl.exitBuildMode();
     },
+    onSelectMode: () => {
+      buildMenu.hide();
+      buildCtrl.enterSelectMode();
+    },
   });
 
   // Enter key opens chat during gameplay
@@ -400,7 +404,6 @@ async function main(): Promise<void> {
   // ── State: Menu ─────────────────────────────────────────────────────────────
   stateMgr.onEnter(GameState.Menu, () => {
     cancelTargeting();
-    camera.lookEnabled = false;
     menuOverlay.showMenu();
     lobbyOverlay.hide();
     pauseBanner.hide();
@@ -479,7 +482,6 @@ async function main(): Promise<void> {
     resourceHUD.setVisible(true);
     minimap.setVisible(true);
     chatOverlay.setActive(true);
-    camera.lookEnabled = true;
 
     // Clear menu background chunks from the tile renderer
     for (const key of menuStreamedKeys) {
@@ -865,7 +867,7 @@ async function main(): Promise<void> {
       }
 
       // Space: dodge roll
-      if (input.isJustPressed(Action.DodgeRoll) && localEntityId !== null) {
+      if (canAct && input.isJustPressed(Action.DodgeRoll) && localEntityId !== null) {
         const stamina = world.getComponent<StaminaComponent>(localEntityId, C.Stamina);
         const existingDodge = world.getComponent<DodgeRollComponent>(localEntityId, C.DodgeRoll);
         if (stamina && stamina.current >= DODGE_ROLL_STAMINA_COST &&
@@ -1092,6 +1094,15 @@ async function main(): Promise<void> {
         camera.targetY = pos.y + reconciler.smoothY;
       }
     }
+
+    // Look-around only when actively playing with no overlays open
+    camera.lookEnabled = state === GameState.Playing
+      && !localDowned && !localDead && !localGameOver
+      && !chatOverlay.isOpen && !cardPicker.isPicking
+      && !potionShopOverlay.isVisible && !buildMenu.isVisible
+      && !skillTree.isVisible;
+    // If look was disabled mid-look, release it so the camera eases back
+    if (!camera.lookEnabled) camera.releaseLook();
 
     camera.update(dt);
 

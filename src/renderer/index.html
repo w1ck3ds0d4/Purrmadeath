@@ -33,6 +33,12 @@
         -webkit-backdrop-filter: blur(4px);
       }
 
+      /* ── Custom scrollbar (matches dark UI theme) ─────────────────────── */
+      #card-browser-screen::-webkit-scrollbar { width: 8px; }
+      #card-browser-screen::-webkit-scrollbar-track { background: rgba(10, 10, 20, 0.6); border-radius: 4px; }
+      #card-browser-screen::-webkit-scrollbar-thumb { background: rgba(100, 120, 150, 0.4); border-radius: 4px; }
+      #card-browser-screen::-webkit-scrollbar-thumb:hover { background: rgba(120, 140, 170, 0.6); }
+
       /* ── Main menu ─────────────────────────────────────────────────────── */
       .game-title {
         font-family: 'Segoe UI', 'Helvetica Neue', sans-serif;

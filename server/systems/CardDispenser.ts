@@ -7,7 +7,7 @@ import type { SpeedComponent } from '@shared/components';
 import { PLAYER_MAX_HEALTH } from '@shared/constants';
 import { MessageType } from '@shared/protocol';
 import type { CardOfferMessage, CardAppliedMessage, CardPickMessage } from '@shared/protocol';
-import type { CardDefinition } from '@shared/CardDefinitions';
+import type { CardDefinition, CardEffect } from '@shared/CardDefinitions';
 import type { ConnectedClient } from '../net/ServerSocket';
 import type { SessionPlayer, SendFn } from '../GameSession';
 import type { CardSystem } from '../CardSystem';
@@ -67,7 +67,7 @@ export function createCardDispenser(deps: CardDispenserDeps) {
     };
     for (const p of players.values()) {
       // Include abilities list only for the picking player
-      if (p.client.id === clientId && card.effect.type === 'ability') {
+      if (p.client.id === clientId && hasAbilityEffect(card.effect)) {
         send(p.client, { ...applied, abilities: [...cards.getBuffs(clientId).abilities] });
       } else {
         send(p.client, applied);
@@ -107,7 +107,7 @@ export function createCardDispenser(deps: CardDispenserDeps) {
         isTrap: card.category === 'trap',
       };
       for (const pp of players.values()) {
-        if (pp.client.id === p.client.id && card.effect.type === 'ability') {
+        if (pp.client.id === p.client.id && hasAbilityEffect(card.effect)) {
           send(pp.client, { ...applied, abilities: [...cards.getBuffs(p.client.id).abilities] });
         } else {
           send(pp.client, applied);
@@ -118,9 +118,12 @@ export function createCardDispenser(deps: CardDispenserDeps) {
 
   function applyToEntity(player: SessionPlayer, card: CardDefinition, send: SendFn): void {
     if (!player.entityId) return;
-    const eid = player.entityId;
+    applyEffectToEntity(player, card.effect, send);
+  }
+
+  function applyEffectToEntity(player: SessionPlayer, effect: CardEffect, send: SendFn): void {
+    const eid = player.entityId!;
     const buffs = cards.getBuffs(player.client.id);
-    const effect = card.effect;
 
     if (effect.type === 'stat_buff') {
       if (effect.stat === 'speed') {
@@ -142,7 +145,16 @@ export function createCardDispenser(deps: CardDispenserDeps) {
         const spd = world.getComponent<SpeedComponent>(p.entityId, C.Speed);
         if (spd) spd.multiplier = pBuffs.speedMultiplier;
       }
+    } else if (effect.type === 'multi') {
+      for (const sub of effect.effects) applyEffectToEntity(player, sub, send);
     }
+  }
+
+  /** Check if a card effect contains any ability effects (including inside multi). */
+  function hasAbilityEffect(effect: CardEffect): boolean {
+    if (effect.type === 'ability') return true;
+    if (effect.type === 'multi') return effect.effects.some(hasAbilityEffect);
+    return false;
   }
 
   function tickHpRegen(dt: number): void {

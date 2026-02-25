@@ -79,6 +79,12 @@ export class InputManager {
     });
     document.addEventListener('contextmenu', (e) => e.preventDefault());
     document.addEventListener('wheel', (e) => { this.scrollDelta += e.deltaY; });
+
+    // Clear all input when the window loses focus (prevents stuck keys on Alt+Tab, etc.)
+    window.addEventListener('blur', () => {
+      this.held.clear();
+      this.justPressedSet.clear();
+    });
   }
 
   /** True while the key(s) for this action are held down. */

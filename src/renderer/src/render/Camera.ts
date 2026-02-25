@@ -96,6 +96,11 @@ export class Camera {
     this.shakeTimer = this.shakeDuration;
   }
 
+  /** Stop look-around if active (e.g. when a menu opens). */
+  releaseLook(): void {
+    this.isLooking = false;
+  }
+
   // ── Derived view position ───────────────────────────────────────────────────
 
   /** The world X the camera is actually rendering (camera position + look-around offset + shake). */
@@ -144,6 +149,11 @@ export class Camera {
         this.isLooking = false;
         // update() will ease lookOffset back to 0
       }
+    });
+
+    // Release look-around when the window loses focus (prevents stuck Alt on Alt+Tab)
+    window.addEventListener('blur', () => {
+      this.isLooking = false;
     });
   }
 }

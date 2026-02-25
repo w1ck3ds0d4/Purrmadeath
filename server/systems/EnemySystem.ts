@@ -10,6 +10,7 @@ import {
   EnemyVariantComponent,
   EnemyStatsComponent,
   AssassinDashComponent,
+  TitanRallyComponent,
   VelocityComponent,
   SpeedComponent,
   GuardComponent,
@@ -213,7 +214,7 @@ export class EnemySystem {
       const rangedRange = stats?.rangedRange ?? (variant === 'ranger' ? ENEMY_RANGER_RANGE : 0);
       const hasRanged = rangedRange > 0;
       const enemyOverrides = stats
-        ? { damage: stats.damage, range: stats.range, knockback: stats.knockback }
+        ? { damage: stats.damage, range: stats.range, knockback: stats.knockback, aoe: variant === 'titan' }
         : ENEMY_OVERRIDES_DEFAULT;
 
       // ── Assassin dash tick ─────────────────────────────────────────────────
@@ -384,6 +385,37 @@ export class EnemySystem {
           targetDist = nearest.dist;
           targetHalfExtent = nearest.half;
           targetEntityId = nearest.id;
+        }
+      } else if (variant === 'titan') {
+        // Titans: beeline for the campfire, only distracted by very close players
+        const campfire = tryBuildings(campfireIds, Infinity);
+        if (campfire) {
+          targetPos = campfire.pos;
+          navPos = campfire.nav;
+          targetDist = campfire.dist;
+          targetHalfExtent = campfire.half;
+          targetEntityId = campfire.id;
+        }
+        // Players within melee range override campfire target
+        const closeThreat = findNearestPlayer((stats?.range ?? 60) * 1.5);
+        if (closeThreat) {
+          targetPos = closeThreat.pos;
+          navPos = closeThreat.pos;
+          targetDist = closeThreat.dist;
+          targetHalfExtent = 0;
+          targetEntityId = null;
+        }
+        // No campfire and no players — fall back to any building
+        if (!targetPos) {
+          const allBuildingIds = [...campfireIds, ...wallIds, ...otherBuildingIds];
+          const nearest = tryBuildings(allBuildingIds, Infinity);
+          if (nearest) {
+            targetPos = nearest.pos;
+            navPos = nearest.nav;
+            targetDist = nearest.dist;
+            targetHalfExtent = nearest.half;
+            targetEntityId = nearest.id;
+          }
         }
       } else {
         // Standard targeting: campfire > players > walls > other buildings
@@ -632,7 +664,40 @@ export class EnemySystem {
       inp.sprint = false;
     }
 
+    // ── Titan rally mechanic ──────────────────────────────────────────────────
+    this.tickTitanRally(world);
+
     return result;
+  }
+
+  /** Activate rally aura at 50% HP and buff nearby enemies' speed. */
+  private tickTitanRally(world: World): void {
+    for (const id of world.query(C.TitanRally, C.Health, C.Position)) {
+      const rally = world.getComponent<TitanRallyComponent>(id, C.TitanRally)!;
+      const hp = world.getComponent<HealthComponent>(id, C.Health)!;
+      const pos = world.getComponent<PositionComponent>(id, C.Position)!;
+
+      // Activate rally when HP drops to 50%
+      if (!rally.active && hp.current <= hp.max * 0.5 && hp.current > 0) {
+        rally.active = true;
+      }
+
+      if (!rally.active) continue;
+
+      // Boost speed of nearby non-titan enemies to at least rally.speedBuff × their base multiplier
+      const rangeSq = rally.range * rally.range;
+      for (const eid of world.query(C.EnemyVariant, C.Speed, C.Position)) {
+        if (eid === id) continue;
+        const ev = world.getComponent<EnemyVariantComponent>(eid, C.EnemyVariant)!;
+        if (ev.variant === 'titan') continue;
+        const epos = world.getComponent<PositionComponent>(eid, C.Position)!;
+        const dx = epos.x - pos.x, dy = epos.y - pos.y;
+        if (dx * dx + dy * dy > rangeSq) continue;
+        const spd = world.getComponent<SpeedComponent>(eid, C.Speed)!;
+        // Set multiplier to rally level (idempotent — safe to call every tick)
+        spd.multiplier = Math.max(spd.multiplier, rally.speedBuff);
+      }
+    }
   }
 
   /**

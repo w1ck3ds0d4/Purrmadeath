@@ -29,6 +29,8 @@ export interface MeleeOverrides {
   damage?: number;
   range?: number;
   knockback?: number;
+  /** If true, attack hits all targets in range (360° AoE, ignores arc check). */
+  aoe?: boolean;
 }
 
 /**
@@ -156,8 +158,8 @@ export class CombatSystem {
       }
       if (dist > meleeRange + tgtRadius || dist === 0) continue;
 
-      // Arc check - must be within ±60° of facing (skip for buildings — large area targets)
-      if (!bldgComp) {
+      // Arc check - must be within ±60° of facing (skip for buildings and AoE attacks)
+      if (!bldgComp && !overrides?.aoe) {
         const angleToTarget = Math.atan2(dy, dx);
         let diff = Math.abs(angleToTarget - facing);
         if (diff > Math.PI) diff = 2 * Math.PI - diff;
@@ -188,7 +190,7 @@ export class CombatSystem {
       let knockbackVx = 0;
       let knockbackVy = 0;
       const tgtVariant = world.getComponent<EnemyVariantComponent>(targetId, C.EnemyVariant);
-      if (meleeKnockback > 0 && tgtVariant?.variant !== 'giant') {
+      if (meleeKnockback > 0 && tgtVariant?.variant !== 'giant' && tgtVariant?.variant !== 'titan') {
         knockbackVx = (dx / dist) * meleeKnockback;
         knockbackVy = (dy / dist) * meleeKnockback;
         const kb = world.getComponent<KnockbackReceiverComponent>(targetId, C.KnockbackReceiver);

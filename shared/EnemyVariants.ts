@@ -77,6 +77,15 @@ export const ENEMY_VARIANT_STATS: Record<EnemyVariantType, EnemyVariantStats> = 
     cooldown: 0.8,
     radius: 10,
   },
+  titan: {
+    hp: 5000,
+    speed: 60,
+    damage: 200,
+    range: 60,
+    knockback: 400,
+    cooldown: 0.75,    // fast AoE slam
+    radius: 50,        // 3× normal
+  },
 };
 
 /**
@@ -134,6 +143,7 @@ export const ENEMY_VARIANT_NAMES: Record<EnemyVariantType, string> = {
   ghost: 'Ghosts',
   giant: 'Giants',
   assassin: 'Assassins',
+  titan: 'Titan',
 };
 
 // ─── Enemy Factions ──────────────────────────────────────────────────────────

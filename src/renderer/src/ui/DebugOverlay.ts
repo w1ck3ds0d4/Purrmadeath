@@ -1,4 +1,5 @@
 import { CHUNK_SIZE, TILE_SIZE, TICK_RATE } from '@shared/constants';
+import { CARD_POOL } from '@shared/CardDefinitions';
 import type { Camera } from '../render/Camera';
 
 export interface NetStats {
@@ -278,6 +279,7 @@ export class DebugOverlay {
         '/skipwave   Skip wave prep timer',
         '/pausewave  Pause/resume wave timer',
         '/card <id>  Give a card by ID',
+        '/cards [f]  List all card IDs (filter optional)',
         '/sp [n]     Give n skill points (default 1)',
         '/clear      Close stats panel',
         '/help       This help text',
@@ -331,6 +333,18 @@ export class DebugOverlay {
         this.cheatHandler?.(cmd, args);
         this.log(`Executed: ${raw}`);
         break;
+      case '/cards': {
+        const filter = args[0]?.toLowerCase();
+        const cards = filter
+          ? CARD_POOL.filter(c => c.id.includes(filter) || c.name.toLowerCase().includes(filter) || c.rarity === filter || c.category === filter)
+          : CARD_POOL;
+        this.log(`── Card IDs (${cards.length}) ──`);
+        for (const c of cards) {
+          this.log(`  ${c.id} — ${c.name} [${c.rarity}/${c.category}]`);
+        }
+        this.activeView = 'logs';
+        break;
+      }
       default:
         this.log(`Unknown command: ${cmd}`);
         this.activeView = 'logs';

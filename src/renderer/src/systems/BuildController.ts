@@ -37,13 +37,13 @@ export interface BuildControllerDeps {
 // ── Factory ─────────────────────────────────────────────────────────────────
 
 export type BuildPhase = 'inactive' | 'picker' | 'placing';
-
 export function createBuildController(deps: BuildControllerDeps) {
   const { world, input, buildOverlay, buildGhost } = deps;
 
   let phase: BuildPhase = 'inactive';
   let placingType = '';
   let selectedId: number | null = null;
+  let selectMode = false;
 
   function openPicker(): void {
     phase = 'picker';
@@ -65,10 +65,21 @@ export function createBuildController(deps: BuildControllerDeps) {
     buildGhost.hide();
   }
 
+  function enterSelectMode(): void {
+    phase = 'placing';
+    placingType = '';
+    selectedId = null;
+    selectMode = true;
+    buildGhost.hide();
+    buildOverlay.update('Click a building to select', {});
+    buildOverlay.show();
+  }
+
   function exitBuildMode(): void {
     phase = 'inactive';
     placingType = '';
     selectedId = null;
+    selectMode = false;
     buildOverlay.hide();
     buildGhost.hide();
   }
@@ -77,13 +88,73 @@ export function createBuildController(deps: BuildControllerDeps) {
     phase = 'inactive';
     placingType = '';
     selectedId = null;
+    selectMode = false;
     buildOverlay.hide();
     buildGhost.hide();
+  }
+
+  /** Find the building entity under the mouse cursor. */
+  function findBuildingAt(wx: number, wy: number): number | null {
+    for (const eid of world.query(C.Position, C.Building)) {
+      const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
+      const bComp = world.getComponent<BuildingComponent>(eid, C.Building)!;
+      const bHalf = buildingHalfExtent(bComp.buildingType);
+      if (Math.abs(wx - ep.x) < bHalf && Math.abs(wy - ep.y) < bHalf) return eid;
+    }
+    return null;
   }
 
   function update(): void {
     if (phase !== 'placing') return;
     const { x: wmx, y: wmy } = deps.getMouseWorld();
+
+    // ── Select mode: click any building to select, then V/G/X ──────────────
+    if (selectMode) {
+      buildGhost.hide();
+
+      if (input.isJustPressed(Action.Attack)) {
+        const clicked = findBuildingAt(wmx, wmy);
+        if (clicked !== null) {
+          selectedId = clicked;
+          const bComp = world.getComponent<BuildingComponent>(clicked, C.Building)!;
+          const hp = world.getComponent<HealthComponent>(clicked, C.Health);
+          buildOverlay.updateSelection(bComp.buildingType, bComp.upgradeLevel, deps.combinedResources(), hp?.current, hp?.max);
+        }
+      }
+
+      // V/G/X on selected building
+      if (selectedId !== null) {
+        if (input.isJustPressed(Action.Upgrade)) deps.send({ type: MessageType.BUILD_UPGRADE, entityId: selectedId });
+        if (input.isJustPressed(Action.Repair)) deps.send({ type: MessageType.BUILD_REPAIR, entityId: selectedId });
+        if (input.isJustPressed(Action.Demolish)) {
+          deps.send({ type: MessageType.BUILD_DEMOLISH, entityId: selectedId });
+          selectedId = null;
+          buildOverlay.update('Click a building to select', {});
+        }
+      }
+
+      // Deselect if building no longer exists
+      if (selectedId !== null && !world.hasEntity(selectedId)) {
+        selectedId = null;
+        buildOverlay.update('Click a building to select', {});
+      }
+
+      // Live HP update
+      if (selectedId !== null) {
+        const hp = world.getComponent<HealthComponent>(selectedId, C.Health);
+        if (hp) buildOverlay.updateSelectionHp(hp.current, hp.max);
+      }
+
+      // Right-click or ESC: exit select mode back to picker
+      if (input.isJustPressed(Action.Cancel) || input.isJustPressed(Action.Pause)) {
+        selectMode = false;
+        selectedId = null;
+        reopenPicker();
+      }
+      return;
+    }
+
+    // ── Normal placing mode ──────────────────────────────────────────────────
 
     // Snap to grid
     const { x: snapX, y: snapY } = snapBuildingPosition(wmx, wmy, placingType);
@@ -139,13 +210,7 @@ export function createBuildController(deps: BuildControllerDeps) {
 
     // Click: select existing building or place new one
     if (input.isJustPressed(Action.Attack)) {
-      let clicked: number | null = null;
-      for (const eid of world.query(C.Position, C.Building)) {
-        const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
-        const bComp = world.getComponent<BuildingComponent>(eid, C.Building)!;
-        const bHalf = buildingHalfExtent(bComp.buildingType);
-        if (Math.abs(wmx - ep.x) < bHalf && Math.abs(wmy - ep.y) < bHalf) { clicked = eid; break; }
-      }
+      const clicked = findBuildingAt(wmx, wmy);
       if (clicked !== null) {
         selectedId = clicked;
         const bComp = world.getComponent<BuildingComponent>(clicked, C.Building)!;
@@ -195,6 +260,7 @@ export function createBuildController(deps: BuildControllerDeps) {
     openPicker,
     selectBuilding,
     reopenPicker,
+    enterSelectMode,
     exitBuildMode,
     reset,
     update,

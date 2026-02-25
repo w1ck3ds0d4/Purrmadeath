@@ -63,6 +63,7 @@ export interface RespawnManagerDeps {
   spawnItemDrop: (x: number, y: number, itemType: string, quantity: number, autoPickup: boolean) => void;
   findSafeSpawnNear: (wx: number, wy: number) => { x: number; y: number };
   trackKill: (attackerEntityId: number, enemyVariant: string) => void;
+  onTitanKilled: (deadId: number, send: SendFn) => void;
   fireRunEnd: () => void;
 }
 
@@ -327,12 +328,16 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
         deps.spawnLootDrops(deadId);
         waveState.enemyCount--;
         deps.incrementEnemiesKilled();
+        const ev = world.getComponent<EnemyVariantComponent>(deadId, C.EnemyVariant);
         if (attackerMap) {
           const attackerId = attackerMap.get(deadId);
           if (attackerId !== undefined) {
-            const ev = world.getComponent<EnemyVariantComponent>(deadId, C.EnemyVariant);
             deps.trackKill(attackerId, ev?.variant ?? 'melee');
           }
+        }
+        // Titan death: chance to drop a random card
+        if (ev?.variant === 'titan' && send) {
+          deps.onTitanKilled(deadId, send);
         }
       }
 

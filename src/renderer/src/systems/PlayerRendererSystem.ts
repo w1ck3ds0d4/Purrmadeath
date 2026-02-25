@@ -38,6 +38,7 @@ const ENEMY_RANGER_COLOR = 0xdd7722;   // ranger
 const ENEMY_GHOST_COLOR = 0x44cccc;    // ghost (teal/cyan)
 const ENEMY_GIANT_COLOR = 0x664422;    // giant (dark brown)
 const ENEMY_ASSASSIN_COLOR = 0xcc44cc; // assassin (purple-pink)
+const ENEMY_TITAN_COLOR = 0xaa2200;    // titan (dark crimson)
 // Portal colors
 const PORTAL_OUTER_COLOR = 0x9933ff;
 const PORTAL_CORE_COLOR  = 0x6600cc;
@@ -650,6 +651,7 @@ export class PlayerRendererSystem {
             case 'ghost':    baseColor = ENEMY_GHOST_COLOR; break;
             case 'giant':    baseColor = ENEMY_GIANT_COLOR; break;
             case 'assassin': baseColor = ENEMY_ASSASSIN_COLOR; break;
+            case 'titan':    baseColor = ENEMY_TITAN_COLOR; break;
             default:         baseColor = ENEMY_COLOR;
           }
           // Apply faction tint (blend 25% toward faction color for non-bandit factions)
@@ -713,6 +715,15 @@ export class PlayerRendererSystem {
             gfx.fill({ color: 0x44ccff, alpha: 1 });
           }
         } else {
+          // Titan rally aura (pulsing ring when below 50% HP)
+          if (ev?.variant === 'titan' && hp && hp.current > 0 && hp.current <= hp.max * 0.5) {
+            const pulse = 0.3 + Math.sin(Date.now() / 200) * 0.15;
+            gfx.circle(0, 0, r + 12);
+            gfx.fill({ color: 0xff4400, alpha: pulse * 0.2 });
+            gfx.circle(0, 0, r + 12);
+            gfx.stroke({ color: 0xff4400, alpha: pulse, width: 2 });
+          }
+
           gfx.circle(0, 0, r);
           gfx.fill({ color, alpha: ghostAlpha });
 
@@ -787,7 +798,13 @@ export class PlayerRendererSystem {
         // Skip health bars for hidden ghosts
         const gs = world.getComponent<GhostStateComponent>(id, C.GhostState);
         if (gs?.hidden) continue;
-        barW = BAR_W; barH = BAR_H; barY = BAR_Y; alwaysShow = true;
+        const ev = world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant);
+        if (ev?.variant === 'titan') {
+          // Boss HP bar: wider, taller, positioned higher
+          barW = 60; barH = 6; barY = -(30 + 14); alwaysShow = true;
+        } else {
+          barW = BAR_W; barH = BAR_H; barY = BAR_Y; alwaysShow = true;
+        }
       } else if (guardIds.has(id)) {
         barW = BAR_W; barH = BAR_H; barY = BAR_Y; alwaysShow = false;
       } else {

@@ -89,7 +89,7 @@ export class MenuOverlay {
     this.cardScreen = document.createElement('div');
     this.cardScreen.className = 'screen';
     this.cardScreen.id = 'card-browser-screen';
-    this.cardScreen.style.cssText = 'display:none;flex-direction:column;align-items:center;padding:24px;overflow-y:auto;';
+    this.cardScreen.style.cssText = 'display:none;flex-direction:column;align-items:center;justify-content:flex-start;padding:24px;overflow-y:auto;';
     this.cardScreen.innerHTML = `
       <h2 style="font-family:'Segoe UI',sans-serif;font-size:30px;font-weight:700;color:#ccd8ea;letter-spacing:4px;margin-bottom:8px;user-select:none;">CARDS</h2>
       <p style="font-family:monospace;font-size:12px;color:#6a7a8a;margin-bottom:24px;user-select:none;">All cards in the pool</p>
@@ -359,9 +359,29 @@ export class MenuOverlay {
       { key: 'trap', label: 'TRAPS' },
     ];
 
+    // Sort key: group by effect stat/ability/resource, then by value ascending
+    const cardSortKey = (c: CardDefinition): [string, number] => {
+      const e = c.effect;
+      switch (e.type) {
+        case 'stat_buff':    return [e.stat, e.value];
+        case 'ability':      return [e.ability, 0];
+        case 'resource':     return [e.resource, e.amount];
+        case 'trap_player':  return [e.stat, Math.abs(e.value)];
+        case 'trap_enemy':   return [e.stat, e.value];
+        case 'multi':        return ['zzz_multi', 0]; // sort last within category
+      }
+    };
+
     for (const cat of categories) {
       const cards = CARD_POOL.filter(c => c.category === cat.key);
       if (cards.length === 0) continue;
+
+      cards.sort((a, b) => {
+        const [aKey, aVal] = cardSortKey(a);
+        const [bKey, bVal] = cardSortKey(b);
+        if (aKey !== bKey) return aKey.localeCompare(bKey);
+        return aVal - bVal;
+      });
 
       // Category header spanning full width
       const header = document.createElement('div');
@@ -381,7 +401,7 @@ export class MenuOverlay {
     const rarBorder = RARITY_BORDER_COLORS[card.rarity];
     const rarLabel = card.rarity.toUpperCase();
 
-    const rarColor = card.rarity === 'epic' ? '#aa44ff' : card.rarity === 'rare' ? '#4a90d9' : '#8a8a8a';
+    const rarColor = card.rarity === 'legendary' ? '#e8c96a' : card.rarity === 'epic' ? '#aa44ff' : card.rarity === 'rare' ? '#4a90d9' : '#8a8a8a';
 
     el.style.cssText = `
       background: rgba(20, 20, 35, 0.9);

@@ -41,6 +41,7 @@ const BUILD_CATEGORIES: BuildCategory[] = [
 export interface BuildMenuCallbacks {
   onSelect: (buildingType: string) => void;
   onClose: () => void;
+  onSelectMode: () => void;
 }
 
 function titleCase(s: string): string {
@@ -152,10 +153,38 @@ export class BuildMenuOverlay {
 
     this.el.appendChild(body);
 
-    // Footer hint
+    // Footer: select button + hint
     const footer = document.createElement('div');
-    footer.style.cssText = 'font-size: 11px; color: #5a6a7a; text-align: center; padding: 8px 0; border-top: 1px solid rgba(255,255,255,0.08);';
-    footer.textContent = 'Click to select \u00B7 B / ESC to close';
+    footer.style.cssText = 'border-top: 1px solid rgba(255,255,255,0.08); padding: 10px 16px 8px;';
+
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display: flex; justify-content: center; margin-bottom: 6px;';
+
+    const selectBtn = document.createElement('div');
+    selectBtn.style.cssText = [
+      'padding: 6px 20px',
+      'font-size: 12px',
+      'font-weight: bold',
+      'cursor: pointer',
+      'border-radius: 4px',
+      'border: 1px solid #e8c96a66',
+      'color: #e8c96a',
+      'background: rgba(255,255,255,0.04)',
+      'transition: background 0.12s',
+      'letter-spacing: 0.5px',
+    ].join('; ');
+    selectBtn.textContent = 'Select Building';
+    selectBtn.addEventListener('mouseenter', () => { selectBtn.style.background = '#e8c96a22'; });
+    selectBtn.addEventListener('mouseleave', () => { selectBtn.style.background = 'rgba(255,255,255,0.04)'; });
+    selectBtn.addEventListener('click', () => this.callbacks?.onSelectMode());
+    btnRow.appendChild(selectBtn);
+    footer.appendChild(btnRow);
+
+    const hint = document.createElement('div');
+    hint.style.cssText = 'font-size: 11px; color: #5a6a7a; text-align: center;';
+    hint.textContent = 'V upgrade \u00B7 G repair \u00B7 X demolish \u00B7 B / ESC to close';
+    footer.appendChild(hint);
+
     this.el.appendChild(footer);
 
     document.getElementById('overlay')!.appendChild(this.el);

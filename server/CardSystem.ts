@@ -8,6 +8,17 @@ export interface PlayerBuffs {
   maxHpBonus: number;
   hpRegen: number;
   abilities: string[];
+  critChance: number;
+  critMultiplier: number;
+  reviveHpBonus: number;
+  defenseBonus: number;
+  staminaRegenMult: number;
+  maxStaminaBonus: number;
+  knockbackMult: number;
+  knockbackResist: number;
+  selfRevives: number;
+  thornsDamage: number;
+  pickupRadiusMult: number;
 }
 
 /** Session-wide debuffs from trap cards. */
@@ -15,14 +26,37 @@ export interface SessionDebuffs {
   playerDamageMult: number;
   enemySpeedMult: number;
   enemyDamageMult: number;
+  playerStaminaRegenMult: number;
+  playerMaxHpPenalty: number;
+  playerAttackSpeedMult: number;
+  enemyKnockbackMult: number;
+  buildingDamageMult: number;
+  buildingRegenRate: number;
+  turretCooldownMult: number;
+  productionIntervalMult: number;
+  lootMultiplier: number;
+  goldDropMult: number;
+  guaranteedTitans: number;
+  dodgeCooldownMult: number;
 }
 
 export function emptyBuffs(): PlayerBuffs {
-  return { damageMultiplier: 1, speedMultiplier: 1, maxHpBonus: 0, hpRegen: 0, abilities: [] };
+  return {
+    damageMultiplier: 1, speedMultiplier: 1, maxHpBonus: 0, hpRegen: 0, abilities: [],
+    critChance: 0, critMultiplier: 0, reviveHpBonus: 0, defenseBonus: 0,
+    staminaRegenMult: 1, maxStaminaBonus: 0, knockbackMult: 1, knockbackResist: 0,
+    selfRevives: 0, thornsDamage: 0, pickupRadiusMult: 1,
+  };
 }
 
 export function emptyDebuffs(): SessionDebuffs {
-  return { playerDamageMult: 1, enemySpeedMult: 1, enemyDamageMult: 1 };
+  return {
+    playerDamageMult: 1, enemySpeedMult: 1, enemyDamageMult: 1,
+    playerStaminaRegenMult: 1, playerMaxHpPenalty: 0, playerAttackSpeedMult: 1,
+    enemyKnockbackMult: 1, buildingDamageMult: 1, buildingRegenRate: 0,
+    turretCooldownMult: 1, productionIntervalMult: 1,
+    lootMultiplier: 1, goldDropMult: 1, guaranteedTitans: 0, dodgeCooldownMult: 1,
+  };
 }
 
 /**
@@ -41,11 +75,14 @@ export class CardSystem {
   private pendingOffers = new Map<string, string[]>();
 
   /** Generate an offer of 3 cards for a player. At most 1 trap card. */
-  generateOffer(): CardDefinition[] {
-    const available = CARD_POOL.filter(c => !this._pickedCardIds.has(c.id));
+  generateOffer(playerCount: number = 1): CardDefinition[] {
+    const available = CARD_POOL.filter(c =>
+      !this._pickedCardIds.has(c.id) &&
+      (!c.requiresMultiplayer || playerCount > 1)
+    );
     if (available.length === 0) {
-      // All cards picked — allow repeats
-      return this.pickWeighted(CARD_POOL, 3);
+      const fallback = CARD_POOL.filter(c => !c.requiresMultiplayer || playerCount > 1);
+      return this.pickWeighted(fallback, 3);
     }
     return this.pickWeighted(available, 3);
   }
@@ -102,14 +139,25 @@ export class CardSystem {
   }
 
   /** Restore card state for a player from save data. */
-  restore(clientId: string, buffs: PlayerBuffs, pickedCards: string[]): void {
-    this.playerBuffs.set(clientId, { ...buffs, abilities: [...buffs.abilities] });
+  restore(clientId: string, buffs: Partial<PlayerBuffs> & { abilities: string[] }, pickedCards: string[]): void {
+    const full: PlayerBuffs = {
+      ...emptyBuffs(),
+      ...buffs,
+      abilities: [...buffs.abilities],
+    };
+    this.playerBuffs.set(clientId, full);
     for (const id of pickedCards) this._pickedCardIds.add(id);
   }
 
   /** Restore session-wide debuffs from save data. */
-  restoreDebuffs(debuffs: SessionDebuffs): void {
-    Object.assign(this.debuffs, debuffs);
+  restoreDebuffs(debuffs: Partial<SessionDebuffs>): void {
+    Object.assign(this.debuffs, { ...emptyDebuffs(), ...debuffs });
+  }
+
+  /** Force-apply a card without an offer (used for Titan card drops). */
+  forceApplyCard(clientId: string, card: CardDefinition): void {
+    this._pickedCardIds.add(card.id);
+    this.applyEffect(clientId, card.effect);
   }
 
   /** Clear all state (for session reset). */
@@ -128,15 +176,46 @@ export class CardSystem {
     switch (effect.type) {
       case 'stat_buff':
         switch (effect.stat) {
-          case 'damage':  buffs.damageMultiplier *= (1 + effect.value); break;
-          case 'speed':   buffs.speedMultiplier *= (1 + effect.value); break;
-          case 'maxHp':   buffs.maxHpBonus += effect.value; break;
-          case 'hpRegen': buffs.hpRegen += effect.value; break;
+          case 'damage':          buffs.damageMultiplier *= (1 + effect.value); break;
+          case 'speed':           buffs.speedMultiplier *= (1 + effect.value); break;
+          case 'maxHp':           buffs.maxHpBonus += effect.value; break;
+          case 'hpRegen':         buffs.hpRegen += effect.value; break;
+          case 'critChance':      buffs.critChance += effect.value; break;
+          case 'critMultiplier':  buffs.critMultiplier += effect.value; break;
+          case 'reviveHpBonus':   buffs.reviveHpBonus += effect.value; break;
+          case 'defense':         buffs.defenseBonus += effect.value; break;
+          case 'staminaRegenMult': buffs.staminaRegenMult *= (1 + effect.value); break;
+          case 'maxStamina':      buffs.maxStaminaBonus += effect.value; break;
+          case 'knockbackMult':   buffs.knockbackMult *= (1 + effect.value); break;
+          case 'knockbackResist': buffs.knockbackResist = Math.min(1, buffs.knockbackResist + effect.value); break;
         }
         break;
       case 'ability':
         if (!buffs.abilities.includes(effect.ability)) {
           buffs.abilities.push(effect.ability);
+        }
+        // Session-wide ability effects
+        switch (effect.ability) {
+          case 'spare_life':        buffs.selfRevives += 1; break;
+          case 'thorns':            buffs.thornsDamage += 5; break;
+          case 'magnetic_fur':      buffs.pickupRadiusMult *= 2; break;
+          case 'thick_walls':       this.debuffs.buildingDamageMult *= 0.75; break;
+          case 'building_regen':    this.debuffs.buildingRegenRate += 5; break;
+          case 'rapid_fire':        this.debuffs.turretCooldownMult *= 0.80; break;
+          case 'scavenger':         this.debuffs.lootMultiplier *= 1.50; break;
+          case 'bounty_hunter':     this.debuffs.goldDropMult *= 1.50; break;
+          case 'jammed_gears':      this.debuffs.turretCooldownMult *= 1.25; break;
+          case 'resource_drought':  this.debuffs.productionIntervalMult *= 1.30; break;
+          case 'shoddy_construction': this.debuffs.buildingDamageMult *= 1.25; break;
+          case 'titans_march':      this.debuffs.guaranteedTitans += 1; break;
+          case 'slow_reflexes':     this.debuffs.dodgeCooldownMult *= 1.30; break;
+          // Legendary abilities
+          case 'phoenix_down':      buffs.selfRevives += 2; break;
+          case 'blood_thorns':      buffs.thornsDamage += 10; break;
+          case 'master_walls':      this.debuffs.buildingDamageMult *= 0.50; break;
+          case 'master_regen':      this.debuffs.buildingRegenRate += 10; break;
+          case 'master_turrets':    this.debuffs.turretCooldownMult *= 0.60; break;
+          case 'the_rumbling':      this.debuffs.guaranteedTitans += 2; break;
         }
         break;
       case 'resource':
@@ -150,10 +229,23 @@ export class CardSystem {
             b.speedMultiplier *= (1 + effect.value);
           }
         }
+        if (effect.stat === 'staminaRegen') {
+          this.debuffs.playerStaminaRegenMult *= (1 + effect.value);
+        }
+        if (effect.stat === 'maxHp') {
+          this.debuffs.playerMaxHpPenalty += Math.abs(effect.value);
+        }
+        if (effect.stat === 'attackSpeed') {
+          this.debuffs.playerAttackSpeedMult *= (1 + effect.value);
+        }
         break;
       case 'trap_enemy':
         if (effect.stat === 'speed') this.debuffs.enemySpeedMult *= (1 + effect.value);
         if (effect.stat === 'damage') this.debuffs.enemyDamageMult *= (1 + effect.value);
+        if (effect.stat === 'knockback') this.debuffs.enemyKnockbackMult *= (1 + effect.value);
+        break;
+      case 'multi':
+        for (const sub of effect.effects) this.applyEffect(clientId, sub);
         break;
     }
   }

@@ -86,7 +86,7 @@ export const PLAYER_SPRINT_STAMINA_DRAIN = 30;
 // ─── Dodge Roll ──────────────────────────────────────────────────────────────
 export const DODGE_ROLL_DURATION = 0.2;
 export const DODGE_ROLL_COOLDOWN = 0.6;
-export const DODGE_ROLL_SPEED = 450;
+export const DODGE_ROLL_SPEED = 300;
 export const DODGE_ROLL_STAMINA_COST = 25;
 
 // ─── Critical Hits ───────────────────────────────────────────────────────────

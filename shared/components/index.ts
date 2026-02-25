@@ -33,6 +33,7 @@ export const C = {
   EnemyStats:      'EnemyStats',
   GhostState:      'GhostState',
   AssassinDash:    'AssassinDash',
+  TitanRally:      'TitanRally',
   LightReveal:     'LightReveal',
   HealAura:        'HealAura',
   BarracksSpawner: 'BarracksSpawner',
@@ -288,7 +289,7 @@ export interface BridgeComponent {
 
 // ── Enemy variants ──────────────────────────────────────────────────────────
 
-export type EnemyVariantType = 'melee' | 'ranger' | 'ghost' | 'giant' | 'assassin';
+export type EnemyVariantType = 'melee' | 'ranger' | 'ghost' | 'giant' | 'assassin' | 'titan';
 
 /** Tags an enemy with its variant type. */
 export interface EnemyVariantComponent {
@@ -327,6 +328,16 @@ export interface AssassinDashComponent {
   dashDuration: number;
   dashing: boolean;
   dashTimer: number;
+}
+
+/** Titan rally aura state (activates at 50% HP). */
+export interface TitanRallyComponent {
+  /** Whether the rally aura is currently active. */
+  active: boolean;
+  /** Range in px that the rally buff affects. */
+  range: number;
+  /** Speed multiplier applied to rallied enemies. */
+  speedBuff: number;
 }
 
 /** Player dodge roll state. */

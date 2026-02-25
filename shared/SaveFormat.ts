@@ -19,7 +19,14 @@ export interface SaveData {
   resourceNodes?: SavedResourceNode[];
   itemDrops?: SavedItemDrop[];
   /** Session-wide card debuffs from trap cards. */
-  cardDebuffs?: { playerDamageMult: number; enemySpeedMult: number; enemyDamageMult: number };
+  cardDebuffs?: {
+    playerDamageMult: number; enemySpeedMult: number; enemyDamageMult: number;
+    playerStaminaRegenMult?: number; playerMaxHpPenalty?: number; playerAttackSpeedMult?: number;
+    enemyKnockbackMult?: number; buildingDamageMult?: number; buildingRegenRate?: number;
+    turretCooldownMult?: number; productionIntervalMult?: number;
+    lootMultiplier?: number; goldDropMult?: number; guaranteedTitans?: number;
+    dodgeCooldownMult?: number;
+  };
   hostPlayerId: string;
   timestamp: number;
 }
@@ -92,6 +99,10 @@ export interface SavedPlayer {
     maxHpBonus: number;
     hpRegen: number;
     abilities: string[];
+    critChance?: number; critMultiplier?: number; reviveHpBonus?: number;
+    defenseBonus?: number; staminaRegenMult?: number; maxStaminaBonus?: number;
+    knockbackMult?: number; knockbackResist?: number;
+    selfRevives?: number; thornsDamage?: number; pickupRadiusMult?: number;
   };
   /** IDs of cards picked by this player. */
   pickedCards?: string[];

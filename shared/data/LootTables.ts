@@ -66,4 +66,14 @@ export const LOOT_TABLES: Record<string, LootTable> = {
       { itemType: 'diamond', minQty: 1, maxQty: 1, chance: 0.1,  autoPickup: true },
     ],
   },
+  titan: {
+    entries: [
+      { itemType: 'wood',    minQty: 5, maxQty: 10, chance: 1.0,  autoPickup: true },
+      { itemType: 'stone',   minQty: 4, maxQty: 8,  chance: 1.0,  autoPickup: true },
+      { itemType: 'iron',    minQty: 3, maxQty: 6,  chance: 1.0,  autoPickup: true },
+      { itemType: 'gold',    minQty: 5, maxQty: 10, chance: 1.0,  autoPickup: true },
+      { itemType: 'diamond', minQty: 1, maxQty: 3,  chance: 0.5,  autoPickup: true },
+      { itemType: 'food',    minQty: 3, maxQty: 6,  chance: 0.8,  autoPickup: true },
+    ],
+  },
 };

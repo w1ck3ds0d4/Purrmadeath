@@ -7,7 +7,7 @@ import {
   FactionComponent,
   EnemyVariantComponent,
 } from '@shared/components';
-import type { EnemyVariantType, EnemyStatsComponent } from '@shared/components';
+import type { EnemyVariantType, EnemyStatsComponent, TitanRallyComponent } from '@shared/components';
 import {
   ENEMY_VARIANT_STATS, pickEnemyVariant, ENEMY_VARIANT_NAMES,
   pickWaveFactions, pickEnemyVariantForFaction,
@@ -62,7 +62,7 @@ export interface WaveControllerDeps {
   state: WaveState;
   players: Map<string, SessionPlayer>;
   cards: {
-    debuffs: { enemyDamageMult: number; enemySpeedMult: number };
+    debuffs: { enemyDamageMult: number; enemySpeedMult: number; guaranteedTitans: number };
   };
   maxEnemies: number;
   waveSyncInterval: number;
@@ -199,6 +199,77 @@ export function createWaveController(deps: WaveControllerDeps) {
     return id;
   }
 
+  // ── Titan spawning ──────────────────────────────────────────────────────
+
+  /** Natural titan waves: every 5 waves starting at wave 10. */
+  const TITAN_NATURAL_START = 10;
+  const TITAN_NATURAL_INTERVAL = 5;
+
+  function isTitanWave(wave: number): boolean {
+    return wave >= TITAN_NATURAL_START && (wave - TITAN_NATURAL_START) % TITAN_NATURAL_INTERVAL === 0;
+  }
+
+  function spawnTitans(wave: number): void {
+    // Natural titan(s) on milestone waves
+    let count = isTitanWave(wave) ? 1 : 0;
+    // Card-based extra titans every wave
+    count += cards.debuffs.guaranteedTitans;
+    if (count <= 0) return;
+
+    // Find player center for spawn location
+    let cx = 0, cy = 0, pc = 0;
+    for (const p of players.values()) {
+      if (p.entityId === null) continue;
+      const pos = world.getComponent<PositionComponent>(p.entityId, C.Position);
+      if (pos) { cx += pos.x; cy += pos.y; pc++; }
+    }
+    if (pc === 0) return;
+    cx /= pc; cy /= pc;
+
+    for (let i = 0; i < count; i++) {
+      // Find a walkable spawn position at a distance from the player center
+      let sx = 0, sy = 0, found = false;
+      for (let attempt = 0; attempt < 80; attempt++) {
+        const angle = Math.random() * Math.PI * 2;
+        const dist = PORTAL_MIN_DIST + Math.random() * (PORTAL_MAX_DIST - PORTAL_MIN_DIST);
+        sx = cx + Math.cos(angle) * dist;
+        sy = cy + Math.sin(angle) * dist;
+        if (isWalkable(sx, sy) && !overlapsBuilding(sx, sy, 30)) { found = true; break; }
+      }
+      if (!found) continue;
+
+      const base = ENEMY_VARIANT_STATS['titan'];
+      const hpMult = Math.pow(1 + ENEMY_HP_SCALE_PER_WAVE, wave - 1);
+      const dmgMult = Math.pow(1 + ENEMY_DAMAGE_SCALE_PER_WAVE, wave - 1);
+      const scaledHp = Math.round(base.hp * hpMult);
+      const scaledDmg = Math.round(base.damage * dmgMult * cards.debuffs.enemyDamageMult);
+
+      const id = world.createEntity();
+      world.addComponent(id, C.Position, { x: sx, y: sy });
+      world.addComponent(id, C.Velocity, { vx: 0, vy: 0 });
+      world.addComponent(id, C.Health, { current: scaledHp, max: scaledHp });
+      world.addComponent(id, C.Speed, { base: base.speed, multiplier: cards.debuffs.enemySpeedMult });
+      world.addComponent(id, C.PlayerInput, { dx: 0, dy: 0, sprint: false });
+      world.addComponent(id, C.Faction, { type: 'enemy', enemyFaction: 'bandits' });
+      world.addComponent(id, C.Facing, { angle: 0 });
+      world.addComponent(id, C.AttackCooldown, { remaining: 0, max: base.cooldown });
+      world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
+      world.addComponent(id, C.EnemyVariant, { variant: 'titan' });
+      world.addComponent(id, C.EnemyStats, {
+        damage: scaledDmg, range: base.range, knockback: base.knockback, radius: base.radius,
+        rangedRange: 0, projectileSpeed: 0, rangedDamage: 0, rangedCooldown: base.cooldown,
+      });
+      world.addComponent(id, C.TitanRally, { active: false, range: 350, speedBuff: 1.5 } as TitanRallyComponent);
+
+      if (!s.introducedTypes.has('titan')) {
+        s.introducedTypes.add('titan');
+        s.pendingIntros.push({ variant: 'titan', displayName: ENEMY_VARIANT_NAMES['titan'] });
+      }
+      s.enemyCount++;
+    }
+    console.log(`[Wave] Spawned ${count} Titan(s) for wave ${wave}`);
+  }
+
   // ── Wave timer sync ──────────────────────────────────────────────────────
 
   function broadcastWaveTimerSync(send: SendFn): void {
@@ -226,6 +297,7 @@ export function createWaveController(deps: WaveControllerDeps) {
 
       if (s.prepTimer <= 0) {
         spawnPortals(s.currentWave);
+        spawnTitans(s.currentWave);
         s.phase = 'active';
         const waveActive: WaveStartMessage = {
           type: MessageType.WAVE_START, waveNumber: s.currentWave, prepDuration: 0,
