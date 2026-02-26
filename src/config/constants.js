@@ -28,6 +28,8 @@ export const ENEMY_OFFSCREEN_MARGIN_TILES = 4;
 export const ENEMY_MIN_PLAYER_DISTANCE_TILES = 8;
 export const ENEMY_DESPAWN_DISTANCE_TILES = 95;
 export const ENEMY_REPATH_INTERVAL_FRAMES = 30;
+export const ENEMY_BLOCKED_REPATH_INTERVAL_FRAMES = 90;
+export const ENEMY_REPATH_JITTER_FRAMES = 12;
 export const ENEMY_PATH_GRID_RADIUS = 18;
 export const ENEMY_PATH_MAX_STEPS = 900;
 export const ENEMY_MAX_REPATHS_PER_FRAME = 8;
@@ -86,3 +88,63 @@ export const RESOURCE_BIOMES = {
 };
 
 export const PLAYER_SPEED = 200;
+
+// Building blueprints:
+// - Add new buildable structures here.
+// - Change `cost` to tune required resources.
+// - For walls, set `maxHp` and switch `unbreakable` to `false` when break logic is enabled.
+export const BUILDING_TYPES = {
+    lumberMill: {
+        label: 'Lumber Mill',
+        footprint: { w: 2, h: 2 },
+        color: 0x8b5a2b,
+        cost: {
+            wood: 20,
+            stone: 10,
+            iron: 0,
+            gold: 0
+        }
+    },
+    wallLvl1: {
+        label: 'Wall Lvl1',
+        footprint: { w: 1, h: 1 },
+        color: 0x7a4f2a,
+        role: 'wall',
+        maxHp: 500,
+        unbreakable: true,
+        cost: {
+            wood: 1,
+            stone: 0,
+            iron: 0,
+            gold: 0
+        }
+    },
+    wallLvl2: {
+        label: 'Wall Lvl2',
+        footprint: { w: 1, h: 1 },
+        color: 0x6f6f6f,
+        role: 'wall',
+        maxHp: 1500,
+        unbreakable: true,
+        cost: {
+            wood: 0,
+            stone: 1,
+            iron: 0,
+            gold: 0
+        }
+    },
+    wallLvl3: {
+        label: 'Wall Lvl3',
+        footprint: { w: 1, h: 1 },
+        color: 0xd8d8d8,
+        role: 'wall',
+        maxHp: 3000,
+        unbreakable: true,
+        cost: {
+            wood: 0,
+            stone: 0,
+            iron: 1,
+            gold: 0
+        }
+    }
+};
