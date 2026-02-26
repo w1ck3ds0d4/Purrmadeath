@@ -1,11 +1,33 @@
 import * as PIXI from 'pixi.js';
-
-// Fast deterministic random in [0, 1] from integer coordinates + salt.
-function rand2D(x, y, salt = 0) {
-    let n = Math.imul(x ^ (salt * 374761393), 668265263) ^ Math.imul(y ^ (salt * 1274126177), 2246822519);
-    n = Math.imul(n ^ (n >>> 13), 1274126177);
-    return ((n ^ (n >>> 16)) >>> 0) / 4294967295;
-}
+import {
+    ENEMY_CONTACT_COOLDOWN_FRAMES,
+    ENEMY_CONTACT_DAMAGE,
+    ENEMY_DESPAWN_DISTANCE_TILES,
+    ENEMY_KNOCKBACK_FRICTION,
+    ENEMY_MAX_COUNT,
+    ENEMY_MAX_HP,
+    ENEMY_MAX_REPATHS_PER_FRAME,
+    ENEMY_MIN_KNOCKBACK_SPEED,
+    ENEMY_MIN_PLAYER_DISTANCE_TILES,
+    ENEMY_OFFSCREEN_MARGIN_TILES,
+    ENEMY_PATH_GRID_RADIUS,
+    ENEMY_PATH_MAX_STEPS,
+    ENEMY_RADIUS,
+    ENEMY_REPATH_INTERVAL_FRAMES,
+    ENEMY_SIZE,
+    ENEMY_SPEED,
+    ENEMY_SPAWN_INTERVAL_FRAMES,
+    GOLD_PER_ENEMY_KILL,
+    INVULN_FRAMES_ON_HIT,
+    MAX_BULLETS,
+    PLAYER_COLLISION_RADIUS,
+    PLAYER_INVULN_FRAMES,
+    PLAYER_MAX_HP,
+    PLAYER_SPEED,
+    TILE_SIZE,
+    WEAPONS
+} from './config/constants.js';
+import { createWorldSystem } from './systems/worldSystem.js';
 
 async function init() {
     const app = new PIXI.Application();
@@ -23,103 +45,36 @@ async function init() {
     const tileLayer = new PIXI.Container();
     const resourceLayer = new PIXI.Container();
     const enemyLayer = new PIXI.Container();
+    const projectileLayer = new PIXI.Container();
     world.addChild(tileLayer);
     world.addChild(resourceLayer);
     world.addChild(enemyLayer);
-
-    const TILE_SIZE = 32;
-    const LOAD_BUFFER = 3;
-    const SPAWN_SAFE_RADIUS_TILES = 50;
-
-    const TERRAIN_COLORS = {
-        grass: 0x2d5016,
-        ocean: 0x0d2a4b,
-        lake: 0x245a8d,
-        river: 0x3d7fb8
-    };
-
-    // Terrain tuning knobs:
-    // - Increase WATER_FEATURE_CHANCE to generate more water overall.
-    // - Decrease it to generate more grass land.
-    const FEATURE_REGION_SIZE = 40;
-    const FEATURE_SEARCH_RADIUS = 2;
-    const WATER_FEATURE_CHANCE = 0.45;
-
-    // Resource tuning knobs:
-    // - Increase BASE_RESOURCE_CHANCE for more scattered resources outside biomes.
-    // - Increase HARVEST_RANGE to make collecting easier.
-    const RESOURCE_REGION_SIZE = 64;
-    const RESOURCE_FEATURE_SEARCH_RADIUS = 1;
-    const BASE_RESOURCE_CHANCE = 0.004;
-    const HARVEST_RANGE = 40;
-
-    // Enemy tuning knobs:
-    // - ENEMY_MAX_COUNT controls max simultaneous enemies.
-    // - Lower ENEMY_SPAWN_INTERVAL_FRAMES for faster spawning.
-    // - Increase ENEMY_SPEED for more aggressive enemies.
-    // - ENEMY_MAX_REPATHS_PER_FRAME limits A* workload per frame.
-    const ENEMY_SIZE = 24;
-    const ENEMY_RADIUS = ENEMY_SIZE / 2;
-    const PLAYER_COLLISION_RADIUS = 16;
-    const ENEMY_SPEED = 90;
-    const ENEMY_MAX_COUNT = 100;
-    const ENEMY_SPAWN_INTERVAL_FRAMES = 30;
-    const ENEMY_OFFSCREEN_MARGIN_TILES = 4;
-    const ENEMY_MIN_PLAYER_DISTANCE_TILES = 8;
-    const ENEMY_DESPAWN_DISTANCE_TILES = 95;
-    const ENEMY_REPATH_INTERVAL_FRAMES = 30;
-    const ENEMY_PATH_GRID_RADIUS = 18;
-    const ENEMY_PATH_MAX_STEPS = 900;
-    const ENEMY_MAX_REPATHS_PER_FRAME = 8;
-
-    // New resource types can be added here later without changing core logic.
-    const RESOURCE_TYPES = {
-        wood: { color: 0x1d5b2a, weight: 0.55 },
-        stone: { color: 0x7f7f7f, weight: 0.35 },
-        iron: { color: 0xffffff, weight: 0.10 }
-    };
-
-    const RESOURCE_BIOMES = {
-        forest: {
-            // Chance that a resource region becomes a forest biome.
-            chance: 0.10,
-            minNodes: 50,
-            maxNodes: 80,
-            radius: 7
-        },
-        quarry: {
-            // Chance that a resource region becomes a quarry biome.
-            chance: 0.03,
-            minNodes: 50,
-            maxNodes: 70,
-            radius: 7,
-            // Increase to make quarries produce more iron.
-            ironChance: 0.14
-        },
-        mine: {
-            // Chance that a resource region becomes a mine biome.
-            chance: 0.02,
-            nodeCount: 15,
-            radius: 4
-        }
-    };
-
-    const tileCache = new Map();
-    const tileTypeCache = new Map();
-    const waterFeatureCache = new Map();
-
-    const resourceTileTypeCache = new Map();
-    const resourceBiomeCache = new Map();
-    const harvestedResourceTiles = new Set();
-    const resourceNodeCache = new Map();
+    world.addChild(projectileLayer);
 
     const inventory = {
         wood: 0,
         stone: 0,
-        iron: 0
+        iron: 0,
+        gold: 0
+    };
+    const combatStats = {
+        enemiesKilled: 0
+    };
+    const playerState = {
+        hp: PLAYER_MAX_HP,
+        maxHp: PLAYER_MAX_HP,
+        invulnFrames: 0,
+        isDead: false
+    };
+    const playerCombat = {
+        weapon: 'sword',
+        cooldownFrames: 0,
+        facingX: 1,
+        facingY: 0
     };
     const floatingTexts = [];
     const enemies = [];
+    const projectiles = [];
     let enemySpawnTimer = 0;
     let enemyIdCounter = 0;
     let playerHitFlashFrames = 0;
@@ -130,304 +85,97 @@ async function init() {
     const debugLogs = [];
     let debugOverlayEnabled = false;
     let smoothedFps = 60;
+    let isPaused = false;
+    const worldSystem = createWorldSystem({
+        tileLayer,
+        resourceLayer,
+        getDebugOverlayEnabled: () => debugOverlayEnabled
+    });
 
-    function isInSpawnSafeZone(tileX, tileY) {
-        return Math.abs(tileX) <= SPAWN_SAFE_RADIUS_TILES && Math.abs(tileY) <= SPAWN_SAFE_RADIUS_TILES;
-    }
-
-    function isWaterType(tileType) {
-        return tileType === 'ocean' || tileType === 'lake' || tileType === 'river';
-    }
-
-    function getWaterFeature(regionX, regionY) {
-        const key = `${regionX},${regionY}`;
-        if (waterFeatureCache.has(key)) {
-            return waterFeatureCache.get(key);
-        }
-
-        if (rand2D(regionX, regionY, 1) > WATER_FEATURE_CHANCE) {
-            waterFeatureCache.set(key, null);
-            return null;
-        }
-
-        const centerX = regionX * FEATURE_REGION_SIZE + Math.floor(rand2D(regionX, regionY, 2) * FEATURE_REGION_SIZE);
-        const centerY = regionY * FEATURE_REGION_SIZE + Math.floor(rand2D(regionX, regionY, 3) * FEATURE_REGION_SIZE);
-        const typeRoll = rand2D(regionX, regionY, 4);
-
-        let feature;
-        if (typeRoll < 0.15) {
-            const radius = 10 + Math.floor(rand2D(regionX, regionY, 5) * 9);
-            feature = { type: 'ocean', centerX, centerY, radius };
-        } else if (typeRoll < 0.65) {
-            const radius = 3 + Math.floor(rand2D(regionX, regionY, 6) * 3);
-            feature = { type: 'lake', centerX, centerY, radius };
-        } else {
-            const width = 3 + Math.floor(rand2D(regionX, regionY, 7) * 4);
-            const targetArea = 220 + Math.floor(rand2D(regionX, regionY, 8) * 281);
-            const length = Math.max(30, Math.floor(targetArea / width));
-            const angle = rand2D(regionX, regionY, 9) * Math.PI * 2;
-            feature = { type: 'river', centerX, centerY, width, length, angle };
-        }
-
-        waterFeatureCache.set(key, feature);
-        return feature;
-    }
-
-    function isTileInsideWaterFeature(tileX, tileY, feature) {
-        const dx = tileX - feature.centerX;
-        const dy = tileY - feature.centerY;
-
-        if (feature.type === 'ocean' || feature.type === 'lake') {
-            return (dx * dx + dy * dy) <= feature.radius * feature.radius;
-        }
-
-        const cosA = Math.cos(feature.angle);
-        const sinA = Math.sin(feature.angle);
-        const localX = dx * cosA + dy * sinA;
-        const localY = -dx * sinA + dy * cosA;
-        const halfLength = feature.length / 2;
-        const radius = feature.width / 2;
-        const outsideX = Math.max(Math.abs(localX) - halfLength, 0);
-        return (outsideX * outsideX + localY * localY) <= radius * radius;
-    }
-
-    function getTileType(tileX, tileY) {
-        const key = `${tileX},${tileY}`;
-        if (tileTypeCache.has(key)) {
-            return tileTypeCache.get(key);
-        }
-
-        if (isInSpawnSafeZone(tileX, tileY)) {
-            tileTypeCache.set(key, 'grass');
-            return 'grass';
-        }
-
-        const regionX = Math.floor(tileX / FEATURE_REGION_SIZE);
-        const regionY = Math.floor(tileY / FEATURE_REGION_SIZE);
-        let resolvedType = 'grass';
-
-        regionSearch:
-        for (let ry = regionY - FEATURE_SEARCH_RADIUS; ry <= regionY + FEATURE_SEARCH_RADIUS; ry++) {
-            for (let rx = regionX - FEATURE_SEARCH_RADIUS; rx <= regionX + FEATURE_SEARCH_RADIUS; rx++) {
-                const feature = getWaterFeature(rx, ry);
-                if (!feature || !isTileInsideWaterFeature(tileX, tileY, feature)) {
-                    continue;
-                }
-
-                if (feature.type === 'ocean') {
-                    resolvedType = 'ocean';
-                    break regionSearch;
-                }
-                if (feature.type === 'river' && resolvedType !== 'ocean') {
-                    resolvedType = 'river';
-                } else if (feature.type === 'lake' && resolvedType === 'grass') {
-                    resolvedType = 'lake';
-                }
-            }
-        }
-
-        tileTypeCache.set(key, resolvedType);
-        return resolvedType;
-    }
-
-    function isTileWater(tileX, tileY) {
-        return isWaterType(getTileType(tileX, tileY));
-    }
-
-    function buildCandidateTiles(centerX, centerY, radius) {
-        const candidates = [];
-        const radiusSq = radius * radius;
-
-        for (let dy = -radius; dy <= radius; dy++) {
-            for (let dx = -radius; dx <= radius; dx++) {
-                if (dx * dx + dy * dy <= radiusSq) {
-                    candidates.push({
-                        x: centerX + dx,
-                        y: centerY + dy
-                    });
-                }
-            }
-        }
-
-        return candidates;
-    }
-
-    function pickNodeTiles(candidates, count, salt) {
-        const ranked = candidates
-            .map((tile) => ({
-                ...tile,
-                rank: rand2D(tile.x, tile.y, salt)
-            }))
-            .sort((a, b) => a.rank - b.rank);
-
-        return ranked.slice(0, Math.min(count, ranked.length));
-    }
-
-    function createResourceBiome(regionX, regionY) {
-        const biomeRoll = rand2D(regionX, regionY, 500);
-        const mineThreshold = RESOURCE_BIOMES.mine.chance;
-        const quarryThreshold = mineThreshold + RESOURCE_BIOMES.quarry.chance;
-        const forestThreshold = quarryThreshold + RESOURCE_BIOMES.forest.chance;
-
-        let biomeType = null;
-        if (biomeRoll < mineThreshold) {
-            biomeType = 'mine';
-        } else if (biomeRoll < quarryThreshold) {
-            biomeType = 'quarry';
-        } else if (biomeRoll < forestThreshold) {
-            biomeType = 'forest';
-        } else {
-            return null;
-        }
-
-        const centerX = regionX * RESOURCE_REGION_SIZE + Math.floor(rand2D(regionX, regionY, 501) * RESOURCE_REGION_SIZE);
-        const centerY = regionY * RESOURCE_REGION_SIZE + Math.floor(rand2D(regionX, regionY, 502) * RESOURCE_REGION_SIZE);
-        const nodes = new Map();
-
-        if (biomeType === 'forest') {
-            const cfg = RESOURCE_BIOMES.forest;
-            const count = cfg.minNodes + Math.floor(rand2D(regionX, regionY, 503) * (cfg.maxNodes - cfg.minNodes + 1));
-            const candidates = buildCandidateTiles(centerX, centerY, cfg.radius);
-            const selected = pickNodeTiles(candidates, count, 504);
-            for (const tile of selected) {
-                nodes.set(`${tile.x},${tile.y}`, 'wood');
-            }
-        } else if (biomeType === 'quarry') {
-            const cfg = RESOURCE_BIOMES.quarry;
-            const count = cfg.minNodes + Math.floor(rand2D(regionX, regionY, 505) * (cfg.maxNodes - cfg.minNodes + 1));
-            const candidates = buildCandidateTiles(centerX, centerY, cfg.radius);
-            const selected = pickNodeTiles(candidates, count, 506);
-            for (const tile of selected) {
-                const ironRoll = rand2D(tile.x, tile.y, 507);
-                const resourceType = ironRoll < cfg.ironChance ? 'iron' : 'stone';
-                nodes.set(`${tile.x},${tile.y}`, resourceType);
-            }
-        } else if (biomeType === 'mine') {
-            const cfg = RESOURCE_BIOMES.mine;
-            const candidates = buildCandidateTiles(centerX, centerY, cfg.radius);
-            const selected = pickNodeTiles(candidates, cfg.nodeCount, 508);
-            for (const tile of selected) {
-                nodes.set(`${tile.x},${tile.y}`, 'iron');
-            }
-        }
-
-        return { type: biomeType, centerX, centerY, nodes };
-    }
-
-    function getResourceBiome(regionX, regionY) {
-        const key = `${regionX},${regionY}`;
-        if (resourceBiomeCache.has(key)) {
-            return resourceBiomeCache.get(key);
-        }
-
-        const biome = createResourceBiome(regionX, regionY);
-        resourceBiomeCache.set(key, biome);
-        return biome;
-    }
-
-    function chooseBaseResourceType(tileX, tileY) {
-        const roll = rand2D(tileX, tileY, 520);
-        const woodThreshold = RESOURCE_TYPES.wood.weight;
-        const stoneThreshold = woodThreshold + RESOURCE_TYPES.stone.weight;
-
-        if (roll < woodThreshold) {
-            return 'wood';
-        }
-        if (roll < stoneThreshold) {
-            return 'stone';
-        }
-        return 'iron';
-    }
-
-    function getResourceTypeAtTile(tileX, tileY) {
-        const key = `${tileX},${tileY}`;
-        if (resourceTileTypeCache.has(key)) {
-            return resourceTileTypeCache.get(key);
-        }
-
-        if (harvestedResourceTiles.has(key) || isTileWater(tileX, tileY)) {
-            resourceTileTypeCache.set(key, null);
-            return null;
-        }
-
-        const regionX = Math.floor(tileX / RESOURCE_REGION_SIZE);
-        const regionY = Math.floor(tileY / RESOURCE_REGION_SIZE);
-
-        for (let ry = regionY - RESOURCE_FEATURE_SEARCH_RADIUS; ry <= regionY + RESOURCE_FEATURE_SEARCH_RADIUS; ry++) {
-            for (let rx = regionX - RESOURCE_FEATURE_SEARCH_RADIUS; rx <= regionX + RESOURCE_FEATURE_SEARCH_RADIUS; rx++) {
-                const biome = getResourceBiome(rx, ry);
-                if (!biome) {
-                    continue;
-                }
-
-                const biomeResource = biome.nodes.get(key);
-                if (biomeResource) {
-                    resourceTileTypeCache.set(key, biomeResource);
-                    return biomeResource;
-                }
-            }
-        }
-
-        if (rand2D(tileX, tileY, 521) < BASE_RESOURCE_CHANCE) {
-            const baseResource = chooseBaseResourceType(tileX, tileY);
-            resourceTileTypeCache.set(key, baseResource);
-            return baseResource;
-        }
-
-        resourceTileTypeCache.set(key, null);
-        return null;
-    }
-
-    function createTileAt(tileX, tileY) {
-        const tileType = getTileType(tileX, tileY);
-        const color = TERRAIN_COLORS[tileType] ?? TERRAIN_COLORS.grass;
-
-        const tile = new PIXI.Graphics();
-        drawTileGraphic(tile, color);
-        tile.position.set(tileX * TILE_SIZE, tileY * TILE_SIZE);
-        return tile;
-    }
-
-    function drawTileGraphic(tileGraphic, fillColor) {
-        tileGraphic.clear();
-        tileGraphic.rect(0, 0, TILE_SIZE, TILE_SIZE);
-        tileGraphic.fill(fillColor);
-        // Gridlines are debug-only and shown only with the dev overlay.
-        if (debugOverlayEnabled) {
-            tileGraphic.stroke({ width: 1, color: 0x000000 });
-        }
-    }
-
-    function refreshVisibleTileGridlines() {
-        for (const [key, tileGraphic] of tileCache) {
-            const [tileX, tileY] = key.split(',').map(Number);
-            const tileType = getTileType(tileX, tileY);
-            const color = TERRAIN_COLORS[tileType] ?? TERRAIN_COLORS.grass;
-            drawTileGraphic(tileGraphic, color);
-        }
-    }
-
-    function createResourceNode(resourceType, tileX, tileY) {
-        const node = new PIXI.Graphics();
-        const color = RESOURCE_TYPES[resourceType].color;
-
-        node.rect(6, 6, 20, 20);
-        node.fill(color);
-        node.stroke({ width: 1, color: 0x111111 });
-        node.position.set(tileX * TILE_SIZE, tileY * TILE_SIZE);
-        return node;
+    function updateVisibleWorld() {
+        worldSystem.updateTiles({
+            worldPositionX: world.position.x,
+            worldPositionY: world.position.y,
+            screenWidth: window.innerWidth,
+            screenHeight: window.innerHeight
+        });
     }
 
     function createEnemySprite() {
+        const container = new PIXI.Container();
+
+        const body = new PIXI.Graphics();
+        body.circle(ENEMY_RADIUS, ENEMY_RADIUS, ENEMY_RADIUS);
+        body.fill(0x8f1f1f);
+        body.stroke({ width: 1, color: 0x220808 });
+
+        const healthBg = new PIXI.Graphics();
+        const healthFill = new PIXI.Graphics();
+        container.addChild(body);
+        container.addChild(healthBg);
+        container.addChild(healthFill);
+
+        return { container, healthBg, healthFill };
+    }
+
+    function updateEnemyHealthBar(enemy) {
+        const barWidth = ENEMY_SIZE;
+        const barHeight = 4;
+        const barY = -8;
+        const ratio = Math.max(0, Math.min(1, enemy.hp / enemy.maxHp));
+
+        enemy.healthBg.clear();
+        enemy.healthBg.rect(0, barY, barWidth, barHeight);
+        enemy.healthBg.fill(0x1d1d1d);
+
+        enemy.healthFill.clear();
+        enemy.healthFill.rect(0, barY, barWidth * ratio, barHeight);
+        enemy.healthFill.fill(0x4ed85a);
+
+        enemy.healthBg.visible = ratio < 1;
+        enemy.healthFill.visible = ratio < 1;
+    }
+
+    function createBulletSprite() {
         const sprite = new PIXI.Graphics();
-        sprite.circle(ENEMY_RADIUS, ENEMY_RADIUS, ENEMY_RADIUS);
-        sprite.fill(0x8f1f1f);
-        sprite.stroke({ width: 1, color: 0x220808 });
+        sprite.circle(4, 4, 4);
+        sprite.fill(0xf7e56a);
+        sprite.stroke({ width: 1, color: 0x2a2409 });
         return sprite;
     }
 
+    function createAimIndicator() {
+        const sprite = new PIXI.Graphics();
+        sprite.moveTo(0, -6);
+        sprite.lineTo(16, 0);
+        sprite.lineTo(0, 6);
+        sprite.closePath();
+        sprite.fill(0xffd166);
+        sprite.stroke({ width: 1, color: 0x5c4a11 });
+        return sprite;
+    }
+
+    function createSwordSwingSprite() {
+        return new PIXI.Graphics();
+    }
+
+    function drawSwordSwing(sprite, centerX, centerY, angle, progress) {
+        const cfg = WEAPONS.sword;
+        const arcHalf = cfg.arcRadians * 0.5;
+        const start = angle - arcHalf;
+        const end = angle + arcHalf;
+        const radius = cfg.range + 14 + progress * 8;
+
+        sprite.clear();
+        sprite.moveTo(centerX, centerY);
+        sprite.arc(centerX, centerY, radius, start, end);
+        sprite.closePath();
+        sprite.fill(0xf6dfa7);
+        sprite.alpha = 0.32 * (1 - progress);
+    }
+
     function isTileWalkable(tileX, tileY) {
-        return !isTileWater(tileX, tileY);
+        return worldSystem.isTileWalkable(tileX, tileY);
     }
 
     function estimatePathCost(ax, ay, bx, by) {
@@ -608,19 +356,28 @@ async function init() {
     }
 
     function spawnEnemyAtTile(tileX, tileY) {
-        const sprite = createEnemySprite();
+        const spriteData = createEnemySprite();
         const enemy = {
             id: enemyIdCounter++,
             x: tileX * TILE_SIZE + (TILE_SIZE - ENEMY_SIZE) / 2,
             y: tileY * TILE_SIZE + (TILE_SIZE - ENEMY_SIZE) / 2,
+            hp: ENEMY_MAX_HP,
+            maxHp: ENEMY_MAX_HP,
+            invulnFrames: 0,
+            isDead: false,
             path: [],
             pathIndex: 0,
             repathTimer: 0,
-            hitCooldown: 0
+            contactCooldownFrames: 0,
+            knockbackVX: 0,
+            knockbackVY: 0,
+            healthBg: spriteData.healthBg,
+            healthFill: spriteData.healthFill
         };
-        sprite.position.set(enemy.x, enemy.y);
-        enemyLayer.addChild(sprite);
-        enemy.sprite = sprite;
+        spriteData.container.position.set(enemy.x, enemy.y);
+        enemyLayer.addChild(spriteData.container);
+        enemy.sprite = spriteData.container;
+        updateEnemyHealthBar(enemy);
         enemies.push(enemy);
     }
 
@@ -628,6 +385,15 @@ async function init() {
         const enemy = enemies[index];
         enemy.sprite.destroy();
         enemies.splice(index, 1);
+    }
+
+    function resetCombatEntities() {
+        for (let i = enemies.length - 1; i >= 0; i--) {
+            removeEnemyAt(i);
+        }
+        for (let i = projectiles.length - 1; i >= 0; i--) {
+            removeProjectileAt(i);
+        }
     }
 
     function resolveEnemyCollisions() {
@@ -697,6 +463,9 @@ async function init() {
     }
 
     function resolvePlayerEnemyCollisions() {
+        if (playerState.isDead) {
+            return;
+        }
         const minDistance = ENEMY_RADIUS + PLAYER_COLLISION_RADIUS;
         const minDistanceSq = minDistance * minDistance;
         let playerCenterX = playerWorldX + TILE_SIZE / 2;
@@ -774,6 +543,10 @@ async function init() {
 
         for (let i = enemies.length - 1; i >= 0; i--) {
             const enemy = enemies[i];
+            if (enemy.isDead) {
+                removeEnemyAt(i);
+                continue;
+            }
             const enemyCenterX = enemy.x + ENEMY_SIZE / 2;
             const enemyCenterY = enemy.y + ENEMY_SIZE / 2;
             const enemyTileX = Math.floor(enemyCenterX / TILE_SIZE);
@@ -784,6 +557,26 @@ async function init() {
             if (dxPlayerTiles * dxPlayerTiles + dyPlayerTiles * dyPlayerTiles > ENEMY_DESPAWN_DISTANCE_TILES * ENEMY_DESPAWN_DISTANCE_TILES) {
                 removeEnemyAt(i);
                 continue;
+            }
+
+            let hasStrongKnockback = false;
+            const knockbackSpeed = Math.hypot(enemy.knockbackVX, enemy.knockbackVY);
+            if (knockbackSpeed > ENEMY_MIN_KNOCKBACK_SPEED) {
+                hasStrongKnockback = true;
+                const pushedX = enemy.x + enemy.knockbackVX * deltaMoveScale;
+                const pushedY = enemy.y + enemy.knockbackVY * deltaMoveScale;
+                const pushedTileX = Math.floor((pushedX + ENEMY_SIZE / 2) / TILE_SIZE);
+                const pushedTileY = Math.floor((pushedY + ENEMY_SIZE / 2) / TILE_SIZE);
+                if (isTileWalkable(pushedTileX, pushedTileY)) {
+                    enemy.x = pushedX;
+                    enemy.y = pushedY;
+                } else {
+                    enemy.knockbackVX = 0;
+                    enemy.knockbackVY = 0;
+                    hasStrongKnockback = false;
+                }
+                enemy.knockbackVX *= ENEMY_KNOCKBACK_FRICTION;
+                enemy.knockbackVY *= ENEMY_KNOCKBACK_FRICTION;
             }
 
             enemy.repathTimer -= 1;
@@ -801,7 +594,7 @@ async function init() {
                 }
             }
 
-            if (enemy.pathIndex < enemy.path.length) {
+            if (!hasStrongKnockback && enemy.pathIndex < enemy.path.length) {
                 const targetTile = enemy.path[enemy.pathIndex];
                 const targetCenterX = targetTile.x * TILE_SIZE + TILE_SIZE / 2;
                 const targetCenterY = targetTile.y * TILE_SIZE + TILE_SIZE / 2;
@@ -828,17 +621,20 @@ async function init() {
 
             enemy.sprite.position.set(enemy.x, enemy.y);
 
-            if (enemy.hitCooldown > 0) {
-                enemy.hitCooldown -= 1;
+            if (enemy.invulnFrames > 0) {
+                enemy.invulnFrames -= 1;
+            }
+            if (enemy.contactCooldownFrames > 0) {
+                enemy.contactCooldownFrames -= 1;
             }
 
             const dxPlayer = (enemy.x + ENEMY_RADIUS) - playerCenterX;
             const dyPlayer = (enemy.y + ENEMY_RADIUS) - playerCenterY;
             const collisionDistance = ENEMY_RADIUS + PLAYER_COLLISION_RADIUS;
             const collisionDistSq = dxPlayer * dxPlayer + dyPlayer * dyPlayer;
-            if (collisionDistSq < collisionDistance * collisionDistance && enemy.hitCooldown <= 0) {
-                enemy.hitCooldown = 40;
-                playerHitFlashFrames = 8;
+            if (collisionDistSq < collisionDistance * collisionDistance && enemy.contactCooldownFrames <= 0) {
+                enemy.contactCooldownFrames = ENEMY_CONTACT_COOLDOWN_FRAMES;
+                applyDamage(playerState, ENEMY_CONTACT_DAMAGE, 'enemy_contact');
             }
         }
 
@@ -848,76 +644,6 @@ async function init() {
             enemy.sprite.position.set(enemy.x, enemy.y);
         }
     }
-
-    function updateTiles() {
-        const screenCenterX = world.position.x;
-        const screenCenterY = world.position.y;
-
-        const tilesAcross = Math.ceil(window.innerWidth / TILE_SIZE) + 2;
-        const tilesDown = Math.ceil(window.innerHeight / TILE_SIZE) + 2;
-
-        const startTileX = Math.floor(-screenCenterX / TILE_SIZE) - LOAD_BUFFER;
-        const startTileY = Math.floor(-screenCenterY / TILE_SIZE) - LOAD_BUFFER;
-        const endTileX = startTileX + tilesAcross + LOAD_BUFFER;
-        const endTileY = startTileY + tilesDown + LOAD_BUFFER;
-
-        for (let y = startTileY; y < endTileY; y++) {
-            for (let x = startTileX; x < endTileX; x++) {
-                const key = `${x},${y}`;
-                if (!tileCache.has(key)) {
-                    const tile = createTileAt(x, y);
-                    tileLayer.addChild(tile);
-                    tileCache.set(key, tile);
-                }
-            }
-        }
-
-        for (let y = startTileY; y < endTileY; y++) {
-            for (let x = startTileX; x < endTileX; x++) {
-                const key = `${x},${y}`;
-                if (resourceNodeCache.has(key)) {
-                    continue;
-                }
-
-                const resourceType = getResourceTypeAtTile(x, y);
-                if (!resourceType) {
-                    continue;
-                }
-
-                const resourceNode = createResourceNode(resourceType, x, y);
-                resourceLayer.addChild(resourceNode);
-                resourceNodeCache.set(key, resourceNode);
-            }
-        }
-
-        const cleanupDistance = LOAD_BUFFER + 5;
-
-        for (const [key, tile] of tileCache) {
-            const [x, y] = key.split(',').map(Number);
-            if (x < startTileX - cleanupDistance ||
-                x > endTileX + cleanupDistance ||
-                y < startTileY - cleanupDistance ||
-                y > endTileY + cleanupDistance) {
-                tile.destroy();
-                tileCache.delete(key);
-                tileTypeCache.delete(key);
-                resourceTileTypeCache.delete(key);
-            }
-        }
-
-        for (const [key, node] of resourceNodeCache) {
-            const [x, y] = key.split(',').map(Number);
-            if (x < startTileX - cleanupDistance ||
-                x > endTileX + cleanupDistance ||
-                y < startTileY - cleanupDistance ||
-                y > endTileY + cleanupDistance) {
-                node.destroy();
-                resourceNodeCache.delete(key);
-                resourceTileTypeCache.delete(key);
-            }
-        }
-    }
-
     function findSafeSpawnPosition() {
         return { x: TILE_SIZE / 2, y: TILE_SIZE / 2 };
     }
@@ -932,6 +658,16 @@ async function init() {
     const player = createPlayerSprite();
     player.position.set(window.innerWidth / 2 - 16, window.innerHeight / 2 - 16);
     app.stage.addChild(player);
+    const aimIndicator = createAimIndicator();
+    app.stage.addChild(aimIndicator);
+    const swordSwingSprite = createSwordSwingSprite();
+    swordSwingSprite.visible = false;
+    app.stage.addChild(swordSwingSprite);
+    const swordSwingState = {
+        ttl: 0,
+        maxTtl: 8,
+        angle: 0
+    };
 
     const hudText = new PIXI.Text({
         text: '',
@@ -941,8 +677,50 @@ async function init() {
             fontSize: 18
         }
     });
-    hudText.position.set(16, 16);
+    hudText.position.set(16, 66);
     app.stage.addChild(hudText);
+
+    const healthBarBackground = new PIXI.Graphics();
+    const healthBarFill = new PIXI.Graphics();
+    const healthText = new PIXI.Text({
+        text: '',
+        style: {
+            fill: '#ffffff',
+            fontFamily: 'monospace',
+            fontSize: 14
+        }
+    });
+    app.stage.addChild(healthBarBackground);
+    app.stage.addChild(healthBarFill);
+    app.stage.addChild(healthText);
+
+    const deathText = new PIXI.Text({
+        text: 'You Died\nPress R to restart',
+        style: {
+            fill: '#ffaaaa',
+            fontFamily: 'monospace',
+            fontSize: 28,
+            align: 'center'
+        }
+    });
+    deathText.anchor.set(0.5);
+    deathText.visible = false;
+    deathText.position.set(window.innerWidth / 2, window.innerHeight / 2);
+    app.stage.addChild(deathText);
+
+    const pauseText = new PIXI.Text({
+        text: 'Paused\nPress ESC to resume',
+        style: {
+            fill: '#f3e6a1',
+            fontFamily: 'monospace',
+            fontSize: 26,
+            align: 'center'
+        }
+    });
+    pauseText.anchor.set(0.5);
+    pauseText.visible = false;
+    pauseText.position.set(window.innerWidth / 2, window.innerHeight / 2);
+    app.stage.addChild(pauseText);
 
     const debugText = new PIXI.Text({
         text: '',
@@ -957,7 +735,27 @@ async function init() {
     app.stage.addChild(debugText);
 
     function updateHud() {
-        hudText.text = `Wood: ${inventory.wood}\nStone: ${inventory.stone}\nIron: ${inventory.iron}`;
+        hudText.text = `Weapon: ${playerCombat.weapon}\nKills: ${combatStats.enemiesKilled}\nGold: ${inventory.gold}\nWood: ${inventory.wood}\nStone: ${inventory.stone}\nIron: ${inventory.iron}`;
+    }
+
+    function updateHealthHud() {
+        const barX = 16;
+        const barY = 16;
+        const barWidth = 240;
+        const barHeight = 18;
+        const ratio = Math.max(0, Math.min(1, playerState.hp / playerState.maxHp));
+
+        healthBarBackground.clear();
+        healthBarBackground.rect(barX, barY, barWidth, barHeight);
+        healthBarBackground.fill(0x2a2a2a);
+        healthBarBackground.stroke({ width: 1, color: 0x000000 });
+
+        healthBarFill.clear();
+        healthBarFill.rect(barX, barY, barWidth * ratio, barHeight);
+        healthBarFill.fill(0xd94b4b);
+
+        healthText.text = `HP: ${Math.max(0, Math.ceil(playerState.hp))}/${playerState.maxHp}`;
+        healthText.position.set(barX + 8, barY + 1);
     }
 
     function logDebug(message) {
@@ -972,16 +770,19 @@ async function init() {
         if (!debugOverlayEnabled) {
             return;
         }
+        const worldStats = worldSystem.getStats();
 
         const lines = [
             'DEV CONSOLE (F4 or `)',
             `FPS: ${smoothedFps.toFixed(1)} | Frame: ${frameMs.toFixed(2)} ms`,
+            `Player HP: ${Math.ceil(playerState.hp)}/${playerState.maxHp} | Weapon: ${playerCombat.weapon}`,
             `Enemies: ${enemies.length}/${ENEMY_MAX_COUNT}`,
+            `Bullets: ${projectiles.length}/${MAX_BULLETS}`,
             `Path req/exe/def: ${framePathRequests}/${framePathExecuted}/${framePathDeferred}`,
             `Path budget/frame: ${ENEMY_MAX_REPATHS_PER_FRAME}`,
-            `Tiles cached: ${tileCache.size}`,
-            `Resources active: ${resourceNodeCache.size}`,
-            `Water feature regions: ${waterFeatureCache.size}`
+            `Tiles cached: ${worldStats.tilesCached}`,
+            `Resources active: ${worldStats.resourcesActive}`,
+            `Water feature regions: ${worldStats.waterFeatureRegions}`
         ];
 
         if (debugLogs.length > 0) {
@@ -992,6 +793,157 @@ async function init() {
         }
 
         debugText.text = lines.join('\n');
+    }
+
+    function removeProjectileAt(index) {
+        const projectile = projectiles[index];
+        projectile.sprite.destroy();
+        projectiles.splice(index, 1);
+    }
+
+    function applyDamage(target, amount, source) {
+        if (!target || target.isDead || amount <= 0) {
+            return false;
+        }
+        if ((target.invulnFrames ?? 0) > 0) {
+            return false;
+        }
+
+        target.hp = Math.max(0, target.hp - amount);
+        target.invulnFrames = target === playerState ? PLAYER_INVULN_FRAMES : INVULN_FRAMES_ON_HIT;
+
+        if (target === playerState) {
+            playerHitFlashFrames = 8;
+            updateHealthHud();
+        } else if (target.healthBg && target.healthFill) {
+            updateEnemyHealthBar(target);
+        }
+
+        if (target.hp <= 0) {
+            target.isDead = true;
+            if (target === playerState) {
+                deathText.visible = true;
+                logDebug(`Player defeated by ${source}`);
+            } else {
+                combatStats.enemiesKilled += 1;
+                inventory.gold += GOLD_PER_ENEMY_KILL;
+                updateHud();
+            }
+        }
+
+        return true;
+    }
+
+    function performSwordAttack(playerCenterX, playerCenterY, dirX, dirY) {
+        const cfg = WEAPONS.sword;
+        const cosHalfArc = Math.cos(cfg.arcRadians / 2);
+        swordSwingState.ttl = swordSwingState.maxTtl;
+        swordSwingState.angle = Math.atan2(dirY, dirX);
+
+        for (const enemy of enemies) {
+            if (enemy.isDead) {
+                continue;
+            }
+            const enemyCenterX = enemy.x + ENEMY_RADIUS;
+            const enemyCenterY = enemy.y + ENEMY_RADIUS;
+            const dx = enemyCenterX - playerCenterX;
+            const dy = enemyCenterY - playerCenterY;
+            const dist = Math.hypot(dx, dy);
+            if (dist > cfg.range + ENEMY_RADIUS || dist <= 0.001) {
+                continue;
+            }
+
+            const nx = dx / dist;
+            const ny = dy / dist;
+            const dot = nx * dirX + ny * dirY;
+            if (dot < cosHalfArc) {
+                continue;
+            }
+
+            const hit = applyDamage(enemy, cfg.damage, 'sword');
+            if (hit) {
+                enemy.knockbackVX += nx * cfg.knockbackSpeed;
+                enemy.knockbackVY += ny * cfg.knockbackSpeed;
+            }
+        }
+    }
+
+    function spawnBullet(playerCenterX, playerCenterY, dirX, dirY) {
+        if (projectiles.length >= MAX_BULLETS) {
+            return;
+        }
+
+        const cfg = WEAPONS.pistol;
+        const sprite = createBulletSprite();
+        const bullet = {
+            x: playerCenterX - 4,
+            y: playerCenterY - 4,
+            vx: dirX * cfg.bulletSpeed,
+            vy: dirY * cfg.bulletSpeed,
+            ttl: cfg.bulletLifetimeFrames,
+            damage: cfg.damage,
+            sprite
+        };
+        sprite.position.set(bullet.x, bullet.y);
+        projectileLayer.addChild(sprite);
+        projectiles.push(bullet);
+    }
+
+    function performAttack(playerCenterX, playerCenterY) {
+        const mag = Math.hypot(playerCombat.facingX, playerCombat.facingY);
+        const dirX = mag > 0.001 ? playerCombat.facingX / mag : 1;
+        const dirY = mag > 0.001 ? playerCombat.facingY / mag : 0;
+
+        if (playerCombat.weapon === 'sword') {
+            performSwordAttack(playerCenterX, playerCenterY, dirX, dirY);
+            playerCombat.cooldownFrames = WEAPONS.sword.cooldownFrames;
+        } else {
+            spawnBullet(playerCenterX, playerCenterY, dirX, dirY);
+            playerCombat.cooldownFrames = WEAPONS.pistol.cooldownFrames;
+        }
+    }
+
+    function updateProjectiles(deltaMoveScale) {
+        for (let i = projectiles.length - 1; i >= 0; i--) {
+            const bullet = projectiles[i];
+            bullet.ttl -= 1;
+            bullet.x += bullet.vx * deltaMoveScale;
+            bullet.y += bullet.vy * deltaMoveScale;
+            bullet.sprite.position.set(bullet.x, bullet.y);
+
+            if (bullet.ttl <= 0) {
+                removeProjectileAt(i);
+                continue;
+            }
+
+            const bulletCenterX = bullet.x + 4;
+            const bulletCenterY = bullet.y + 4;
+            const bulletTileX = Math.floor(bulletCenterX / TILE_SIZE);
+            const bulletTileY = Math.floor(bulletCenterY / TILE_SIZE);
+            if (!isTileWalkable(bulletTileX, bulletTileY)) {
+                removeProjectileAt(i);
+                continue;
+            }
+
+            let hitEnemy = false;
+            for (const enemy of enemies) {
+                if (enemy.isDead) {
+                    continue;
+                }
+                const dx = (enemy.x + ENEMY_RADIUS) - bulletCenterX;
+                const dy = (enemy.y + ENEMY_RADIUS) - bulletCenterY;
+                const hitDistance = ENEMY_RADIUS + 4;
+                if (dx * dx + dy * dy <= hitDistance * hitDistance) {
+                    applyDamage(enemy, bullet.damage, 'bullet');
+                    hitEnemy = true;
+                    break;
+                }
+            }
+
+            if (hitEnemy) {
+                removeProjectileAt(i);
+            }
+        }
     }
 
     function spawnHarvestFeedback(resourceType, tileX, tileY) {
@@ -1018,28 +970,95 @@ async function init() {
     let playerWorldY = spawnWorldPos.y;
 
     const keys = {};
-    const SPEED = 200;
     let harvestRequested = false;
+    let leftMouseDown = false;
+    let mouseScreenX = window.innerWidth / 2;
+    let mouseScreenY = window.innerHeight / 2;
 
     updateHud();
-    updateTiles();
+    updateHealthHud();
+    updateVisibleWorld();
 
     window.addEventListener('keydown', (e) => {
         const key = e.key.toLowerCase();
         keys[key] = true;
+        if (key === 'escape') {
+            isPaused = !isPaused;
+            pauseText.visible = isPaused;
+            logDebug(`Game ${isPaused ? 'paused' : 'resumed'}`);
+            e.preventDefault();
+            return;
+        }
         if (key === 'f4' || key === 'ç') {
             debugOverlayEnabled = !debugOverlayEnabled;
             debugText.visible = debugOverlayEnabled;
-            refreshVisibleTileGridlines();
+            worldSystem.refreshVisibleTileGridlines();
             logDebug(`Debug console ${debugOverlayEnabled ? 'enabled' : 'disabled'}`);
         }
         if (key === 'e') {
             harvestRequested = true;
         }
+        if (key === '1') {
+            playerCombat.weapon = 'sword';
+            updateHud();
+        } else if (key === '2') {
+            playerCombat.weapon = 'pistol';
+            updateHud();
+        }
+        if (key === ' ' || key === 'space') {
+            keys.attack = true;
+        }
+        if (key === 'r' && playerState.isDead) {
+            playerState.hp = playerState.maxHp;
+            playerState.invulnFrames = 0;
+            playerState.isDead = false;
+            combatStats.enemiesKilled = 0;
+            inventory.gold = 0;
+            deathText.visible = false;
+            const respawn = findSafeSpawnPosition();
+            playerWorldX = respawn.x;
+            playerWorldY = respawn.y;
+            resetCombatEntities();
+            updateHud();
+            updateHealthHud();
+            logDebug('Player restarted');
+        }
     });
 
     window.addEventListener('keyup', (e) => {
-        keys[e.key.toLowerCase()] = false;
+        const key = e.key.toLowerCase();
+        keys[key] = false;
+        if (key === ' ' || key === 'space') {
+            keys.attack = false;
+        }
+    });
+
+    app.canvas.addEventListener('contextmenu', (e) => {
+        // Disable RMB behavior for now to avoid browser/game conflicts.
+        e.preventDefault();
+    });
+
+    app.canvas.addEventListener('mousemove', (e) => {
+        mouseScreenX = e.clientX;
+        mouseScreenY = e.clientY;
+    });
+
+    app.canvas.addEventListener('mousedown', (e) => {
+        mouseScreenX = e.clientX;
+        mouseScreenY = e.clientY;
+        if (e.button === 2) {
+            e.preventDefault();
+            return;
+        }
+        if (e.button === 0) {
+            leftMouseDown = true;
+        }
+    });
+
+    window.addEventListener('mouseup', (e) => {
+        if (e.button === 0) {
+            leftMouseDown = false;
+        }
     });
 
     app.ticker.add((delta) => {
@@ -1051,22 +1070,60 @@ async function init() {
         framePathDeferred = 0;
         framePathBudget = ENEMY_MAX_REPATHS_PER_FRAME;
 
+        const aimDx = mouseScreenX - window.innerWidth / 2;
+        const aimDy = mouseScreenY - window.innerHeight / 2;
+        const aimMagnitude = Math.hypot(aimDx, aimDy);
+        if (aimMagnitude > 0.001) {
+            playerCombat.facingX = aimDx / aimMagnitude;
+            playerCombat.facingY = aimDy / aimMagnitude;
+        }
+
+        const playerScreenCenterX = player.position.x + PLAYER_COLLISION_RADIUS;
+        const playerScreenCenterY = player.position.y + PLAYER_COLLISION_RADIUS;
+        aimIndicator.rotation = Math.atan2(playerCombat.facingY, playerCombat.facingX);
+        aimIndicator.position.set(
+            playerScreenCenterX + playerCombat.facingX * 22,
+            playerScreenCenterY + playerCombat.facingY * 22
+        );
+        if (swordSwingState.ttl > 0) {
+            const progress = 1 - swordSwingState.ttl / swordSwingState.maxTtl;
+            drawSwordSwing(swordSwingSprite, playerScreenCenterX, playerScreenCenterY, swordSwingState.angle, progress);
+            swordSwingState.ttl -= 1;
+            swordSwingSprite.visible = true;
+        } else {
+            swordSwingSprite.visible = false;
+        }
+
+        if (isPaused) {
+            updateDebugOverlay(frameMs);
+            return;
+        }
+
         const deltaMoveScale = delta.deltaTime / 60;
-        const moveDistance = SPEED * deltaMoveScale;
+        const moveDistance = PLAYER_SPEED * deltaMoveScale;
         let newWorldX = playerWorldX;
         let newWorldY = playerWorldY;
 
-        if (keys.w || keys.arrowup) {
-            newWorldY -= moveDistance;
+        if (playerState.invulnFrames > 0) {
+            playerState.invulnFrames -= 1;
         }
-        if (keys.s || keys.arrowdown) {
-            newWorldY += moveDistance;
+        if (playerCombat.cooldownFrames > 0) {
+            playerCombat.cooldownFrames -= 1;
         }
-        if (keys.a || keys.arrowleft) {
-            newWorldX -= moveDistance;
-        }
-        if (keys.d || keys.arrowright) {
-            newWorldX += moveDistance;
+
+        if (!playerState.isDead) {
+            if (keys.w || keys.arrowup) {
+                newWorldY -= moveDistance;
+            }
+            if (keys.s || keys.arrowdown) {
+                newWorldY += moveDistance;
+            }
+            if (keys.a || keys.arrowleft) {
+                newWorldX -= moveDistance;
+            }
+            if (keys.d || keys.arrowright) {
+                newWorldX += moveDistance;
+            }
         }
 
         const centerX = newWorldX + TILE_SIZE / 2;
@@ -1074,7 +1131,7 @@ async function init() {
         const tileX = Math.floor(centerX / TILE_SIZE);
         const tileY = Math.floor(centerY / TILE_SIZE);
 
-        if (!isTileWater(tileX, tileY)) {
+        if (!playerState.isDead && !worldSystem.isTileWater(tileX, tileY)) {
             playerWorldX = newWorldX;
             playerWorldY = newWorldY;
         }
@@ -1082,61 +1139,31 @@ async function init() {
         world.position.x = window.innerWidth / 2 - playerWorldX - 16;
         world.position.y = window.innerHeight / 2 - playerWorldY - 16;
 
-        updateTiles();
-        updateEnemySpawning();
+        updateVisibleWorld();
+        if (!playerState.isDead) {
+            updateEnemySpawning();
+        }
         updateEnemies(deltaMoveScale);
+        updateProjectiles(deltaMoveScale);
 
         // Re-apply camera in case enemy collision resolution pushed the player.
         world.position.x = window.innerWidth / 2 - playerWorldX - 16;
         world.position.y = window.innerHeight / 2 - playerWorldY - 16;
 
-        if (harvestRequested) {
+        if (!playerState.isDead && (keys.attack || leftMouseDown) && playerCombat.cooldownFrames <= 0) {
+            performAttack(playerWorldX + TILE_SIZE / 2, playerWorldY + TILE_SIZE / 2);
+        }
+
+        if (!playerState.isDead && harvestRequested) {
             harvestRequested = false;
 
             const playerCenterX = playerWorldX + TILE_SIZE / 2;
             const playerCenterY = playerWorldY + TILE_SIZE / 2;
-            const centerTileX = Math.floor(playerCenterX / TILE_SIZE);
-            const centerTileY = Math.floor(playerCenterY / TILE_SIZE);
-            const searchRadiusTiles = 2;
-
-            let bestKey = null;
-            let bestDistanceSq = HARVEST_RANGE * HARVEST_RANGE;
-
-            for (let y = centerTileY - searchRadiusTiles; y <= centerTileY + searchRadiusTiles; y++) {
-                for (let x = centerTileX - searchRadiusTiles; x <= centerTileX + searchRadiusTiles; x++) {
-                    const key = `${x},${y}`;
-                    const resourceNode = resourceNodeCache.get(key);
-                    if (!resourceNode) {
-                        continue;
-                    }
-
-                    const nodeCenterX = x * TILE_SIZE + TILE_SIZE / 2;
-                    const nodeCenterY = y * TILE_SIZE + TILE_SIZE / 2;
-                    const dx = nodeCenterX - playerCenterX;
-                    const dy = nodeCenterY - playerCenterY;
-                    const distSq = dx * dx + dy * dy;
-
-                    if (distSq <= bestDistanceSq) {
-                        bestDistanceSq = distSq;
-                        bestKey = key;
-                    }
-                }
-            }
-
-            if (bestKey) {
-                const node = resourceNodeCache.get(bestKey);
-                const resourceType = resourceTileTypeCache.get(bestKey);
-
-                if (node && resourceType && inventory[resourceType] !== undefined) {
-                    const [harvestTileX, harvestTileY] = bestKey.split(',').map(Number);
-                    node.destroy();
-                    resourceNodeCache.delete(bestKey);
-                    harvestedResourceTiles.add(bestKey);
-                    resourceTileTypeCache.set(bestKey, null);
-                    inventory[resourceType] += 1;
-                    spawnHarvestFeedback(resourceType, harvestTileX, harvestTileY);
-                    updateHud();
-                }
+            const harvest = worldSystem.tryHarvestNearest(playerCenterX, playerCenterY);
+            if (harvest && inventory[harvest.resourceType] !== undefined) {
+                inventory[harvest.resourceType] += 1;
+                spawnHarvestFeedback(harvest.resourceType, harvest.tileX, harvest.tileY);
+                updateHud();
             }
         }
 
@@ -1165,8 +1192,11 @@ async function init() {
 
     window.addEventListener('resize', () => {
         app.renderer.resize(window.innerWidth, window.innerHeight);
+        player.position.set(window.innerWidth / 2 - 16, window.innerHeight / 2 - 16);
         debugText.position.set(window.innerWidth - 360, 16);
-        updateTiles();
+        deathText.position.set(window.innerWidth / 2, window.innerHeight / 2);
+        pauseText.position.set(window.innerWidth / 2, window.innerHeight / 2);
+        updateVisibleWorld();
     });
 
     console.log('Purrmadeath initialized');
