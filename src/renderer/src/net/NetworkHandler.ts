@@ -205,6 +205,9 @@ export function registerMessageHandlers(
     s.seed               = ack.seed;
     d.initGameWorld(ack.seed);
 
+    // Apply milestone class unlocks
+    d.lobbyOverlay.setUnlockedClasses(ack.unlockedClasses ?? []);
+
     // Check if local player's class is locked from a loaded save
     const localSlotData = ack.players.find(p => p.slot === ack.slot);
     if (localSlotData?.classLocked) {

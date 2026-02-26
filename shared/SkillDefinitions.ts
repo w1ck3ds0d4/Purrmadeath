@@ -5,7 +5,11 @@ import type { PlayerClass } from './ClassDefinitions';
 export type SkillBranchId =
   | 'berserker' | 'guardian' | 'warlord'       // Warrior
   | 'sharpshooter' | 'trapper' | 'scout'       // Ranger
-  | 'pyromancer' | 'frost_mage' | 'arcanist';  // Mage
+  | 'pyromancer' | 'frost_mage' | 'arcanist'   // Mage
+  | 'blade_dancer' | 'shadow' | 'venom'        // Assassin
+  | 'holy_knight' | 'bulwark' | 'crusader'     // Paladin
+  | 'death_mage' | 'cursed' | 'blood_magic'    // Necromancer
+  | 'feral' | 'packleader' | 'survivalist';    // Beastmaster
 
 /** Node IDs follow the pattern: branchId_tN (e.g. 'berserker_t1'). */
 export type SkillNodeId = string;
@@ -234,6 +238,218 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
           params: { type: 'teleport', maxDistance: 200 } } },
     ],
   },
+
+  // ── Assassin ──────────────────────────────────────────────────────────────
+  blade_dancer: {
+    id: 'blade_dancer', name: 'Blade Dancer', description: 'Speed and damage',
+    playerClass: 'assassin', color: 0xcc3333,
+    nodes: [
+      { id: 'blade_dancer_t1', tier: 1, branch: 'blade_dancer', name: 'Quick Slash', description: '+10% attack speed',
+        passive: [{ stat: 'attackSpeed', value: 0.10, mode: 'multiply' }] },
+      { id: 'blade_dancer_t2', tier: 2, branch: 'blade_dancer', name: 'Twin Fangs', description: '+10% damage',
+        passive: [{ stat: 'damage', value: 0.10, mode: 'multiply' }] },
+      { id: 'blade_dancer_t3', tier: 3, branch: 'blade_dancer', name: 'Expose Weakness', description: '+5% crit chance',
+        passive: [{ stat: 'critChance', value: 0.05, mode: 'add' }] },
+      { id: 'blade_dancer_t4', tier: 4, branch: 'blade_dancer', name: 'Flurry', description: '+20% attack speed',
+        passive: [{ stat: 'attackSpeed', value: 0.20, mode: 'multiply' }] },
+      { id: 'blade_dancer_t5', tier: 5, branch: 'blade_dancer', name: 'Whirlwind', description: '360° spin dealing 3× damage',
+        active: { abilityId: 'whirlwind', name: 'Whirlwind', description: '360° spin, 3× damage', cooldown: 8,
+          params: { type: 'whirlwind', damage: 3, radius: 60 } } },
+    ],
+  },
+  shadow: {
+    id: 'shadow', name: 'Shadow', description: 'Stealth and mobility',
+    playerClass: 'assassin', color: 0x553366,
+    nodes: [
+      { id: 'shadow_t1', tier: 1, branch: 'shadow', name: 'Ghost Walk', description: '+10% movement speed',
+        passive: [{ stat: 'speed', value: 0.10, mode: 'multiply' }] },
+      { id: 'shadow_t2', tier: 2, branch: 'shadow', name: 'Ambush', description: '+15% damage',
+        passive: [{ stat: 'damage', value: 0.15, mode: 'multiply' }] },
+      { id: 'shadow_t3', tier: 3, branch: 'shadow', name: 'Drain', description: '5% lifesteal on hit',
+        special: [{ type: 'lifesteal', value: 0.05 }] },
+      { id: 'shadow_t4', tier: 4, branch: 'shadow', name: 'Phantom', description: '+15% movement speed',
+        passive: [{ stat: 'speed', value: 0.15, mode: 'multiply' }] },
+      { id: 'shadow_t5', tier: 5, branch: 'shadow', name: 'Shadow Step', description: 'Teleport 150px forward',
+        active: { abilityId: 'shadow_step', name: 'Shadow Step', description: 'Teleport 150px forward', cooldown: 5,
+          params: { type: 'shadow_step', distance: 150 } } },
+    ],
+  },
+  venom: {
+    id: 'venom', name: 'Venom', description: 'Poison and control',
+    playerClass: 'assassin', color: 0x44aa44,
+    nodes: [
+      { id: 'venom_t1', tier: 1, branch: 'venom', name: 'Toxic Blade', description: 'Burn enemies for 2 dps',
+        special: [{ type: 'burn_dot', value: 2 }] },
+      { id: 'venom_t2', tier: 2, branch: 'venom', name: 'Cripple', description: 'Slow enemies 15% on hit',
+        special: [{ type: 'slow_on_hit', value: 0.15 }] },
+      { id: 'venom_t3', tier: 3, branch: 'venom', name: 'Lethal Dose', description: '+15% damage',
+        passive: [{ stat: 'damage', value: 0.15, mode: 'multiply' }] },
+      { id: 'venom_t4', tier: 4, branch: 'venom', name: 'Neurotoxin', description: 'Slow enemies 25% on hit',
+        special: [{ type: 'slow_on_hit', value: 0.25 }] },
+      { id: 'venom_t5', tier: 5, branch: 'venom', name: 'Explosive Trap', description: 'Place poison AOE trap',
+        active: { abilityId: 'explosive_trap', name: 'Explosive Trap', description: 'Place AOE trap', cooldown: 8,
+          params: { type: 'explosive_trap', damage: 35, radius: 70, armTime: 0.5 } } },
+    ],
+  },
+
+  // ── Paladin ───────────────────────────────────────────────────────────────
+  holy_knight: {
+    id: 'holy_knight', name: 'Holy Knight', description: 'Healing and defense',
+    playerClass: 'paladin', color: 0xddcc44,
+    nodes: [
+      { id: 'holy_knight_t1', tier: 1, branch: 'holy_knight', name: 'Divine Grace', description: '+1 HP/s regen',
+        passive: [{ stat: 'hpRegen', value: 1, mode: 'add' }] },
+      { id: 'holy_knight_t2', tier: 2, branch: 'holy_knight', name: 'Holy Armor', description: '+1 flat defense',
+        passive: [{ stat: 'defense', value: 1, mode: 'add' }] },
+      { id: 'holy_knight_t3', tier: 3, branch: 'holy_knight', name: 'Blessed Strikes', description: '5% lifesteal on hit',
+        special: [{ type: 'lifesteal', value: 0.05 }] },
+      { id: 'holy_knight_t4', tier: 4, branch: 'holy_knight', name: 'Sanctuary', description: '+25 max HP',
+        passive: [{ stat: 'maxHp', value: 25, mode: 'add' }] },
+      { id: 'holy_knight_t5', tier: 5, branch: 'holy_knight', name: 'War Cry', description: 'Allies +20% damage for 8s',
+        active: { abilityId: 'war_cry', name: 'War Cry', description: '+20% team damage for 8s', cooldown: 15,
+          params: { type: 'war_cry', damageBonus: 0.20, duration: 8, radius: 200 } } },
+    ],
+  },
+  bulwark: {
+    id: 'bulwark', name: 'Bulwark', description: 'Tank and durability',
+    playerClass: 'paladin', color: 0x5577cc,
+    nodes: [
+      { id: 'bulwark_t1', tier: 1, branch: 'bulwark', name: 'Fortify', description: '+2 flat defense',
+        passive: [{ stat: 'defense', value: 2, mode: 'add' }] },
+      { id: 'bulwark_t2', tier: 2, branch: 'bulwark', name: 'Endurance', description: '+20 max HP',
+        passive: [{ stat: 'maxHp', value: 20, mode: 'add' }] },
+      { id: 'bulwark_t3', tier: 3, branch: 'bulwark', name: 'Retribution', description: 'Reflect 8 damage to attackers',
+        special: [{ type: 'thorns', value: 8 }] },
+      { id: 'bulwark_t4', tier: 4, branch: 'bulwark', name: 'Unbreakable', description: '+3 flat defense',
+        passive: [{ stat: 'defense', value: 3, mode: 'add' }] },
+      { id: 'bulwark_t5', tier: 5, branch: 'bulwark', name: 'Shield Wall', description: '50% damage reduction for 5s',
+        active: { abilityId: 'shield_wall', name: 'Shield Wall', description: '50% DR for 5s', cooldown: 12,
+          params: { type: 'shield_wall', damageReduction: 0.50, duration: 5 } } },
+    ],
+  },
+  crusader: {
+    id: 'crusader', name: 'Crusader', description: 'Damage and crits',
+    playerClass: 'paladin', color: 0xcc8833,
+    nodes: [
+      { id: 'crusader_t1', tier: 1, branch: 'crusader', name: 'Smite', description: '+10% damage',
+        passive: [{ stat: 'damage', value: 0.10, mode: 'multiply' }] },
+      { id: 'crusader_t2', tier: 2, branch: 'crusader', name: 'Judgment', description: '+5% crit chance',
+        passive: [{ stat: 'critChance', value: 0.05, mode: 'add' }] },
+      { id: 'crusader_t3', tier: 3, branch: 'crusader', name: 'Zeal', description: '+15% attack speed',
+        passive: [{ stat: 'attackSpeed', value: 0.15, mode: 'multiply' }] },
+      { id: 'crusader_t4', tier: 4, branch: 'crusader', name: 'Wrath', description: '+20% damage',
+        passive: [{ stat: 'damage', value: 0.20, mode: 'multiply' }] },
+      { id: 'crusader_t5', tier: 5, branch: 'crusader', name: 'Meteor', description: 'Holy fire at target area',
+        active: { abilityId: 'meteor', name: 'Meteor', description: 'Massive AOE at target', cooldown: 12,
+          params: { type: 'meteor', damage: 70, radius: 100 } } },
+    ],
+  },
+
+  // ── Necromancer ────────────────────────────────────────────────────────────
+  death_mage: {
+    id: 'death_mage', name: 'Death Mage', description: 'Damage over time',
+    playerClass: 'necromancer', color: 0x339988,
+    nodes: [
+      { id: 'death_mage_t1', tier: 1, branch: 'death_mage', name: 'Decay', description: 'Burn enemies for 3 dps',
+        special: [{ type: 'burn_dot', value: 3 }] },
+      { id: 'death_mage_t2', tier: 2, branch: 'death_mage', name: 'Blight', description: '+10% damage',
+        passive: [{ stat: 'damage', value: 0.10, mode: 'multiply' }] },
+      { id: 'death_mage_t3', tier: 3, branch: 'death_mage', name: 'Necrosis', description: '+5% crit chance',
+        passive: [{ stat: 'critChance', value: 0.05, mode: 'add' }] },
+      { id: 'death_mage_t4', tier: 4, branch: 'death_mage', name: 'Plague', description: 'Burn enemies for 5 dps',
+        special: [{ type: 'burn_dot', value: 5 }] },
+      { id: 'death_mage_t5', tier: 5, branch: 'death_mage', name: 'Meteor', description: 'Death explosion at target',
+        active: { abilityId: 'meteor', name: 'Meteor', description: 'Massive AOE at target', cooldown: 10,
+          params: { type: 'meteor', damage: 60, radius: 100 } } },
+    ],
+  },
+  cursed: {
+    id: 'cursed', name: 'Cursed', description: 'Control and debuffs',
+    playerClass: 'necromancer', color: 0x774488,
+    nodes: [
+      { id: 'cursed_t1', tier: 1, branch: 'cursed', name: 'Hex', description: 'Slow enemies 20% on hit',
+        special: [{ type: 'slow_on_hit', value: 0.20 }] },
+      { id: 'cursed_t2', tier: 2, branch: 'cursed', name: 'Wither', description: '+10% damage',
+        passive: [{ stat: 'damage', value: 0.10, mode: 'multiply' }] },
+      { id: 'cursed_t3', tier: 3, branch: 'cursed', name: 'Soul Siphon', description: '5% lifesteal on hit',
+        special: [{ type: 'lifesteal', value: 0.05 }] },
+      { id: 'cursed_t4', tier: 4, branch: 'cursed', name: 'Entropy', description: 'Slow enemies 30% on hit',
+        special: [{ type: 'slow_on_hit', value: 0.30 }] },
+      { id: 'cursed_t5', tier: 5, branch: 'cursed', name: 'Blizzard', description: 'Cursed zone that slows all enemies',
+        active: { abilityId: 'blizzard', name: 'Blizzard', description: 'AOE slow zone for 6s', cooldown: 14,
+          params: { type: 'blizzard', slowFactor: 0.50, duration: 6, radius: 110 } } },
+    ],
+  },
+  blood_magic: {
+    id: 'blood_magic', name: 'Blood Magic', description: 'Sacrifice and power',
+    playerClass: 'necromancer', color: 0xaa3344,
+    nodes: [
+      { id: 'blood_magic_t1', tier: 1, branch: 'blood_magic', name: 'Blood Pact', description: '+15% damage',
+        passive: [{ stat: 'damage', value: 0.15, mode: 'multiply' }] },
+      { id: 'blood_magic_t2', tier: 2, branch: 'blood_magic', name: 'Crimson Thorns', description: 'Reflect 5 damage to attackers',
+        special: [{ type: 'thorns', value: 5 }] },
+      { id: 'blood_magic_t3', tier: 3, branch: 'blood_magic', name: 'Life Tap', description: '8% lifesteal on hit',
+        special: [{ type: 'lifesteal', value: 0.08 }] },
+      { id: 'blood_magic_t4', tier: 4, branch: 'blood_magic', name: 'Sanguine Power', description: '+5% crit chance',
+        passive: [{ stat: 'critChance', value: 0.05, mode: 'add' }] },
+      { id: 'blood_magic_t5', tier: 5, branch: 'blood_magic', name: 'Teleport', description: 'Blood warp to cursor (200px max)',
+        active: { abilityId: 'teleport', name: 'Teleport', description: 'Blink to cursor, 200px max', cooldown: 8,
+          params: { type: 'teleport', maxDistance: 200 } } },
+    ],
+  },
+
+  // ── Beastmaster ───────────────────────────────────────────────────────────
+  feral: {
+    id: 'feral', name: 'Feral', description: 'Raw damage and speed',
+    playerClass: 'beastmaster', color: 0xcc6633,
+    nodes: [
+      { id: 'feral_t1', tier: 1, branch: 'feral', name: 'Savage Claws', description: '+10% damage',
+        passive: [{ stat: 'damage', value: 0.10, mode: 'multiply' }] },
+      { id: 'feral_t2', tier: 2, branch: 'feral', name: 'Predatory Instinct', description: '+10% attack speed',
+        passive: [{ stat: 'attackSpeed', value: 0.10, mode: 'multiply' }] },
+      { id: 'feral_t3', tier: 3, branch: 'feral', name: 'Rend', description: 'Burn enemies for 4 dps',
+        special: [{ type: 'burn_dot', value: 4 }] },
+      { id: 'feral_t4', tier: 4, branch: 'feral', name: 'Apex Predator', description: '+5% crit chance',
+        passive: [{ stat: 'critChance', value: 0.05, mode: 'add' }] },
+      { id: 'feral_t5', tier: 5, branch: 'feral', name: 'Whirlwind', description: 'Wild frenzy dealing 3× damage in AOE',
+        active: { abilityId: 'whirlwind', name: 'Whirlwind', description: '360° spin, 3× damage', cooldown: 8,
+          params: { type: 'whirlwind', damage: 3, radius: 70 } } },
+    ],
+  },
+  packleader: {
+    id: 'packleader', name: 'Packleader', description: 'Team buffs and resilience',
+    playerClass: 'beastmaster', color: 0x55aa77,
+    nodes: [
+      { id: 'packleader_t1', tier: 1, branch: 'packleader', name: 'Thick Hide', description: '+15 max HP',
+        passive: [{ stat: 'maxHp', value: 15, mode: 'add' }] },
+      { id: 'packleader_t2', tier: 2, branch: 'packleader', name: 'Pack Vitality', description: '+1 HP/s regen',
+        passive: [{ stat: 'hpRegen', value: 1, mode: 'add' }] },
+      { id: 'packleader_t3', tier: 3, branch: 'packleader', name: 'Alpha Roar', description: '+10% damage',
+        passive: [{ stat: 'damage', value: 0.10, mode: 'multiply' }] },
+      { id: 'packleader_t4', tier: 4, branch: 'packleader', name: 'Resilience', description: '+20 max HP',
+        passive: [{ stat: 'maxHp', value: 20, mode: 'add' }] },
+      { id: 'packleader_t5', tier: 5, branch: 'packleader', name: 'War Cry', description: 'Rally allies +20% damage for 8s',
+        active: { abilityId: 'war_cry', name: 'War Cry', description: '+20% team damage for 8s', cooldown: 15,
+          params: { type: 'war_cry', damageBonus: 0.20, duration: 8, radius: 200 } } },
+    ],
+  },
+  survivalist: {
+    id: 'survivalist', name: 'Survivalist', description: 'Mobility and utility',
+    playerClass: 'beastmaster', color: 0x8899aa,
+    nodes: [
+      { id: 'survivalist_t1', tier: 1, branch: 'survivalist', name: 'Nimble', description: '+10% movement speed',
+        passive: [{ stat: 'speed', value: 0.10, mode: 'multiply' }] },
+      { id: 'survivalist_t2', tier: 2, branch: 'survivalist', name: 'Natural Armor', description: '+1 flat defense',
+        passive: [{ stat: 'defense', value: 1, mode: 'add' }] },
+      { id: 'survivalist_t3', tier: 3, branch: 'survivalist', name: 'Leech', description: '5% lifesteal on hit',
+        special: [{ type: 'lifesteal', value: 0.05 }] },
+      { id: 'survivalist_t4', tier: 4, branch: 'survivalist', name: 'Evasion', description: '+10% movement speed',
+        passive: [{ stat: 'speed', value: 0.10, mode: 'multiply' }] },
+      { id: 'survivalist_t5', tier: 5, branch: 'survivalist', name: 'Shadow Step', description: 'Dash 150px forward',
+        active: { abilityId: 'shadow_step', name: 'Shadow Step', description: 'Teleport 150px forward', cooldown: 6,
+          params: { type: 'shadow_step', distance: 150 } } },
+    ],
+  },
 };
 
 /** Which branches belong to each class (display order: left, center, right). */
@@ -241,6 +457,10 @@ export const CLASS_BRANCHES: Record<PlayerClass, SkillBranchId[]> = {
   warrior: ['berserker', 'guardian', 'warlord'],
   ranger: ['sharpshooter', 'trapper', 'scout'],
   mage: ['pyromancer', 'frost_mage', 'arcanist'],
+  assassin: ['blade_dancer', 'shadow', 'venom'],
+  paladin: ['holy_knight', 'bulwark', 'crusader'],
+  necromancer: ['death_mage', 'cursed', 'blood_magic'],
+  beastmaster: ['feral', 'packleader', 'survivalist'],
 };
 
 // ─── Lookup helpers ────────────────────────────────────────────────────────────

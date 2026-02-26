@@ -33,11 +33,12 @@ import type {
   PotionEquipMessage,
   PotionRestockMessage,
 } from '@shared/protocol';
-import { PLAYER_CLASSES } from '@shared/ClassDefinitions';
+import { PLAYER_CLASSES, BASE_CLASSES } from '@shared/ClassDefinitions';
 import type { PlayerClass } from '@shared/ClassDefinitions';
 import { GAME_VERSION, RECONNECT_GRACE_MS } from '@shared/constants';
 import type { MetaStats } from '@shared/MetaStats';
 import { emptyMetaStats, mergeRunStats } from '@shared/MetaStats';
+import { computeUnlockedClasses } from '@shared/MilestoneDefinitions';
 import type { MetaStatsRequestMessage, CardPickMessage } from '@shared/protocol';
 
 /** Minimum interval (ms) between SESSION_CREATE or SESSION_JOIN per client. */
@@ -175,7 +176,14 @@ export class SessionManager {
       if (!UUID_RE.test(playerId)) continue;
       try {
         const data = JSON.parse(fs.readFileSync(path.join(META_DIR, file), 'utf-8'));
-        this.metaStats.set(playerId, data);
+        const defaults = emptyMetaStats();
+        const merged: MetaStats = {
+          ...defaults,
+          ...data,
+          resourcesGathered: { ...defaults.resourcesGathered, ...data.resourcesGathered },
+          unlockedClasses: data.unlockedClasses ?? [],
+        };
+        this.metaStats.set(playerId, merged);
       } catch {
         console.warn(`[MetaStats] Failed to load ${file}`);
       }
@@ -329,13 +337,16 @@ export class SessionManager {
         let meta = this.metaStats.get(pid);
         if (!meta) { meta = emptyMetaStats(); this.metaStats.set(pid, meta); }
         mergeRunStats(meta, runStats);
+        // Recompute class unlocks after stats merge
+        meta.unlockedClasses = computeUnlockedClasses(meta);
         this.writeMetaStatsToDisk(pid, meta);
       }
       console.log(`[MetaStats] Merged run stats for ${playerStats.size} player(s)`);
     };
 
     const displayName = this.displayNames.get(client.id) ?? `Player${client.id}`;
-    const playerClass = this.validatePlayerClass(msg.playerClass);
+    const unlocked = this.getUnlockedClasses(client.id);
+    const playerClass = this.validatePlayerClass(msg.playerClass, unlocked);
     const player = this.session.addPlayer(client, displayName, /* isHost */ true, hostPlayerId, playerClass);
 
     const ack: SessionAckMessage = {
@@ -347,6 +358,7 @@ export class SessionManager {
       playerId: player.playerId,
       isHost: true,
       players: this.session.getLobbySlots(),
+      unlockedClasses: unlocked,
     };
     this.socket.send(client, ack);
     this.beacon.update({ code: this.session.code, playerCount: this.session.playerCount });
@@ -417,7 +429,8 @@ export class SessionManager {
 
     const displayName = this.displayNames.get(client.id) ?? `Player${client.id}`;
     const joinerId = this.clientPlayerIds.get(client.id);
-    const joinClass = this.validatePlayerClass(msg.playerClass);
+    const unlocked = this.getUnlockedClasses(client.id);
+    const joinClass = this.validatePlayerClass(msg.playerClass, unlocked);
     const player = this.session.addPlayer(client, displayName, /* isHost */ false, joinerId, joinClass);
 
     // Acknowledge to the joining player
@@ -430,6 +443,7 @@ export class SessionManager {
       playerId: player.playerId,
       isHost: false,
       players: this.session.getLobbySlots(),
+      unlockedClasses: unlocked,
     };
     this.socket.send(client, ack);
 
@@ -514,7 +528,8 @@ export class SessionManager {
 
   private onClassSelect(client: ConnectedClient, msg: ClassSelectMessage): void {
     if (!this.session) return;
-    const playerClass = this.validatePlayerClass(msg.playerClass);
+    const unlocked = this.getUnlockedClasses(client.id);
+    const playerClass = this.validatePlayerClass(msg.playerClass, unlocked);
     this.session.handleClassSelect(client.id, playerClass, (c, m) => this.socket.send(c, m));
   }
 
@@ -555,9 +570,23 @@ export class SessionManager {
     targetClient.ws.close();
   }
 
-  private validatePlayerClass(raw: unknown): PlayerClass {
+  /** Get the list of advanced classes a client has unlocked. */
+  private getUnlockedClasses(clientId: string): string[] {
+    const playerId = this.clientPlayerIds.get(clientId);
+    if (!playerId) return [];
+    const meta = this.metaStats.get(playerId);
+    if (!meta) return [];
+    return meta.unlockedClasses ?? computeUnlockedClasses(meta);
+  }
+
+  private validatePlayerClass(raw: unknown, unlockedClasses?: string[]): PlayerClass {
     if (typeof raw === 'string' && (PLAYER_CLASSES as readonly string[]).includes(raw)) {
-      return raw as PlayerClass;
+      const cls = raw as PlayerClass;
+      // Advanced classes require milestone unlocks
+      if (!(BASE_CLASSES as readonly string[]).includes(cls)) {
+        if (!unlockedClasses?.includes(cls)) return 'warrior';
+      }
+      return cls;
     }
     return 'warrior';
   }

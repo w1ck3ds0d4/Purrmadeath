@@ -274,6 +274,8 @@ export interface SessionAckMessage extends BaseMessage {
   isHost: boolean;
   /** Snapshot of all current lobby slots. */
   players: LobbySlot[];
+  /** Advanced classes this player has unlocked via lifetime milestones. */
+  unlockedClasses?: string[];
 }
 
 export interface LobbySlot {

@@ -1,11 +1,15 @@
 import type { LobbySlot } from '@shared/protocol';
-import { CLASS_DISPLAY_NAMES } from '@shared/ClassDefinitions';
+import { CLASS_DISPLAY_NAMES, BASE_CLASSES } from '@shared/ClassDefinitions';
 import type { PlayerClass } from '@shared/ClassDefinitions';
 
 const CLASS_BADGE_COLORS: Record<string, string> = {
-  warrior: '#cc9966',
-  ranger:  '#55cc77',
-  mage:    '#9966dd',
+  warrior:     '#cc9966',
+  ranger:      '#55cc77',
+  mage:        '#9966dd',
+  assassin:    '#cc5555',
+  paladin:     '#ccaa44',
+  necromancer: '#55bbaa',
+  beastmaster: '#cc8844',
 };
 
 /**
@@ -51,6 +55,7 @@ export class LobbyOverlay {
     for (const btn of this.classButtons) {
       btn.addEventListener('click', () => {
         if (this.locked) return;
+        if (btn.classList.contains('locked')) return;
         const cls = btn.dataset.class as PlayerClass;
         this.selectClass(cls);
         this.onClassSelect?.(cls);
@@ -85,6 +90,16 @@ export class LobbyOverlay {
     for (const btn of this.classButtons) {
       (btn as HTMLButtonElement).style.opacity = locked ? '0.4' : '';
       (btn as HTMLButtonElement).style.cursor = locked ? 'not-allowed' : 'pointer';
+    }
+  }
+
+  /** Update which advanced classes are unlocked (show/hide lock state). */
+  setUnlockedClasses(unlocked: string[]): void {
+    for (const btn of this.classButtons) {
+      const cls = btn.dataset.class as string;
+      const isBase = (BASE_CLASSES as readonly string[]).includes(cls);
+      const isUnlocked = isBase || unlocked.includes(cls);
+      btn.classList.toggle('locked', !isUnlocked);
     }
   }
 

@@ -213,6 +213,7 @@ export class EnemySystem {
       const meleeRange = stats?.range ?? ENEMY_MELEE_RANGE;
       const rangedRange = stats?.rangedRange ?? (variant === 'ranger' ? ENEMY_RANGER_RANGE : 0);
       const hasRanged = rangedRange > 0;
+      const eRadius = stats?.radius ?? ENEMY_RADIUS;
       const enemyOverrides = stats
         ? { damage: stats.damage, range: stats.range, knockback: stats.knockback, aoe: variant === 'titan' }
         : ENEMY_OVERRIDES_DEFAULT;
@@ -243,7 +244,7 @@ export class EnemySystem {
       let directBeeline = false;
 
       // Margin to push nav point outside building collision so pathfinder can reach it
-      const NAV_MARGIN = 14; // ~ENEMY_RADIUS + buffer
+      const navMargin = eRadius + 4;
 
       // Helper: find nearest player (alive, not downed)
       const findNearestPlayer = (maxRange: number) => {
@@ -276,15 +277,15 @@ export class EnemySystem {
             const cy = Math.max(bpos.y - bHalf, Math.min(bpos.y + bHalf, pos.y));
             const pdx = cx - bpos.x, pdy = cy - bpos.y;
             const pLen = Math.sqrt(pdx * pdx + pdy * pdy);
-            let nx = pLen > 0 ? cx + (pdx / pLen) * NAV_MARGIN : cx + NAV_MARGIN;
-            let ny = pLen > 0 ? cy + (pdy / pLen) * NAV_MARGIN : cy;
+            let nx = pLen > 0 ? cx + (pdx / pLen) * navMargin : cx + navMargin;
+            let ny = pLen > 0 ? cy + (pdy / pLen) * navMargin : cy;
             // If nav point lands on unwalkable terrain (e.g. water), try 4 cardinal sides
             if (!(TILE_DEFS[this.generator.getTile(Math.floor(nx / TILE_SIZE), Math.floor(ny / TILE_SIZE))]?.walkable ?? false)) {
               const sides = [
-                { x: bpos.x + bHalf + NAV_MARGIN, y: bpos.y },
-                { x: bpos.x - bHalf - NAV_MARGIN, y: bpos.y },
-                { x: bpos.x, y: bpos.y + bHalf + NAV_MARGIN },
-                { x: bpos.x, y: bpos.y - bHalf - NAV_MARGIN },
+                { x: bpos.x + bHalf + navMargin, y: bpos.y },
+                { x: bpos.x - bHalf - navMargin, y: bpos.y },
+                { x: bpos.x, y: bpos.y + bHalf + navMargin },
+                { x: bpos.x, y: bpos.y - bHalf - navMargin },
               ];
               let bestDist = Infinity;
               for (const side of sides) {
@@ -435,7 +436,7 @@ export class EnemySystem {
         const PLAYER_DISTRACT_RANGE = rangedRange > 0 ? rangedRange : ENEMY_MELEE_RANGE * 2;
         const closestPlayer = findNearestPlayer(ENEMY_AGGRO_RANGE);
         if (closestPlayer && (closestPlayer.dist < PLAYER_DISTRACT_RANGE || !targetPos)) {
-          if (!targetPos || this.isDirectPathClear(pos.x, pos.y, closestPlayer.pos.x, closestPlayer.pos.y)) {
+          if (!targetPos || this.isDirectPathClear(pos.x, pos.y, closestPlayer.pos.x, closestPlayer.pos.y, eRadius)) {
             targetPos = closestPlayer.pos;
             navPos = closestPlayer.pos;
             targetDist = closestPlayer.dist;
@@ -565,10 +566,9 @@ export class EnemySystem {
             const excludedTiles = targetEntityId !== null ? this.buildingTilesMap.get(targetEntityId) : undefined;
             if (excludedTiles) for (const tk of excludedTiles) this.buildingBlockedTiles.delete(tk);
 
-            this.navigateToward(id, pos, navPos as PositionComponent, inp, dt, len, ddx, ddy);
+            this.navigateToward(id, pos, navPos as PositionComponent, inp, dt, len, ddx, ddy, eRadius);
 
             // Local obstacle avoidance: steer around resource nodes and portals
-            const eRadius = stats?.radius ?? ENEMY_RADIUS;
             this.applyObstacleAvoidance(pos, inp, navPos as { x: number; y: number }, eRadius);
 
             // Stuck detection: if enemy hasn't moved, apply perpendicular wiggle
@@ -632,7 +632,7 @@ export class EnemySystem {
             // Attack any building within melee range while navigating (break through obstacles)
             // Ghosts don't attack buildings
             if (variant !== 'ghost') {
-              const blocking = this.findBlockingBuilding(pos);
+              const blocking = this.findBlockingBuilding(pos, meleeRange);
               if (blocking) {
                 const facing = Math.atan2(blocking.y - pos.y, blocking.x - pos.x);
                 const facingComp = world.getComponent<FacingComponent>(id, C.Facing);
@@ -713,9 +713,10 @@ export class EnemySystem {
     directLen: number,
     directDx: number,
     directDy: number,
+    enemyRadius = ENEMY_RADIUS,
   ): boolean {
     // If direct line is clear (tiles + buildings), chase directly
-    if (this.isDirectPathClear(pos.x, pos.y, target.x, target.y)) {
+    if (this.isDirectPathClear(pos.x, pos.y, target.x, target.y, enemyRadius)) {
       inp.dx = directLen > 0 ? directDx / directLen : 0;
       inp.dy = directLen > 0 ? directDy / directLen : 0;
       this.paths.delete(id);
@@ -723,7 +724,7 @@ export class EnemySystem {
     }
 
     // Use cached path or compute a new one (building-aware)
-    const path = this.getOrComputePath(id, pos, target, dt);
+    const path = this.getOrComputePath(id, pos, target, dt, enemyRadius);
 
     if (path && path.nextIndex < path.waypoints.length) {
       const wp = path.waypoints[path.nextIndex];
@@ -731,7 +732,9 @@ export class EnemySystem {
       const wpDy = wp.y - pos.y;
       const wpLen = Math.sqrt(wpDx * wpDx + wpDy * wpDy);
 
-      if (wpLen < WAYPOINT_REACH) {
+      // Large enemies consider waypoints reached at greater distance
+      const wpReach = Math.max(WAYPOINT_REACH, enemyRadius);
+      if (wpLen < wpReach) {
         // Reached waypoint, advance to next
         path.nextIndex++;
         if (path.nextIndex >= path.waypoints.length) {
@@ -765,6 +768,7 @@ export class EnemySystem {
     pos: PositionComponent,
     target: PositionComponent,
     dt: number,
+    enemyRadius = ENEMY_RADIUS,
   ): CachedPath | null {
     const existing = this.paths.get(enemyId);
 
@@ -780,7 +784,9 @@ export class EnemySystem {
     }
 
     // Compute new path (with building-blocked tiles)
-    const waypoints = findPath(this.generator, pos.x, pos.y, target.x, target.y, this.buildingBlockedTiles, this.bridgeTiles);
+    // Inflate blocked tiles for large enemies so they don't try to squeeze through narrow gaps
+    const inflation = enemyRadius > TILE_SIZE * 0.5 ? 1 : 0;
+    const waypoints = findPath(this.generator, pos.x, pos.y, target.x, target.y, this.buildingBlockedTiles, this.bridgeTiles, inflation);
     if (!waypoints || waypoints.length === 0) {
       this.paths.delete(enemyId);
       return null;
@@ -799,12 +805,11 @@ export class EnemySystem {
   }
 
   /** Ray-march check: is the path clear of unwalkable tiles, buildings, resources, and portals? */
-  private isDirectPathClear(sx: number, sy: number, ex: number, ey: number): boolean {
+  private isDirectPathClear(sx: number, sy: number, ex: number, ey: number, r = ENEMY_RADIUS): boolean {
     const dx = ex - sx;
     const dy = ey - sy;
     const dist = Math.sqrt(dx * dx + dy * dy);
     const steps = Math.ceil(dist / (TILE_SIZE / 2)); // 16px resolution
-    const r = ENEMY_RADIUS;
 
     for (let i = 0; i <= steps; i++) {
       const t = steps > 0 ? i / steps : 0;
@@ -841,13 +846,13 @@ export class EnemySystem {
   }
 
   /** Find the nearest building within melee range to break through. */
-  private findBlockingBuilding(pos: PositionComponent): { x: number; y: number } | null {
+  private findBlockingBuilding(pos: PositionComponent, range = ENEMY_MELEE_RANGE): { x: number; y: number } | null {
     let closest: { x: number; y: number; dist: number } | null = null;
     for (const b of this.buildingEntities) {
       const edx = Math.max(0, Math.abs(b.x - pos.x) - b.half);
       const edy = Math.max(0, Math.abs(b.y - pos.y) - b.half);
       const edgeDist = Math.sqrt(edx * edx + edy * edy);
-      if (edgeDist <= ENEMY_MELEE_RANGE && (!closest || edgeDist < closest.dist)) {
+      if (edgeDist <= range && (!closest || edgeDist < closest.dist)) {
         closest = { x: b.x, y: b.y, dist: edgeDist };
       }
     }

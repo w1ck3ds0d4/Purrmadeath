@@ -57,6 +57,17 @@ function chebyshev(ax: number, ay: number, bx: number, by: number): number {
   return Math.max(dx, dy) + (SQRT2 - 1) * Math.min(dx, dy);
 }
 
+/** Check if any tile within inflation distance is blocked (Minkowski sum for large entities). */
+function isTileInflatedBlocked(tx: number, ty: number, blocked: Set<number>, inflation: number): boolean {
+  for (let dx = -inflation; dx <= inflation; dx++) {
+    for (let dy = -inflation; dy <= inflation; dy++) {
+      if (dx === 0 && dy === 0) continue;
+      if (blocked.has(tileKey(tx + dx, ty + dy))) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Find a path from world-pixel (sx, sy) to world-pixel (gx, gy) using A*.
  * Returns an array of world-pixel waypoints, or null if no path found.
@@ -70,6 +81,7 @@ export function findPath(
   gx: number, gy: number,
   blockedTiles?: Set<number>,
   bridgeTiles?: Set<number>,
+  inflation = 0,
 ): Waypoint[] | null {
   const startTx = Math.floor(sx / TILE_SIZE);
   const startTy = Math.floor(sy / TILE_SIZE);
@@ -139,6 +151,12 @@ export function findPath(
       // Walkability check (tiles + building entities + bridge overrides)
       if (!isWalkable(nx, ny)) continue;
       if (blockedTiles?.has(nKey)) continue;
+
+      // Large-entity inflation: reject tiles near blocked tiles (prevents squeezing through gaps)
+      if (inflation > 0 && blockedTiles &&
+          (nx !== startTx || ny !== startTy) && (nx !== goalTx || ny !== goalTy)) {
+        if (isTileInflatedBlocked(nx, ny, blockedTiles, inflation)) continue;
+      }
 
       // For diagonal moves, both adjacent cardinal tiles must be walkable
       // (prevents corner-cutting through walls)

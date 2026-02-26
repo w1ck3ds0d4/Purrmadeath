@@ -5,9 +5,11 @@ export interface MetaStats {
   totalEnemiesKilled: number;
   killsByType: Record<string, number>;
   totalWavesSurvived: number;
+  highestWaveSurvived: number;
   totalTimePlayed: number;
   totalBuildingsBuilt: number;
   totalRuns: number;
+  unlockedClasses: string[];
 }
 
 /** Create a blank MetaStats object with all counters at 0. */
@@ -18,9 +20,11 @@ export function emptyMetaStats(): MetaStats {
     totalEnemiesKilled: 0,
     killsByType: {},
     totalWavesSurvived: 0,
+    highestWaveSurvived: 0,
     totalTimePlayed: 0,
     totalBuildingsBuilt: 0,
     totalRuns: 0,
+    unlockedClasses: [],
   };
 }
 
@@ -47,6 +51,7 @@ export function mergeRunStats(meta: MetaStats, run: RunStats): void {
     meta.killsByType[type] = (meta.killsByType[type] ?? 0) + count;
   }
   meta.totalWavesSurvived += run.wavesSurvived;
+  meta.highestWaveSurvived = Math.max(meta.highestWaveSurvived ?? 0, run.wavesSurvived);
   meta.totalTimePlayed += run.timePlayed;
   meta.totalBuildingsBuilt += run.buildingsBuilt;
   meta.totalRuns++;

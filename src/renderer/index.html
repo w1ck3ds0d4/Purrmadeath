@@ -394,13 +394,16 @@
         color: #8a9ab0;
         background: rgba(255, 255, 255, 0.04);
         border: 2px solid rgba(255, 255, 255, 0.10);
-        padding: 12px 24px;
+        padding: 12px 14px;
         cursor: pointer;
         letter-spacing: 1px;
         transition: background 0.15s, border-color 0.15s, color 0.15s;
         outline: none;
-        min-width: 120px;
+        flex: 0 0 150px;
+        height: 58px;
         text-align: center;
+        box-sizing: border-box;
+        overflow: hidden;
       }
 
       .class-btn:hover {
@@ -414,9 +417,32 @@
         border-color: currentColor;
       }
 
-      .class-btn[data-class="warrior"].selected { color: #cc9966; border-color: #cc9966; }
-      .class-btn[data-class="ranger"].selected  { color: #55cc77; border-color: #55cc77; }
-      .class-btn[data-class="mage"].selected    { color: #9966dd; border-color: #9966dd; }
+      .class-btn[data-class="warrior"].selected   { color: #cc9966; border-color: #cc9966; }
+      .class-btn[data-class="ranger"].selected    { color: #55cc77; border-color: #55cc77; }
+      .class-btn[data-class="mage"].selected      { color: #9966dd; border-color: #9966dd; }
+      .class-btn[data-class="assassin"].selected   { color: #cc5555; border-color: #cc5555; }
+      .class-btn[data-class="paladin"].selected    { color: #ccaa44; border-color: #ccaa44; }
+      .class-btn[data-class="necromancer"].selected { color: #55bbaa; border-color: #55bbaa; }
+      .class-btn[data-class="beastmaster"].selected { color: #cc8844; border-color: #cc8844; }
+
+      .class-btn.locked {
+        opacity: 0.35;
+        cursor: not-allowed;
+        pointer-events: none;
+      }
+
+      .class-btn-unlock {
+        display: none;
+        font-size: 9px;
+        color: #665533;
+        margin-top: 2px;
+        letter-spacing: 0;
+        font-style: italic;
+        white-space: nowrap;
+      }
+
+      .class-btn.locked .class-btn-unlock { display: block; }
+      .class-btn.locked .class-btn-stats { display: none; }
 
       .class-btn-stats {
         display: block;
@@ -424,6 +450,7 @@
         color: #4a5a6a;
         margin-top: 3px;
         letter-spacing: 0;
+        white-space: nowrap;
       }
 
       .class-btn.selected .class-btn-stats { color: #6a7a8a; }
@@ -478,7 +505,7 @@
             <button id="btn-join-game" class="join-menu-btn">Join</button>
           </div>
 
-          <button id="btn-stats" class="menu-btn muted" style="margin-top:8px;">Stats</button>
+          <button id="btn-stats" class="menu-btn muted" style="margin-top:8px;">Progression</button>
           <button id="btn-cards" class="menu-btn muted">Cards</button>
           <button id="btn-settings" class="menu-btn muted">Settings</button>
         </div>
@@ -514,6 +541,26 @@
               <button class="class-btn" data-class="mage">
                 Mage
                 <span class="class-btn-stats">70 HP · Staff · 14 dmg</span>
+              </button>
+              <button class="class-btn locked" data-class="assassin">
+                Assassin
+                <span class="class-btn-stats">65 HP · Daggers · 22 dmg</span>
+                <span class="class-btn-unlock">Kill 500 enemies</span>
+              </button>
+              <button class="class-btn locked" data-class="paladin">
+                Paladin
+                <span class="class-btn-stats">100 HP · Mace · 15 dmg</span>
+                <span class="class-btn-unlock">Build 50 buildings</span>
+              </button>
+              <button class="class-btn locked" data-class="necromancer">
+                Necromancer
+                <span class="class-btn-stats">60 HP · Tome · 16 dmg</span>
+                <span class="class-btn-unlock">Survive to wave 15</span>
+              </button>
+              <button class="class-btn locked" data-class="beastmaster">
+                Beastmaster
+                <span class="class-btn-stats">90 HP · Claws · 14 dmg</span>
+                <span class="class-btn-unlock">Gather 2000 resources</span>
               </button>
             </div>
           </div>
