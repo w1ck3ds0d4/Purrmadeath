@@ -31,6 +31,8 @@ import {
     WEAPONS
 } from './config/constants.js';
 import { createBuildingSystem } from './systems/buildingSystem.js';
+import { createEnemySystem } from './systems/enemySystem.js';
+import { createPlayerSystem } from './systems/playerSystem.js';
 import { createWorldSystem } from './systems/worldSystem.js';
 
 async function init() {
@@ -66,33 +68,33 @@ async function init() {
     const combatStats = {
         enemiesKilled: 0
     };
-    const playerState = {
-        hp: PLAYER_MAX_HP,
-        maxHp: PLAYER_MAX_HP,
-        invulnFrames: 0,
-        isDead: false
-    };
-    const playerCombat = {
-        weapon: 'sword',
-        cooldownFrames: 0,
-        facingX: 1,
-        facingY: 0
-    };
+    const spawnWorldPos = { x: TILE_SIZE / 2, y: TILE_SIZE / 2 };
+    const playerSystem = createPlayerSystem({
+        stage: app.stage,
+        spawnWorldX: spawnWorldPos.x,
+        spawnWorldY: spawnWorldPos.y,
+        screenWidth: window.innerWidth,
+        screenHeight: window.innerHeight
+    });
+    const playerState = playerSystem.state;
+    playerState.hp = PLAYER_MAX_HP;
+    playerState.maxHp = PLAYER_MAX_HP;
+    const playerCombat = playerSystem.combat;
     const floatingTexts = [];
     const enemies = [];
     const projectiles = [];
     let enemySpawnTimer = 0;
     let enemyIdCounter = 0;
-    let playerHitFlashFrames = 0;
-    let framePathRequests = 0;
-    let framePathExecuted = 0;
-    let framePathDeferred = 0;
-    let framePathBudget = 0;
+    let uiRefreshTimer = 0;
     const debugLogs = [];
+    // Browser-side crash records are persisted in localStorage for post-mortem checks.
+    const crashLogs = [];
     let debugOverlayEnabled = false;
     let smoothedFps = 60;
     let isPaused = false;
     let buildingSystem = null;
+    let enemySystem = null;
+    // World streaming/resource system; owns terrain cache and node spawning.
     const worldSystem = createWorldSystem({
         tileLayer,
         resourceLayer,
@@ -108,632 +110,15 @@ async function init() {
         });
     }
 
-    function createEnemySprite() {
-        const container = new PIXI.Container();
-
-        const body = new PIXI.Graphics();
-        body.circle(ENEMY_RADIUS, ENEMY_RADIUS, ENEMY_RADIUS);
-        body.fill(0x8f1f1f);
-        body.stroke({ width: 1, color: 0x220808 });
-
-        const healthBg = new PIXI.Graphics();
-        const healthFill = new PIXI.Graphics();
-        container.addChild(body);
-        container.addChild(healthBg);
-        container.addChild(healthFill);
-
-        return { container, healthBg, healthFill };
-    }
-
-    function updateEnemyHealthBar(enemy) {
-        const barWidth = ENEMY_SIZE;
-        const barHeight = 4;
-        const barY = -8;
-        const ratio = Math.max(0, Math.min(1, enemy.hp / enemy.maxHp));
-
-        enemy.healthBg.clear();
-        enemy.healthBg.rect(0, barY, barWidth, barHeight);
-        enemy.healthBg.fill(0x1d1d1d);
-
-        enemy.healthFill.clear();
-        enemy.healthFill.rect(0, barY, barWidth * ratio, barHeight);
-        enemy.healthFill.fill(0x4ed85a);
-
-        enemy.healthBg.visible = ratio < 1;
-        enemy.healthFill.visible = ratio < 1;
-    }
-
-    function createBulletSprite() {
-        const sprite = new PIXI.Graphics();
-        sprite.circle(4, 4, 4);
-        sprite.fill(0xf7e56a);
-        sprite.stroke({ width: 1, color: 0x2a2409 });
-        return sprite;
-    }
-
-    function createAimIndicator() {
-        const sprite = new PIXI.Graphics();
-        sprite.moveTo(0, -6);
-        sprite.lineTo(16, 0);
-        sprite.lineTo(0, 6);
-        sprite.closePath();
-        sprite.fill(0xffd166);
-        sprite.stroke({ width: 1, color: 0x5c4a11 });
-        return sprite;
-    }
-
-    function createSwordSwingSprite() {
-        return new PIXI.Graphics();
-    }
-
-    function drawSwordSwing(sprite, centerX, centerY, angle, progress) {
-        const cfg = WEAPONS.sword;
-        const arcHalf = cfg.arcRadians * 0.5;
-        const start = angle - arcHalf;
-        const end = angle + arcHalf;
-        const radius = cfg.range + 14 + progress * 8;
-
-        sprite.clear();
-        sprite.moveTo(centerX, centerY);
-        sprite.arc(centerX, centerY, radius, start, end);
-        sprite.closePath();
-        sprite.fill(0xf6dfa7);
-        sprite.alpha = 0.32 * (1 - progress);
-    }
-
+    // Shared walkability rule used by player/enemies/projectiles.
     function isTileWalkable(tileX, tileY) {
         return worldSystem.isTileWalkable(tileX, tileY) && !(buildingSystem?.isTileBlocked(tileX, tileY) ?? false);
     }
-
-    function estimatePathCost(ax, ay, bx, by) {
-        return Math.abs(ax - bx) + Math.abs(ay - by);
-    }
-
-    function reconstructPath(cameFrom, endKey) {
-        const path = [];
-        let currentKey = endKey;
-        while (currentKey) {
-            const [x, y] = currentKey.split(',').map(Number);
-            path.push({ x, y });
-            currentKey = cameFrom.get(currentKey);
-        }
-        path.reverse();
-        // Skip current tile so enemies move toward the next point.
-        return path.slice(1);
-    }
-
-    function findPathAStar(startX, startY, goalX, goalY) {
-        if (startX === goalX && startY === goalY) {
-            return [];
-        }
-
-        const minX = Math.min(startX, goalX) - ENEMY_PATH_GRID_RADIUS;
-        const maxX = Math.max(startX, goalX) + ENEMY_PATH_GRID_RADIUS;
-        const minY = Math.min(startY, goalY) - ENEMY_PATH_GRID_RADIUS;
-        const maxY = Math.max(startY, goalY) + ENEMY_PATH_GRID_RADIUS;
-
-        const startKey = `${startX},${startY}`;
-        const goalKey = `${goalX},${goalY}`;
-
-        const open = [{ key: startKey, x: startX, y: startY, f: estimatePathCost(startX, startY, goalX, goalY) }];
-        const openKeys = new Set([startKey]);
-        const closedKeys = new Set();
-        const cameFrom = new Map();
-        const gScore = new Map([[startKey, 0]]);
-
-        let steps = 0;
-        while (open.length > 0 && steps < ENEMY_PATH_MAX_STEPS) {
-            steps += 1;
-
-            let bestIdx = 0;
-            for (let i = 1; i < open.length; i++) {
-                if (open[i].f < open[bestIdx].f) {
-                    bestIdx = i;
-                }
-            }
-
-            const current = open.splice(bestIdx, 1)[0];
-            openKeys.delete(current.key);
-
-            if (current.key === goalKey) {
-                return reconstructPath(cameFrom, current.key);
-            }
-
-            closedKeys.add(current.key);
-
-            const neighbors = [
-                { x: current.x + 1, y: current.y, cost: 1, diagonal: false },
-                { x: current.x - 1, y: current.y, cost: 1, diagonal: false },
-                { x: current.x, y: current.y + 1, cost: 1, diagonal: false },
-                { x: current.x, y: current.y - 1, cost: 1, diagonal: false },
-                { x: current.x + 1, y: current.y + 1, cost: Math.SQRT2, diagonal: true },
-                { x: current.x + 1, y: current.y - 1, cost: Math.SQRT2, diagonal: true },
-                { x: current.x - 1, y: current.y + 1, cost: Math.SQRT2, diagonal: true },
-                { x: current.x - 1, y: current.y - 1, cost: Math.SQRT2, diagonal: true }
-            ];
-
-            for (const neighbor of neighbors) {
-                if (neighbor.x < minX || neighbor.x > maxX || neighbor.y < minY || neighbor.y > maxY) {
-                    continue;
-                }
-                // Prevent diagonal corner-cutting through blocked water edges.
-                if (neighbor.diagonal) {
-                    if (!isTileWalkable(current.x, neighbor.y) || !isTileWalkable(neighbor.x, current.y)) {
-                        continue;
-                    }
-                }
-                if (!isTileWalkable(neighbor.x, neighbor.y)) {
-                    continue;
-                }
-
-                const neighborKey = `${neighbor.x},${neighbor.y}`;
-                if (closedKeys.has(neighborKey)) {
-                    continue;
-                }
-
-                const tentativeG = (gScore.get(current.key) ?? Infinity) + neighbor.cost;
-                if (tentativeG >= (gScore.get(neighborKey) ?? Infinity)) {
-                    continue;
-                }
-
-                cameFrom.set(neighborKey, current.key);
-                gScore.set(neighborKey, tentativeG);
-                const fScore = tentativeG + estimatePathCost(neighbor.x, neighbor.y, goalX, goalY);
-
-                if (!openKeys.has(neighborKey)) {
-                    open.push({
-                        key: neighborKey,
-                        x: neighbor.x,
-                        y: neighbor.y,
-                        f: fScore
-                    });
-                    openKeys.add(neighborKey);
-                } else {
-                    for (const node of open) {
-                        if (node.key === neighborKey) {
-                            node.f = fScore;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        return [];
-    }
-
-    function getViewTileBounds() {
-        const startTileX = Math.floor(-world.position.x / TILE_SIZE);
-        const startTileY = Math.floor(-world.position.y / TILE_SIZE);
-        const endTileX = startTileX + Math.ceil(window.innerWidth / TILE_SIZE);
-        const endTileY = startTileY + Math.ceil(window.innerHeight / TILE_SIZE);
-        return { startTileX, startTileY, endTileX, endTileY };
-    }
-
-    function isTileInView(tileX, tileY, bounds) {
-        return tileX >= bounds.startTileX && tileX <= bounds.endTileX && tileY >= bounds.startTileY && tileY <= bounds.endTileY;
-    }
-
-    function tryGetOffscreenSpawnTile() {
-        const bounds = getViewTileBounds();
-        const margin = ENEMY_OFFSCREEN_MARGIN_TILES;
-        const minX = bounds.startTileX - margin;
-        const maxX = bounds.endTileX + margin;
-        const minY = bounds.startTileY - margin;
-        const maxY = bounds.endTileY + margin;
-        const playerTileX = Math.floor((playerWorldX + TILE_SIZE / 2) / TILE_SIZE);
-        const playerTileY = Math.floor((playerWorldY + TILE_SIZE / 2) / TILE_SIZE);
-
-        for (let attempt = 0; attempt < 24; attempt++) {
-            const side = Math.floor(Math.random() * 4);
-            let tileX;
-            let tileY;
-
-            if (side === 0) { // top
-                tileX = minX + Math.floor(Math.random() * (maxX - minX + 1));
-                tileY = minY;
-            } else if (side === 1) { // bottom
-                tileX = minX + Math.floor(Math.random() * (maxX - minX + 1));
-                tileY = maxY;
-            } else if (side === 2) { // left
-                tileX = minX;
-                tileY = minY + Math.floor(Math.random() * (maxY - minY + 1));
-            } else { // right
-                tileX = maxX;
-                tileY = minY + Math.floor(Math.random() * (maxY - minY + 1));
-            }
-
-            if (isTileInView(tileX, tileY, bounds)) {
-                continue;
-            }
-            if (!isTileWalkable(tileX, tileY)) {
-                continue;
-            }
-
-            const dx = tileX - playerTileX;
-            const dy = tileY - playerTileY;
-            if ((dx * dx + dy * dy) < ENEMY_MIN_PLAYER_DISTANCE_TILES * ENEMY_MIN_PLAYER_DISTANCE_TILES) {
-                continue;
-            }
-
-            return { x: tileX, y: tileY };
-        }
-
-        return null;
-    }
-
-    function spawnEnemyAtTile(tileX, tileY) {
-        const spriteData = createEnemySprite();
-        const enemy = {
-            id: enemyIdCounter++,
-            x: tileX * TILE_SIZE + (TILE_SIZE - ENEMY_SIZE) / 2,
-            y: tileY * TILE_SIZE + (TILE_SIZE - ENEMY_SIZE) / 2,
-            hp: ENEMY_MAX_HP,
-            maxHp: ENEMY_MAX_HP,
-            invulnFrames: 0,
-            isDead: false,
-            path: [],
-            pathIndex: 0,
-            repathTimer: Math.floor(Math.random() * (ENEMY_REPATH_INTERVAL_FRAMES + 1)),
-            contactCooldownFrames: 0,
-            knockbackVX: 0,
-            knockbackVY: 0,
-            wallTargetTile: null,
-            healthBg: spriteData.healthBg,
-            healthFill: spriteData.healthFill
-        };
-        spriteData.container.position.set(enemy.x, enemy.y);
-        enemyLayer.addChild(spriteData.container);
-        enemy.sprite = spriteData.container;
-        updateEnemyHealthBar(enemy);
-        enemies.push(enemy);
-    }
-
-    function removeEnemyAt(index) {
-        const enemy = enemies[index];
-        enemy.sprite.destroy();
-        enemies.splice(index, 1);
-    }
-
-    function resetCombatEntities() {
-        for (let i = enemies.length - 1; i >= 0; i--) {
-            removeEnemyAt(i);
-        }
-        for (let i = projectiles.length - 1; i >= 0; i--) {
-            removeProjectileAt(i);
-        }
-    }
-
-    function resolveEnemyCollisions() {
-        const minDistance = ENEMY_RADIUS * 2;
-        const minDistanceSq = minDistance * minDistance;
-
-        for (let i = 0; i < enemies.length; i++) {
-            for (let j = i + 1; j < enemies.length; j++) {
-                const a = enemies[i];
-                const b = enemies[j];
-
-                const ax = a.x + ENEMY_RADIUS;
-                const ay = a.y + ENEMY_RADIUS;
-                const bx = b.x + ENEMY_RADIUS;
-                const by = b.y + ENEMY_RADIUS;
-
-                let dx = bx - ax;
-                let dy = by - ay;
-                let distSq = dx * dx + dy * dy;
-
-                if (distSq >= minDistanceSq) {
-                    continue;
-                }
-
-                // If centers fully overlap, use a deterministic tiny direction.
-                if (distSq < 0.0001) {
-                    const angle = (a.id * 0.37 + b.id * 0.73) % (Math.PI * 2);
-                    dx = Math.cos(angle);
-                    dy = Math.sin(angle);
-                    distSq = 1;
-                }
-
-                const dist = Math.sqrt(distSq);
-                const overlap = minDistance - dist;
-                const nx = dx / dist;
-                const ny = dy / dist;
-                const halfPushX = nx * overlap * 0.5;
-                const halfPushY = ny * overlap * 0.5;
-
-                const newAX = a.x - halfPushX;
-                const newAY = a.y - halfPushY;
-                const newBX = b.x + halfPushX;
-                const newBY = b.y + halfPushY;
-
-                const aTileX = Math.floor((newAX + ENEMY_RADIUS) / TILE_SIZE);
-                const aTileY = Math.floor((newAY + ENEMY_RADIUS) / TILE_SIZE);
-                const bTileX = Math.floor((newBX + ENEMY_RADIUS) / TILE_SIZE);
-                const bTileY = Math.floor((newBY + ENEMY_RADIUS) / TILE_SIZE);
-
-                const canMoveA = isTileWalkable(aTileX, aTileY);
-                const canMoveB = isTileWalkable(bTileX, bTileY);
-
-                if (canMoveA && canMoveB) {
-                    a.x = newAX;
-                    a.y = newAY;
-                    b.x = newBX;
-                    b.y = newBY;
-                } else if (canMoveA) {
-                    a.x -= nx * overlap;
-                    a.y -= ny * overlap;
-                } else if (canMoveB) {
-                    b.x += nx * overlap;
-                    b.y += ny * overlap;
-                }
-            }
-        }
-    }
-
-    function resolvePlayerEnemyCollisions() {
-        if (playerState.isDead) {
-            return;
-        }
-        const minDistance = ENEMY_RADIUS + PLAYER_COLLISION_RADIUS;
-        const minDistanceSq = minDistance * minDistance;
-        let playerCenterX = playerWorldX + TILE_SIZE / 2;
-        let playerCenterY = playerWorldY + TILE_SIZE / 2;
-
-        for (const enemy of enemies) {
-            const enemyCenterX = enemy.x + ENEMY_RADIUS;
-            const enemyCenterY = enemy.y + ENEMY_RADIUS;
-            let dx = enemyCenterX - playerCenterX;
-            let dy = enemyCenterY - playerCenterY;
-            let distSq = dx * dx + dy * dy;
-
-            if (distSq >= minDistanceSq) {
-                continue;
-            }
-
-            if (distSq < 0.0001) {
-                const angle = (enemy.id * 0.61) % (Math.PI * 2);
-                dx = Math.cos(angle);
-                dy = Math.sin(angle);
-                distSq = 1;
-            }
-
-            const dist = Math.sqrt(distSq);
-            const overlap = minDistance - dist;
-            const nx = dx / dist;
-            const ny = dy / dist;
-
-            const pushedPlayerX = playerWorldX - nx * overlap;
-            const pushedPlayerY = playerWorldY - ny * overlap;
-            const pushedPlayerTileX = Math.floor((pushedPlayerX + TILE_SIZE / 2) / TILE_SIZE);
-            const pushedPlayerTileY = Math.floor((pushedPlayerY + TILE_SIZE / 2) / TILE_SIZE);
-
-            if (isTileWalkable(pushedPlayerTileX, pushedPlayerTileY)) {
-                playerWorldX = pushedPlayerX;
-                playerWorldY = pushedPlayerY;
-                playerCenterX = playerWorldX + TILE_SIZE / 2;
-                playerCenterY = playerWorldY + TILE_SIZE / 2;
-            } else {
-                const pushedEnemyX = enemy.x + nx * overlap;
-                const pushedEnemyY = enemy.y + ny * overlap;
-                const pushedEnemyTileX = Math.floor((pushedEnemyX + ENEMY_RADIUS) / TILE_SIZE);
-                const pushedEnemyTileY = Math.floor((pushedEnemyY + ENEMY_RADIUS) / TILE_SIZE);
-                if (isTileWalkable(pushedEnemyTileX, pushedEnemyTileY)) {
-                    enemy.x = pushedEnemyX;
-                    enemy.y = pushedEnemyY;
-                    enemy.sprite.position.set(enemy.x, enemy.y);
-                }
-            }
-        }
-    }
-
-    function updateEnemySpawning() {
-        enemySpawnTimer -= 1;
-        if (enemySpawnTimer > 0) {
-            return;
-        }
-        enemySpawnTimer = ENEMY_SPAWN_INTERVAL_FRAMES;
-
-        if (enemies.length >= ENEMY_MAX_COUNT) {
-            return;
-        }
-
-        const spawnTile = tryGetOffscreenSpawnTile();
-        if (spawnTile) {
-            spawnEnemyAtTile(spawnTile.x, spawnTile.y);
-        }
-    }
-
-    function findPathToNearestWall(enemyTileX, enemyTileY) {
-        const walls = buildingSystem.getWalls();
-        if (walls.length === 0) {
-            return { path: [], targetTile: null };
-        }
-
-        // Prioritize nearby wall structures first to reduce fallback pathing cost.
-        const rankedWalls = walls
-            .map((wall) => ({
-                wall,
-                score: Math.abs(wall.tileX - enemyTileX) + Math.abs(wall.tileY - enemyTileY)
-            }))
-            .sort((a, b) => a.score - b.score);
-
-        const maxWallsToProbe = Math.min(10, rankedWalls.length);
-        for (let wi = 0; wi < maxWallsToProbe; wi++) {
-            const wall = rankedWalls[wi].wall;
-            for (const tile of wall.tiles) {
-                const candidates = [
-                    { x: tile.x + 1, y: tile.y },
-                    { x: tile.x - 1, y: tile.y },
-                    { x: tile.x, y: tile.y + 1 },
-                    { x: tile.x, y: tile.y - 1 }
-                ];
-
-                for (const candidate of candidates) {
-                    if (!isTileWalkable(candidate.x, candidate.y)) {
-                        continue;
-                    }
-                    const path = findPathAStar(enemyTileX, enemyTileY, candidate.x, candidate.y);
-                    if (path.length > 0) {
-                        return { path, targetTile: candidate };
-                    }
-                }
-            }
-        }
-
-        return { path: [], targetTile: null };
-    }
-
-    function updateEnemies(deltaMoveScale) {
-        const playerCenterX = playerWorldX + TILE_SIZE / 2;
-        const playerCenterY = playerWorldY + TILE_SIZE / 2;
-        const playerTileX = Math.floor(playerCenterX / TILE_SIZE);
-        const playerTileY = Math.floor(playerCenterY / TILE_SIZE);
-
-        for (let i = enemies.length - 1; i >= 0; i--) {
-            const enemy = enemies[i];
-            if (enemy.isDead) {
-                removeEnemyAt(i);
-                continue;
-            }
-            const enemyCenterX = enemy.x + ENEMY_SIZE / 2;
-            const enemyCenterY = enemy.y + ENEMY_SIZE / 2;
-            const enemyTileX = Math.floor(enemyCenterX / TILE_SIZE);
-            const enemyTileY = Math.floor(enemyCenterY / TILE_SIZE);
-
-            const dxPlayerTiles = enemyTileX - playerTileX;
-            const dyPlayerTiles = enemyTileY - playerTileY;
-            if (dxPlayerTiles * dxPlayerTiles + dyPlayerTiles * dyPlayerTiles > ENEMY_DESPAWN_DISTANCE_TILES * ENEMY_DESPAWN_DISTANCE_TILES) {
-                removeEnemyAt(i);
-                continue;
-            }
-
-            let hasStrongKnockback = false;
-            const knockbackSpeed = Math.hypot(enemy.knockbackVX, enemy.knockbackVY);
-            if (knockbackSpeed > ENEMY_MIN_KNOCKBACK_SPEED) {
-                hasStrongKnockback = true;
-                const pushedX = enemy.x + enemy.knockbackVX * deltaMoveScale;
-                const pushedY = enemy.y + enemy.knockbackVY * deltaMoveScale;
-                const pushedTileX = Math.floor((pushedX + ENEMY_SIZE / 2) / TILE_SIZE);
-                const pushedTileY = Math.floor((pushedY + ENEMY_SIZE / 2) / TILE_SIZE);
-                if (isTileWalkable(pushedTileX, pushedTileY)) {
-                    enemy.x = pushedX;
-                    enemy.y = pushedY;
-                } else {
-                    enemy.knockbackVX = 0;
-                    enemy.knockbackVY = 0;
-                    hasStrongKnockback = false;
-                }
-                enemy.knockbackVX *= ENEMY_KNOCKBACK_FRICTION;
-                enemy.knockbackVY *= ENEMY_KNOCKBACK_FRICTION;
-            }
-
-            enemy.repathTimer -= 1;
-            if (enemy.repathTimer <= 0 || enemy.pathIndex >= enemy.path.length) {
-                framePathRequests += 1;
-                if (framePathBudget > 0) {
-                    const jitter = Math.floor(Math.random() * (ENEMY_REPATH_JITTER_FRAMES + 1));
-                    // Primary target is player; if unreachable, fallback to cached wall target.
-                    let resolvedPath = findPathAStar(enemyTileX, enemyTileY, playerTileX, playerTileY);
-                    if (resolvedPath.length > 0) {
-                        enemy.wallTargetTile = null;
-                        enemy.repathTimer = ENEMY_REPATH_INTERVAL_FRAMES + jitter;
-                    } else {
-                        if (enemy.wallTargetTile && isTileWalkable(enemy.wallTargetTile.x, enemy.wallTargetTile.y)) {
-                            resolvedPath = findPathAStar(enemyTileX, enemyTileY, enemy.wallTargetTile.x, enemy.wallTargetTile.y);
-                        }
-                        if (resolvedPath.length === 0) {
-                            const wallPathResult = findPathToNearestWall(enemyTileX, enemyTileY);
-                            resolvedPath = wallPathResult.path;
-                            enemy.wallTargetTile = wallPathResult.targetTile;
-                        }
-                        enemy.repathTimer = resolvedPath.length > 0
-                            ? ENEMY_REPATH_INTERVAL_FRAMES + jitter
-                            : ENEMY_BLOCKED_REPATH_INTERVAL_FRAMES + jitter;
-                    }
-                    enemy.path = resolvedPath;
-                    enemy.pathIndex = 0;
-                    framePathBudget -= 1;
-                    framePathExecuted += 1;
-                } else {
-                    framePathDeferred += 1;
-                    enemy.repathTimer = 0;
-                }
-            }
-
-            if (!hasStrongKnockback && enemy.pathIndex < enemy.path.length) {
-                const targetTile = enemy.path[enemy.pathIndex];
-                const targetCenterX = targetTile.x * TILE_SIZE + TILE_SIZE / 2;
-                const targetCenterY = targetTile.y * TILE_SIZE + TILE_SIZE / 2;
-                const dx = targetCenterX - (enemy.x + ENEMY_SIZE / 2);
-                const dy = targetCenterY - (enemy.y + ENEMY_SIZE / 2);
-                const dist = Math.hypot(dx, dy);
-                const step = ENEMY_SPEED * deltaMoveScale;
-
-                if (dist <= step) {
-                    enemy.x = targetCenterX - ENEMY_SIZE / 2;
-                    enemy.y = targetCenterY - ENEMY_SIZE / 2;
-                    enemy.pathIndex += 1;
-                } else if (dist > 0) {
-                    enemy.x += (dx / dist) * step;
-                    enemy.y += (dy / dist) * step;
-                }
-
-                const newTileX = Math.floor((enemy.x + ENEMY_SIZE / 2) / TILE_SIZE);
-                const newTileY = Math.floor((enemy.y + ENEMY_SIZE / 2) / TILE_SIZE);
-                if (!isTileWalkable(newTileX, newTileY)) {
-                    enemy.repathTimer = 0;
-                }
-            }
-
-            enemy.sprite.position.set(enemy.x, enemy.y);
-
-            if (enemy.invulnFrames > 0) {
-                enemy.invulnFrames -= 1;
-            }
-            if (enemy.contactCooldownFrames > 0) {
-                enemy.contactCooldownFrames -= 1;
-            }
-
-            const dxPlayer = (enemy.x + ENEMY_RADIUS) - playerCenterX;
-            const dyPlayer = (enemy.y + ENEMY_RADIUS) - playerCenterY;
-            const collisionDistance = ENEMY_RADIUS + PLAYER_COLLISION_RADIUS;
-            const collisionDistSq = dxPlayer * dxPlayer + dyPlayer * dyPlayer;
-            if (collisionDistSq < collisionDistance * collisionDistance && enemy.contactCooldownFrames <= 0) {
-                enemy.contactCooldownFrames = ENEMY_CONTACT_COOLDOWN_FRAMES;
-                applyDamage(playerState, ENEMY_CONTACT_DAMAGE, 'enemy_contact');
-            }
-        }
-
-        resolveEnemyCollisions();
-        resolvePlayerEnemyCollisions();
-        for (const enemy of enemies) {
-            enemy.sprite.position.set(enemy.x, enemy.y);
-        }
-    }
+    // Enemy runtime logic is managed in `systems/enemySystem.js`.
     function findSafeSpawnPosition() {
         return { x: TILE_SIZE / 2, y: TILE_SIZE / 2 };
     }
-
-    function createPlayerSprite() {
-        const sprite = new PIXI.Graphics();
-        sprite.circle(16, 16, 16);
-        sprite.fill(0xff6b6b);
-        return sprite;
-    }
-
-    const player = createPlayerSprite();
-    player.position.set(window.innerWidth / 2 - 16, window.innerHeight / 2 - 16);
-    app.stage.addChild(player);
-    const aimIndicator = createAimIndicator();
-    app.stage.addChild(aimIndicator);
-    const swordSwingSprite = createSwordSwingSprite();
-    swordSwingSprite.visible = false;
-    app.stage.addChild(swordSwingSprite);
-    const swordSwingState = {
-        ttl: 0,
-        maxTtl: 8,
-        angle: 0
-    };
+    const player = playerSystem.sprite;
 
     const hudText = new PIXI.Text({
         text: '',
@@ -823,7 +208,8 @@ async function init() {
         }
     });
     debugText.visible = false;
-    debugText.position.set(window.innerWidth - 360, 16);
+    // Keep debug panel below the top HUD bar to avoid overlap.
+    debugText.position.set(window.innerWidth - 360, 52);
     app.stage.addChild(debugText);
 
     function updateHud() {
@@ -849,15 +235,28 @@ async function init() {
             return;
         }
         const buildUi = buildingSystem.getUiState();
-        if (!buildUi.buildMode) {
+        if (!buildUi.buildMode && !buildUi.selectedPlacedBuilding) {
             buildMenuBackground.visible = false;
             buildMenuText.visible = false;
             return;
         }
 
-        const lines = ['Build Menu (Tab/Mouse Wheel)', 'Left Click: Place'];
-        for (const entry of buildingSystem.getMenuEntries()) {
-            lines.push(`${entry.selected ? '> ' : '  '}${entry.label} [${formatCost(entry.cost)}]`);
+        const lines = [];
+        if (buildUi.buildMode) {
+            lines.push('Build Menu (Tab/Mouse Wheel)', 'Left Click: Place');
+            for (const entry of buildingSystem.getMenuEntries()) {
+                lines.push(`${entry.selected ? '> ' : '  '}${entry.label} [${formatCost(entry.cost)}]`);
+            }
+        }
+
+        if (buildUi.selectedPlacedBuilding) {
+            if (lines.length > 0) {
+                lines.push('');
+            }
+            lines.push(`Selected: ${buildUi.selectedPlacedBuilding.label}`);
+            if (buildUi.selectedPlacedBuilding.role === 'producer') {
+                lines.push(`Stored: ${buildUi.selectedPlacedBuilding.storedOutput}/${buildUi.selectedPlacedBuilding.storageCap} ${buildUi.selectedPlacedBuilding.outputResource}`);
+            }
         }
         buildMenuText.text = lines.join('\n');
         buildMenuBackground.clear();
@@ -905,16 +304,19 @@ async function init() {
         }
         const worldStats = worldSystem.getStats();
         const buildingStats = buildingSystem?.getStats() ?? { buildingCount: 0 };
+        const pathStats = enemySystem?.getPathStats() ?? { requests: 0, executed: 0, deferred: 0, budget: ENEMY_MAX_REPATHS_PER_FRAME };
 
         const lines = [
-            'DEV CONSOLE (F4 or ç)',
+            'DEV CONSOLE (F4 or ç) | Export crashes: F8',
             `FPS: ${smoothedFps.toFixed(1)} | Frame: ${frameMs.toFixed(2)} ms`,
             `Player HP: ${Math.ceil(playerState.hp)}/${playerState.maxHp} | Weapon: ${playerCombat.weapon}`,
             `Enemies: ${enemies.length}/${ENEMY_MAX_COUNT}`,
             `Bullets: ${projectiles.length}/${MAX_BULLETS}`,
-            `Buildings: ${buildingStats.buildingCount}`,
-            `Path req/exe/def: ${framePathRequests}/${framePathExecuted}/${framePathDeferred}`,
-            `Path budget/frame: ${ENEMY_MAX_REPATHS_PER_FRAME}`,
+            `Buildings: ${buildingStats.buildingCount} | Producers: ${buildingStats.producerCount ?? 0}`,
+            `Producer output: ${(buildingStats.producedPerSecond ?? 0).toFixed(2)}/s`,
+            `Crash logs stored: ${crashLogs.length}`,
+            `Path req/exe/def: ${pathStats.requests}/${pathStats.executed}/${pathStats.deferred}`,
+            `Path budget/frame: ${pathStats.budget}`,
             `Tiles cached: ${worldStats.tilesCached}`,
             `Resources active: ${worldStats.resourcesActive}`,
             `Water feature regions: ${worldStats.waterFeatureRegions}`
@@ -936,6 +338,13 @@ async function init() {
         projectiles.splice(index, 1);
     }
 
+    function resetCombatEntities() {
+        enemySystem.resetEnemies();
+        for (let i = projectiles.length - 1; i >= 0; i--) {
+            removeProjectileAt(i);
+        }
+    }
+
     function applyDamage(target, amount, source) {
         if (!target || target.isDead || amount <= 0) {
             return false;
@@ -948,10 +357,10 @@ async function init() {
         target.invulnFrames = target === playerState ? PLAYER_INVULN_FRAMES : INVULN_FRAMES_ON_HIT;
 
         if (target === playerState) {
-            playerHitFlashFrames = 8;
+            playerSystem.flashOnHit(8);
             updateHealthHud();
-        } else if (target.healthBg && target.healthFill) {
-            updateEnemyHealthBar(target);
+        } else if (enemySystem?.isEnemyEntity(target)) {
+            enemySystem.updateEnemyHealthBar(target);
         }
 
         if (target.hp <= 0) {
@@ -972,8 +381,7 @@ async function init() {
     function performSwordAttack(playerCenterX, playerCenterY, dirX, dirY) {
         const cfg = WEAPONS.sword;
         const cosHalfArc = Math.cos(cfg.arcRadians / 2);
-        swordSwingState.ttl = swordSwingState.maxTtl;
-        swordSwingState.angle = Math.atan2(dirY, dirX);
+        playerSystem.triggerSwordSwing(dirX, dirY);
 
         for (const enemy of enemies) {
             if (enemy.isDead) {
@@ -1001,6 +409,14 @@ async function init() {
                 enemy.knockbackVY += ny * cfg.knockbackSpeed;
             }
         }
+    }
+
+    function createBulletSprite() {
+        const sprite = new PIXI.Graphics();
+        sprite.circle(4, 4, 4);
+        sprite.fill(0xf7e56a);
+        sprite.stroke({ width: 1, color: 0x2a2409 });
+        return sprite;
     }
 
     function spawnBullet(playerCenterX, playerCenterY, dirX, dirY) {
@@ -1041,7 +457,7 @@ async function init() {
     function updateProjectiles(deltaMoveScale) {
         for (let i = projectiles.length - 1; i >= 0; i--) {
             const bullet = projectiles[i];
-            bullet.ttl -= 1;
+            bullet.ttl -= (deltaMoveScale * 60);
             bullet.x += bullet.vx * deltaMoveScale;
             bullet.y += bullet.vy * deltaMoveScale;
             bullet.sprite.position.set(bullet.x, bullet.y);
@@ -1100,26 +516,115 @@ async function init() {
         });
     }
 
-    const spawnWorldPos = findSafeSpawnPosition();
     let playerWorldX = spawnWorldPos.x;
     let playerWorldY = spawnWorldPos.y;
 
     const keys = {};
     let harvestRequested = false;
     let placeRequested = false;
+    let inspectRequested = false;
     let leftMouseDown = false;
     let mouseScreenX = window.innerWidth / 2;
     let mouseScreenY = window.innerHeight / 2;
+    // Building placement + production system.
     buildingSystem = createBuildingSystem({
         buildingLayer,
         getWorldPosition: () => ({ x: world.position.x, y: world.position.y }),
         getMouseScreenPosition: () => ({ x: mouseScreenX, y: mouseScreenY }),
         isTileWalkableBase: (tileX, tileY) => worldSystem.isTileWalkable(tileX, tileY),
-        getPlayerCenter: () => ({ x: playerWorldX + TILE_SIZE / 2, y: playerWorldY + TILE_SIZE / 2 }),
-        getEnemies: () => enemies,
+        getPlayerCenter: () => playerSystem.getCenter(),
+        getEnemies: () => enemySystem?.getEnemies() ?? enemies,
         inventory,
         buildingTypes: BUILDING_TYPES,
         onLog: (message) => logDebug(message)
+    });
+
+    function loadCrashLogs() {
+        try {
+            const raw = localStorage.getItem('purrmadeath_crash_logs');
+            if (!raw) {
+                return;
+            }
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+                crashLogs.push(...parsed.slice(-50));
+            }
+        } catch {
+            // Ignore malformed persisted logs.
+        }
+    }
+
+    function persistCrashLogs() {
+        try {
+            localStorage.setItem('purrmadeath_crash_logs', JSON.stringify(crashLogs.slice(-50)));
+        } catch {
+            // Ignore quota/storage failures.
+        }
+    }
+
+    function recordCrash(kind, payload) {
+        crashLogs.push({
+            kind,
+            at: new Date().toISOString(),
+            payload
+        });
+        if (crashLogs.length > 50) {
+            crashLogs.shift();
+        }
+        persistCrashLogs();
+    }
+
+    function downloadCrashLogs() {
+        const blob = new Blob([JSON.stringify(crashLogs, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `purrmadeath-crash-logs-${Date.now()}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    loadCrashLogs();
+    window.addEventListener('error', (event) => {
+        recordCrash('error', {
+            message: event.message,
+            source: event.filename,
+            line: event.lineno,
+            column: event.colno,
+            stack: event.error?.stack ?? null
+        });
+    });
+    window.addEventListener('unhandledrejection', (event) => {
+        recordCrash('unhandledrejection', {
+            reason: typeof event.reason === 'string' ? event.reason : JSON.stringify(event.reason ?? null)
+        });
+    });
+
+    // Enemy AI/spawn/pathfinding system.
+    enemySystem = createEnemySystem({
+        enemyList: enemies,
+        enemyLayer,
+        isTileWalkable,
+        getWorldPosition: () => ({ x: world.position.x, y: world.position.y }),
+        getViewportSize: () => ({ width: window.innerWidth, height: window.innerHeight }),
+        getPlayerCenter: () => playerSystem.getCenter(),
+        getPlayerTile: () => playerSystem.getTile(),
+        isPlayerDead: () => playerState.isDead,
+        getPlayerCollisionRadius: () => PLAYER_COLLISION_RADIUS,
+        setPlayerWorldPosition: (x, y) => {
+            playerWorldX = x;
+            playerWorldY = y;
+            playerSystem.setWorldPosition(x, y);
+        },
+        canMovePlayerTo: (x, y) => {
+            const tileX = Math.floor((x + TILE_SIZE / 2) / TILE_SIZE);
+            const tileY = Math.floor((y + TILE_SIZE / 2) / TILE_SIZE);
+            return isTileWalkable(tileX, tileY);
+        },
+        onPlayerContactDamage: (amount, source) => applyDamage(playerState, amount, source),
+        getWalls: () => buildingSystem.getWalls()
     });
 
     updateHud();
@@ -1144,6 +649,10 @@ async function init() {
             debugText.visible = debugOverlayEnabled;
             worldSystem.refreshVisibleTileGridlines();
             logDebug(`Debug console ${debugOverlayEnabled ? 'enabled' : 'disabled'}`);
+        }
+        if (key === 'f8') {
+            downloadCrashLogs();
+            logDebug('Crash logs exported');
         }
         if (key === 'b') {
             // Build mode toggle keybind.
@@ -1179,6 +688,7 @@ async function init() {
             const respawn = findSafeSpawnPosition();
             playerWorldX = respawn.x;
             playerWorldY = respawn.y;
+            playerSystem.setWorldPosition(playerWorldX, playerWorldY);
             resetCombatEntities();
             updateHud();
             updateHealthHud();
@@ -1224,6 +734,7 @@ async function init() {
             leftMouseDown = true;
             // LMB is used for both attack and building placement, depending on mode.
             placeRequested = true;
+            inspectRequested = true;
         }
     });
 
@@ -1237,34 +748,10 @@ async function init() {
         const frameMs = delta.deltaMS;
         const fps = frameMs > 0 ? 1000 / frameMs : 0;
         smoothedFps = smoothedFps * 0.9 + fps * 0.1;
-        framePathRequests = 0;
-        framePathExecuted = 0;
-        framePathDeferred = 0;
-        framePathBudget = ENEMY_MAX_REPATHS_PER_FRAME;
+        enemySystem.beginFramePathBudget();
 
-        const aimDx = mouseScreenX - window.innerWidth / 2;
-        const aimDy = mouseScreenY - window.innerHeight / 2;
-        const aimMagnitude = Math.hypot(aimDx, aimDy);
-        if (aimMagnitude > 0.001) {
-            playerCombat.facingX = aimDx / aimMagnitude;
-            playerCombat.facingY = aimDy / aimMagnitude;
-        }
-
-        const playerScreenCenterX = player.position.x + PLAYER_COLLISION_RADIUS;
-        const playerScreenCenterY = player.position.y + PLAYER_COLLISION_RADIUS;
-        aimIndicator.rotation = Math.atan2(playerCombat.facingY, playerCombat.facingX);
-        aimIndicator.position.set(
-            playerScreenCenterX + playerCombat.facingX * 22,
-            playerScreenCenterY + playerCombat.facingY * 22
-        );
-        if (swordSwingState.ttl > 0) {
-            const progress = 1 - swordSwingState.ttl / swordSwingState.maxTtl;
-            drawSwordSwing(swordSwingSprite, playerScreenCenterX, playerScreenCenterY, swordSwingState.angle, progress);
-            swordSwingState.ttl -= 1;
-            swordSwingSprite.visible = true;
-        } else {
-            swordSwingSprite.visible = false;
-        }
+        playerSystem.updateFacingFromMouse(mouseScreenX, mouseScreenY, window.innerWidth, window.innerHeight);
+        playerSystem.updateScreenVisuals();
         buildingSystem.updatePlacementGhost();
 
         if (isPaused) {
@@ -1272,51 +759,32 @@ async function init() {
             return;
         }
 
+        buildingSystem.updateProduction(delta.deltaTime);
+        uiRefreshTimer -= delta.deltaTime;
+        if (uiRefreshTimer <= 0) {
+            updateBuildMenu();
+            uiRefreshTimer = 12;
+        }
+
         const deltaMoveScale = delta.deltaTime / 60;
-        const moveDistance = PLAYER_SPEED * deltaMoveScale;
-        let newWorldX = playerWorldX;
-        let newWorldY = playerWorldY;
-
-        if (playerState.invulnFrames > 0) {
-            playerState.invulnFrames -= 1;
-        }
-        if (playerCombat.cooldownFrames > 0) {
-            playerCombat.cooldownFrames -= 1;
-        }
-
-        if (!playerState.isDead) {
-            if (keys.w || keys.arrowup) {
-                newWorldY -= moveDistance;
-            }
-            if (keys.s || keys.arrowdown) {
-                newWorldY += moveDistance;
-            }
-            if (keys.a || keys.arrowleft) {
-                newWorldX -= moveDistance;
-            }
-            if (keys.d || keys.arrowright) {
-                newWorldX += moveDistance;
-            }
-        }
-
-        const centerX = newWorldX + TILE_SIZE / 2;
-        const centerY = newWorldY + TILE_SIZE / 2;
-        const tileX = Math.floor(centerX / TILE_SIZE);
-        const tileY = Math.floor(centerY / TILE_SIZE);
-
-        if (!playerState.isDead && isTileWalkable(tileX, tileY)) {
-            playerWorldX = newWorldX;
-            playerWorldY = newWorldY;
-        }
+        playerSystem.tickCombatTimers(delta.deltaTime);
+        playerSystem.updateMovement(keys, deltaMoveScale, (nextX, nextY) => {
+            const tileX = Math.floor((nextX + TILE_SIZE / 2) / TILE_SIZE);
+            const tileY = Math.floor((nextY + TILE_SIZE / 2) / TILE_SIZE);
+            return isTileWalkable(tileX, tileY);
+        });
+        const playerWorld = playerSystem.getWorldPosition();
+        playerWorldX = playerWorld.x;
+        playerWorldY = playerWorld.y;
 
         world.position.x = window.innerWidth / 2 - playerWorldX - 16;
         world.position.y = window.innerHeight / 2 - playerWorldY - 16;
 
         updateVisibleWorld();
         if (!playerState.isDead) {
-            updateEnemySpawning();
+            enemySystem.spawnTick();
         }
-        updateEnemies(deltaMoveScale);
+        enemySystem.update(deltaMoveScale);
         updateProjectiles(deltaMoveScale);
 
         // Re-apply camera in case enemy collision resolution pushed the player.
@@ -1324,6 +792,11 @@ async function init() {
         world.position.y = window.innerHeight / 2 - playerWorldY - 16;
 
         const buildUi = buildingSystem.getUiState();
+        if (inspectRequested) {
+            buildingSystem.selectBuildingAtMouse();
+            updateHud();
+            inspectRequested = false;
+        }
         if (!playerState.isDead && buildUi.buildMode && placeRequested) {
             const placed = buildingSystem.tryPlaceSelectedAtMouse();
             if (placed) {
@@ -1333,7 +806,8 @@ async function init() {
         }
 
         if (!playerState.isDead && !buildUi.buildMode && (keys.attack || leftMouseDown) && playerCombat.cooldownFrames <= 0) {
-            performAttack(playerWorldX + TILE_SIZE / 2, playerWorldY + TILE_SIZE / 2);
+            const center = playerSystem.getCenter();
+            performAttack(center.x, center.y);
         }
         if (!buildUi.buildMode) {
             placeRequested = false;
@@ -1349,6 +823,12 @@ async function init() {
                 inventory[harvest.resourceType] += 1;
                 spawnHarvestFeedback(harvest.resourceType, harvest.tileX, harvest.tileY);
                 updateHud();
+            } else {
+                const collected = buildingSystem.collectNearestOutput(playerCenterX, playerCenterY, TILE_SIZE * 3);
+                if (collected && inventory[collected.resourceType] !== undefined) {
+                    inventory[collected.resourceType] += collected.amount;
+                    updateHud();
+                }
             }
         }
 
@@ -1365,20 +845,15 @@ async function init() {
             }
         }
 
-        if (playerHitFlashFrames > 0) {
-            player.alpha = 0.5;
-            playerHitFlashFrames -= 1;
-        } else {
-            player.alpha = 1;
-        }
+        playerSystem.updateHitVisual();
 
         updateDebugOverlay(frameMs);
     });
 
     window.addEventListener('resize', () => {
         app.renderer.resize(window.innerWidth, window.innerHeight);
-        player.position.set(window.innerWidth / 2 - 16, window.innerHeight / 2 - 16);
-        debugText.position.set(window.innerWidth - 360, 16);
+        playerSystem.handleResize(window.innerWidth, window.innerHeight);
+        debugText.position.set(window.innerWidth - 360, 52);
         deathText.position.set(window.innerWidth / 2, window.innerHeight / 2);
         pauseText.position.set(window.innerWidth / 2, window.innerHeight / 2);
         updateVisibleWorld();

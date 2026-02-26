@@ -14,12 +14,19 @@ export function createBuildingSystem({
 }) {
     // Runtime building state.
     const buildings = [];
+    const producers = [];
     const occupiedTiles = new Set();
+    const occupiedTileToBuildingId = new Map();
+    const buildingById = new Map();
     const buildingTypeIds = Object.keys(buildingTypes);
     let nextBuildingId = 1;
     let buildMode = false;
     let selectedIndex = 0;
     let selectedBuildingType = buildingTypeIds[selectedIndex] ?? null;
+    let selectedPlacedBuildingId = null;
+    let producedUnitsWindow = 0;
+    let producedFramesWindow = 0;
+    let producedPerSecond = 0;
 
     // Placement ghost rendered while build mode is active.
     const ghost = new PIXI.Graphics();
@@ -150,8 +157,9 @@ export function createBuildingSystem({
         sprite.position.set(tileX * TILE_SIZE, tileY * TILE_SIZE);
         buildingLayer.addChild(sprite);
 
-        buildings.push({
-            id: nextBuildingId++,
+        const id = nextBuildingId++;
+        const building = {
+            id,
             type: selectedBuildingType,
             role: type.role ?? 'building',
             hp: type.maxHp ?? 0,
@@ -160,8 +168,24 @@ export function createBuildingSystem({
             tileX,
             tileY,
             sprite,
-            tiles: check.tiles
-        });
+            tiles: check.tiles,
+            footprintW: type.footprint.w,
+            footprintH: type.footprint.h,
+            storedOutput: 0,
+            outputResource: type.outputResource ?? null,
+            outputPerCycle: type.outputPerCycle ?? 0,
+            cycleFrames: type.cycleFrames ?? 0,
+            cycleTimerFrames: type.cycleFrames ?? 0,
+            storageCap: type.storageCap ?? 0
+        };
+        buildings.push(building);
+        buildingById.set(id, building);
+        if (building.role === 'producer') {
+            producers.push(building);
+        }
+        for (const tile of check.tiles) {
+            occupiedTileToBuildingId.set(keyFromTile(tile.x, tile.y), id);
+        }
         onLog?.(`${type.label} placed`);
         return true;
     }
@@ -195,15 +219,89 @@ export function createBuildingSystem({
         drawGhost(tileX, tileY, type, valid);
     }
 
+    function updateProduction(deltaFrames) {
+        if (producers.length === 0) {
+            return;
+        }
+        for (const producer of producers) {
+            if (!producer.outputResource || producer.cycleFrames <= 0 || producer.storageCap <= 0) {
+                continue;
+            }
+            if (producer.storedOutput >= producer.storageCap) {
+                continue;
+            }
+
+            producer.cycleTimerFrames -= deltaFrames;
+            while (producer.cycleTimerFrames <= 0 && producer.storedOutput < producer.storageCap) {
+                producer.storedOutput += producer.outputPerCycle;
+                producedUnitsWindow += producer.outputPerCycle;
+                producer.cycleTimerFrames += producer.cycleFrames;
+            }
+        }
+
+        producedFramesWindow += deltaFrames;
+        if (producedFramesWindow >= 60) {
+            producedPerSecond = producedUnitsWindow * (60 / producedFramesWindow);
+            producedUnitsWindow = 0;
+            producedFramesWindow = 0;
+        }
+    }
+
+    function selectBuildingAtMouse() {
+        const mouse = getMouseScreenPosition();
+        const { tileX, tileY } = screenToTile(mouse.x, mouse.y);
+        const buildingId = occupiedTileToBuildingId.get(keyFromTile(tileX, tileY)) ?? null;
+        selectedPlacedBuildingId = buildingId;
+        return buildingId !== null;
+    }
+
+    function collectNearestOutput(playerCenterX, playerCenterY, maxDistancePx) {
+        const maxDistanceSq = maxDistancePx * maxDistancePx;
+        let best = null;
+        let bestDistSq = maxDistanceSq;
+
+        for (const producer of producers) {
+            if (producer.storedOutput <= 0 || !producer.outputResource) {
+                continue;
+            }
+            const centerX = (producer.tileX + producer.footprintW * 0.5) * TILE_SIZE;
+            const centerY = (producer.tileY + producer.footprintH * 0.5) * TILE_SIZE;
+            const dx = centerX - playerCenterX;
+            const dy = centerY - playerCenterY;
+            const distSq = dx * dx + dy * dy;
+            if (distSq <= bestDistSq) {
+                bestDistSq = distSq;
+                best = producer;
+            }
+        }
+
+        if (!best) {
+            return null;
+        }
+
+        const amount = best.storedOutput;
+        best.storedOutput = 0;
+        return { resourceType: best.outputResource, amount };
+    }
+
     function isTileBlocked(tileX, tileY) {
         return occupiedTiles.has(keyFromTile(tileX, tileY));
     }
 
     function getUiState() {
+        const selectedPlaced = selectedPlacedBuildingId ? buildingById.get(selectedPlacedBuildingId) : null;
         return {
             buildMode,
             selectedBuildingType,
-            selectedLabel: selectedBuildingType ? buildingTypes[selectedBuildingType]?.label ?? 'None' : 'None'
+            selectedLabel: selectedBuildingType ? buildingTypes[selectedBuildingType]?.label ?? 'None' : 'None',
+            selectedPlacedBuilding: selectedPlaced ? {
+                id: selectedPlaced.id,
+                label: buildingTypes[selectedPlaced.type]?.label ?? selectedPlaced.type,
+                role: selectedPlaced.role,
+                storedOutput: selectedPlaced.storedOutput,
+                outputResource: selectedPlaced.outputResource,
+                storageCap: selectedPlaced.storageCap
+            } : null
         };
     }
 
@@ -229,6 +327,13 @@ export function createBuildingSystem({
         getUiState,
         getMenuEntries,
         getWalls,
-        getStats: () => ({ buildingCount: buildings.length })
+        selectBuildingAtMouse,
+        updateProduction,
+        collectNearestOutput,
+        getStats: () => ({
+            buildingCount: buildings.length,
+            producerCount: producers.length,
+            producedPerSecond
+        })
     };
 }
