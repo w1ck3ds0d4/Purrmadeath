@@ -22,10 +22,13 @@ import {
     ENEMY_SPAWN_INTERVAL_FRAMES,
     GOLD_PER_ENEMY_KILL,
     INVULN_FRAMES_ON_HIT,
+    MAX_ENEMY_PROJECTILES,
     MAX_BULLETS,
+    MAX_TOWER_PROJECTILES,
     PLAYER_COLLISION_RADIUS,
     PLAYER_INVULN_FRAMES,
     PLAYER_MAX_HP,
+    PROJECTILES,
     TILE_SIZE,
     WEAPONS
 } from './config/constants.js';
@@ -36,6 +39,7 @@ import { createPlayerSystem } from './systems/playerSystem.js';
 import { createWorldSystem } from './systems/worldSystem.js';
 
 async function init() {
+    const SAVE_STORAGE_KEY = 'purrmadeath_save_v1';
     const TOP_BAR_HEIGHT = 40;
     const SIDE_PANEL_MARGIN = 12;
     const SIDE_PANEL_TOP = TOP_BAR_HEIGHT + 12;
@@ -90,9 +94,13 @@ async function init() {
     const floatingTexts = [];
     const enemies = [];
     const projectiles = [];
+    const towerProjectiles = [];
+    const enemyProjectiles = [];
+    const civilianFireCooldowns = new Map();
     let enemySpawnTimer = 0;
     let enemyIdCounter = 0;
     let uiRefreshTimer = 0;
+    let saveTimerFrames = 0;
     let gameTimeSeconds = 0;
     const debugLogs = [];
     // Browser-side crash records are persisted in localStorage for post-mortem checks.
@@ -207,7 +215,7 @@ async function init() {
     app.stage.addChild(deathText);
 
     const pauseText = new PIXI.Text({
-        text: 'Paused\nPress ESC to resume',
+        text: 'Paused\nPress ESC to resume\nPress R to restart run',
         style: {
             fill: '#f3e6a1',
             fontFamily: 'monospace',
@@ -290,6 +298,9 @@ async function init() {
                 lines.push('');
             }
             lines.push(`Selected: ${buildUi.selectedPlacedBuilding.label}`);
+            if ((buildUi.selectedPlacedBuilding.maxHp ?? 0) > 0) {
+                lines.push(`HP: ${Math.max(0, Math.ceil(buildUi.selectedPlacedBuilding.hp ?? 0))}/${buildUi.selectedPlacedBuilding.maxHp}`);
+            }
             if (buildUi.selectedPlacedBuilding.role === 'producer') {
                 lines.push(`Stored: ${buildUi.selectedPlacedBuilding.storedOutput}/${buildUi.selectedPlacedBuilding.storageCap} ${buildUi.selectedPlacedBuilding.outputResource}`);
             }
@@ -376,12 +387,14 @@ async function init() {
 
         const lines = [
             'DEV CONSOLE (F4 or ç)',
-            'Shortcuts: F8 export crashes | H +100 resources | K enemy toggle',
+            'Shortcuts: F8 export crashes | H +100 resources | K enemy toggle | J force reset',
             `FPS: ${smoothedFps.toFixed(1)} | Frame: ${frameMs.toFixed(2)} ms`,
             `Player HP: ${Math.ceil(playerState.hp)}/${playerState.maxHp} | Weapon: ${playerCombat.weapon}`,
             `Enemies: ${enemies.length}/${ENEMY_MAX_COUNT}`,
             `Enemies disabled: ${enemiesDisabled ? 'YES' : 'NO'} (Toggle: K while dev console open)`,
-            `Bullets: ${projectiles.length}/${MAX_BULLETS}`,
+            `Enemy ranged: ${enemies.filter((enemy) => enemy.isRanged).length}/${enemies.length}`,
+            `Bullets: ${projectiles.length}/${MAX_BULLETS} | Tower shots: ${towerProjectiles.length}/${MAX_TOWER_PROJECTILES} | Enemy shots: ${enemyProjectiles.length}/${MAX_ENEMY_PROJECTILES}`,
+            `Coords: ${Math.floor(playerWorldX)}, ${Math.floor(playerWorldY)} | Tile: ${Math.floor((playerWorldX + TILE_SIZE / 2) / TILE_SIZE)}, ${Math.floor((playerWorldY + TILE_SIZE / 2) / TILE_SIZE)}`,
             `Buildings: ${buildingStats.buildingCount} | Producers: ${buildingStats.producerCount ?? 0}`,
             `Civilians: ${civilianStats.civilianCount}/${civilianStats.civilianCap} | Lost: ${civilianStats.civiliansKilled}`,
             `Civ update: ${civPerf.updateMs.toFixed(2)} ms | Assign ${civPerf.assignmentCalls} (${civPerf.assignmentSkippedByBudget} delayed)`,
@@ -418,8 +431,17 @@ async function init() {
 
     function resetCombatEntities() {
         enemySystem.resetEnemies();
+        civilianFireCooldowns.clear();
         for (let i = projectiles.length - 1; i >= 0; i--) {
             removeProjectileAt(i);
+        }
+        for (let i = towerProjectiles.length - 1; i >= 0; i--) {
+            towerProjectiles[i].sprite.destroy();
+            towerProjectiles.splice(i, 1);
+        }
+        for (let i = enemyProjectiles.length - 1; i >= 0; i--) {
+            enemyProjectiles[i].sprite.destroy();
+            enemyProjectiles.splice(i, 1);
         }
     }
 
@@ -462,6 +484,96 @@ async function init() {
         updateVisibleWorld();
         updateHud();
         updateHealthHud();
+        clearSavedGameState();
+    }
+
+    function buildSaveStateSnapshot() {
+        return {
+            savedAt: Date.now(),
+            gameTimeSeconds,
+            player: {
+                worldX: playerWorldX,
+                worldY: playerWorldY,
+                hp: playerState.hp,
+                maxHp: playerState.maxHp,
+                invulnFrames: playerState.invulnFrames,
+                weapon: playerCombat.weapon,
+                cooldownFrames: playerCombat.cooldownFrames
+            },
+            inventory: { ...inventory },
+            combatStats: { ...combatStats },
+            world: worldSystem.exportState?.() ?? null,
+            buildings: buildingSystem.exportState?.() ?? null
+        };
+    }
+
+    function persistSaveState() {
+        if (playerState.isDead) {
+            return;
+        }
+        try {
+            localStorage.setItem(SAVE_STORAGE_KEY, JSON.stringify(buildSaveStateSnapshot()));
+        } catch {
+            // Ignore storage quota failures.
+        }
+    }
+
+    function clearSavedGameState() {
+        try {
+            localStorage.removeItem(SAVE_STORAGE_KEY);
+        } catch {
+            // Ignore storage access failures.
+        }
+    }
+
+    function restoreSavedGameState() {
+        let saved = null;
+        try {
+            const raw = localStorage.getItem(SAVE_STORAGE_KEY);
+            if (!raw) {
+                return false;
+            }
+            saved = JSON.parse(raw);
+        } catch {
+            return false;
+        }
+        if (!saved || typeof saved !== 'object') {
+            return false;
+        }
+
+        const playerSnapshot = saved.player ?? {};
+        const inventorySnapshot = saved.inventory ?? {};
+        const combatSnapshot = saved.combatStats ?? {};
+
+        if (saved.world) {
+            worldSystem.importState(saved.world);
+        }
+        if (saved.buildings) {
+            buildingSystem.importState(saved.buildings);
+        }
+
+        inventory.wood = Number.isFinite(inventorySnapshot.wood) ? inventorySnapshot.wood : 0;
+        inventory.stone = Number.isFinite(inventorySnapshot.stone) ? inventorySnapshot.stone : 0;
+        inventory.iron = Number.isFinite(inventorySnapshot.iron) ? inventorySnapshot.iron : 0;
+        inventory.gold = Number.isFinite(inventorySnapshot.gold) ? inventorySnapshot.gold : 0;
+        combatStats.enemiesKilled = Number.isFinite(combatSnapshot.enemiesKilled) ? combatSnapshot.enemiesKilled : 0;
+
+        playerState.hp = Number.isFinite(playerSnapshot.hp) ? playerSnapshot.hp : PLAYER_MAX_HP;
+        playerState.maxHp = Number.isFinite(playerSnapshot.maxHp) ? playerSnapshot.maxHp : PLAYER_MAX_HP;
+        playerState.invulnFrames = Number.isFinite(playerSnapshot.invulnFrames) ? playerSnapshot.invulnFrames : 0;
+        playerState.isDead = false;
+        playerCombat.weapon = playerSnapshot.weapon === 'pistol' ? 'pistol' : 'sword';
+        playerCombat.cooldownFrames = Number.isFinite(playerSnapshot.cooldownFrames) ? playerSnapshot.cooldownFrames : 0;
+        gameTimeSeconds = Number.isFinite(saved.gameTimeSeconds) ? saved.gameTimeSeconds : 0;
+
+        playerWorldX = Number.isFinite(playerSnapshot.worldX) ? playerSnapshot.worldX : playerWorldX;
+        playerWorldY = Number.isFinite(playerSnapshot.worldY) ? playerSnapshot.worldY : playerWorldY;
+        playerSystem.setWorldPosition(playerWorldX, playerWorldY);
+
+        updateVisibleWorld();
+        updateHud();
+        updateHealthHud();
+        return true;
     }
 
     function applyDamage(target, amount, source) {
@@ -486,6 +598,7 @@ async function init() {
             target.isDead = true;
             if (target === playerState) {
                 deathText.visible = true;
+                clearSavedGameState();
                 logDebug(`Player defeated by ${source}`);
             } else {
                 combatStats.enemiesKilled += 1;
@@ -530,33 +643,50 @@ async function init() {
         }
     }
 
-    function createBulletSprite() {
+    function createBulletSprite(fillColor = 0xf7e56a, strokeColor = 0x2a2409, radius = 4) {
         const sprite = new PIXI.Graphics();
-        sprite.circle(4, 4, 4);
-        sprite.fill(0xf7e56a);
-        sprite.stroke({ width: 1, color: 0x2a2409 });
+        sprite.circle(radius, radius, radius);
+        sprite.fill(fillColor);
+        sprite.stroke({ width: 1, color: strokeColor });
         return sprite;
     }
 
-    function spawnBullet(playerCenterX, playerCenterY, dirX, dirY) {
-        if (projectiles.length >= MAX_BULLETS) {
+    function spawnFriendlyProjectile(sourceList, maxCount, config) {
+        if (sourceList.length >= maxCount) {
             return;
         }
-
-        const cfg = WEAPONS.pistol;
-        const sprite = createBulletSprite();
+        const sprite = createBulletSprite(config.fillColor, config.strokeColor, config.radius ?? 4);
         const bullet = {
-            x: playerCenterX - 4,
-            y: playerCenterY - 4,
-            vx: dirX * cfg.bulletSpeed,
-            vy: dirY * cfg.bulletSpeed,
-            ttl: cfg.bulletLifetimeFrames,
-            damage: cfg.damage,
+            x: config.originX - (config.radius ?? 4),
+            y: config.originY - (config.radius ?? 4),
+            vx: config.dirX * config.speed,
+            vy: config.dirY * config.speed,
+            ttl: config.lifetimeFrames,
+            damage: config.damage,
+            radius: config.radius ?? 4,
+            team: config.team,
             sprite
         };
         sprite.position.set(bullet.x, bullet.y);
         projectileLayer.addChild(sprite);
-        projectiles.push(bullet);
+        sourceList.push(bullet);
+    }
+
+    function spawnBullet(playerCenterX, playerCenterY, dirX, dirY) {
+        const cfg = WEAPONS.pistol;
+        spawnFriendlyProjectile(projectiles, MAX_BULLETS, {
+            originX: playerCenterX,
+            originY: playerCenterY,
+            dirX,
+            dirY,
+            speed: cfg.bulletSpeed,
+            lifetimeFrames: cfg.bulletLifetimeFrames,
+            damage: cfg.damage,
+            team: 'player',
+            fillColor: 0xf7e56a,
+            strokeColor: 0x2a2409,
+            radius: 4
+        });
     }
 
     function performAttack(playerCenterX, playerCenterY) {
@@ -573,26 +703,72 @@ async function init() {
         }
     }
 
-    function updateProjectiles(deltaMoveScale) {
-        for (let i = projectiles.length - 1; i >= 0; i--) {
-            const bullet = projectiles[i];
+    function updateProjectileList(list, deltaMoveScale) {
+        for (let i = list.length - 1; i >= 0; i--) {
+            const bullet = list[i];
             bullet.ttl -= (deltaMoveScale * 60);
             bullet.x += bullet.vx * deltaMoveScale;
             bullet.y += bullet.vy * deltaMoveScale;
             bullet.sprite.position.set(bullet.x, bullet.y);
 
             if (bullet.ttl <= 0) {
-                removeProjectileAt(i);
+                bullet.sprite.destroy();
+                list.splice(i, 1);
                 continue;
             }
 
-            const bulletCenterX = bullet.x + 4;
-            const bulletCenterY = bullet.y + 4;
+            const bulletCenterX = bullet.x + bullet.radius;
+            const bulletCenterY = bullet.y + bullet.radius;
             const bulletTileX = Math.floor(bulletCenterX / TILE_SIZE);
             const bulletTileY = Math.floor(bulletCenterY / TILE_SIZE);
-            // Projectiles pass over water; only solid buildings can block them.
-            if (buildingSystem.isProjectileBlocked(bulletTileX, bulletTileY)) {
-                removeProjectileAt(i);
+
+            if (bullet.team === 'enemy') {
+                if (buildingSystem.isProjectileBlockedForTeam(bulletTileX, bulletTileY, 'enemy')) {
+                    const result = buildingSystem.applyDamageAtTile(bulletTileX, bulletTileY, bullet.damage, 'enemy_projectile');
+                    bullet.sprite.destroy();
+                    list.splice(i, 1);
+                    if (result?.destroyed) {
+                        updateHud();
+                    }
+                    continue;
+                }
+
+                const dxPlayer = playerSystem.getCenter().x - bulletCenterX;
+                const dyPlayer = playerSystem.getCenter().y - bulletCenterY;
+                const playerHitDistance = PLAYER_COLLISION_RADIUS + bullet.radius;
+                if (dxPlayer * dxPlayer + dyPlayer * dyPlayer <= playerHitDistance * playerHitDistance) {
+                    applyDamage(playerState, bullet.damage, 'enemy_projectile');
+                    bullet.sprite.destroy();
+                    list.splice(i, 1);
+                    continue;
+                }
+
+                const civilians = civilianSystem.getTargets();
+                let hitCivilian = false;
+                for (const civilian of civilians) {
+                    if (civilian.isDead) {
+                        continue;
+                    }
+                    const dxCivilian = civilian.x - bulletCenterX;
+                    const dyCivilian = civilian.y - bulletCenterY;
+                    const hitDistance = 8 + bullet.radius;
+                    if (dxCivilian * dxCivilian + dyCivilian * dyCivilian <= hitDistance * hitDistance) {
+                        civilianSystem.applyDamage(civilian.id, bullet.damage, 'enemy_projectile');
+                        hitCivilian = true;
+                        break;
+                    }
+                }
+                if (hitCivilian) {
+                    bullet.sprite.destroy();
+                    list.splice(i, 1);
+                }
+                continue;
+            }
+
+            const blockingTeam = bullet.team === 'tower' ? 'tower' : 'friendly';
+            if (buildingSystem.isProjectileBlockedForTeam(bulletTileX, bulletTileY, blockingTeam)) {
+                bullet.sprite.destroy();
+                list.splice(i, 1);
                 continue;
             }
 
@@ -603,17 +779,211 @@ async function init() {
                 }
                 const dx = (enemy.x + ENEMY_RADIUS) - bulletCenterX;
                 const dy = (enemy.y + ENEMY_RADIUS) - bulletCenterY;
-                const hitDistance = ENEMY_RADIUS + 4;
+                const hitDistance = ENEMY_RADIUS + bullet.radius;
                 if (dx * dx + dy * dy <= hitDistance * hitDistance) {
-                    applyDamage(enemy, bullet.damage, 'bullet');
+                    applyDamage(enemy, bullet.damage, `${bullet.team}_projectile`);
                     hitEnemy = true;
                     break;
                 }
             }
 
             if (hitEnemy) {
-                removeProjectileAt(i);
+                bullet.sprite.destroy();
+                list.splice(i, 1);
             }
+        }
+    }
+
+    function updateProjectiles(deltaMoveScale) {
+        updateProjectileList(projectiles, deltaMoveScale);
+        updateProjectileList(towerProjectiles, deltaMoveScale);
+        updateProjectileList(enemyProjectiles, deltaMoveScale);
+    }
+
+    function updateTowerCombat() {
+        const towers = buildingSystem.getTowers?.() ?? [];
+        if (towers.length === 0) {
+            return;
+        }
+        for (const tower of towers) {
+            if ((tower.towerCooldownRemainingFrames ?? 0) > 0) {
+                continue;
+            }
+            const centerX = (tower.tileX + tower.footprintW * 0.5) * TILE_SIZE;
+            const centerY = (tower.tileY + tower.footprintH * 0.5) * TILE_SIZE;
+            const range = tower.towerRange || PROJECTILES.tower.range;
+            const rangeSq = range * range;
+            let targetEnemy = null;
+            let bestHp = -1;
+            let bestDistSq = rangeSq;
+            for (const enemy of enemies) {
+                if (enemy.isDead) {
+                    continue;
+                }
+                const dx = (enemy.x + ENEMY_RADIUS) - centerX;
+                const dy = (enemy.y + ENEMY_RADIUS) - centerY;
+                const distSq = dx * dx + dy * dy;
+                if (distSq > rangeSq) {
+                    continue;
+                }
+                // Target the strongest enemy first; distance breaks ties.
+                if (enemy.hp > bestHp || (enemy.hp === bestHp && distSq < bestDistSq)) {
+                    bestHp = enemy.hp;
+                    bestDistSq = distSq;
+                    targetEnemy = enemy;
+                }
+            }
+            if (!targetEnemy) {
+                continue;
+            }
+            const dx = (targetEnemy.x + ENEMY_RADIUS) - centerX;
+            const dy = (targetEnemy.y + ENEMY_RADIUS) - centerY;
+            const mag = Math.hypot(dx, dy);
+            if (mag <= 0.001) {
+                continue;
+            }
+            spawnFriendlyProjectile(towerProjectiles, MAX_TOWER_PROJECTILES, {
+                originX: centerX,
+                originY: centerY,
+                dirX: dx / mag,
+                dirY: dy / mag,
+                speed: tower.towerProjectileSpeed || PROJECTILES.tower.speed,
+                lifetimeFrames: tower.towerProjectileLifetimeFrames || PROJECTILES.tower.lifetimeFrames,
+                damage: tower.towerProjectileDamage || PROJECTILES.tower.damage,
+                team: 'tower',
+                fillColor: 0xb08bff,
+                strokeColor: 0x2f1c4f,
+                radius: 4
+            });
+            tower.towerCooldownRemainingFrames = tower.towerCooldownFrames || PROJECTILES.tower.cooldownFrames;
+        }
+    }
+
+    function updateCivilianCombat() {
+        const civilians = civilianSystem.getTargets();
+        if (civilians.length === 0) {
+            return;
+        }
+        const activeIds = new Set(civilians.filter((civilian) => !civilian.isDead).map((civilian) => civilian.id));
+        for (const [civilianId] of civilianFireCooldowns) {
+            if (!activeIds.has(civilianId)) {
+                civilianFireCooldowns.delete(civilianId);
+            }
+        }
+        const rangeSq = PROJECTILES.civilian.range * PROJECTILES.civilian.range;
+        for (const civilian of civilians) {
+            if (civilian.isDead) {
+                continue;
+            }
+            const cooldown = civilianFireCooldowns.has(civilian.id)
+                ? civilianFireCooldowns.get(civilian.id)
+                : Math.floor(Math.random() * PROJECTILES.civilian.cooldownFrames);
+            if (cooldown > 0) {
+                civilianFireCooldowns.set(civilian.id, cooldown - 1);
+                continue;
+            }
+            let targetEnemy = null;
+            let bestDistSq = rangeSq;
+            for (const enemy of enemies) {
+                if (enemy.isDead) {
+                    continue;
+                }
+                const dx = (enemy.x + ENEMY_RADIUS) - civilian.x;
+                const dy = (enemy.y + ENEMY_RADIUS) - civilian.y;
+                const distSq = dx * dx + dy * dy;
+                if (distSq <= bestDistSq) {
+                    bestDistSq = distSq;
+                    targetEnemy = enemy;
+                }
+            }
+            if (!targetEnemy) {
+                continue;
+            }
+            const dx = (targetEnemy.x + ENEMY_RADIUS) - civilian.x;
+            const dy = (targetEnemy.y + ENEMY_RADIUS) - civilian.y;
+            const mag = Math.hypot(dx, dy);
+            if (mag <= 0.001) {
+                continue;
+            }
+            spawnFriendlyProjectile(projectiles, MAX_BULLETS, {
+                originX: civilian.x,
+                originY: civilian.y,
+                dirX: dx / mag,
+                dirY: dy / mag,
+                speed: PROJECTILES.civilian.speed,
+                lifetimeFrames: PROJECTILES.civilian.lifetimeFrames,
+                damage: PROJECTILES.civilian.damage,
+                team: 'civilian',
+                fillColor: 0xffd6a6,
+                strokeColor: 0x5c4323,
+                radius: 3
+            });
+            civilianFireCooldowns.set(civilian.id, PROJECTILES.civilian.cooldownFrames);
+        }
+    }
+
+    function updateEnemyRangedCombat(deltaFrames) {
+        if (enemiesDisabled) {
+            return;
+        }
+        const rangeSq = PROJECTILES.enemy.range * PROJECTILES.enemy.range;
+        const civilians = civilianSystem.getTargets();
+        for (const enemy of enemies) {
+            if (enemy.isDead || !enemy.isRanged) {
+                continue;
+            }
+            enemy.rangedCooldownFrames = Number.isFinite(enemy.rangedCooldownFrames)
+                ? enemy.rangedCooldownFrames - deltaFrames
+                : Math.floor(Math.random() * PROJECTILES.enemy.cooldownFrames);
+            if (enemy.rangedCooldownFrames > 0) {
+                continue;
+            }
+            const enemyCenterX = enemy.x + ENEMY_RADIUS;
+            const enemyCenterY = enemy.y + ENEMY_RADIUS;
+            const playerCenter = playerSystem.getCenter();
+            let targetX = playerCenter.x;
+            let targetY = playerCenter.y;
+            let bestDistSq = (playerCenter.x - enemyCenterX) ** 2 + (playerCenter.y - enemyCenterY) ** 2;
+
+            for (const civilian of civilians) {
+                if (civilian.isDead) {
+                    continue;
+                }
+                const distSq = (civilian.x - enemyCenterX) ** 2 + (civilian.y - enemyCenterY) ** 2;
+                if (distSq < bestDistSq) {
+                    bestDistSq = distSq;
+                    targetX = civilian.x;
+                    targetY = civilian.y;
+                }
+            }
+            if (bestDistSq > rangeSq) {
+                continue;
+            }
+            const dx = targetX - enemyCenterX;
+            const dy = targetY - enemyCenterY;
+            const mag = Math.hypot(dx, dy);
+            if (mag <= 0.001) {
+                continue;
+            }
+            if (enemyProjectiles.length >= MAX_ENEMY_PROJECTILES) {
+                break;
+            }
+            const sprite = createBulletSprite(0xff8d8d, 0x4f1b1b, 4);
+            const projectile = {
+                x: enemyCenterX - 4,
+                y: enemyCenterY - 4,
+                vx: (dx / mag) * PROJECTILES.enemy.speed,
+                vy: (dy / mag) * PROJECTILES.enemy.speed,
+                ttl: PROJECTILES.enemy.lifetimeFrames,
+                damage: PROJECTILES.enemy.damage,
+                radius: 4,
+                team: 'enemy',
+                sprite
+            };
+            sprite.position.set(projectile.x, projectile.y);
+            projectileLayer.addChild(sprite);
+            enemyProjectiles.push(projectile);
+            enemy.rangedCooldownFrames = PROJECTILES.enemy.cooldownFrames;
         }
     }
 
@@ -768,6 +1138,9 @@ async function init() {
     updateHud();
     updateHealthHud();
     updateVisibleWorld();
+    if (restoreSavedGameState()) {
+        logDebug('Saved game restored');
+    }
 
     window.addEventListener('keydown', (e) => {
         const key = e.key.toLowerCase();
@@ -834,9 +1207,18 @@ async function init() {
         if (key === ' ' || key === 'space') {
             keys.attack = true;
         }
-        if (key === 'r' && playerState.isDead) {
+        if (key === 'r' && (playerState.isDead || isPaused)) {
+            isPaused = false;
+            pauseText.visible = false;
             resetRunState();
             logDebug('Player restarted');
+        }
+        if (key === 'j' && debugOverlayEnabled) {
+            crashLogs.length = 0;
+            persistCrashLogs();
+            clearSavedGameState();
+            resetRunState();
+            logDebug('Force reset executed (save/cache cleared)');
         }
     });
 
@@ -935,6 +1317,24 @@ async function init() {
         const playerWorld = playerSystem.getWorldPosition();
         playerWorldX = playerWorld.x;
         playerWorldY = playerWorld.y;
+        const playerCenterAfterMove = playerSystem.getCenter();
+        civilianSystem.resolvePlayerCollision(
+            playerCenterAfterMove.x,
+            playerCenterAfterMove.y,
+            PLAYER_COLLISION_RADIUS,
+            (pushX, pushY) => {
+                const candidateX = playerWorldX + pushX;
+                const candidateY = playerWorldY + pushY;
+                const tileX = Math.floor((candidateX + TILE_SIZE / 2) / TILE_SIZE);
+                const tileY = Math.floor((candidateY + TILE_SIZE / 2) / TILE_SIZE);
+                if (!isTileWalkable(tileX, tileY)) {
+                    return;
+                }
+                playerWorldX = candidateX;
+                playerWorldY = candidateY;
+                playerSystem.setWorldPosition(candidateX, candidateY);
+            }
+        );
 
         world.position.x = window.innerWidth / 2 - playerWorldX - 16;
         world.position.y = window.innerHeight / 2 - playerWorldY - 16;
@@ -946,6 +1346,9 @@ async function init() {
         if (!enemiesDisabled) {
             enemySystem.update(deltaMoveScale);
         }
+        updateTowerCombat();
+        updateCivilianCombat();
+        updateEnemyRangedCombat(deltaFrames);
         updateProjectiles(deltaMoveScale);
 
         // Re-apply camera in case enemy collision resolution pushed the player.
@@ -1015,6 +1418,12 @@ async function init() {
 
         playerSystem.updateHitVisual();
 
+        saveTimerFrames -= deltaFrames;
+        if (saveTimerFrames <= 0) {
+            persistSaveState();
+            saveTimerFrames = 120;
+        }
+
         if (!isBackgroundTick) {
             updateDebugOverlay(clampedFrameMs);
         }
@@ -1058,6 +1467,9 @@ async function init() {
         } else {
             stopHiddenTickLoop();
         }
+    });
+    window.addEventListener('beforeunload', () => {
+        persistSaveState();
     });
 
     window.addEventListener('resize', () => {

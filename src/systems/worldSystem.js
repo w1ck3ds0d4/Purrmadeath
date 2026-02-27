@@ -450,12 +450,38 @@ export function createWorldSystem({ tileLayer, resourceLayer, getDebugOverlayEna
         resourceNodeCache.clear();
     }
 
+    function exportState() {
+        return {
+            harvestedResourceTiles: [...harvestedResourceTiles]
+        };
+    }
+
+    function importState(state) {
+        if (!state || !Array.isArray(state.harvestedResourceTiles)) {
+            return;
+        }
+        for (const key of state.harvestedResourceTiles) {
+            if (typeof key !== 'string') {
+                continue;
+            }
+            harvestedResourceTiles.add(key);
+            resourceTileTypeCache.set(key, null);
+            const node = resourceNodeCache.get(key);
+            if (node) {
+                node.destroy();
+                resourceNodeCache.delete(key);
+            }
+        }
+    }
+
     return {
         isTileWater,
         isTileWalkable: (tileX, tileY) => !isTileWater(tileX, tileY),
         refreshVisibleTileGridlines,
         updateTiles,
         tryHarvestNearest,
+        exportState,
+        importState,
         getStats,
         reset
     };

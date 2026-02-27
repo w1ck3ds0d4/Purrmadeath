@@ -15,6 +15,7 @@ import {
     ENEMY_PATH_GRID_RADIUS,
     ENEMY_PATH_MAX_STEPS,
     ENEMY_RADIUS,
+    ENEMY_RANGED_SPAWN_CHANCE,
     ENEMY_REPATH_JITTER_FRAMES,
     ENEMY_REPATH_INTERVAL_FRAMES,
     ENEMY_SIZE,
@@ -58,11 +59,12 @@ export function createEnemySystem({
         framePathBudget = ENEMY_MAX_REPATHS_PER_FRAME;
     }
 
-    function createEnemySprite() {
+    function createEnemySprite(isRanged) {
         const container = new PIXI.Container();
         const body = new PIXI.Graphics();
         body.circle(ENEMY_RADIUS, ENEMY_RADIUS, ENEMY_RADIUS);
-        body.fill(0x8f1f1f);
+        // Orange marks ranged enemies, red marks melee enemies.
+        body.fill(isRanged ? 0xd9771f : 0x8f1f1f);
         body.stroke({ width: 1, color: 0x220808 });
 
         const healthBg = new PIXI.Graphics();
@@ -251,7 +253,8 @@ export function createEnemySystem({
     }
 
     function spawnEnemyAtTile(tileX, tileY) {
-        const spriteData = createEnemySprite();
+        const isRanged = Math.random() < ENEMY_RANGED_SPAWN_CHANCE;
+        const spriteData = createEnemySprite(isRanged);
         const enemy = {
             __entity: 'enemy',
             id: enemyIdCounter++,
@@ -267,6 +270,7 @@ export function createEnemySystem({
             contactCooldownFrames: 0,
             knockbackVX: 0,
             knockbackVY: 0,
+            isRanged,
             wallTargetTile: null,
             healthBg: spriteData.healthBg,
             healthFill: spriteData.healthFill
