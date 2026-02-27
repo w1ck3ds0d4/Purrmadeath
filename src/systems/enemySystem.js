@@ -51,6 +51,11 @@ export function createEnemySystem({
     let pathDeferred = 0;
     let framePathBudget = ENEMY_MAX_REPATHS_PER_FRAME;
     let frameIndex = 0;
+    const perfStats = {
+        skippedByStride: 0,
+        collisionSkippedFrames: 0,
+        lastUpdateMs: 0
+    };
 
     function beginFramePathBudget() {
         pathRequests = 0;
@@ -294,11 +299,17 @@ export function createEnemySystem({
         }
     }
 
-    function resolveEnemyCollisions() {
+    function resolveEnemyCollisions(options = {}) {
         const minDistance = ENEMY_RADIUS * 2;
         const minDistanceSq = minDistance * minDistance;
         const cellSize = minDistance;
         const separationPasses = 2;
+        const highDensityThreshold = options.highDensityThreshold ?? 120;
+        const highDensityStride = options.highDensityStride ?? 2;
+        if (enemies.length >= highDensityThreshold && (frameIndex % highDensityStride) !== 0) {
+            perfStats.collisionSkippedFrames += 1;
+            return;
+        }
 
         for (let pass = 0; pass < separationPasses; pass++) {
             const grid = new Map();
@@ -480,8 +491,24 @@ export function createEnemySystem({
         }
     }
 
-    function update(deltaMoveScale) {
+    function spawnBurst(count) {
+        let spawned = 0;
+        const maxToSpawn = Math.max(0, Math.floor(count));
+        while (spawned < maxToSpawn && enemies.length < ENEMY_MAX_COUNT) {
+            const spawnTile = tryGetOffscreenSpawnTile();
+            if (!spawnTile) {
+                break;
+            }
+            spawnEnemyAtTile(spawnTile.x, spawnTile.y);
+            spawned += 1;
+        }
+        return spawned;
+    }
+
+    function update(deltaMoveScale, options = {}) {
+        const startMs = performance.now();
         frameIndex += 1;
+        perfStats.skippedByStride = 0;
         const playerCenter = getPlayerCenter();
         const playerTile = getPlayerTile();
         const civilians = getCivilianTargets();
@@ -504,6 +531,25 @@ export function createEnemySystem({
             const enemyCenterY = enemy.y + ENEMY_SIZE / 2;
             const enemyTileX = Math.floor(enemyCenterX / TILE_SIZE);
             const enemyTileY = Math.floor(enemyCenterY / TILE_SIZE);
+            const dxTiles = enemyTileX - playerTile.x;
+            const dyTiles = enemyTileY - playerTile.y;
+            const distTileSq = dxTiles * dxTiles + dyTiles * dyTiles;
+            const nearTiles = options.nearTiles ?? 20;
+            const midTiles = options.midTiles ?? 40;
+            const midStride = Math.max(1, options.midStride ?? 2);
+            const farStride = Math.max(midStride, options.farStride ?? 3);
+            const nearSq = nearTiles * nearTiles;
+            const midSq = midTiles * midTiles;
+            let stride = 1;
+            if (distTileSq > midSq) {
+                stride = farStride;
+            } else if (distTileSq > nearSq) {
+                stride = midStride;
+            }
+            if (stride > 1 && (frameIndex + enemy.id) % stride !== 0) {
+                perfStats.skippedByStride += 1;
+                continue;
+            }
             let targetTileX = playerTile.x;
             let targetTileY = playerTile.y;
 
@@ -536,9 +582,7 @@ export function createEnemySystem({
                     }
                 }
             }
-            const dxPlayerTiles = enemyTileX - playerTile.x;
-            const dyPlayerTiles = enemyTileY - playerTile.y;
-            if (dxPlayerTiles * dxPlayerTiles + dyPlayerTiles * dyPlayerTiles > ENEMY_DESPAWN_DISTANCE_TILES * ENEMY_DESPAWN_DISTANCE_TILES) {
+            if (distTileSq > ENEMY_DESPAWN_DISTANCE_TILES * ENEMY_DESPAWN_DISTANCE_TILES) {
                 removeEnemyAt(i);
                 continue;
             }
@@ -656,11 +700,15 @@ export function createEnemySystem({
             }
         }
 
-        resolveEnemyCollisions();
+        resolveEnemyCollisions({
+            highDensityThreshold: options.collisionHighDensityThreshold,
+            highDensityStride: options.collisionHighDensityStride
+        });
         resolvePlayerEnemyCollisions();
         for (const enemy of enemies) {
             enemy.sprite.position.set(enemy.x, enemy.y);
         }
+        perfStats.lastUpdateMs = performance.now() - startMs;
     }
 
     function getPathStats() {
@@ -668,13 +716,17 @@ export function createEnemySystem({
             requests: pathRequests,
             executed: pathExecuted,
             deferred: pathDeferred,
-            budget: ENEMY_MAX_REPATHS_PER_FRAME
+            budget: ENEMY_MAX_REPATHS_PER_FRAME,
+            skippedByStride: perfStats.skippedByStride,
+            collisionSkippedFrames: perfStats.collisionSkippedFrames,
+            updateMs: perfStats.lastUpdateMs
         };
     }
 
     return {
         beginFramePathBudget,
         spawnTick,
+        spawnBurst,
         update,
         resetEnemies,
         getEnemies: () => enemies,

@@ -616,9 +616,12 @@ export function createBuildingSystem({
     }
 
     // Used by civilian logistics so workers can haul resources to warehouses.
-    function takeProducerOutput(producerId, amount = 1) {
+    function takeProducerOutput(producerId, amount = 1, requireFullAmount = false) {
         const producer = buildingById.get(producerId);
         if (!producer || producer.role !== 'producer' || !producer.outputResource || producer.storedOutput <= 0) {
+            return null;
+        }
+        if (requireFullAmount && producer.storedOutput < amount) {
             return null;
         }
         const takenAmount = Math.min(amount, producer.storedOutput);
