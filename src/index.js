@@ -47,7 +47,8 @@ async function init() {
     const TOP_BAR_HEIGHT = 40;
     const SIDE_PANEL_MARGIN = 12;
     const SIDE_PANEL_TOP = TOP_BAR_HEIGHT + 12;
-    const DEBUG_PANEL_MARGIN = 16;
+    const DEBUG_PANEL_MARGIN = 12;
+    const DEBUG_PANEL_WIDTH = 360;
 
     const app = new PIXI.Application();
     await app.init({
@@ -131,6 +132,9 @@ async function init() {
     // Browser-side crash records are persisted in localStorage for post-mortem checks.
     const crashLogs = [];
     let debugOverlayEnabled = false;
+    let debugOverlayView = 'all';
+    let debugCommandActive = false;
+    let debugCommandBuffer = '';
     let smoothedFps = 60;
     let isPaused = false;
     let enemiesDisabled = false;
@@ -174,12 +178,17 @@ async function init() {
     let buildingSystem = null;
     let civilianSystem = null;
     let enemySystem = null;
+    let lastAppliedMultiplayerSnapshotTick = -1;
+    let lastAppliedNonPlayerSnapshotSeq = -1;
+    let outboundEntitySnapshotSeq = 0;
+    let outboundEntitySnapshotTimerMs = 0;
     const remotePlayerSystem = createRemotePlayerSystem({ layer: remotePlayerLayer });
     const urlParams = new URLSearchParams(window.location.search);
     const multiplayerQueryEnabled = urlParams.get('multiplayer') === '1' || urlParams.get('mp') === '1';
-    // Manual LAN host hint used by the dev console to share join URLs quickly.
-    // Update this value when your local IPv4 changes.
-    const DEV_LAN_HOST_HINT = '192.168.4.31';
+    // LAN host hint for dev console sharing. Defaults to a placeholder to avoid
+    // committing personal/local network addresses into source control.
+    const DEV_LAN_HOST_HINT = urlParams.get('lanHostHint')
+        || (window.location.hostname !== 'localhost' && window.location.hostname !== '0.0.0.0' ? window.location.hostname : '<HOST_LAN_IP>');
     const multiplayerProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
     // Multiplayer host override for LAN join testing (example: ?mp=1&mpHost=192.168.1.10).
     // `0.0.0.0` is a bind address, not a routable destination for clients.
@@ -314,13 +323,43 @@ async function init() {
         style: {
             fill: '#8df7ff',
             fontFamily: 'monospace',
-            fontSize: 13
+            fontSize: 13,
+            wordWrap: true,
+            wordWrapWidth: DEBUG_PANEL_WIDTH - 24,
+            breakWords: true
         }
     });
     debugText.visible = false;
-    // Keep debug panel below the top HUD bar to avoid overlap.
-    debugText.position.set(window.innerWidth - 360, SIDE_PANEL_TOP);
+    debugText.position.set(window.innerWidth - DEBUG_PANEL_WIDTH + 12 - SIDE_PANEL_MARGIN, SIDE_PANEL_TOP + 54);
+    const debugNavText = new PIXI.Text({
+        text: '',
+        style: {
+            fill: '#9fffa8',
+            fontFamily: 'monospace',
+            fontSize: 12,
+            wordWrap: false
+        }
+    });
+    debugNavText.visible = false;
+    debugNavText.position.set(window.innerWidth - DEBUG_PANEL_WIDTH + 12 - SIDE_PANEL_MARGIN, SIDE_PANEL_TOP + 10);
+    const debugInputBackground = new PIXI.Graphics();
+    debugInputBackground.visible = false;
+    const debugInputText = new PIXI.Text({
+        text: '',
+        style: {
+            fill: '#d7f4ff',
+            fontFamily: 'monospace',
+            fontSize: 12
+        }
+    });
+    debugInputText.visible = false;
+    const debugPanelBackground = new PIXI.Graphics();
+    debugPanelBackground.visible = false;
+    app.stage.addChild(debugPanelBackground);
     app.stage.addChild(debugText);
+    app.stage.addChild(debugNavText);
+    app.stage.addChild(debugInputBackground);
+    app.stage.addChild(debugInputText);
 
     function updateHud() {
         const buildUi = buildingSystem?.getUiState();
@@ -516,6 +555,44 @@ async function init() {
         }
     }
 
+    function setDebugOverlayView(view) {
+        const allowed = new Set(['core', 'perf', 'cheats', 'multiplayer', 'logs', 'all']);
+        if (!allowed.has(view)) {
+            return false;
+        }
+        debugOverlayView = view;
+        logDebug(`Debug view: ${debugOverlayView}`);
+        return true;
+    }
+
+    function executeDebugCommand(commandText) {
+        const command = commandText.trim().toLowerCase();
+        if (command === '/core') {
+            return setDebugOverlayView('core');
+        }
+        if (command === '/perf') {
+            return setDebugOverlayView('perf');
+        }
+        if (command === '/cheats') {
+            return setDebugOverlayView('cheats');
+        }
+        if (command === '/multiplayer' || command === '/mp') {
+            return setDebugOverlayView('multiplayer');
+        }
+        if (command === '/logs') {
+            return setDebugOverlayView('logs');
+        }
+        if (command === '/all') {
+            return setDebugOverlayView('all');
+        }
+        if (command === '/help') {
+            logDebug('Commands: /core /perf /cheats /multiplayer /logs /all');
+            return true;
+        }
+        logDebug(`Unknown command: ${command}`);
+        return false;
+    }
+
     function updatePerformanceGovernor(frameOverBudget) {
         if (!autoPerfGovernorEnabled) {
             return;
@@ -562,6 +639,9 @@ async function init() {
         activePerfProfile = PERFORMANCE_PROFILES[activePerfProfileKey];
         overBudgetFrameStreak = 0;
         stableFrameStreak = 0;
+        outboundEntitySnapshotTimerMs = 0;
+        outboundEntitySnapshotSeq = 0;
+        lastAppliedNonPlayerSnapshotSeq = -1;
         benchmarkState.active = false;
         benchmarkState.elapsedMs = 0;
         benchmarkState.frameCount = 0;
@@ -591,55 +671,151 @@ async function init() {
 
         const lines = [
             'DEV CONSOLE (F4 or \\u00e7)',
-            'Shortcuts: F8 export crashes | H +100 resources | K enemy toggle | J force reset | L perf profile | O auto governor | M benchmark | N multiplayer',
-            `FPS: ${smoothedFps.toFixed(1)} | Frame: ${frameMs.toFixed(2)} ms`,
-            `Perf profile: ${activePerfProfileKey}`,
-            `Auto governor: ${autoPerfGovernorEnabled ? 'ON' : 'OFF'} | Streak O/S: ${overBudgetFrameStreak}/${stableFrameStreak}`,
-            `Benchmark: ${benchmarkState.active ? 'RUNNING' : 'idle'} | Frames: ${benchmarkState.frameCount}`,
-            `Player HP: ${Math.ceil(playerState.hp)}/${playerState.maxHp} | Weapon: ${playerCombat.weapon}`,
-            `Enemies: ${enemies.length}/${ENEMY_MAX_COUNT}`,
-            `Enemies disabled: ${enemiesDisabled ? 'YES' : 'NO'} (Toggle: K while dev console open)`,
-            `Enemy ranged: ${enemies.filter((enemy) => enemy.isRanged).length}/${enemies.length}`,
-            `Bullets: ${projectiles.length}/${MAX_BULLETS} | Tower shots: ${towerProjectiles.length}/${MAX_TOWER_PROJECTILES} | Enemy shots: ${enemyProjectiles.length}/${MAX_ENEMY_PROJECTILES}`,
-            `Coords: ${Math.floor(playerWorldX)}, ${Math.floor(playerWorldY)} | Tile: ${Math.floor((playerWorldX + TILE_SIZE / 2) / TILE_SIZE)}, ${Math.floor((playerWorldY + TILE_SIZE / 2) / TILE_SIZE)}`,
-            `MP: ${multiplayerStats.connected ? 'ON' : 'OFF'} | URL: ${multiplayerStats.url}`,
-            `MP player: ${multiplayerStats.playerId ?? '-'} | Ping: ${Math.round(multiplayerStats.pingMs)} ms | Tick: ${multiplayerStats.tickRate}`,
-            `MP snapshot: ${multiplayerStats.snapshotTick} | Remote players: ${multiplayerStats.remotePlayerCount} | Attempts: ${multiplayerStats.connectAttempts}`,
-            `MP session: ${multiplayerStats.sessionId ?? 'none'}`,
-            `MP reconnect token: ${multiplayerStats.reconnectToken} | Last error: ${multiplayerStats.lastError ?? 'none'}`,
-            `MP LAN host hint: ${DEV_LAN_HOST_HINT}`,
-            `MP LAN join: ${multiplayerStats.joinHintUrl ?? 'connect first to detect host LAN IP'}`,
-            `MP manual join: ${window.location.protocol}//${DEV_LAN_HOST_HINT}:${window.location.port || '3001'}/?mp=1&mpHost=${DEV_LAN_HOST_HINT}`,
-            `Buildings: ${buildingStats.buildingCount} | Producers: ${buildingStats.producerCount ?? 0}`,
-            `Civilians: ${civilianStats.civilianCount}/${civilianStats.civilianCap} | Lost: ${civilianStats.civiliansKilled}`,
-            `Civ update: ${civPerf.updateMs.toFixed(2)} ms | Assign ${civPerf.assignmentCalls} (${civPerf.assignmentSkippedByBudget} delayed)`,
-            `Civ queries P/W: ${civPerf.producerQueries}/${civPerf.warehouseQueries} | Civ sep: ${civPerf.civiliansResolvedCollisions} in ${civPerf.collisionPasses} pass`,
-            `Producer output: ${(buildingStats.producedPerSecond ?? 0).toFixed(2)}/s`,
-            `Crash logs stored: ${crashLogs.length}`,
-            `Path req/exe/def: ${pathStats.requests}/${pathStats.executed}/${pathStats.deferred} | Stride-skip: ${pathStats.skippedByStride ?? 0}`,
-            `Path budget/frame: ${pathStats.budget}`,
-            `System ms B/C/E/T/R/P/UI: ${systemPerfMs.buildings.toFixed(2)}/${systemPerfMs.civilians.toFixed(2)}/${systemPerfMs.enemies.toFixed(2)}/${systemPerfMs.towerCombat.toFixed(2)}/${systemPerfMs.enemyRanged.toFixed(2)}/${systemPerfMs.projectiles.toFixed(2)}/${systemPerfMs.ui.toFixed(2)}`,
-            `Budgets ms B/C/E/T/R/P/UI: ${activePerfProfile.budgetsMs.buildings.toFixed(1)}/${activePerfProfile.budgetsMs.civilians.toFixed(1)}/${activePerfProfile.budgetsMs.enemies.toFixed(1)}/${activePerfProfile.budgetsMs.towerCombat.toFixed(1)}/${activePerfProfile.budgetsMs.enemyRanged.toFixed(1)}/${activePerfProfile.budgetsMs.projectiles.toFixed(1)}/${activePerfProfile.budgetsMs.ui.toFixed(1)}`,
-            `Deferred C/T/R: ${systemDeferred.civilianSkippedFrames}/${systemDeferred.towerSkippedFrames}/${systemDeferred.enemyRangedSkippedFrames}`,
-            `Over budget B/C/E/T/R/P/UI: ${systemOverBudget.buildings}/${systemOverBudget.civilians}/${systemOverBudget.enemies}/${systemOverBudget.towerCombat}/${systemOverBudget.enemyRanged}/${systemOverBudget.projectiles}/${systemOverBudget.ui}`,
-            `Tiles cached: ${worldStats.tilesCached}`,
-            `Resources active: ${worldStats.resourcesActive}`,
-            `Water feature regions: ${worldStats.waterFeatureRegions}`
+            `View: ${debugOverlayView.toUpperCase()}`,
+            ''
         ];
 
-        if (debugLogs.length > 0) {
-            lines.push('Logs:');
+        const pushSection = (name, sectionLines) => {
+            if (sectionLines.length === 0) {
+                return;
+            }
+            lines.push(`-- ${name} --`);
+            for (const line of sectionLines) {
+                lines.push(line);
+            }
+            lines.push('');
+        };
+
+        const showAll = debugOverlayView === 'all';
+        if (showAll || debugOverlayView === 'core') {
+            pushSection('Core', [
+                `FPS: ${smoothedFps.toFixed(1)} | Frame: ${frameMs.toFixed(2)} ms`,
+                `Player HP: ${Math.ceil(playerState.hp)}/${playerState.maxHp} | Weapon: ${playerCombat.weapon}`,
+                `Coords: ${Math.floor(playerWorldX)}, ${Math.floor(playerWorldY)} | Tile: ${Math.floor((playerWorldX + TILE_SIZE / 2) / TILE_SIZE)}, ${Math.floor((playerWorldY + TILE_SIZE / 2) / TILE_SIZE)}`,
+                `Enemies: ${enemies.length}/${ENEMY_MAX_COUNT} | Ranged: ${enemies.filter((enemy) => enemy.isRanged).length}`,
+                `Enemies disabled: ${enemiesDisabled ? 'YES' : 'NO'} (K while console open)`,
+                `Bullets P/T/E: ${projectiles.length}/${towerProjectiles.length}/${enemyProjectiles.length}`,
+                `Buildings: ${buildingStats.buildingCount} | Producers: ${buildingStats.producerCount ?? 0}`,
+                `Civilians: ${civilianStats.civilianCount}/${civilianStats.civilianCap} | Lost: ${civilianStats.civiliansKilled}`,
+                `Crash logs stored: ${crashLogs.length}`,
+                `Tiles cached: ${worldStats.tilesCached} | Resources active: ${worldStats.resourcesActive}`
+            ]);
+        }
+
+        if (showAll || debugOverlayView === 'multiplayer') {
+            pushSection('Multiplayer', [
+                `State: ${multiplayerStats.connected ? 'CONNECTED' : 'DISCONNECTED'} | URL: ${multiplayerStats.url}`,
+                `Session: ${multiplayerStats.sessionId ?? 'none'} | Player ID: ${multiplayerStats.playerId ?? '-'}`,
+                `Authority: ${multiplayerStats.authorityPlayerId ?? '-'} | Role: ${multiplayerStats.isAuthority ? 'HOST_AUTH' : 'FOLLOWER'}`,
+                `Protocol: v${multiplayerStats.protocolVersion ?? 1}`,
+                `Ping: ${Math.round(multiplayerStats.pingMs)} ms | Tick: ${multiplayerStats.tickRate}`,
+                `Snapshots: tick ${multiplayerStats.snapshotTick} | remote ${multiplayerStats.remotePlayerCount} | age ${Math.round(multiplayerStats.snapshotAgeMs ?? 0)} ms`,
+                `Relevance: ${multiplayerStats.relevantPlayersSeen ?? 0}/${multiplayerStats.totalPlayersSeen ?? 0} players in scope`,
+                `Replicated non-player seq: ${multiplayerStats.nonPlayerSeq ?? 0} | Totals E/P/T/EP: ${(multiplayerStats.nonPlayerTotals?.enemies ?? 0)}/${(multiplayerStats.nonPlayerTotals?.playerProjectiles ?? 0)}/${(multiplayerStats.nonPlayerTotals?.towerProjectiles ?? 0)}/${(multiplayerStats.nonPlayerTotals?.enemyProjectiles ?? 0)}`,
+                `Net rate: in ${Number(multiplayerStats.inboundKbps ?? 0).toFixed(2)} kB/s | out ${Number(multiplayerStats.outboundKbps ?? 0).toFixed(2)} kB/s`,
+                `Msg rate: snapshots ${multiplayerStats.snapshotRate ?? 0}/s | inputs ${multiplayerStats.inputRate ?? 0}/s`,
+                `Reconnect token: ${multiplayerStats.reconnectToken} | Attempts: ${multiplayerStats.connectAttempts}`,
+                `Last error: ${multiplayerStats.lastError ?? 'none'}`,
+                `LAN host hint: ${DEV_LAN_HOST_HINT}`,
+                `LAN join: ${multiplayerStats.joinHintUrl ?? 'connect first to detect host LAN IP'}`,
+                `Manual join: ${window.location.protocol}//${DEV_LAN_HOST_HINT}:${window.location.port || '3001'}/?mp=1&mpHost=${DEV_LAN_HOST_HINT}`
+            ]);
+        }
+
+        if (showAll || debugOverlayView === 'perf') {
+            pushSection('Performance', [
+                `Perf profile: ${activePerfProfileKey} | Auto governor: ${autoPerfGovernorEnabled ? 'ON' : 'OFF'}`,
+                `Governor streak O/S: ${overBudgetFrameStreak}/${stableFrameStreak}`,
+                `Benchmark: ${benchmarkState.active ? 'RUNNING' : 'idle'} | Frames: ${benchmarkState.frameCount}`,
+                `Path req/exe/def: ${pathStats.requests}/${pathStats.executed}/${pathStats.deferred} | Budget: ${pathStats.budget}`,
+                `Path stride-skip: ${pathStats.skippedByStride ?? 0}`,
+                `System ms B/C/E/T/R/P/UI: ${systemPerfMs.buildings.toFixed(2)}/${systemPerfMs.civilians.toFixed(2)}/${systemPerfMs.enemies.toFixed(2)}/${systemPerfMs.towerCombat.toFixed(2)}/${systemPerfMs.enemyRanged.toFixed(2)}/${systemPerfMs.projectiles.toFixed(2)}/${systemPerfMs.ui.toFixed(2)}`,
+                `Budgets ms B/C/E/T/R/P/UI: ${activePerfProfile.budgetsMs.buildings.toFixed(1)}/${activePerfProfile.budgetsMs.civilians.toFixed(1)}/${activePerfProfile.budgetsMs.enemies.toFixed(1)}/${activePerfProfile.budgetsMs.towerCombat.toFixed(1)}/${activePerfProfile.budgetsMs.enemyRanged.toFixed(1)}/${activePerfProfile.budgetsMs.projectiles.toFixed(1)}/${activePerfProfile.budgetsMs.ui.toFixed(1)}`,
+                `Deferred C/T/R: ${systemDeferred.civilianSkippedFrames}/${systemDeferred.towerSkippedFrames}/${systemDeferred.enemyRangedSkippedFrames}`,
+                `Over budget B/C/E/T/R/P/UI: ${systemOverBudget.buildings}/${systemOverBudget.civilians}/${systemOverBudget.enemies}/${systemOverBudget.towerCombat}/${systemOverBudget.enemyRanged}/${systemOverBudget.projectiles}/${systemOverBudget.ui}`,
+                `Civ update: ${civPerf.updateMs.toFixed(2)} ms | Assign ${civPerf.assignmentCalls} (${civPerf.assignmentSkippedByBudget} delayed)`,
+                `Civ queries P/W: ${civPerf.producerQueries}/${civPerf.warehouseQueries} | Civ sep: ${civPerf.civiliansResolvedCollisions} in ${civPerf.collisionPasses} pass`
+            ]);
+        }
+
+        if (showAll || debugOverlayView === 'cheats') {
+            pushSection('Cheats/Dev Actions', [
+                `H: +100 resources | K: enemy toggle (${enemiesDisabled ? 'ON' : 'OFF'})`,
+                `J: force reset | F8: export crash logs`,
+                `L: perf profile (${activePerfProfileKey}) | O: auto governor (${autoPerfGovernorEnabled ? 'ON' : 'OFF'})`,
+                `M: start benchmark`,
+                `Build mode: ${buildingSystem.getUiState().buildMode ? 'ON' : 'OFF'}`
+            ]);
+        }
+
+        // Remove trailing blank section spacer.
+        while (lines.length > 0 && lines[lines.length - 1] === '') {
+            lines.pop();
+        }
+
+        const logLines = ['', '-- Logs --'];
+        if (debugLogs.length === 0) {
+            logLines.push('(empty)');
+        } else {
             for (const entry of debugLogs) {
-                lines.push(entry);
+                logLines.push(entry);
             }
         }
 
+        const maxPanelWidth = Math.max(320, Math.floor(window.innerWidth * 0.45));
+        debugText.style.wordWrap = false;
         debugText.text = lines.join('\n');
-        // Right-align by content width so text never renders off-screen.
-        debugText.position.set(
-            Math.max(DEBUG_PANEL_MARGIN, window.innerWidth - debugText.width - DEBUG_PANEL_MARGIN),
-            SIDE_PANEL_TOP
-        );
+        const measuredWidth = Math.ceil(debugText.width + 28);
+        const panelWidth = Math.max(300, Math.min(maxPanelWidth, measuredWidth));
+        const panelX = window.innerWidth - panelWidth - SIDE_PANEL_MARGIN;
+        debugText.style.wordWrap = true;
+        debugText.style.wordWrapWidth = panelWidth - 24;
+        debugText.text = lines.join('\n');
+        debugNavText.style.wordWrapWidth = panelWidth - 24;
+        const maxPanelHeight = window.innerHeight - SIDE_PANEL_TOP - DEBUG_PANEL_MARGIN;
+        let panelHeight = Math.ceil(debugText.height + 78);
+        panelHeight = Math.max(170, Math.min(maxPanelHeight, panelHeight));
+        const headerHeight = 62;
+        const inputHeight = 26;
+        const navTop = SIDE_PANEL_TOP + 8;
+        const inputTop = SIDE_PANEL_TOP + 28;
+        const dividerY = SIDE_PANEL_TOP + headerHeight - 6;
+        const contentTop = SIDE_PANEL_TOP + headerHeight;
+        const contentHeight = Math.max(80, panelHeight - headerHeight - 12);
+        const maxLines = Math.max(6, Math.floor(contentHeight / 16));
+        const reservedForLogs = Math.min(logLines.length, Math.max(2, maxLines - 2));
+        const bodyBudget = Math.max(0, maxLines - reservedForLogs);
+        let bodyLines = lines;
+        if (bodyLines.length > bodyBudget) {
+            bodyLines = bodyLines.slice(0, Math.max(0, bodyBudget - 1)).concat('... (truncated)');
+        }
+        const clampedLines = [...bodyLines, ...logLines.slice(-reservedForLogs)];
+
+        debugText.position.set(panelX + 12, contentTop);
+        debugNavText.position.set(panelX + 12, navTop);
+        debugNavText.text = `View: ${debugOverlayView.toUpperCase()} | Tab or / to type`;
+
+        debugPanelBackground.clear();
+        debugPanelBackground.rect(panelX, SIDE_PANEL_TOP, panelWidth, panelHeight);
+        debugPanelBackground.fill(0x101010);
+        debugPanelBackground.alpha = 0.84;
+        debugPanelBackground.stroke({ width: 1, color: 0x2f2f2f });
+        debugPanelBackground.visible = true;
+
+        debugPanelBackground.rect(panelX + 10, dividerY, panelWidth - 20, 1);
+        debugPanelBackground.fill(0x2b2b2b);
+        debugInputBackground.clear();
+        debugInputBackground.rect(panelX + 10, inputTop, panelWidth - 20, inputHeight);
+        debugInputBackground.fill(0x06140a);
+        debugInputBackground.alpha = 1;
+        debugInputBackground.stroke({ width: 1, color: 0x3fa35e });
+        debugInputBackground.visible = true;
+        debugInputText.text = debugCommandActive ? `> ${debugCommandBuffer}_` : '> type /help';
+        debugInputText.position.set(panelX + 16, inputTop + 4);
+        debugInputText.visible = true;
+        debugNavText.visible = false;
+        debugText.text = clampedLines.join('\n');
+        debugText.visible = true;
     }
 
     function removeProjectileAt(index) {
@@ -652,19 +828,13 @@ async function init() {
     function resetCombatEntities() {
         enemySystem.resetEnemies();
         remotePlayerSystem.clear();
+        lastAppliedMultiplayerSnapshotTick = -1;
+        lastAppliedNonPlayerSnapshotSeq = -1;
         for (let i = projectiles.length - 1; i >= 0; i--) {
             removeProjectileAt(i);
         }
-        for (let i = towerProjectiles.length - 1; i >= 0; i--) {
-            releaseProjectileSprite(towerProjectiles[i].team, towerProjectiles[i].sprite);
-            releaseProjectileObject(towerProjectiles[i]);
-            towerProjectiles.splice(i, 1);
-        }
-        for (let i = enemyProjectiles.length - 1; i >= 0; i--) {
-            releaseProjectileSprite(enemyProjectiles[i].team, enemyProjectiles[i].sprite);
-            releaseProjectileObject(enemyProjectiles[i]);
-            enemyProjectiles.splice(i, 1);
-        }
+        clearProjectileList(towerProjectiles);
+        clearProjectileList(enemyProjectiles);
     }
 
     // Full run reset: player, world, buildings, civilians, enemies, and resources.
@@ -1091,6 +1261,46 @@ async function init() {
         }
     }
 
+    function clearProjectileList(list) {
+        for (let i = list.length - 1; i >= 0; i--) {
+            releaseProjectileSprite(list[i].team, list[i].sprite);
+            releaseProjectileObject(list[i]);
+            list.splice(i, 1);
+        }
+    }
+
+    function syncReplicatedProjectileList(targetList, sourceEntries, team) {
+        clearProjectileList(targetList);
+        const source = Array.isArray(sourceEntries) ? sourceEntries : [];
+        for (const entry of source) {
+            const projectile = acquireProjectileObject();
+            const sprite = acquireProjectileSprite(team);
+            projectile.x = Number(entry.x) || 0;
+            projectile.y = Number(entry.y) || 0;
+            projectile.vx = 0;
+            projectile.vy = 0;
+            projectile.ttl = 60;
+            projectile.damage = 0;
+            projectile.radius = 4;
+            projectile.team = team;
+            projectile.sprite = sprite;
+            sprite.position.set(projectile.x, projectile.y);
+            projectileLayer.addChild(sprite);
+            targetList.push(projectile);
+        }
+    }
+
+    function exportReplicatedProjectileList(sourceList) {
+        const result = [];
+        for (const projectile of sourceList) {
+            result.push({
+                x: projectile.x,
+                y: projectile.y
+            });
+        }
+        return result;
+    }
+
     function updateProjectiles(deltaMoveScale, civilianTargetsSnapshot = null) {
         const snapshot = {
             playerCenter: playerSystem.getCenter(),
@@ -1410,6 +1620,47 @@ async function init() {
     window.addEventListener('keydown', (e) => {
         const key = e.key.toLowerCase();
         keys[key] = true;
+        if (debugOverlayEnabled && key === 'tab') {
+            debugCommandActive = true;
+            if (!debugCommandBuffer.startsWith('/')) {
+                debugCommandBuffer = '/';
+            }
+            e.preventDefault();
+            return;
+        }
+        if (debugOverlayEnabled && !debugCommandActive && key === '/') {
+            debugCommandActive = true;
+            debugCommandBuffer = '/';
+            e.preventDefault();
+            return;
+        }
+        if (debugOverlayEnabled && debugCommandActive) {
+            if (key === 'enter') {
+                executeDebugCommand(debugCommandBuffer);
+                debugCommandActive = false;
+                debugCommandBuffer = '';
+                e.preventDefault();
+                return;
+            }
+            if (key === 'escape') {
+                debugCommandActive = false;
+                debugCommandBuffer = '';
+                e.preventDefault();
+                return;
+            }
+            if (key === 'backspace') {
+                if (debugCommandBuffer.length > 0) {
+                    debugCommandBuffer = debugCommandBuffer.slice(0, -1);
+                }
+                e.preventDefault();
+                return;
+            }
+            if (key.length === 1) {
+                debugCommandBuffer += key;
+                e.preventDefault();
+                return;
+            }
+        }
         // Global gameplay keybinds are handled in this block.
         if (key === 'escape') {
             isPaused = !isPaused;
@@ -1423,6 +1674,12 @@ async function init() {
         if (key === 'f4' || key === '\u00e7') {
             debugOverlayEnabled = !debugOverlayEnabled;
             debugText.visible = debugOverlayEnabled;
+            debugNavText.visible = debugOverlayEnabled;
+            debugPanelBackground.visible = debugOverlayEnabled;
+            debugInputBackground.visible = debugOverlayEnabled;
+            debugInputText.visible = debugOverlayEnabled;
+            debugCommandActive = false;
+            debugCommandBuffer = '';
             worldSystem.refreshVisibleTileGridlines();
             logDebug(`Debug console ${debugOverlayEnabled ? 'enabled' : 'disabled'}`);
         }
@@ -1461,7 +1718,24 @@ async function init() {
         if ((key === 'm') && debugOverlayEnabled) {
             startStressBenchmark();
         }
+        if ((key === 'c') && debugOverlayEnabled) {
+            setDebugOverlayView('perf');
+        }
+        if ((key === 'v') && debugOverlayEnabled) {
+            setDebugOverlayView('cheats');
+        }
+        if ((key === 'b') && debugOverlayEnabled) {
+            setDebugOverlayView('multiplayer');
+            return;
+        }
         if ((key === 'n') && debugOverlayEnabled) {
+            setDebugOverlayView('logs');
+            return;
+        }
+        if ((key === 'g') && debugOverlayEnabled) {
+            setDebugOverlayView('core');
+        }
+        if ((key === 'p') && debugOverlayEnabled) {
             const multiplayerStats = multiplayerClient.getStats();
             if (multiplayerStats.connected) {
                 multiplayerClient.disconnect();
@@ -1576,10 +1850,12 @@ async function init() {
             const fps = clampedFrameMs > 0 ? 1000 / clampedFrameMs : 0;
             smoothedFps = smoothedFps * 0.9 + fps * 0.1;
         }
-        multiplayerClient.update(clampedFrameMs);
         multiplayerClient.sendInput(movementInput.x, movementInput.y);
+        multiplayerClient.update(clampedFrameMs);
         const multiplayerStats = multiplayerClient.getStats();
         const multiplayerSnapshot = multiplayerClient.getSnapshotState();
+        const replicatedAuthority = multiplayerStats.connected && multiplayerStats.isAuthority;
+        const replicatedFollower = multiplayerStats.connected && !multiplayerStats.isAuthority;
         if (multiplayerStats.connected && multiplayerStats.playerId !== null) {
             const localServerPlayer = multiplayerSnapshot.players.find(
                 (entry) => String(entry.playerId) === String(multiplayerStats.playerId)
@@ -1595,9 +1871,25 @@ async function init() {
                     playerSystem.setWorldPosition(playerWorldX, playerWorldY);
                 }
             }
-            remotePlayerSystem.sync(multiplayerSnapshot.players, multiplayerStats.playerId);
+            if (multiplayerSnapshot.tick !== lastAppliedMultiplayerSnapshotTick) {
+                lastAppliedMultiplayerSnapshotTick = multiplayerSnapshot.tick;
+                remotePlayerSystem.sync(multiplayerSnapshot.players, multiplayerStats.playerId);
+            }
+            remotePlayerSystem.update(clampedFrameMs);
+            if (replicatedFollower) {
+                const nonPlayerSnapshot = multiplayerClient.getNonPlayerSnapshotState();
+                if (nonPlayerSnapshot.seq !== lastAppliedNonPlayerSnapshotSeq) {
+                    lastAppliedNonPlayerSnapshotSeq = nonPlayerSnapshot.seq;
+                    enemySystem.syncReplicatedState(nonPlayerSnapshot.enemies);
+                    syncReplicatedProjectileList(projectiles, nonPlayerSnapshot.projectiles.player, 'player');
+                    syncReplicatedProjectileList(towerProjectiles, nonPlayerSnapshot.projectiles.tower, 'tower');
+                    syncReplicatedProjectileList(enemyProjectiles, nonPlayerSnapshot.projectiles.enemy, 'enemy');
+                }
+            }
         } else {
             remotePlayerSystem.clear();
+            lastAppliedMultiplayerSnapshotTick = -1;
+            lastAppliedNonPlayerSnapshotSeq = -1;
         }
         enemySystem.beginFramePathBudget();
 
@@ -1614,16 +1906,20 @@ async function init() {
 
         gameTimeSeconds += (clampedFrameMs / 1000);
 
-        const tBuildStart = performance.now();
-        buildingSystem.updateProduction(deltaFrames);
-        systemPerfMs.buildings = performance.now() - tBuildStart;
-        if (systemPerfMs.buildings > activePerfProfile.budgetsMs.buildings) {
-            systemOverBudget.buildings += 1;
-            frameOverBudget = true;
+        if (!replicatedFollower) {
+            const tBuildStart = performance.now();
+            buildingSystem.updateProduction(deltaFrames);
+            systemPerfMs.buildings = performance.now() - tBuildStart;
+            if (systemPerfMs.buildings > activePerfProfile.budgetsMs.buildings) {
+                systemOverBudget.buildings += 1;
+                frameOverBudget = true;
+            }
+        } else {
+            systemPerfMs.buildings = 0;
         }
 
         const civilianStride = Math.max(1, activePerfProfile.civilianUpdateStride ?? 1);
-        if (simFrameIndex % civilianStride === 0) {
+        if (!replicatedFollower && simFrameIndex % civilianStride === 0) {
             const tCivilianStart = performance.now();
             civilianSystem.update(deltaFrames, deltaMoveScale);
             systemPerfMs.civilians = performance.now() - tCivilianStart;
@@ -1682,10 +1978,10 @@ async function init() {
         world.position.y = window.innerHeight / 2 - playerWorldY - 16;
 
         updateVisibleWorld();
-        if (!playerState.isDead && !enemiesDisabled) {
+        if (!replicatedFollower && !playerState.isDead && !enemiesDisabled) {
             enemySystem.spawnTick();
         }
-        if (!enemiesDisabled) {
+        if (!replicatedFollower && !enemiesDisabled) {
             const tEnemyStart = performance.now();
             enemySystem.update(deltaMoveScale, {
                 nearTiles: activePerfProfile.enemyNearTiles,
@@ -1706,7 +2002,7 @@ async function init() {
         const civilianTargetsSnapshot = civilianSystem.getTargets();
         rebuildRuntimeSpatialIndexes(civilianTargetsSnapshot);
         const towerStride = Math.max(1, activePerfProfile.towerUpdateStride ?? 1);
-        if (simFrameIndex % towerStride === 0) {
+        if (!replicatedFollower && simFrameIndex % towerStride === 0) {
             const tTowerStart = performance.now();
             updateTowerCombat();
             systemPerfMs.towerCombat = performance.now() - tTowerStart;
@@ -1719,7 +2015,7 @@ async function init() {
             systemDeferred.towerSkippedFrames += 1;
         }
         const enemyRangedStride = Math.max(1, activePerfProfile.enemyRangedUpdateStride ?? 1);
-        if (simFrameIndex % enemyRangedStride === 0) {
+        if (!replicatedFollower && simFrameIndex % enemyRangedStride === 0) {
             const tEnemyRangedStart = performance.now();
             updateEnemyRangedCombat(deltaFrames);
             systemPerfMs.enemyRanged = performance.now() - tEnemyRangedStart;
@@ -1731,12 +2027,16 @@ async function init() {
             systemPerfMs.enemyRanged = 0;
             systemDeferred.enemyRangedSkippedFrames += 1;
         }
-        const tProjStart = performance.now();
-        updateProjectiles(deltaMoveScale, civilianTargetsSnapshot);
-        systemPerfMs.projectiles = performance.now() - tProjStart;
-        if (systemPerfMs.projectiles > activePerfProfile.budgetsMs.projectiles) {
-            systemOverBudget.projectiles += 1;
-            frameOverBudget = true;
+        if (!replicatedFollower) {
+            const tProjStart = performance.now();
+            updateProjectiles(deltaMoveScale, civilianTargetsSnapshot);
+            systemPerfMs.projectiles = performance.now() - tProjStart;
+            if (systemPerfMs.projectiles > activePerfProfile.budgetsMs.projectiles) {
+                systemOverBudget.projectiles += 1;
+                frameOverBudget = true;
+            }
+        } else {
+            systemPerfMs.projectiles = 0;
         }
 
         // Re-apply camera in case enemy collision resolution pushed the player.
@@ -1756,7 +2056,7 @@ async function init() {
             }
             deleteBuildingRequested = false;
         }
-        if (!playerState.isDead && buildUi.buildMode && placeRequested) {
+        if (!replicatedFollower && !playerState.isDead && buildUi.buildMode && placeRequested) {
             const placed = buildingSystem.tryPlaceSelectedAtMouse();
             if (placed) {
                 updateHud();
@@ -1764,7 +2064,7 @@ async function init() {
             placeRequested = false;
         }
 
-        if (!playerState.isDead && !buildUi.buildMode && (keys.attack || leftMouseDown) && playerCombat.cooldownFrames <= 0) {
+        if (!replicatedFollower && !playerState.isDead && !buildUi.buildMode && (keys.attack || leftMouseDown) && playerCombat.cooldownFrames <= 0) {
             const center = playerSystem.getCenter();
             performAttack(center.x, center.y);
         }
@@ -1772,7 +2072,7 @@ async function init() {
             placeRequested = false;
         }
 
-        if (!playerState.isDead && harvestRequested) {
+        if (!replicatedFollower && !playerState.isDead && harvestRequested) {
             harvestRequested = false;
 
             const playerCenterX = playerWorldX + TILE_SIZE / 2;
@@ -1790,6 +2090,12 @@ async function init() {
                 }
             }
         }
+        if (replicatedFollower) {
+            harvestRequested = false;
+            placeRequested = false;
+            inspectRequested = false;
+            deleteBuildingRequested = false;
+        }
 
         // Lightweight floating text update for harvest feedback.
         for (let i = floatingTexts.length - 1; i >= 0; i--) {
@@ -1805,6 +2111,22 @@ async function init() {
         }
 
         playerSystem.updateHitVisual();
+
+        if (replicatedAuthority) {
+            outboundEntitySnapshotTimerMs -= clampedFrameMs;
+            if (outboundEntitySnapshotTimerMs <= 0) {
+                outboundEntitySnapshotTimerMs = 120;
+                outboundEntitySnapshotSeq += 1;
+                multiplayerClient.sendEntitySnapshot(outboundEntitySnapshotSeq, {
+                    enemies: enemySystem.exportReplicatedState(),
+                    projectiles: {
+                        player: exportReplicatedProjectileList(projectiles),
+                        tower: exportReplicatedProjectileList(towerProjectiles),
+                        enemy: exportReplicatedProjectileList(enemyProjectiles)
+                    }
+                });
+            }
+        }
 
         updatePerformanceGovernor(frameOverBudget);
         if (benchmarkState.active && !isBackgroundTick) {
@@ -1879,10 +2201,8 @@ async function init() {
     window.addEventListener('resize', () => {
         app.renderer.resize(window.innerWidth, window.innerHeight);
         playerSystem.handleResize(window.innerWidth, window.innerHeight);
-        debugText.position.set(
-            Math.max(DEBUG_PANEL_MARGIN, window.innerWidth - debugText.width - DEBUG_PANEL_MARGIN),
-            SIDE_PANEL_TOP
-        );
+        debugText.position.set(window.innerWidth - DEBUG_PANEL_WIDTH + 12 - SIDE_PANEL_MARGIN, SIDE_PANEL_TOP + 44);
+        debugNavText.position.set(window.innerWidth - DEBUG_PANEL_WIDTH + 12 - SIDE_PANEL_MARGIN, SIDE_PANEL_TOP + 10);
         deathText.position.set(window.innerWidth / 2, window.innerHeight / 2);
         pauseText.position.set(window.innerWidth / 2, window.innerHeight / 2);
         updateVisibleWorld();

@@ -299,6 +299,80 @@ export function createEnemySystem({
         }
     }
 
+    function createReplicatedEnemy(entry) {
+        const spriteData = createEnemySprite(Boolean(entry.isRanged));
+        const enemy = {
+            __entity: 'enemy',
+            id: Number(entry.id) || enemyIdCounter++,
+            x: Number(entry.x) || 0,
+            y: Number(entry.y) || 0,
+            hp: Number(entry.hp) || ENEMY_MAX_HP,
+            maxHp: Number(entry.maxHp) || ENEMY_MAX_HP,
+            invulnFrames: 0,
+            isDead: false,
+            path: [],
+            pathIndex: 0,
+            repathTimer: 0,
+            contactCooldownFrames: 0,
+            knockbackVX: 0,
+            knockbackVY: 0,
+            isRanged: Boolean(entry.isRanged),
+            wallTargetTile: null,
+            healthBg: spriteData.healthBg,
+            healthFill: spriteData.healthFill
+        };
+        spriteData.container.position.set(enemy.x, enemy.y);
+        enemyLayer.addChild(spriteData.container);
+        enemy.sprite = spriteData.container;
+        updateEnemyHealthBar(enemy);
+        return enemy;
+    }
+
+    function exportReplicatedState() {
+        return enemies.map((enemy) => ({
+            id: enemy.id,
+            x: enemy.x,
+            y: enemy.y,
+            hp: enemy.hp,
+            maxHp: enemy.maxHp,
+            isRanged: enemy.isRanged
+        }));
+    }
+
+    function syncReplicatedState(entries) {
+        const source = Array.isArray(entries) ? entries : [];
+        const byId = new Map();
+        for (const enemy of enemies) {
+            byId.set(String(enemy.id), enemy);
+        }
+        const seen = new Set();
+        for (const entry of source) {
+            const key = String(entry.id);
+            let enemy = byId.get(key);
+            if (!enemy) {
+                enemy = createReplicatedEnemy(entry);
+                enemies.push(enemy);
+            } else {
+                enemy.x = Number(entry.x) || enemy.x;
+                enemy.y = Number(entry.y) || enemy.y;
+                enemy.hp = Number(entry.hp) || enemy.hp;
+                enemy.maxHp = Number(entry.maxHp) || enemy.maxHp;
+                enemy.isRanged = Boolean(entry.isRanged);
+                enemy.sprite.position.set(enemy.x, enemy.y);
+                updateEnemyHealthBar(enemy);
+            }
+            seen.add(key);
+        }
+
+        for (let i = enemies.length - 1; i >= 0; i--) {
+            const key = String(enemies[i].id);
+            if (seen.has(key)) {
+                continue;
+            }
+            removeEnemyAt(i);
+        }
+    }
+
     function resolveEnemyCollisions(options = {}) {
         const minDistance = ENEMY_RADIUS * 2;
         const minDistanceSq = minDistance * minDistance;
@@ -732,6 +806,8 @@ export function createEnemySystem({
         getEnemies: () => enemies,
         getPathStats,
         updateEnemyHealthBar,
+        exportReplicatedState,
+        syncReplicatedState,
         isEnemyEntity: (entity) => entity?.__entity === 'enemy'
     };
 }

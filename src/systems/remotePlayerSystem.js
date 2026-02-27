@@ -4,6 +4,7 @@ import { PLAYER_COLLISION_RADIUS } from '../config/constants.js';
 // Renders non-local multiplayer peers from server snapshots.
 export function createRemotePlayerSystem({ layer }) {
     const peers = new Map();
+    const smoothingPerSecond = 12;
 
     function createPeerSprite() {
         const sprite = new PIXI.Graphics();
@@ -22,33 +23,52 @@ export function createRemotePlayerSystem({ layer }) {
             }
             const id = String(peer.playerId);
             activeIds.add(id);
-            let sprite = peers.get(id);
-            if (!sprite) {
-                sprite = createPeerSprite();
-                peers.set(id, sprite);
+            let entry = peers.get(id);
+            if (!entry) {
+                const sprite = createPeerSprite();
+                entry = {
+                    sprite,
+                    x: peer.x,
+                    y: peer.y,
+                    targetX: peer.x,
+                    targetY: peer.y
+                };
+                sprite.position.set(peer.x, peer.y);
+                peers.set(id, entry);
             }
-            sprite.position.set(peer.x, peer.y);
-            sprite.visible = true;
+            entry.targetX = peer.x;
+            entry.targetY = peer.y;
+            entry.sprite.visible = true;
         }
 
-        for (const [id, sprite] of peers) {
+        for (const [id, entry] of peers) {
             if (activeIds.has(id)) {
                 continue;
             }
-            sprite.destroy();
+            entry.sprite.destroy();
             peers.delete(id);
         }
     }
 
+    function update(deltaMs) {
+        const alpha = Math.max(0, Math.min(1, (deltaMs / 1000) * smoothingPerSecond));
+        for (const entry of peers.values()) {
+            entry.x += (entry.targetX - entry.x) * alpha;
+            entry.y += (entry.targetY - entry.y) * alpha;
+            entry.sprite.position.set(entry.x, entry.y);
+        }
+    }
+
     function clear() {
-        for (const sprite of peers.values()) {
-            sprite.destroy();
+        for (const entry of peers.values()) {
+            entry.sprite.destroy();
         }
         peers.clear();
     }
 
     return {
         sync,
+        update,
         clear
     };
 }
