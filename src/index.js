@@ -36,6 +36,11 @@ import { createPlayerSystem } from './systems/playerSystem.js';
 import { createWorldSystem } from './systems/worldSystem.js';
 
 async function init() {
+    const TOP_BAR_HEIGHT = 40;
+    const SIDE_PANEL_MARGIN = 12;
+    const SIDE_PANEL_TOP = TOP_BAR_HEIGHT + 12;
+    const DEBUG_PANEL_MARGIN = 16;
+
     const app = new PIXI.Application();
     await app.init({
         width: window.innerWidth,
@@ -225,7 +230,7 @@ async function init() {
     });
     debugText.visible = false;
     // Keep debug panel below the top HUD bar to avoid overlap.
-    debugText.position.set(window.innerWidth - 360, 52);
+    debugText.position.set(window.innerWidth - 360, SIDE_PANEL_TOP);
     app.stage.addChild(debugText);
 
     function updateHud() {
@@ -235,7 +240,7 @@ async function init() {
         const civStats = civilianSystem?.getStats() ?? { civilianCount: 0, civilianCap: 0 };
         hudText.text = `Wood: ${inventory.wood}   Stone: ${inventory.stone}   Iron: ${inventory.iron}   Gold: ${inventory.gold}   Kills: ${combatStats.enemiesKilled}   Civilians: ${civStats.civilianCount}/${civStats.civilianCap}   Build: ${buildMode} (${buildType})`;
         topBarBackground.clear();
-        topBarBackground.rect(0, 0, window.innerWidth, 40);
+        topBarBackground.rect(0, 0, window.innerWidth, TOP_BAR_HEIGHT);
         topBarBackground.fill(0x111111);
         topBarBackground.alpha = 0.85;
         updateClockHud();
@@ -289,12 +294,23 @@ async function init() {
                 lines.push(`Stored: ${buildUi.selectedPlacedBuilding.storedOutput}/${buildUi.selectedPlacedBuilding.storageCap} ${buildUi.selectedPlacedBuilding.outputResource}`);
             }
         }
-        buildMenuText.text = lines.join('\n');
+        const estimatedLineHeight = 18;
+        const maxVisibleLines = Math.max(
+            4,
+            Math.floor((window.innerHeight - SIDE_PANEL_TOP - SIDE_PANEL_MARGIN - 24) / estimatedLineHeight)
+        );
+        const visibleLines = lines.length > maxVisibleLines
+            ? [...lines.slice(0, maxVisibleLines - 1), `... (${lines.length - maxVisibleLines + 1} more)`]
+            : lines;
+        buildMenuText.text = visibleLines.join('\n');
         const panelPadding = 12;
-        const panelX = 12;
-        const panelY = 52;
-        const panelWidth = Math.min(440, Math.max(280, Math.ceil(buildMenuText.width + panelPadding * 2)));
-        const panelHeight = Math.max(46, Math.ceil(buildMenuText.height + panelPadding * 2));
+        const panelX = SIDE_PANEL_MARGIN;
+        const panelY = SIDE_PANEL_TOP;
+        const maxPanelWidth = Math.max(280, Math.floor(window.innerWidth * 0.4));
+        const panelWidth = Math.min(maxPanelWidth, Math.max(280, Math.ceil(buildMenuText.width + panelPadding * 2)));
+        const requestedHeight = Math.max(46, Math.ceil(buildMenuText.height + panelPadding * 2));
+        const maxPanelHeight = Math.max(80, window.innerHeight - panelY - SIDE_PANEL_MARGIN);
+        const panelHeight = Math.min(requestedHeight, maxPanelHeight);
         buildMenuText.position.set(panelX + panelPadding, panelY + panelPadding);
         buildMenuBackground.clear();
         buildMenuBackground.rect(panelX, panelY, panelWidth, panelHeight);
@@ -348,6 +364,15 @@ async function init() {
         const buildingStats = buildingSystem?.getStats() ?? { buildingCount: 0 };
         const civilianStats = civilianSystem?.getStats() ?? { civilianCount: 0, civilianCap: 0, civiliansKilled: 0 };
         const pathStats = enemySystem?.getPathStats() ?? { requests: 0, executed: 0, deferred: 0, budget: ENEMY_MAX_REPATHS_PER_FRAME };
+        const civPerf = civilianStats.perf ?? {
+            updateMs: 0,
+            assignmentCalls: 0,
+            assignmentSkippedByBudget: 0,
+            producerQueries: 0,
+            warehouseQueries: 0,
+            collisionPasses: 0,
+            civiliansResolvedCollisions: 0
+        };
 
         const lines = [
             'DEV CONSOLE (F4 or ç)',
@@ -359,6 +384,8 @@ async function init() {
             `Bullets: ${projectiles.length}/${MAX_BULLETS}`,
             `Buildings: ${buildingStats.buildingCount} | Producers: ${buildingStats.producerCount ?? 0}`,
             `Civilians: ${civilianStats.civilianCount}/${civilianStats.civilianCap} | Lost: ${civilianStats.civiliansKilled}`,
+            `Civ update: ${civPerf.updateMs.toFixed(2)} ms | Assign ${civPerf.assignmentCalls} (${civPerf.assignmentSkippedByBudget} delayed)`,
+            `Civ queries P/W: ${civPerf.producerQueries}/${civPerf.warehouseQueries} | Civ sep: ${civPerf.civiliansResolvedCollisions} in ${civPerf.collisionPasses} pass`,
             `Producer output: ${(buildingStats.producedPerSecond ?? 0).toFixed(2)}/s`,
             `Crash logs stored: ${crashLogs.length}`,
             `Path req/exe/def: ${pathStats.requests}/${pathStats.executed}/${pathStats.deferred}`,
@@ -377,7 +404,10 @@ async function init() {
 
         debugText.text = lines.join('\n');
         // Right-align by content width so text never renders off-screen.
-        debugText.position.set(Math.max(16, window.innerWidth - debugText.width - 16), 52);
+        debugText.position.set(
+            Math.max(DEBUG_PANEL_MARGIN, window.innerWidth - debugText.width - DEBUG_PANEL_MARGIN),
+            SIDE_PANEL_TOP
+        );
     }
 
     function removeProjectileAt(index) {
@@ -858,10 +888,20 @@ async function init() {
         }
     });
 
-    app.ticker.add((delta) => {
-        const frameMs = delta.deltaMS;
-        const fps = frameMs > 0 ? 1000 / frameMs : 0;
-        smoothedFps = smoothedFps * 0.9 + fps * 0.1;
+    const HIDDEN_TICK_INTERVAL_MS = 100;
+    const HIDDEN_MAX_STEP_MS = 125;
+    let hiddenTickTimerId = null;
+    let hiddenLastTickMs = 0;
+
+    function runGameStep(frameMs, isBackgroundTick = false) {
+        const clampedFrameMs = Math.max(0, Math.min(HIDDEN_MAX_STEP_MS, frameMs));
+        const deltaFrames = clampedFrameMs * 0.06;
+        const deltaMoveScale = clampedFrameMs / 1000;
+
+        if (!isBackgroundTick) {
+            const fps = clampedFrameMs > 0 ? 1000 / clampedFrameMs : 0;
+            smoothedFps = smoothedFps * 0.9 + fps * 0.1;
+        }
         enemySystem.beginFramePathBudget();
 
         playerSystem.updateFacingFromMouse(mouseScreenX, mouseScreenY, window.innerWidth, window.innerHeight);
@@ -869,23 +909,24 @@ async function init() {
         buildingSystem.updatePlacementGhost();
 
         if (isPaused) {
-            updateDebugOverlay(frameMs);
+            if (!isBackgroundTick) {
+                updateDebugOverlay(clampedFrameMs);
+            }
             return;
         }
 
-        gameTimeSeconds += (delta.deltaMS / 1000);
+        gameTimeSeconds += (clampedFrameMs / 1000);
 
-        const deltaMoveScale = delta.deltaTime / 60;
-        buildingSystem.updateProduction(delta.deltaTime);
-        civilianSystem.update(delta.deltaTime, deltaMoveScale);
-        uiRefreshTimer -= delta.deltaTime;
+        buildingSystem.updateProduction(deltaFrames);
+        civilianSystem.update(deltaFrames, deltaMoveScale);
+        uiRefreshTimer -= deltaFrames;
         if (uiRefreshTimer <= 0) {
             updateBuildMenu();
             updateClockHud();
             uiRefreshTimer = 12;
         }
 
-        playerSystem.tickCombatTimers(delta.deltaTime);
+        playerSystem.tickCombatTimers(deltaFrames);
         playerSystem.updateMovement(keys, deltaMoveScale, (nextX, nextY) => {
             const tileX = Math.floor((nextX + TILE_SIZE / 2) / TILE_SIZE);
             const tileY = Math.floor((nextY + TILE_SIZE / 2) / TILE_SIZE);
@@ -962,8 +1003,8 @@ async function init() {
         // Lightweight floating text update for harvest feedback.
         for (let i = floatingTexts.length - 1; i >= 0; i--) {
             const entry = floatingTexts[i];
-            entry.ttl -= 1;
-            entry.sprite.y -= 0.4;
+            entry.ttl -= deltaFrames;
+            entry.sprite.y -= 0.4 * (deltaFrames / 1);
             entry.sprite.alpha = Math.max(0, entry.ttl / 75);
 
             if (entry.ttl <= 0) {
@@ -974,13 +1015,58 @@ async function init() {
 
         playerSystem.updateHitVisual();
 
-        updateDebugOverlay(frameMs);
+        if (!isBackgroundTick) {
+            updateDebugOverlay(clampedFrameMs);
+        }
+    }
+
+    // Background simulation keeps progression ticking when the window is minimized/hidden.
+    // Updates are coarse and clamped to avoid heavy catch-up spikes.
+    function startHiddenTickLoop() {
+        if (hiddenTickTimerId !== null) {
+            return;
+        }
+        hiddenLastTickMs = performance.now();
+        hiddenTickTimerId = window.setInterval(() => {
+            const now = performance.now();
+            const elapsedMs = now - hiddenLastTickMs;
+            hiddenLastTickMs = now;
+            runGameStep(elapsedMs, true);
+        }, HIDDEN_TICK_INTERVAL_MS);
+        logDebug('Background simulation enabled');
+    }
+
+    function stopHiddenTickLoop() {
+        if (hiddenTickTimerId === null) {
+            return;
+        }
+        window.clearInterval(hiddenTickTimerId);
+        hiddenTickTimerId = null;
+        logDebug('Background simulation disabled');
+    }
+
+    app.ticker.add((delta) => {
+        if (document.hidden) {
+            return;
+        }
+        runGameStep(delta.deltaMS, false);
+    });
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            startHiddenTickLoop();
+        } else {
+            stopHiddenTickLoop();
+        }
     });
 
     window.addEventListener('resize', () => {
         app.renderer.resize(window.innerWidth, window.innerHeight);
         playerSystem.handleResize(window.innerWidth, window.innerHeight);
-        debugText.position.set(Math.max(16, window.innerWidth - debugText.width - 16), 52);
+        debugText.position.set(
+            Math.max(DEBUG_PANEL_MARGIN, window.innerWidth - debugText.width - DEBUG_PANEL_MARGIN),
+            SIDE_PANEL_TOP
+        );
         deathText.position.set(window.innerWidth / 2, window.innerHeight / 2);
         pauseText.position.set(window.innerWidth / 2, window.innerHeight / 2);
         updateVisibleWorld();
