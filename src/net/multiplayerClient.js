@@ -7,7 +7,7 @@ export function createMultiplayerClient({
     onLog = () => {}
 }) {
     const PROTOCOL_VERSION = 1;
-    const INPUT_SEND_INTERVAL_MS = 50;
+    const INPUT_SEND_INTERVAL_MS = 33;
     const INPUT_KEEPALIVE_MS = 250;
     const STATS_WINDOW_MS = 1000;
     let socket = null;
@@ -45,12 +45,104 @@ export function createMultiplayerClient({
     let totalPlayersSeen = 0;
     let relevantPlayersSeen = 0;
     let authorityPlayerId = null;
+    let serverPerf = null;
+    let lastSnapshotAtMs = 0;
+    let snapshotIntervalMs = 0;
+    let snapshotJitterMs = 0;
     let nonPlayerSnapshot = {
         seq: 0,
         enemies: [],
         projectiles: { player: [], tower: [], enemy: [] },
-        totals: { enemies: 0, playerProjectiles: 0, towerProjectiles: 0, enemyProjectiles: 0 }
+        totals: { enemies: 0, playerProjectiles: 0, towerProjectiles: 0, enemyProjectiles: 0 },
+        playerStates: [],
+        sharedResources: null,
+        buildingsState: null,
+        buildingsRevision: 0
     };
+    const pendingPeerActions = [];
+
+    function sanitizeProjectileArray(entries) {
+        if (!Array.isArray(entries)) {
+            return [];
+        }
+        return entries
+            .map((entry) => ({
+                x: Number(entry?.x) || 0,
+                y: Number(entry?.y) || 0
+            }))
+            .filter((entry) => Number.isFinite(entry.x) && Number.isFinite(entry.y));
+    }
+
+    function applyProjectileDelta(previous, delta) {
+        const next = Array.isArray(previous) ? previous.map((entry) => ({ x: entry.x, y: entry.y })) : [];
+        if (!delta || typeof delta !== 'object') {
+            return next;
+        }
+        const setEntries = Array.isArray(delta.set) ? delta.set : [];
+        for (const patch of setEntries) {
+            const index = Number(patch?.i);
+            if (!Number.isFinite(index) || index < 0) {
+                continue;
+            }
+            next[Math.floor(index)] = {
+                x: Number(patch?.x) || 0,
+                y: Number(patch?.y) || 0
+            };
+        }
+        const removeFrom = Number(delta.removeFrom);
+        if (Number.isFinite(removeFrom) && removeFrom >= 0) {
+            next.length = Math.min(next.length, Math.floor(removeFrom));
+        }
+        return next.filter((entry) => entry && Number.isFinite(entry.x) && Number.isFinite(entry.y));
+    }
+
+    function applyNonPlayerDelta(currentSnapshot, np) {
+        const currentEnemies = Array.isArray(currentSnapshot.enemies) ? currentSnapshot.enemies : [];
+        const byId = new Map();
+        for (const enemy of currentEnemies) {
+            byId.set(Number(enemy.id), enemy);
+        }
+        const enemyDelta = np.enemyDelta ?? {};
+        const upsert = Array.isArray(enemyDelta.upsert) ? enemyDelta.upsert : [];
+        for (const enemy of upsert) {
+            const id = Number(enemy?.id);
+            if (!Number.isFinite(id)) {
+                continue;
+            }
+            byId.set(id, {
+                id,
+                x: Number(enemy?.x) || 0,
+                y: Number(enemy?.y) || 0,
+                hp: Number(enemy?.hp) || 0,
+                maxHp: Number(enemy?.maxHp) || 1,
+                isRanged: Boolean(enemy?.isRanged)
+            });
+        }
+        const remove = Array.isArray(enemyDelta.remove) ? enemyDelta.remove : [];
+        for (const id of remove) {
+            byId.delete(Number(id));
+        }
+
+        return {
+            seq: Number(np.seq) || currentSnapshot.seq,
+            enemies: [...byId.values()],
+            projectiles: {
+                player: applyProjectileDelta(currentSnapshot.projectiles?.player, np.projectileDelta?.player),
+                tower: applyProjectileDelta(currentSnapshot.projectiles?.tower, np.projectileDelta?.tower),
+                enemy: applyProjectileDelta(currentSnapshot.projectiles?.enemy, np.projectileDelta?.enemy)
+            },
+            totals: {
+                enemies: Number(np.totals?.enemies) || byId.size,
+                playerProjectiles: Number(np.totals?.playerProjectiles) || 0,
+                towerProjectiles: Number(np.totals?.towerProjectiles) || 0,
+                enemyProjectiles: Number(np.totals?.enemyProjectiles) || 0
+            },
+            playerStates: Array.isArray(np.playerStates) ? np.playerStates : currentSnapshot.playerStates,
+            sharedResources: np.sharedResources ?? currentSnapshot.sharedResources,
+            buildingsState: np.buildingsState ?? currentSnapshot.buildingsState,
+            buildingsRevision: Number(np.buildingsRevision) || currentSnapshot.buildingsRevision
+        };
+    }
 
     function isOpen() {
         return socket && socket.readyState === WebSocket.OPEN;
@@ -137,9 +229,31 @@ export function createMultiplayerClient({
                 return;
             }
             if (message.type === 'snapshot') {
+                const now = performance.now();
+                if (lastSnapshotAtMs > 0) {
+                    const interval = now - lastSnapshotAtMs;
+                    snapshotIntervalMs = interval;
+                    // Exponential smoothing to expose network jitter in the dev console.
+                    const expectedIntervalMs = tickRate > 0 ? (1000 / tickRate) : interval;
+                    const deviation = Math.abs(interval - expectedIntervalMs);
+                    snapshotJitterMs = snapshotJitterMs * 0.85 + deviation * 0.15;
+                }
+                lastSnapshotAtMs = now;
                 snapshotTick = Number(message.tick) || snapshotTick;
                 const players = Array.isArray(message.players) ? message.players : [];
                 authorityPlayerId = Number(message.authorityPlayerId) || authorityPlayerId;
+                serverPerf = message.serverPerf && typeof message.serverPerf === 'object'
+                    ? {
+                        tickRate: Number(message.serverPerf.tickRate) || 0,
+                        targetTickMs: Number(message.serverPerf.targetTickMs) || 0,
+                        simMsAvg: Number(message.serverPerf.simMsAvg) || 0,
+                        simMsPeak: Number(message.serverPerf.simMsPeak) || 0,
+                        loopLagMsAvg: Number(message.serverPerf.loopLagMsAvg) || 0,
+                        inboundKbps: Number(message.serverPerf.inboundKbps) || 0,
+                        outboundKbps: Number(message.serverPerf.outboundKbps) || 0,
+                        connectedClients: Number(message.serverPerf.connectedClients) || 0
+                    }
+                    : null;
                 totalPlayersSeen = Number(message.totalPlayers) || players.length;
                 relevantPlayersSeen = Number(message.relevantPlayers) || players.length;
                 remotePlayerCount = Math.max(0, players.length - (playerId ? 1 : 0));
@@ -153,21 +267,46 @@ export function createMultiplayerClient({
                     }))
                     .filter((entry) => Number.isFinite(entry.x) && Number.isFinite(entry.y));
                 const np = message.nonPlayer ?? {};
-                nonPlayerSnapshot = {
-                    seq: Number(np.seq) || nonPlayerSnapshot.seq,
-                    enemies: Array.isArray(np.enemies) ? np.enemies : [],
-                    projectiles: {
-                        player: Array.isArray(np.projectiles?.player) ? np.projectiles.player : [],
-                        tower: Array.isArray(np.projectiles?.tower) ? np.projectiles.tower : [],
-                        enemy: Array.isArray(np.projectiles?.enemy) ? np.projectiles.enemy : []
-                    },
-                    totals: {
-                        enemies: Number(np.totals?.enemies) || 0,
-                        playerProjectiles: Number(np.totals?.playerProjectiles) || 0,
-                        towerProjectiles: Number(np.totals?.towerProjectiles) || 0,
-                        enemyProjectiles: Number(np.totals?.enemyProjectiles) || 0
+                if (np.mode === 'delta') {
+                    if (Number(np.baseSeq) === Number(nonPlayerSnapshot.seq)) {
+                        nonPlayerSnapshot = applyNonPlayerDelta(nonPlayerSnapshot, np);
                     }
-                };
+                } else {
+                    nonPlayerSnapshot = {
+                        seq: Number(np.seq) || nonPlayerSnapshot.seq,
+                        enemies: Array.isArray(np.enemies) ? np.enemies : [],
+                        projectiles: {
+                            player: sanitizeProjectileArray(np.projectiles?.player),
+                            tower: sanitizeProjectileArray(np.projectiles?.tower),
+                            enemy: sanitizeProjectileArray(np.projectiles?.enemy)
+                        },
+                        totals: {
+                            enemies: Number(np.totals?.enemies) || 0,
+                            playerProjectiles: Number(np.totals?.playerProjectiles) || 0,
+                            towerProjectiles: Number(np.totals?.towerProjectiles) || 0,
+                            enemyProjectiles: Number(np.totals?.enemyProjectiles) || 0
+                        },
+                        playerStates: Array.isArray(np.playerStates) ? np.playerStates : [],
+                        sharedResources: np.sharedResources ?? null,
+                        buildingsState: np.buildingsState ?? null,
+                        buildingsRevision: Number(np.buildingsRevision) || 0
+                    };
+                }
+                return;
+            }
+            if (message.type === 'peer_action') {
+                pendingPeerActions.push({
+                    actorPlayerId: message.actorPlayerId,
+                    action: message.action
+                });
+                if (pendingPeerActions.length > 128) {
+                    pendingPeerActions.shift();
+                }
+                return;
+            }
+            if (message.type === 'error') {
+                lastError = typeof message.code === 'string' ? message.code : 'server_error';
+                onLog(`Multiplayer error: ${lastError}`);
                 return;
             }
             if (message.type === 'pong') {
@@ -195,11 +334,20 @@ export function createMultiplayerClient({
         totalPlayersSeen = 0;
         relevantPlayersSeen = 0;
         authorityPlayerId = null;
+        serverPerf = null;
         nonPlayerSnapshot.seq = 0;
         nonPlayerSnapshot.enemies = [];
         nonPlayerSnapshot.projectiles.player = [];
         nonPlayerSnapshot.projectiles.tower = [];
         nonPlayerSnapshot.projectiles.enemy = [];
+        nonPlayerSnapshot.playerStates = [];
+        nonPlayerSnapshot.sharedResources = null;
+        nonPlayerSnapshot.buildingsState = null;
+        nonPlayerSnapshot.buildingsRevision = 0;
+        pendingPeerActions.length = 0;
+        lastSnapshotAtMs = 0;
+        snapshotIntervalMs = 0;
+        snapshotJitterMs = 0;
     }
 
     function update(deltaMs) {
@@ -273,6 +421,17 @@ export function createMultiplayerClient({
         });
     }
 
+    function sendPlayerAction(action) {
+        if (!connected) {
+            return;
+        }
+        send({
+            v: PROTOCOL_VERSION,
+            type: 'player_action',
+            action
+        });
+    }
+
     function getStats() {
         const isAuthority = playerId !== null && authorityPlayerId !== null && String(playerId) === String(authorityPlayerId);
         return {
@@ -295,11 +454,14 @@ export function createMultiplayerClient({
             inboundKbps,
             outboundKbps,
             snapshotAgeMs,
+            snapshotIntervalMs,
+            snapshotJitterMs,
             totalPlayersSeen,
             relevantPlayersSeen,
             protocolVersion: PROTOCOL_VERSION,
             nonPlayerSeq: nonPlayerSnapshot.seq,
-            nonPlayerTotals: nonPlayerSnapshot.totals
+            nonPlayerTotals: nonPlayerSnapshot.totals,
+            serverPerf
         };
     }
 
@@ -315,14 +477,25 @@ export function createMultiplayerClient({
         return nonPlayerSnapshot;
     }
 
+    function drainPeerActions() {
+        if (pendingPeerActions.length === 0) {
+            return [];
+        }
+        const actions = pendingPeerActions.slice();
+        pendingPeerActions.length = 0;
+        return actions;
+    }
+
     return {
         connect,
         disconnect,
         update,
         sendInput,
         sendEntitySnapshot,
+        sendPlayerAction,
         getStats,
         getSnapshotState,
-        getNonPlayerSnapshotState
+        getNonPlayerSnapshotState,
+        drainPeerActions
     };
 }

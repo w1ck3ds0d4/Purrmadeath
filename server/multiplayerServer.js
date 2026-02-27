@@ -4,9 +4,10 @@ const os = require('os');
 
 const HOST = process.env.HOST || '0.0.0.0';
 const PORT = Number(process.env.PORT || 8080);
-const TICK_RATE = Number(process.env.TICK_RATE || 20);
+const TICK_RATE = Number(process.env.TICK_RATE || 30);
 const TICK_MS = 1000 / TICK_RATE;
 const PLAYER_SPEED = Number(process.env.PLAYER_SPEED || 220);
+const MAX_PLAYERS = Number(process.env.MAX_PLAYERS || 4);
 const PROTOCOL_VERSION = 1;
 const PLAYER_RELEVANCE_RADIUS = Number(process.env.PLAYER_RELEVANCE_RADIUS || 2200);
 const NON_PLAYER_RELEVANCE_RADIUS = Number(process.env.NON_PLAYER_RELEVANCE_RADIUS || 2400);
@@ -30,8 +31,27 @@ let nonPlayerState = {
         player: [],
         tower: [],
         enemy: []
-    }
+    },
+    playerStates: [],
+    sharedResources: null,
+    buildingsState: null,
+    buildingsRevision: 0
 };
+const perSocketNonPlayerCache = new WeakMap();
+const serverPerf = {
+    tickRate: TICK_RATE,
+    targetTickMs: TICK_MS,
+    simMsAvg: 0,
+    simMsPeak: 0,
+    loopLagMsAvg: 0,
+    inboundBytesWindow: 0,
+    outboundBytesWindow: 0,
+    inboundKbps: 0,
+    outboundKbps: 0,
+    connectedClients: 0
+};
+let lastTickStartedAt = Date.now();
+let lastNetWindowAt = Date.now();
 
 function clampInputMagnitude(x, y) {
     const mag = Math.hypot(x, y);
@@ -138,6 +158,45 @@ function sanitizeProjectileEntries(raw) {
     return result;
 }
 
+function sanitizeSharedResources(raw) {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+    return {
+        wood: Math.max(0, Math.floor(Number(raw.wood) || 0)),
+        stone: Math.max(0, Math.floor(Number(raw.stone) || 0)),
+        iron: Math.max(0, Math.floor(Number(raw.iron) || 0)),
+        gold: Math.max(0, Math.floor(Number(raw.gold) || 0))
+    };
+}
+
+function sanitizePlayerStates(raw) {
+    if (!Array.isArray(raw)) {
+        return [];
+    }
+    const result = [];
+    for (const entry of raw) {
+        if (!entry || typeof entry !== 'object') {
+            continue;
+        }
+        const playerId = Number(entry.playerId);
+        const hp = Number(entry.hp);
+        const maxHp = Number(entry.maxHp);
+        const respawnTimer = Number(entry.respawnTimer);
+        if (!Number.isFinite(playerId)) {
+            continue;
+        }
+        result.push({
+            playerId: Math.floor(playerId),
+            hp: Math.max(0, Number.isFinite(hp) ? hp : 0),
+            maxHp: Math.max(1, Number.isFinite(maxHp) ? maxHp : 1),
+            isDead: Boolean(entry.isDead),
+            respawnTimer: Math.max(0, Number.isFinite(respawnTimer) ? respawnTimer : 0)
+        });
+    }
+    return result;
+}
+
 function filterNonPlayerStateForViewer(viewer) {
     const radiusSq = NON_PLAYER_RELEVANCE_RADIUS * NON_PLAYER_RELEVANCE_RADIUS;
     const filterByDistance = (entries) => entries.filter((entry) => {
@@ -155,6 +214,10 @@ function filterNonPlayerStateForViewer(viewer) {
             tower: filterByDistance(nonPlayerState.projectiles.tower),
             enemy: filterByDistance(nonPlayerState.projectiles.enemy)
         },
+        playerStates: nonPlayerState.playerStates,
+        sharedResources: nonPlayerState.sharedResources,
+        buildingsState: nonPlayerState.buildingsState,
+        buildingsRevision: nonPlayerState.buildingsRevision,
         totals: {
             enemies: nonPlayerState.enemies.length,
             playerProjectiles: nonPlayerState.projectiles.player.length,
@@ -164,11 +227,108 @@ function filterNonPlayerStateForViewer(viewer) {
     };
 }
 
+function buildProjectileDelta(previousEntries, nextEntries) {
+    const prev = Array.isArray(previousEntries) ? previousEntries : [];
+    const next = Array.isArray(nextEntries) ? nextEntries : [];
+    const sharedLength = Math.min(prev.length, next.length);
+    const set = [];
+    for (let i = 0; i < sharedLength; i++) {
+        const p = prev[i];
+        const n = next[i];
+        if (!p || !n || p.x !== n.x || p.y !== n.y) {
+            set.push({ i, x: n.x, y: n.y });
+        }
+    }
+    for (let i = sharedLength; i < next.length; i++) {
+        const n = next[i];
+        set.push({ i, x: n.x, y: n.y });
+    }
+    return {
+        set,
+        removeFrom: next.length
+    };
+}
+
+function buildDeltaNonPlayerPayload(socket, fullPayload) {
+    const previousRecord = perSocketNonPlayerCache.get(socket) ?? null;
+    const previous = previousRecord?.payload ?? null;
+    const previousDeltaStreak = Number(previousRecord?.deltaStreak) || 0;
+    const forceFull = previousDeltaStreak >= 20;
+    if (forceFull) {
+        perSocketNonPlayerCache.set(socket, { payload: fullPayload, deltaStreak: 0 });
+        return {
+            mode: 'full',
+            ...fullPayload
+        };
+    }
+    perSocketNonPlayerCache.set(socket, { payload: fullPayload, deltaStreak: previousDeltaStreak });
+    if (!previous || !Array.isArray(previous.enemies)) {
+        return {
+            mode: 'full',
+            ...fullPayload
+        };
+    }
+
+    const previousById = new Map();
+    for (const enemy of previous.enemies) {
+        previousById.set(enemy.id, enemy);
+    }
+    const nextById = new Map();
+    const upsert = [];
+    for (const enemy of fullPayload.enemies) {
+        nextById.set(enemy.id, enemy);
+        const prev = previousById.get(enemy.id);
+        if (!prev || prev.x !== enemy.x || prev.y !== enemy.y || prev.hp !== enemy.hp || prev.maxHp !== enemy.maxHp || prev.isRanged !== enemy.isRanged) {
+            upsert.push(enemy);
+        }
+    }
+    const remove = [];
+    for (const previousEnemy of previous.enemies) {
+        if (!nextById.has(previousEnemy.id)) {
+            remove.push(previousEnemy.id);
+        }
+    }
+
+    const projectileDelta = {
+        player: buildProjectileDelta(previous.projectiles?.player, fullPayload.projectiles.player),
+        tower: buildProjectileDelta(previous.projectiles?.tower, fullPayload.projectiles.tower),
+        enemy: buildProjectileDelta(previous.projectiles?.enemy, fullPayload.projectiles.enemy)
+    };
+
+    const deltaPayload = {
+        mode: 'delta',
+        seq: fullPayload.seq,
+        baseSeq: previous.seq,
+        enemyDelta: {
+            upsert,
+            remove
+        },
+        projectileDelta,
+        totals: fullPayload.totals,
+        playerStates: fullPayload.playerStates,
+        sharedResources: fullPayload.sharedResources,
+        buildingsState: fullPayload.buildingsState,
+        buildingsRevision: fullPayload.buildingsRevision
+    };
+    const fullLength = JSON.stringify(fullPayload).length;
+    const deltaLength = JSON.stringify(deltaPayload).length;
+    if (deltaLength >= fullLength) {
+        perSocketNonPlayerCache.set(socket, { payload: fullPayload, deltaStreak: 0 });
+        return {
+            mode: 'full',
+            ...fullPayload
+        };
+    }
+    perSocketNonPlayerCache.set(socket, { payload: fullPayload, deltaStreak: previousDeltaStreak + 1 });
+    return deltaPayload;
+}
+
 function broadcastSnapshot() {
     if (clients.size === 0) {
         return;
     }
     const allPlayers = [...clients.values()];
+    serverPerf.connectedClients = allPlayers.length;
     for (const [socket, viewer] of clients) {
         if (socket.readyState !== socket.OPEN) {
             continue;
@@ -194,20 +354,35 @@ function broadcastSnapshot() {
             authorityPlayerId,
             totalPlayers: allPlayers.length,
             relevantPlayers: relevantPlayers.length,
+            serverPerf: {
+                tickRate: serverPerf.tickRate,
+                targetTickMs: serverPerf.targetTickMs,
+                simMsAvg: Number(serverPerf.simMsAvg.toFixed(2)),
+                simMsPeak: Number(serverPerf.simMsPeak.toFixed(2)),
+                loopLagMsAvg: Number(serverPerf.loopLagMsAvg.toFixed(2)),
+                inboundKbps: Number(serverPerf.inboundKbps.toFixed(2)),
+                outboundKbps: Number(serverPerf.outboundKbps.toFixed(2)),
+                connectedClients: serverPerf.connectedClients
+            },
             players: relevantPlayers.map((state) => ({
                 playerId: state.playerId,
                 x: quantizePosition(state.x),
                 y: quantizePosition(state.y),
                 lastInputSeq: state.lastInputSeq
             })),
-            nonPlayer: filterNonPlayerStateForViewer(viewer)
+            nonPlayer: buildDeltaNonPlayerPayload(socket, filterNonPlayerStateForViewer(viewer))
         };
         const encoded = JSON.stringify(payload);
+        serverPerf.outboundBytesWindow += encoded.length;
         socket.send(encoded);
     }
 }
 
 function simulateTick() {
+    const tickStartedAt = Date.now();
+    const loopLagMs = Math.max(0, tickStartedAt - lastTickStartedAt - TICK_MS);
+    lastTickStartedAt = tickStartedAt;
+    const simStartedAt = performance.now();
     tick += 1;
     const dt = TICK_MS / 1000;
     const now = Date.now();
@@ -217,11 +392,31 @@ function simulateTick() {
             clients.delete(socket);
             continue;
         }
+        const playerState = Array.isArray(nonPlayerState.playerStates)
+            ? nonPlayerState.playerStates.find((entry) => entry.playerId === state.playerId)
+            : null;
+        if (playerState?.isDead) {
+            continue;
+        }
         state.x += state.inputX * PLAYER_SPEED * dt;
         state.y += state.inputY * PLAYER_SPEED * dt;
     }
 
     broadcastSnapshot();
+    const simDurationMs = performance.now() - simStartedAt;
+    serverPerf.simMsAvg = serverPerf.simMsAvg * 0.9 + simDurationMs * 0.1;
+    serverPerf.simMsPeak = Math.max(simDurationMs, serverPerf.simMsPeak * 0.95);
+    serverPerf.loopLagMsAvg = serverPerf.loopLagMsAvg * 0.9 + loopLagMs * 0.1;
+    const netNow = Date.now();
+    const netWindowMs = netNow - lastNetWindowAt;
+    if (netWindowMs >= 1000) {
+        const scale = 1000 / Math.max(1, netWindowMs);
+        serverPerf.inboundKbps = (serverPerf.inboundBytesWindow * scale) / 1024;
+        serverPerf.outboundKbps = (serverPerf.outboundBytesWindow * scale) / 1024;
+        serverPerf.inboundBytesWindow = 0;
+        serverPerf.outboundBytesWindow = 0;
+        lastNetWindowAt = netNow;
+    }
 }
 
 function handleHello(socket, message) {
@@ -230,6 +425,16 @@ function handleHello(socket, message) {
         const previous = reconnectIndex.get(reconnectToken);
         previous.lastSeenAt = Date.now();
         attachConnection(socket, previous);
+        return;
+    }
+    if (clients.size >= MAX_PLAYERS) {
+        sendMessage(socket, {
+            v: PROTOCOL_VERSION,
+            type: 'error',
+            code: 'session_full',
+            maxPlayers: MAX_PLAYERS
+        });
+        socket.close();
         return;
     }
 
@@ -282,12 +487,43 @@ function handleEntitySnapshot(socket, message) {
             player: sanitizeProjectileEntries(payload.projectiles?.player),
             tower: sanitizeProjectileEntries(payload.projectiles?.tower),
             enemy: sanitizeProjectileEntries(payload.projectiles?.enemy)
-        }
+        },
+        playerStates: sanitizePlayerStates(payload.playerStates),
+        sharedResources: sanitizeSharedResources(payload.sharedResources) ?? nonPlayerState.sharedResources,
+        buildingsState: payload.buildingsState ?? nonPlayerState.buildingsState,
+        buildingsRevision: Number(payload.buildingsRevision) || nonPlayerState.buildingsRevision
     };
+}
+
+function getSocketByPlayerId(playerId) {
+    for (const [socket, state] of clients) {
+        if (state.playerId === playerId) {
+            return socket;
+        }
+    }
+    return null;
+}
+
+function handlePlayerAction(socket, message) {
+    const actor = clients.get(socket);
+    if (!actor || actor.playerId === authorityPlayerId) {
+        return;
+    }
+    const authoritySocket = getSocketByPlayerId(authorityPlayerId);
+    if (!authoritySocket || authoritySocket.readyState !== authoritySocket.OPEN) {
+        return;
+    }
+    sendMessage(authoritySocket, {
+        v: PROTOCOL_VERSION,
+        type: 'peer_action',
+        actorPlayerId: actor.playerId,
+        action: message.action ?? null
+    });
 }
 
 wss.on('connection', (socket) => {
     socket.on('message', (buffer) => {
+        serverPerf.inboundBytesWindow += Buffer.byteLength(buffer);
         let message = null;
         try {
             message = JSON.parse(buffer.toString());
@@ -315,6 +551,10 @@ wss.on('connection', (socket) => {
         }
         if (message.type === 'entity_snapshot') {
             handleEntitySnapshot(socket, message);
+            return;
+        }
+        if (message.type === 'player_action') {
+            handlePlayerAction(socket, message);
         }
     });
 

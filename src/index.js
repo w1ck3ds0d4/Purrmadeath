@@ -180,8 +180,18 @@ async function init() {
     let enemySystem = null;
     let lastAppliedMultiplayerSnapshotTick = -1;
     let lastAppliedNonPlayerSnapshotSeq = -1;
+    let lastAppliedBuildingsRevision = -1;
     let outboundEntitySnapshotSeq = 0;
     let outboundEntitySnapshotTimerMs = 0;
+    let outboundBuildingSyncTimerMs = 0;
+    let outboundBuildingRevision = 0;
+    let lastOutboundBuildingStateHash = '';
+    // Multiplayer sync tuning knobs (host authority side).
+    const ENTITY_SNAPSHOT_INTERVAL_MS = 50;
+    const BUILDING_SYNC_INTERVAL_MS = 750;
+    // Reconciliation tuning for local player correction against server snapshots.
+    const PLAYER_RECONCILE_HARD_SNAP_DISTANCE = TILE_SIZE * 3;
+    const PLAYER_RECONCILE_BLEND = 0.22;
     const remotePlayerSystem = createRemotePlayerSystem({ layer: remotePlayerLayer });
     const urlParams = new URLSearchParams(window.location.search);
     const multiplayerQueryEnabled = urlParams.get('multiplayer') === '1' || urlParams.get('mp') === '1';
@@ -353,6 +363,15 @@ async function init() {
         }
     });
     debugInputText.visible = false;
+    const debugVerdictText = new PIXI.Text({
+        text: '',
+        style: {
+            fill: '#8df7ff',
+            fontFamily: 'monospace',
+            fontSize: 12
+        }
+    });
+    debugVerdictText.visible = false;
     const debugPanelBackground = new PIXI.Graphics();
     debugPanelBackground.visible = false;
     app.stage.addChild(debugPanelBackground);
@@ -360,6 +379,7 @@ async function init() {
     app.stage.addChild(debugNavText);
     app.stage.addChild(debugInputBackground);
     app.stage.addChild(debugInputText);
+    app.stage.addChild(debugVerdictText);
 
     function updateHud() {
         const buildUi = buildingSystem?.getUiState();
@@ -556,7 +576,7 @@ async function init() {
     }
 
     function setDebugOverlayView(view) {
-        const allowed = new Set(['core', 'perf', 'cheats', 'multiplayer', 'logs', 'all']);
+        const allowed = new Set(['core', 'perf', 'cheats', 'multiplayer', 'server', 'logs', 'all']);
         if (!allowed.has(view)) {
             return false;
         }
@@ -579,6 +599,9 @@ async function init() {
         if (command === '/multiplayer' || command === '/mp') {
             return setDebugOverlayView('multiplayer');
         }
+        if (command === '/server' || command === '/sv') {
+            return setDebugOverlayView('server');
+        }
         if (command === '/logs') {
             return setDebugOverlayView('logs');
         }
@@ -586,7 +609,7 @@ async function init() {
             return setDebugOverlayView('all');
         }
         if (command === '/help') {
-            logDebug('Commands: /core /perf /cheats /multiplayer /logs /all');
+            logDebug('Commands: /core /perf /cheats /multiplayer /server /logs /all');
             return true;
         }
         logDebug(`Unknown command: ${command}`);
@@ -641,6 +664,10 @@ async function init() {
         stableFrameStreak = 0;
         outboundEntitySnapshotTimerMs = 0;
         outboundEntitySnapshotSeq = 0;
+        outboundBuildingSyncTimerMs = 0;
+        outboundBuildingRevision = 0;
+        lastOutboundBuildingStateHash = '';
+        lastAppliedBuildingsRevision = -1;
         lastAppliedNonPlayerSnapshotSeq = -1;
         benchmarkState.active = false;
         benchmarkState.elapsedMs = 0;
@@ -659,6 +686,7 @@ async function init() {
         const civilianStats = civilianSystem?.getStats() ?? { civilianCount: 0, civilianCap: 0, civiliansKilled: 0 };
         const pathStats = enemySystem?.getPathStats() ?? { requests: 0, executed: 0, deferred: 0, budget: ENEMY_MAX_REPATHS_PER_FRAME };
         const multiplayerStats = multiplayerClient.getStats();
+        const serverPerfStats = multiplayerStats.serverPerf ?? null;
         const civPerf = civilianStats.perf ?? {
             updateMs: 0,
             assignmentCalls: 0,
@@ -710,6 +738,7 @@ async function init() {
                 `Protocol: v${multiplayerStats.protocolVersion ?? 1}`,
                 `Ping: ${Math.round(multiplayerStats.pingMs)} ms | Tick: ${multiplayerStats.tickRate}`,
                 `Snapshots: tick ${multiplayerStats.snapshotTick} | remote ${multiplayerStats.remotePlayerCount} | age ${Math.round(multiplayerStats.snapshotAgeMs ?? 0)} ms`,
+                `Snapshot interval: ${Math.round(multiplayerStats.snapshotIntervalMs ?? 0)} ms | jitter ${Math.round(multiplayerStats.snapshotJitterMs ?? 0)} ms`,
                 `Relevance: ${multiplayerStats.relevantPlayersSeen ?? 0}/${multiplayerStats.totalPlayersSeen ?? 0} players in scope`,
                 `Replicated non-player seq: ${multiplayerStats.nonPlayerSeq ?? 0} | Totals E/P/T/EP: ${(multiplayerStats.nonPlayerTotals?.enemies ?? 0)}/${(multiplayerStats.nonPlayerTotals?.playerProjectiles ?? 0)}/${(multiplayerStats.nonPlayerTotals?.towerProjectiles ?? 0)}/${(multiplayerStats.nonPlayerTotals?.enemyProjectiles ?? 0)}`,
                 `Net rate: in ${Number(multiplayerStats.inboundKbps ?? 0).toFixed(2)} kB/s | out ${Number(multiplayerStats.outboundKbps ?? 0).toFixed(2)} kB/s`,
@@ -720,6 +749,22 @@ async function init() {
                 `LAN join: ${multiplayerStats.joinHintUrl ?? 'connect first to detect host LAN IP'}`,
                 `Manual join: ${window.location.protocol}//${DEV_LAN_HOST_HINT}:${window.location.port || '3001'}/?mp=1&mpHost=${DEV_LAN_HOST_HINT}`
             ]);
+        }
+
+        if (showAll || debugOverlayView === 'server') {
+            if (!serverPerfStats) {
+                pushSection('Server', [
+                    'No server metrics yet (connect first).'
+                ]);
+            } else {
+                pushSection('Server', [
+                    `Tick: ${serverPerfStats.tickRate} Hz | Target: ${Number(serverPerfStats.targetTickMs ?? 0).toFixed(2)} ms`,
+                    `Sim avg/peak: ${Number(serverPerfStats.simMsAvg ?? 0).toFixed(2)} / ${Number(serverPerfStats.simMsPeak ?? 0).toFixed(2)} ms`,
+                    `Loop lag avg: ${Number(serverPerfStats.loopLagMsAvg ?? 0).toFixed(2)} ms`,
+                    `Net in/out: ${Number(serverPerfStats.inboundKbps ?? 0).toFixed(2)} / ${Number(serverPerfStats.outboundKbps ?? 0).toFixed(2)} kB/s`,
+                    `Connected clients: ${serverPerfStats.connectedClients ?? 0}`
+                ]);
+            }
         }
 
         if (showAll || debugOverlayView === 'perf') {
@@ -743,7 +788,7 @@ async function init() {
                 `H: +100 resources | K: enemy toggle (${enemiesDisabled ? 'ON' : 'OFF'})`,
                 `J: force reset | F8: export crash logs`,
                 `L: perf profile (${activePerfProfileKey}) | O: auto governor (${autoPerfGovernorEnabled ? 'ON' : 'OFF'})`,
-                `M: start benchmark`,
+                `U: start benchmark`,
                 `Build mode: ${buildingSystem.getUiState().buildMode ? 'ON' : 'OFF'}`
             ]);
         }
@@ -780,8 +825,11 @@ async function init() {
         const navTop = SIDE_PANEL_TOP + 8;
         const inputTop = SIDE_PANEL_TOP + 28;
         const dividerY = SIDE_PANEL_TOP + headerHeight - 6;
-        const contentTop = SIDE_PANEL_TOP + headerHeight;
-        const contentHeight = Math.max(80, panelHeight - headerHeight - 12);
+        const verdictState = getLatencyVerdict(serverPerfStats, multiplayerStats);
+        const shouldShowVerdict = showAll || debugOverlayView === 'server';
+        const verdictHeight = shouldShowVerdict ? 18 : 0;
+        const contentTop = SIDE_PANEL_TOP + headerHeight + verdictHeight;
+        const contentHeight = Math.max(80, panelHeight - headerHeight - verdictHeight - 12);
         const maxLines = Math.max(6, Math.floor(contentHeight / 16));
         const reservedForLogs = Math.min(logLines.length, Math.max(2, maxLines - 2));
         const bodyBudget = Math.max(0, maxLines - reservedForLogs);
@@ -813,6 +861,14 @@ async function init() {
         debugInputText.text = debugCommandActive ? `> ${debugCommandBuffer}_` : '> type /help';
         debugInputText.position.set(panelX + 16, inputTop + 4);
         debugInputText.visible = true;
+        if (shouldShowVerdict) {
+            debugVerdictText.text = verdictState.text;
+            debugVerdictText.style.fill = verdictState.color;
+            debugVerdictText.position.set(panelX + 12, SIDE_PANEL_TOP + headerHeight + 1);
+            debugVerdictText.visible = true;
+        } else {
+            debugVerdictText.visible = false;
+        }
         debugNavText.visible = false;
         debugText.text = clampedLines.join('\n');
         debugText.visible = true;
@@ -863,6 +919,12 @@ async function init() {
         systemOverBudget.ui = 0;
         overBudgetFrameStreak = 0;
         stableFrameStreak = 0;
+        outboundEntitySnapshotTimerMs = 0;
+        outboundEntitySnapshotSeq = 0;
+        outboundBuildingSyncTimerMs = 0;
+        outboundBuildingRevision = 0;
+        lastOutboundBuildingStateHash = '';
+        lastAppliedBuildingsRevision = -1;
 
         deathText.visible = false;
         const respawn = findSafeSpawnPosition();
@@ -874,6 +936,14 @@ async function init() {
         buildingSystem.reset();
         civilianSystem.reset();
         resetCombatEntities();
+        for (const runtime of multiplayerPlayerRuntime.values()) {
+            runtime.hp = runtime.maxHp;
+            runtime.isDead = false;
+            runtime.invulnFrames = 0;
+            runtime.respawnTimer = 0;
+            runtime.x = respawn.x + TILE_SIZE / 2;
+            runtime.y = respawn.y + TILE_SIZE / 2;
+        }
 
         for (let i = floatingTexts.length - 1; i >= 0; i--) {
             releaseFloatingTextEntry(floatingTexts[i]);
@@ -1005,7 +1075,7 @@ async function init() {
                 deathText.visible = true;
                 clearSavedGameState();
                 logDebug(`Player defeated by ${source}`);
-            } else {
+            } else if (enemySystem?.isEnemyEntity(target)) {
                 combatStats.enemiesKilled += 1;
                 inventory.gold += GOLD_PER_ENEMY_KILL;
                 updateHud();
@@ -1090,6 +1160,8 @@ async function init() {
         return projectileObjectPool.pop() ?? {
             x: 0,
             y: 0,
+            targetX: 0,
+            targetY: 0,
             vx: 0,
             vy: 0,
             ttl: 0,
@@ -1103,6 +1175,8 @@ async function init() {
     function releaseProjectileObject(projectile) {
         projectile.x = 0;
         projectile.y = 0;
+        projectile.targetX = 0;
+        projectile.targetY = 0;
         projectile.vx = 0;
         projectile.vy = 0;
         projectile.ttl = 0;
@@ -1121,6 +1195,8 @@ async function init() {
         const sprite = acquireProjectileSprite(config.team);
         bullet.x = config.originX - (config.radius ?? 4);
         bullet.y = config.originY - (config.radius ?? 4);
+        bullet.targetX = bullet.x;
+        bullet.targetY = bullet.y;
         bullet.vx = config.dirX * config.speed;
         bullet.vy = config.dirY * config.speed;
         bullet.ttl = config.lifetimeFrames;
@@ -1164,12 +1240,53 @@ async function init() {
         }
     }
 
+    function getLatencyVerdict(serverPerfStats, multiplayerStats) {
+        if (!multiplayerStats.connected) {
+            return { text: 'Verdict: offline', color: '#8df7ff' };
+        }
+        if (!serverPerfStats) {
+            return { text: 'Verdict: waiting for server metrics', color: '#8df7ff' };
+        }
+        const targetTickMs = Math.max(1, Number(serverPerfStats.targetTickMs) || 1);
+        const simMsAvg = Number(serverPerfStats.simMsAvg) || 0;
+        const loopLagMsAvg = Number(serverPerfStats.loopLagMsAvg) || 0;
+        const pingMs = Number(multiplayerStats.pingMs) || 0;
+        const snapshotJitterMs = Number(multiplayerStats.snapshotJitterMs) || 0;
+        const serverCpuBound = simMsAvg >= targetTickMs * 0.8 || loopLagMsAvg >= Math.max(4, targetTickMs * 0.35);
+        const networkBound = pingMs >= 35 || snapshotJitterMs >= 10;
+        if (serverCpuBound && networkBound) {
+            return { text: 'Verdict: mixed pressure (server + network)', color: '#ffc14d' };
+        }
+        if (serverCpuBound) {
+            return { text: 'Verdict: likely host-laptop/server bound', color: '#ff8f8f' };
+        }
+        if (networkBound) {
+            return { text: 'Verdict: likely network/Wi-Fi bound', color: '#ffd166' };
+        }
+        return { text: 'Verdict: stable (no obvious bottleneck)', color: '#9ce9a0' };
+    }
+
+    function performPredictedAttackVisual(playerCenterX, playerCenterY) {
+        const mag = Math.hypot(playerCombat.facingX, playerCombat.facingY);
+        const dirX = mag > 0.001 ? playerCombat.facingX / mag : 1;
+        const dirY = mag > 0.001 ? playerCombat.facingY / mag : 0;
+        if (playerCombat.weapon === 'sword') {
+            playerSystem.triggerSwordSwing(dirX, dirY);
+            return;
+        }
+        const muzzleX = playerCenterX + dirX * 18;
+        const muzzleY = playerCenterY + dirY * 18;
+        spawnFloatingFeedback('*', muzzleX, muzzleY, '#ffd166', 16);
+    }
+
     function updateProjectileList(list, deltaMoveScale, snapshot) {
         for (let i = list.length - 1; i >= 0; i--) {
             const bullet = list[i];
             bullet.ttl -= (deltaMoveScale * 60);
             bullet.x += bullet.vx * deltaMoveScale;
             bullet.y += bullet.vy * deltaMoveScale;
+            bullet.targetX = bullet.x;
+            bullet.targetY = bullet.y;
             bullet.sprite.position.set(bullet.x, bullet.y);
 
             if (bullet.ttl <= 0) {
@@ -1270,13 +1387,14 @@ async function init() {
     }
 
     function syncReplicatedProjectileList(targetList, sourceEntries, team) {
-        clearProjectileList(targetList);
         const source = Array.isArray(sourceEntries) ? sourceEntries : [];
-        for (const entry of source) {
+        while (targetList.length < source.length) {
             const projectile = acquireProjectileObject();
             const sprite = acquireProjectileSprite(team);
-            projectile.x = Number(entry.x) || 0;
-            projectile.y = Number(entry.y) || 0;
+            projectile.x = 0;
+            projectile.y = 0;
+            projectile.targetX = 0;
+            projectile.targetY = 0;
             projectile.vx = 0;
             projectile.vy = 0;
             projectile.ttl = 60;
@@ -1287,6 +1405,32 @@ async function init() {
             sprite.position.set(projectile.x, projectile.y);
             projectileLayer.addChild(sprite);
             targetList.push(projectile);
+        }
+        for (let i = 0; i < source.length; i++) {
+            const entry = source[i];
+            const projectile = targetList[i];
+            const nextX = Number(entry.x) || 0;
+            const nextY = Number(entry.y) || 0;
+            if (!Number.isFinite(projectile.x) || !Number.isFinite(projectile.y)) {
+                projectile.x = nextX;
+                projectile.y = nextY;
+            }
+            projectile.targetX = nextX;
+            projectile.targetY = nextY;
+        }
+        for (let i = targetList.length - 1; i >= source.length; i--) {
+            releaseProjectileSprite(targetList[i].team, targetList[i].sprite);
+            releaseProjectileObject(targetList[i]);
+            targetList.splice(i, 1);
+        }
+    }
+
+    function updateReplicatedProjectileList(list, deltaMoveScale) {
+        const alpha = Math.max(0.05, Math.min(1, deltaMoveScale * 18));
+        for (const projectile of list) {
+            projectile.x += (projectile.targetX - projectile.x) * alpha;
+            projectile.y += (projectile.targetY - projectile.y) * alpha;
+            projectile.sprite.position.set(projectile.x, projectile.y);
         }
     }
 
@@ -1435,25 +1579,30 @@ async function init() {
         }
     }
 
-    function spawnHarvestFeedback(resourceType, tileX, tileY) {
+    function spawnFloatingFeedback(textValue, worldX, worldY, color = '#ffffff', ttlFrames = 75) {
         const text = floatingTextPool.pop() ?? new PIXI.Text({
             text: '',
             style: {
-                fill: '#ffffff',
+                fill: color,
                 fontFamily: 'monospace',
                 fontSize: 14
             }
         });
-        text.text = `+1 ${resourceType}`;
+        text.style.fill = color;
+        text.text = textValue;
         text.alpha = 1;
         text.anchor.set(0.5);
-        text.position.set(tileX * TILE_SIZE + TILE_SIZE / 2, tileY * TILE_SIZE + 6);
+        text.position.set(worldX, worldY);
         text.visible = true;
         resourceLayer.addChild(text);
         const entry = floatingTextEntryPool.pop() ?? { sprite: text, ttl: 0 };
         entry.sprite = text;
-        entry.ttl = 75; // Frames to keep harvest text visible.
+        entry.ttl = ttlFrames;
         floatingTexts.push(entry);
+    }
+
+    function spawnHarvestFeedback(resourceType, tileX, tileY) {
+        spawnFloatingFeedback(`+1 ${resourceType}`, tileX * TILE_SIZE + TILE_SIZE / 2, tileY * TILE_SIZE + 6, '#ffffff', 75);
     }
 
     function releaseFloatingTextEntry(entry) {
@@ -1470,6 +1619,8 @@ async function init() {
 
     let playerWorldX = spawnWorldPos.x;
     let playerWorldY = spawnWorldPos.y;
+    const multiplayerPlayerRuntime = new Map();
+    const PLAYER_RESPAWN_SECONDS = 15;
 
     const keys = {};
     let harvestRequested = false;
@@ -1488,6 +1639,143 @@ async function init() {
             return { x: 0, y: 0 };
         }
         return { x: moveX / magnitude, y: moveY / magnitude };
+    }
+
+    function screenToWorldTile(screenX, screenY) {
+        return {
+            tileX: Math.floor((screenX - world.position.x) / TILE_SIZE),
+            tileY: Math.floor((screenY - world.position.y) / TILE_SIZE)
+        };
+    }
+
+    function computeBuildingStateHash(state) {
+        if (!state || !Array.isArray(state.buildings)) {
+            return '0';
+        }
+        // Compact hash to avoid shipping full building snapshots when nothing changed.
+        return JSON.stringify(state.buildings.map((building) => ([
+            building.id,
+            building.type,
+            building.tileX,
+            building.tileY,
+            Math.round(Number(building.hp) || 0),
+            Math.round(Number(building.storedOutput) || 0),
+            Math.round(Number(building.cycleTimerFrames) || 0),
+            Math.round(Number(building.towerCooldownRemainingFrames) || 0)
+        ])));
+    }
+
+    function runPlayerAction(action, actorCenter = null) {
+        if (!action || typeof action.type !== 'string') {
+            return;
+        }
+        if (action.type === 'attack') {
+            const dirX = Number(action.dirX);
+            const dirY = Number(action.dirY);
+            const originX = Number(action.originX);
+            const originY = Number(action.originY);
+            if (!Number.isFinite(dirX) || !Number.isFinite(dirY)) {
+                return;
+            }
+            const centerX = Number.isFinite(originX) ? originX : (actorCenter?.x ?? playerSystem.getCenter().x);
+            const centerY = Number.isFinite(originY) ? originY : (actorCenter?.y ?? playerSystem.getCenter().y);
+            const mag = Math.hypot(dirX, dirY) || 1;
+            const nx = dirX / mag;
+            const ny = dirY / mag;
+            if (action.weapon === 'sword') {
+                performSwordAttack(centerX, centerY, nx, ny);
+            } else {
+                spawnBullet(centerX, centerY, nx, ny);
+            }
+            return;
+        }
+        if (action.type === 'build') {
+            const tileX = Number(action.tileX);
+            const tileY = Number(action.tileY);
+            const buildingType = action.buildingType;
+            if (!Number.isFinite(tileX) || !Number.isFinite(tileY) || typeof buildingType !== 'string') {
+                return;
+            }
+            const placed = buildingSystem.tryPlaceByTypeAtTile(buildingType, Math.floor(tileX), Math.floor(tileY));
+            if (placed) {
+                updateHud();
+            }
+            return;
+        }
+        if (action.type === 'remove') {
+            const tileX = Number(action.tileX);
+            const tileY = Number(action.tileY);
+            if (!Number.isFinite(tileX) || !Number.isFinite(tileY)) {
+                return;
+            }
+            const removed = buildingSystem.removeBuildingAtTile(Math.floor(tileX), Math.floor(tileY));
+            if (removed) {
+                updateHud();
+            }
+            return;
+        }
+        if (action.type === 'harvest') {
+            const originX = Number(action.originX);
+            const originY = Number(action.originY);
+            const centerX = Number.isFinite(originX) ? originX : (actorCenter?.x ?? playerSystem.getCenter().x);
+            const centerY = Number.isFinite(originY) ? originY : (actorCenter?.y ?? playerSystem.getCenter().y);
+            const harvest = worldSystem.tryHarvestNearest(centerX, centerY);
+            if (harvest && inventory[harvest.resourceType] !== undefined) {
+                inventory[harvest.resourceType] += 1;
+                updateHud();
+                return;
+            }
+            const collected = buildingSystem.collectNearestOutput(centerX, centerY, TILE_SIZE * 3);
+            if (collected && inventory[collected.resourceType] !== undefined) {
+                inventory[collected.resourceType] += collected.amount;
+                updateHud();
+            }
+        }
+    }
+
+    function getMultiplayerPlayerCenterById(playerId) {
+        const snapshot = multiplayerClient.getSnapshotState();
+        const entry = snapshot.players.find((playerEntry) => String(playerEntry.playerId) === String(playerId));
+        if (!entry) {
+            return null;
+        }
+        return {
+            x: Number(entry.x) + TILE_SIZE / 2,
+            y: Number(entry.y) + TILE_SIZE / 2
+        };
+    }
+
+    function ensureRuntimePlayer(playerId) {
+        const key = String(playerId);
+        if (!multiplayerPlayerRuntime.has(key)) {
+            multiplayerPlayerRuntime.set(key, {
+                __entity: 'player',
+                id: key,
+                hp: PLAYER_MAX_HP,
+                maxHp: PLAYER_MAX_HP,
+                isDead: false,
+                invulnFrames: 0,
+                respawnTimer: 0,
+                x: playerWorldX + TILE_SIZE / 2,
+                y: playerWorldY + TILE_SIZE / 2
+            });
+        }
+        return multiplayerPlayerRuntime.get(key);
+    }
+
+    function syncRuntimePlayersFromSnapshot(multiplayerSnapshot) {
+        const seen = new Set();
+        for (const entry of multiplayerSnapshot.players) {
+            const runtime = ensureRuntimePlayer(entry.playerId);
+            runtime.x = Number(entry.x) + TILE_SIZE / 2;
+            runtime.y = Number(entry.y) + TILE_SIZE / 2;
+            seen.add(String(entry.playerId));
+        }
+        for (const [id] of multiplayerPlayerRuntime) {
+            if (!seen.has(id)) {
+                multiplayerPlayerRuntime.delete(id);
+            }
+        }
     }
     // Building placement + production system.
     buildingSystem = createBuildingSystem({
@@ -1587,7 +1875,52 @@ async function init() {
             const tileY = Math.floor((y + TILE_SIZE / 2) / TILE_SIZE);
             return isTileWalkable(tileX, tileY);
         },
-        onPlayerContactDamage: (amount, source) => applyDamage(playerState, amount, source),
+        getPlayerTargets: () => {
+            const stats = multiplayerClient.getStats();
+            if (!stats.connected || !stats.isAuthority) {
+                const center = playerSystem.getCenter();
+                return [{
+                    id: stats.playerId ?? 'local',
+                    x: center.x,
+                    y: center.y,
+                    radius: PLAYER_COLLISION_RADIUS,
+                    isDead: playerState.isDead
+                }];
+            }
+            const targets = [];
+            for (const runtime of multiplayerPlayerRuntime.values()) {
+                targets.push({
+                    id: runtime.id,
+                    x: runtime.x,
+                    y: runtime.y,
+                    radius: PLAYER_COLLISION_RADIUS,
+                    isDead: runtime.isDead
+                });
+            }
+            return targets;
+        },
+        onPlayerContactDamage: (amount, source, playerId) => {
+            const stats = multiplayerClient.getStats();
+            if (!stats.connected || !stats.isAuthority) {
+                applyDamage(playerState, amount, source);
+                return;
+            }
+            const runtime = ensureRuntimePlayer(playerId ?? stats.playerId);
+            applyDamage(runtime, amount, source);
+            if (runtime.isDead) {
+                runtime.respawnTimer = PLAYER_RESPAWN_SECONDS;
+            }
+            if (String(stats.playerId) === String(runtime.id)) {
+                playerState.hp = runtime.hp;
+                playerState.isDead = runtime.isDead;
+                playerState.invulnFrames = runtime.invulnFrames ?? 0;
+                if (playerState.isDead) {
+                    deathText.text = `You are down\nRespawn in ${Math.ceil(runtime.respawnTimer)}s`;
+                    deathText.visible = true;
+                }
+                updateHealthHud();
+            }
+        },
         getWalls: () => buildingSystem.getWalls(),
         getCivilianTargets: () => civilianSystem?.getTargets() ?? [],
         onCivilianContactDamage: (civilianId, amount, source) => civilianSystem?.applyDamage(civilianId, amount, source)
@@ -1678,6 +2011,7 @@ async function init() {
             debugPanelBackground.visible = debugOverlayEnabled;
             debugInputBackground.visible = debugOverlayEnabled;
             debugInputText.visible = debugOverlayEnabled;
+            debugVerdictText.visible = debugOverlayEnabled && (debugOverlayView === 'all' || debugOverlayView === 'server');
             debugCommandActive = false;
             debugCommandBuffer = '';
             worldSystem.refreshVisibleTileGridlines();
@@ -1715,7 +2049,7 @@ async function init() {
             stableFrameStreak = 0;
             logDebug(`Auto governor ${autoPerfGovernorEnabled ? 'enabled' : 'disabled'}`);
         }
-        if ((key === 'm') && debugOverlayEnabled) {
+        if ((key === 'u') && debugOverlayEnabled) {
             startStressBenchmark();
         }
         if ((key === 'c') && debugOverlayEnabled) {
@@ -1724,8 +2058,12 @@ async function init() {
         if ((key === 'v') && debugOverlayEnabled) {
             setDebugOverlayView('cheats');
         }
-        if ((key === 'b') && debugOverlayEnabled) {
+        if ((key === 'm') && debugOverlayEnabled) {
             setDebugOverlayView('multiplayer');
+            return;
+        }
+        if ((key === 'y') && debugOverlayEnabled) {
+            setDebugOverlayView('server');
             return;
         }
         if ((key === 'n') && debugOverlayEnabled) {
@@ -1835,8 +2173,11 @@ async function init() {
 
     const HIDDEN_TICK_INTERVAL_MS = 100;
     const HIDDEN_MAX_STEP_MS = 125;
+    const FIXED_SIMULATION_STEP_MS = 1000 / 60;
+    const MAX_SIMULATION_STEPS_PER_TICK = 6;
     let hiddenTickTimerId = null;
     let hiddenLastTickMs = 0;
+    let simulationAccumulatorMs = 0;
 
     function runGameStep(frameMs, isBackgroundTick = false) {
         simFrameIndex += 1;
@@ -1846,10 +2187,6 @@ async function init() {
         let frameOverBudget = false;
         const movementInput = getMovementInputVector();
 
-        if (!isBackgroundTick) {
-            const fps = clampedFrameMs > 0 ? 1000 / clampedFrameMs : 0;
-            smoothedFps = smoothedFps * 0.9 + fps * 0.1;
-        }
         multiplayerClient.sendInput(movementInput.x, movementInput.y);
         multiplayerClient.update(clampedFrameMs);
         const multiplayerStats = multiplayerClient.getStats();
@@ -1857,6 +2194,8 @@ async function init() {
         const replicatedAuthority = multiplayerStats.connected && multiplayerStats.isAuthority;
         const replicatedFollower = multiplayerStats.connected && !multiplayerStats.isAuthority;
         if (multiplayerStats.connected && multiplayerStats.playerId !== null) {
+            syncRuntimePlayersFromSnapshot(multiplayerSnapshot);
+            const localRuntime = ensureRuntimePlayer(multiplayerStats.playerId);
             const localServerPlayer = multiplayerSnapshot.players.find(
                 (entry) => String(entry.playerId) === String(multiplayerStats.playerId)
             );
@@ -1864,18 +2203,37 @@ async function init() {
                 const localDx = localServerPlayer.x - playerWorldX;
                 const localDy = localServerPlayer.y - playerWorldY;
                 const correctionDistSq = localDx * localDx + localDy * localDy;
-                // Light reconciliation keeps the local player close to authoritative server state.
-                if (correctionDistSq > 36) {
-                    playerWorldX = localServerPlayer.x;
-                    playerWorldY = localServerPlayer.y;
+                const hardSnapDistanceSq = PLAYER_RECONCILE_HARD_SNAP_DISTANCE * PLAYER_RECONCILE_HARD_SNAP_DISTANCE;
+                let candidateX = playerWorldX;
+                let candidateY = playerWorldY;
+                if (correctionDistSq > hardSnapDistanceSq) {
+                    candidateX = localServerPlayer.x;
+                    candidateY = localServerPlayer.y;
+                } else if (correctionDistSq > 4) {
+                    candidateX += localDx * PLAYER_RECONCILE_BLEND;
+                    candidateY += localDy * PLAYER_RECONCILE_BLEND;
+                }
+                const candidateTileX = Math.floor((candidateX + TILE_SIZE / 2) / TILE_SIZE);
+                const candidateTileY = Math.floor((candidateY + TILE_SIZE / 2) / TILE_SIZE);
+                if (isTileWalkable(candidateTileX, candidateTileY)) {
+                    playerWorldX = candidateX;
+                    playerWorldY = candidateY;
                     playerSystem.setWorldPosition(playerWorldX, playerWorldY);
                 }
+                localRuntime.x = Number(localServerPlayer.x) + TILE_SIZE / 2;
+                localRuntime.y = Number(localServerPlayer.y) + TILE_SIZE / 2;
             }
             if (multiplayerSnapshot.tick !== lastAppliedMultiplayerSnapshotTick) {
                 lastAppliedMultiplayerSnapshotTick = multiplayerSnapshot.tick;
                 remotePlayerSystem.sync(multiplayerSnapshot.players, multiplayerStats.playerId);
             }
             remotePlayerSystem.update(clampedFrameMs);
+            if (replicatedAuthority) {
+                const peerActions = multiplayerClient.drainPeerActions();
+                for (const pending of peerActions) {
+                    runPlayerAction(pending.action, getMultiplayerPlayerCenterById(pending.actorPlayerId));
+                }
+            }
             if (replicatedFollower) {
                 const nonPlayerSnapshot = multiplayerClient.getNonPlayerSnapshotState();
                 if (nonPlayerSnapshot.seq !== lastAppliedNonPlayerSnapshotSeq) {
@@ -1884,12 +2242,76 @@ async function init() {
                     syncReplicatedProjectileList(projectiles, nonPlayerSnapshot.projectiles.player, 'player');
                     syncReplicatedProjectileList(towerProjectiles, nonPlayerSnapshot.projectiles.tower, 'tower');
                     syncReplicatedProjectileList(enemyProjectiles, nonPlayerSnapshot.projectiles.enemy, 'enemy');
+                    if (nonPlayerSnapshot.sharedResources) {
+                        inventory.wood = Number(nonPlayerSnapshot.sharedResources.wood) || 0;
+                        inventory.stone = Number(nonPlayerSnapshot.sharedResources.stone) || 0;
+                        inventory.iron = Number(nonPlayerSnapshot.sharedResources.iron) || 0;
+                        inventory.gold = Number(nonPlayerSnapshot.sharedResources.gold) || 0;
+                        updateHud();
+                    }
+                    if (Array.isArray(nonPlayerSnapshot.playerStates) && nonPlayerSnapshot.playerStates.length > 0) {
+                        const localState = nonPlayerSnapshot.playerStates.find(
+                            (entry) => String(entry.playerId) === String(multiplayerStats.playerId)
+                        );
+                        if (localState) {
+                            playerState.hp = Number(localState.hp) || 0;
+                            playerState.maxHp = Number(localState.maxHp) || PLAYER_MAX_HP;
+                            playerState.isDead = Boolean(localState.isDead);
+                            if (playerState.isDead) {
+                                deathText.text = `You are down\nRespawn in ${Math.ceil(Number(localState.respawnTimer) || 0)}s`;
+                                deathText.visible = true;
+                            } else {
+                                deathText.visible = false;
+                            }
+                            updateHealthHud();
+                        }
+                    }
+                    if (
+                        nonPlayerSnapshot.buildingsState &&
+                        Number(nonPlayerSnapshot.buildingsRevision || 0) !== lastAppliedBuildingsRevision
+                    ) {
+                        lastAppliedBuildingsRevision = Number(nonPlayerSnapshot.buildingsRevision || 0);
+                        buildingSystem.importState(nonPlayerSnapshot.buildingsState);
+                        updateHud();
+                    }
                 }
+            }
+            if (replicatedAuthority) {
+                let alivePlayers = 0;
+                for (const runtime of multiplayerPlayerRuntime.values()) {
+                    if (runtime.isDead) {
+                        runtime.respawnTimer = Math.max(0, runtime.respawnTimer - deltaMoveScale);
+                        if (runtime.respawnTimer <= 0) {
+                            runtime.hp = runtime.maxHp;
+                            runtime.isDead = false;
+                            runtime.invulnFrames = 60;
+                        }
+                    }
+                    if (!runtime.isDead) {
+                        alivePlayers += 1;
+                    }
+                }
+                if (alivePlayers === 0 && multiplayerPlayerRuntime.size > 0) {
+                    resetRunState();
+                }
+                playerState.hp = localRuntime.hp;
+                playerState.maxHp = localRuntime.maxHp;
+                playerState.isDead = localRuntime.isDead;
+                playerState.invulnFrames = localRuntime.invulnFrames ?? 0;
+                if (playerState.isDead) {
+                    deathText.text = `You are down\nRespawn in ${Math.ceil(localRuntime.respawnTimer)}s`;
+                    deathText.visible = true;
+                } else {
+                    deathText.visible = false;
+                }
+                updateHealthHud();
             }
         } else {
             remotePlayerSystem.clear();
             lastAppliedMultiplayerSnapshotTick = -1;
             lastAppliedNonPlayerSnapshotSeq = -1;
+            lastAppliedBuildingsRevision = -1;
+            multiplayerPlayerRuntime.clear();
         }
         enemySystem.beginFramePathBudget();
 
@@ -2036,7 +2458,11 @@ async function init() {
                 frameOverBudget = true;
             }
         } else {
-            systemPerfMs.projectiles = 0;
+            const tProjStart = performance.now();
+            updateReplicatedProjectileList(projectiles, deltaMoveScale);
+            updateReplicatedProjectileList(towerProjectiles, deltaMoveScale);
+            updateReplicatedProjectileList(enemyProjectiles, deltaMoveScale);
+            systemPerfMs.projectiles = performance.now() - tProjStart;
         }
 
         // Re-apply camera in case enemy collision resolution pushed the player.
@@ -2050,16 +2476,39 @@ async function init() {
             inspectRequested = false;
         }
         if (deleteBuildingRequested) {
-            const removed = buildingSystem.removeSelectedPlacedBuilding();
-            if (removed) {
-                updateHud();
+            if (replicatedFollower) {
+                const targetTile = screenToWorldTile(mouseScreenX, mouseScreenY);
+                multiplayerClient.sendPlayerAction({
+                    type: 'remove',
+                    tileX: targetTile.tileX,
+                    tileY: targetTile.tileY
+                });
+                spawnFloatingFeedback('remove...', targetTile.tileX * TILE_SIZE + TILE_SIZE / 2, targetTile.tileY * TILE_SIZE + 8, '#ff9c9c', 24);
+            } else {
+                const removed = buildingSystem.removeSelectedPlacedBuilding();
+                if (removed) {
+                    updateHud();
+                }
             }
             deleteBuildingRequested = false;
         }
-        if (!replicatedFollower && !playerState.isDead && buildUi.buildMode && placeRequested) {
-            const placed = buildingSystem.tryPlaceSelectedAtMouse();
-            if (placed) {
-                updateHud();
+        if (!playerState.isDead && buildUi.buildMode && placeRequested) {
+            if (replicatedFollower) {
+                const targetTile = screenToWorldTile(mouseScreenX, mouseScreenY);
+                if (buildUi.selectedBuildingType) {
+                    multiplayerClient.sendPlayerAction({
+                        type: 'build',
+                        buildingType: buildUi.selectedBuildingType,
+                        tileX: targetTile.tileX,
+                        tileY: targetTile.tileY
+                    });
+                    spawnFloatingFeedback('build...', targetTile.tileX * TILE_SIZE + TILE_SIZE / 2, targetTile.tileY * TILE_SIZE + 8, '#9ce9a0', 24);
+                }
+            } else {
+                const placed = buildingSystem.tryPlaceSelectedAtMouse();
+                if (placed) {
+                    updateHud();
+                }
             }
             placeRequested = false;
         }
@@ -2067,6 +2516,20 @@ async function init() {
         if (!replicatedFollower && !playerState.isDead && !buildUi.buildMode && (keys.attack || leftMouseDown) && playerCombat.cooldownFrames <= 0) {
             const center = playerSystem.getCenter();
             performAttack(center.x, center.y);
+        } else if (replicatedFollower && !playerState.isDead && !buildUi.buildMode && (keys.attack || leftMouseDown) && playerCombat.cooldownFrames <= 0) {
+            const center = playerSystem.getCenter();
+            multiplayerClient.sendPlayerAction({
+                type: 'attack',
+                weapon: playerCombat.weapon,
+                originX: center.x,
+                originY: center.y,
+                dirX: playerCombat.facingX,
+                dirY: playerCombat.facingY
+            });
+            performPredictedAttackVisual(center.x, center.y);
+            playerCombat.cooldownFrames = playerCombat.weapon === 'sword'
+                ? WEAPONS.sword.cooldownFrames
+                : WEAPONS.pistol.cooldownFrames;
         }
         if (!buildUi.buildMode) {
             placeRequested = false;
@@ -2089,6 +2552,14 @@ async function init() {
                     updateHud();
                 }
             }
+        }
+        if (replicatedFollower && !playerState.isDead && harvestRequested) {
+            const center = playerSystem.getCenter();
+            multiplayerClient.sendPlayerAction({
+                type: 'harvest',
+                originX: center.x,
+                originY: center.y
+            });
         }
         if (replicatedFollower) {
             harvestRequested = false;
@@ -2114,8 +2585,21 @@ async function init() {
 
         if (replicatedAuthority) {
             outboundEntitySnapshotTimerMs -= clampedFrameMs;
+            outboundBuildingSyncTimerMs -= clampedFrameMs;
+            const hasFollowers = (multiplayerStats.remotePlayerCount ?? 0) > 0;
+            let buildingsState = null;
+            if (hasFollowers && outboundBuildingSyncTimerMs <= 0) {
+                outboundBuildingSyncTimerMs = BUILDING_SYNC_INTERVAL_MS;
+                const candidateState = buildingSystem.exportState();
+                const candidateHash = computeBuildingStateHash(candidateState);
+                if (candidateHash !== lastOutboundBuildingStateHash) {
+                    lastOutboundBuildingStateHash = candidateHash;
+                    outboundBuildingRevision += 1;
+                    buildingsState = candidateState;
+                }
+            }
             if (outboundEntitySnapshotTimerMs <= 0) {
-                outboundEntitySnapshotTimerMs = 120;
+                outboundEntitySnapshotTimerMs = ENTITY_SNAPSHOT_INTERVAL_MS;
                 outboundEntitySnapshotSeq += 1;
                 multiplayerClient.sendEntitySnapshot(outboundEntitySnapshotSeq, {
                     enemies: enemySystem.exportReplicatedState(),
@@ -2123,7 +2607,17 @@ async function init() {
                         player: exportReplicatedProjectileList(projectiles),
                         tower: exportReplicatedProjectileList(towerProjectiles),
                         enemy: exportReplicatedProjectileList(enemyProjectiles)
-                    }
+                    },
+                    playerStates: [...multiplayerPlayerRuntime.values()].map((runtime) => ({
+                        playerId: Number(runtime.id),
+                        hp: runtime.hp,
+                        maxHp: runtime.maxHp,
+                        isDead: runtime.isDead,
+                        respawnTimer: runtime.respawnTimer
+                    })),
+                    sharedResources: { ...inventory },
+                    buildingsState,
+                    buildingsRevision: outboundBuildingRevision
                 });
             }
         }
@@ -2165,7 +2659,7 @@ async function init() {
             const now = performance.now();
             const elapsedMs = now - hiddenLastTickMs;
             hiddenLastTickMs = now;
-            runGameStep(elapsedMs, true);
+            runSimulationFixedStep(elapsedMs, true);
         }, HIDDEN_TICK_INTERVAL_MS);
         logDebug('Background simulation enabled');
     }
@@ -2179,11 +2673,28 @@ async function init() {
         logDebug('Background simulation disabled');
     }
 
+    function runSimulationFixedStep(elapsedMs, isBackgroundTick) {
+        const clampedElapsedMs = Math.max(0, Math.min(HIDDEN_MAX_STEP_MS * MAX_SIMULATION_STEPS_PER_TICK, elapsedMs));
+        simulationAccumulatorMs += clampedElapsedMs;
+        let steps = 0;
+        while (simulationAccumulatorMs >= FIXED_SIMULATION_STEP_MS && steps < MAX_SIMULATION_STEPS_PER_TICK) {
+            runGameStep(FIXED_SIMULATION_STEP_MS, isBackgroundTick);
+            simulationAccumulatorMs -= FIXED_SIMULATION_STEP_MS;
+            steps += 1;
+        }
+        if (steps >= MAX_SIMULATION_STEPS_PER_TICK && simulationAccumulatorMs >= FIXED_SIMULATION_STEP_MS) {
+            // Avoid spiral of death during tab wake-up or heavy stalls by dropping stale backlog.
+            simulationAccumulatorMs = 0;
+        }
+    }
+
     app.ticker.add((delta) => {
         if (document.hidden) {
             return;
         }
-        runGameStep(delta.deltaMS, false);
+        const fps = delta.deltaMS > 0 ? 1000 / delta.deltaMS : 0;
+        smoothedFps = smoothedFps * 0.9 + fps * 0.1;
+        runSimulationFixedStep(delta.deltaMS, false);
     });
 
     document.addEventListener('visibilitychange', () => {
@@ -2191,6 +2702,7 @@ async function init() {
             startHiddenTickLoop();
         } else {
             stopHiddenTickLoop();
+            simulationAccumulatorMs = 0;
         }
     });
     window.addEventListener('beforeunload', () => {
