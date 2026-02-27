@@ -35,9 +35,11 @@ import {
     WEAPONS
 } from './config/constants.js';
 import { createBuildingSystem } from './systems/buildingSystem.js';
+import { createMultiplayerClient } from './net/multiplayerClient.js';
 import { createCivilianSystem } from './systems/civilianSystem.js';
 import { createEnemySystem } from './systems/enemySystem.js';
 import { createPlayerSystem } from './systems/playerSystem.js';
+import { createRemotePlayerSystem } from './systems/remotePlayerSystem.js';
 import { createWorldSystem } from './systems/worldSystem.js';
 
 async function init() {
@@ -63,12 +65,14 @@ async function init() {
     const resourceLayer = new PIXI.Container();
     const buildingLayer = new PIXI.Container();
     const civilianLayer = new PIXI.Container();
+    const remotePlayerLayer = new PIXI.Container();
     const enemyLayer = new PIXI.Container();
     const projectileLayer = new PIXI.Container();
     world.addChild(tileLayer);
     world.addChild(resourceLayer);
     world.addChild(buildingLayer);
     world.addChild(civilianLayer);
+    world.addChild(remotePlayerLayer);
     world.addChild(enemyLayer);
     world.addChild(projectileLayer);
 
@@ -170,6 +174,25 @@ async function init() {
     let buildingSystem = null;
     let civilianSystem = null;
     let enemySystem = null;
+    const remotePlayerSystem = createRemotePlayerSystem({ layer: remotePlayerLayer });
+    const urlParams = new URLSearchParams(window.location.search);
+    const multiplayerQueryEnabled = urlParams.get('multiplayer') === '1' || urlParams.get('mp') === '1';
+    // Manual LAN host hint used by the dev console to share join URLs quickly.
+    // Update this value when your local IPv4 changes.
+    const DEV_LAN_HOST_HINT = '192.168.4.31';
+    const multiplayerProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    // Multiplayer host override for LAN join testing (example: ?mp=1&mpHost=192.168.1.10).
+    // `0.0.0.0` is a bind address, not a routable destination for clients.
+    const defaultMultiplayerHost = (window.location.hostname === '0.0.0.0' || window.location.hostname === '::')
+        ? 'localhost'
+        : window.location.hostname;
+    const multiplayerHost = urlParams.get('mpHost') || defaultMultiplayerHost;
+    const multiplayerPort = Number(urlParams.get('mpPort')) || 8080;
+    const multiplayerUrl = `${multiplayerProtocol}://${multiplayerHost}:${multiplayerPort}`;
+    const multiplayerClient = createMultiplayerClient({
+        url: multiplayerUrl,
+        onLog: (message) => logDebug(message)
+    });
     // World streaming/resource system; owns terrain cache and node spawning.
     const worldSystem = createWorldSystem({
         tileLayer,
@@ -555,6 +578,7 @@ async function init() {
         const buildingStats = buildingSystem?.getStats() ?? { buildingCount: 0 };
         const civilianStats = civilianSystem?.getStats() ?? { civilianCount: 0, civilianCap: 0, civiliansKilled: 0 };
         const pathStats = enemySystem?.getPathStats() ?? { requests: 0, executed: 0, deferred: 0, budget: ENEMY_MAX_REPATHS_PER_FRAME };
+        const multiplayerStats = multiplayerClient.getStats();
         const civPerf = civilianStats.perf ?? {
             updateMs: 0,
             assignmentCalls: 0,
@@ -566,8 +590,8 @@ async function init() {
         };
 
         const lines = [
-            'DEV CONSOLE (F4 or ç)',
-            'Shortcuts: F8 export crashes | H +100 resources | K enemy toggle | J force reset | L perf profile | O auto governor | M benchmark',
+            'DEV CONSOLE (F4 or \\u00e7)',
+            'Shortcuts: F8 export crashes | H +100 resources | K enemy toggle | J force reset | L perf profile | O auto governor | M benchmark | N multiplayer',
             `FPS: ${smoothedFps.toFixed(1)} | Frame: ${frameMs.toFixed(2)} ms`,
             `Perf profile: ${activePerfProfileKey}`,
             `Auto governor: ${autoPerfGovernorEnabled ? 'ON' : 'OFF'} | Streak O/S: ${overBudgetFrameStreak}/${stableFrameStreak}`,
@@ -578,6 +602,14 @@ async function init() {
             `Enemy ranged: ${enemies.filter((enemy) => enemy.isRanged).length}/${enemies.length}`,
             `Bullets: ${projectiles.length}/${MAX_BULLETS} | Tower shots: ${towerProjectiles.length}/${MAX_TOWER_PROJECTILES} | Enemy shots: ${enemyProjectiles.length}/${MAX_ENEMY_PROJECTILES}`,
             `Coords: ${Math.floor(playerWorldX)}, ${Math.floor(playerWorldY)} | Tile: ${Math.floor((playerWorldX + TILE_SIZE / 2) / TILE_SIZE)}, ${Math.floor((playerWorldY + TILE_SIZE / 2) / TILE_SIZE)}`,
+            `MP: ${multiplayerStats.connected ? 'ON' : 'OFF'} | URL: ${multiplayerStats.url}`,
+            `MP player: ${multiplayerStats.playerId ?? '-'} | Ping: ${Math.round(multiplayerStats.pingMs)} ms | Tick: ${multiplayerStats.tickRate}`,
+            `MP snapshot: ${multiplayerStats.snapshotTick} | Remote players: ${multiplayerStats.remotePlayerCount} | Attempts: ${multiplayerStats.connectAttempts}`,
+            `MP session: ${multiplayerStats.sessionId ?? 'none'}`,
+            `MP reconnect token: ${multiplayerStats.reconnectToken} | Last error: ${multiplayerStats.lastError ?? 'none'}`,
+            `MP LAN host hint: ${DEV_LAN_HOST_HINT}`,
+            `MP LAN join: ${multiplayerStats.joinHintUrl ?? 'connect first to detect host LAN IP'}`,
+            `MP manual join: ${window.location.protocol}//${DEV_LAN_HOST_HINT}:${window.location.port || '3001'}/?mp=1&mpHost=${DEV_LAN_HOST_HINT}`,
             `Buildings: ${buildingStats.buildingCount} | Producers: ${buildingStats.producerCount ?? 0}`,
             `Civilians: ${civilianStats.civilianCount}/${civilianStats.civilianCap} | Lost: ${civilianStats.civiliansKilled}`,
             `Civ update: ${civPerf.updateMs.toFixed(2)} ms | Assign ${civPerf.assignmentCalls} (${civPerf.assignmentSkippedByBudget} delayed)`,
@@ -619,6 +651,7 @@ async function init() {
 
     function resetCombatEntities() {
         enemySystem.resetEnemies();
+        remotePlayerSystem.clear();
         for (let i = projectiles.length - 1; i >= 0; i--) {
             removeProjectileAt(i);
         }
@@ -1236,6 +1269,16 @@ async function init() {
     let leftMouseDown = false;
     let mouseScreenX = window.innerWidth / 2;
     let mouseScreenY = window.innerHeight / 2;
+
+    function getMovementInputVector() {
+        const moveX = (keys.d || keys.arrowright ? 1 : 0) - (keys.a || keys.arrowleft ? 1 : 0);
+        const moveY = (keys.s || keys.arrowdown ? 1 : 0) - (keys.w || keys.arrowup ? 1 : 0);
+        const magnitude = Math.hypot(moveX, moveY);
+        if (magnitude <= 0.0001) {
+            return { x: 0, y: 0 };
+        }
+        return { x: moveX / magnitude, y: moveY / magnitude };
+    }
     // Building placement + production system.
     buildingSystem = createBuildingSystem({
         buildingLayer,
@@ -1360,6 +1403,9 @@ async function init() {
     if (restoreSavedGameState()) {
         logDebug('Saved game restored');
     }
+    if (multiplayerQueryEnabled) {
+        multiplayerClient.connect();
+    }
 
     window.addEventListener('keydown', (e) => {
         const key = e.key.toLowerCase();
@@ -1373,7 +1419,7 @@ async function init() {
             e.preventDefault();
             return;
         }
-        // Dev console keybind is F4 or c-cedilla (ç).
+        // Dev console keybind is F4 or c-cedilla (\u00e7).
         if (key === 'f4' || key === '\u00e7') {
             debugOverlayEnabled = !debugOverlayEnabled;
             debugText.visible = debugOverlayEnabled;
@@ -1414,6 +1460,14 @@ async function init() {
         }
         if ((key === 'm') && debugOverlayEnabled) {
             startStressBenchmark();
+        }
+        if ((key === 'n') && debugOverlayEnabled) {
+            const multiplayerStats = multiplayerClient.getStats();
+            if (multiplayerStats.connected) {
+                multiplayerClient.disconnect();
+            } else {
+                multiplayerClient.connect();
+            }
         }
         if (key === 'b') {
             // Build mode toggle keybind.
@@ -1516,10 +1570,34 @@ async function init() {
         const deltaFrames = clampedFrameMs * 0.06;
         const deltaMoveScale = clampedFrameMs / 1000;
         let frameOverBudget = false;
+        const movementInput = getMovementInputVector();
 
         if (!isBackgroundTick) {
             const fps = clampedFrameMs > 0 ? 1000 / clampedFrameMs : 0;
             smoothedFps = smoothedFps * 0.9 + fps * 0.1;
+        }
+        multiplayerClient.update(clampedFrameMs);
+        multiplayerClient.sendInput(movementInput.x, movementInput.y);
+        const multiplayerStats = multiplayerClient.getStats();
+        const multiplayerSnapshot = multiplayerClient.getSnapshotState();
+        if (multiplayerStats.connected && multiplayerStats.playerId !== null) {
+            const localServerPlayer = multiplayerSnapshot.players.find(
+                (entry) => String(entry.playerId) === String(multiplayerStats.playerId)
+            );
+            if (localServerPlayer) {
+                const localDx = localServerPlayer.x - playerWorldX;
+                const localDy = localServerPlayer.y - playerWorldY;
+                const correctionDistSq = localDx * localDx + localDy * localDy;
+                // Light reconciliation keeps the local player close to authoritative server state.
+                if (correctionDistSq > 36) {
+                    playerWorldX = localServerPlayer.x;
+                    playerWorldY = localServerPlayer.y;
+                    playerSystem.setWorldPosition(playerWorldX, playerWorldY);
+                }
+            }
+            remotePlayerSystem.sync(multiplayerSnapshot.players, multiplayerStats.playerId);
+        } else {
+            remotePlayerSystem.clear();
         }
         enemySystem.beginFramePathBudget();
 
@@ -1795,6 +1873,7 @@ async function init() {
     });
     window.addEventListener('beforeunload', () => {
         persistSaveState();
+        multiplayerClient.disconnect();
     });
 
     window.addEventListener('resize', () => {
