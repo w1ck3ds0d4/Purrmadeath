@@ -67,6 +67,7 @@ export function createMultiplayerClient({
         buildingsRevision: 0
     };
     const pendingPeerActions = [];
+    const pendingActionResults = [];
 
     function sanitizeProjectileArray(entries) {
         if (!Array.isArray(entries)) {
@@ -259,6 +260,7 @@ export function createMultiplayerClient({
                 snapshotTick = Number(message.tick) || snapshotTick;
                 const players = Array.isArray(message.players) ? message.players : [];
                 authorityPlayerId = Number(message.authorityPlayerId) || authorityPlayerId;
+                // Server metrics are optional and parsed defensively to keep client robust across schema drift.
                 serverPerf = message.serverPerf && typeof message.serverPerf === 'object'
                     ? {
                         tickRate: Number(message.serverPerf.tickRate) || 0,
@@ -268,7 +270,25 @@ export function createMultiplayerClient({
                         loopLagMsAvg: Number(message.serverPerf.loopLagMsAvg) || 0,
                         inboundKbps: Number(message.serverPerf.inboundKbps) || 0,
                         outboundKbps: Number(message.serverPerf.outboundKbps) || 0,
-                        connectedClients: Number(message.serverPerf.connectedClients) || 0
+                        connectedClients: Number(message.serverPerf.connectedClients) || 0,
+                        forwardedPlayerActions: Number(message.serverPerf.forwardedPlayerActions) || 0,
+                        rejectedPlayerActions: Number(message.serverPerf.rejectedPlayerActions) || 0,
+                        reservedBuildActions: Number(message.serverPerf.reservedBuildActions) || 0,
+                        refundedBuildReservations: Number(message.serverPerf.refundedBuildReservations) || 0,
+                        activeBuildReservations: Number(message.serverPerf.activeBuildReservations) || 0,
+                        activeTileReservations: Number(message.serverPerf.activeTileReservations) || 0,
+                        duplicateOrStaleActions: Number(message.serverPerf.duplicateOrStaleActions) || 0,
+                        buildingStateMismatchCount: Number(message.serverPerf.buildingStateMismatchCount) || 0,
+                        lastServerBuildingHash: typeof message.serverPerf.lastServerBuildingHash === 'string' ? message.serverPerf.lastServerBuildingHash : '0',
+                        lastAuthorityBuildingHash: typeof message.serverPerf.lastAuthorityBuildingHash === 'string' ? message.serverPerf.lastAuthorityBuildingHash : '0',
+                        producerSimUpdateMsAvg: Number(message.serverPerf.producerSimUpdateMsAvg) || 0,
+                        serverHarvestApplied: Number(message.serverPerf.serverHarvestApplied) || 0,
+                        serverHarvestRejected: Number(message.serverPerf.serverHarvestRejected) || 0,
+                        attackRejectedOrigin: Number(message.serverPerf.attackRejectedOrigin) || 0,
+                        attackRejectedCooldown: Number(message.serverPerf.attackRejectedCooldown) || 0,
+                        forwardedAttackActions: Number(message.serverPerf.forwardedAttackActions) || 0,
+                        rangeRejectedActions: Number(message.serverPerf.rangeRejectedActions) || 0,
+                        privilegedRejectedActions: Number(message.serverPerf.privilegedRejectedActions) || 0
                     }
                     : null;
                 totalPlayersSeen = Number(message.totalPlayers) || players.length;
@@ -325,6 +345,13 @@ export function createMultiplayerClient({
                 }
                 return;
             }
+            if (message.type === 'player_action_result') {
+                pendingActionResults.push(message.result ?? null);
+                if (pendingActionResults.length > 128) {
+                    pendingActionResults.shift();
+                }
+                return;
+            }
             if (message.type === 'error') {
                 lastError = typeof message.code === 'string' ? message.code : 'server_error';
                 onLog(`Multiplayer error: ${lastError}`);
@@ -370,6 +397,7 @@ export function createMultiplayerClient({
         nonPlayerSnapshot.buildingsState = null;
         nonPlayerSnapshot.buildingsRevision = 0;
         pendingPeerActions.length = 0;
+        pendingActionResults.length = 0;
         lastSnapshotAtMs = 0;
         snapshotIntervalMs = 0;
         snapshotJitterMs = 0;
@@ -465,6 +493,18 @@ export function createMultiplayerClient({
         });
     }
 
+    function sendPlayerActionResult(targetPlayerId, result) {
+        if (!connected) {
+            return;
+        }
+        send({
+            v: PROTOCOL_VERSION,
+            type: 'player_action_result',
+            targetPlayerId,
+            result
+        });
+    }
+
     function getStats() {
         const isAuthority = playerId !== null && authorityPlayerId !== null && String(playerId) === String(authorityPlayerId);
         return {
@@ -519,6 +559,15 @@ export function createMultiplayerClient({
         return actions;
     }
 
+    function drainActionResults() {
+        if (pendingActionResults.length === 0) {
+            return [];
+        }
+        const results = pendingActionResults.slice();
+        pendingActionResults.length = 0;
+        return results;
+    }
+
     return {
         connect,
         disconnect,
@@ -526,9 +575,11 @@ export function createMultiplayerClient({
         sendInput,
         sendEntitySnapshot,
         sendPlayerAction,
+        sendPlayerActionResult,
         getStats,
         getSnapshotState,
         getNonPlayerSnapshotState,
-        drainPeerActions
+        drainPeerActions,
+        drainActionResults
     };
 }

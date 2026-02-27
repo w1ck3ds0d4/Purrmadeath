@@ -7,6 +7,28 @@ import {
     HOUSE_SPAWN_INTERVAL_FRAMES,
     TILE_SIZE
 } from '../config/constants.js';
+import {
+    findBestApproachPoint,
+    getBuildingCenter,
+    getPerimeterTiles,
+    pushToTargetGrid,
+    queryNearbyGridEntries
+} from './civilianSpatialUtils.js';
+import { resolveCivilianCollisions as resolveCivilianCollisionsBase, resolvePlayerCivilianCollision } from './civilianCollision.js';
+import {
+    ensureHouseStatesAndLabels,
+    getHouseTimerReplication as getHouseTimerReplicationBase,
+    syncReplicatedHouseTimers as syncReplicatedHouseTimersBase,
+    updateHouseTimerLabels as updateHouseTimerLabelsBase
+} from './civilianReplication.js';
+import {
+    buildProducerLoadMap as buildProducerLoadMapBase,
+    findNearestProducerWithOutput as findNearestProducerWithOutputBase,
+    findNearestWarehouse as findNearestWarehouseBase,
+    getProducerQueueCapacity as getProducerQueueCapacityBase,
+    getProducerQueuePoint as getProducerQueuePointBase
+} from './civilianLogisticsSelectors.js';
+import { syncReplicatedStateFromSnapshot } from './civilianSync.js';
 
 // Civilian system:
 // - Spawns civilians from houses based on per-house timers and cap rules.
@@ -60,33 +82,12 @@ export function createCivilianSystem({
     let civilianIdCounter = 0;
     let civiliansKilled = 0;
 
-    function getTargetGridCellKey(worldX, worldY) {
-        const cellX = Math.floor(worldX / CIVILIAN_TARGET_GRID_SIZE);
-        const cellY = Math.floor(worldY / CIVILIAN_TARGET_GRID_SIZE);
-        return `${cellX},${cellY}`;
-    }
-
-    function pushToTargetGrid(grid, worldX, worldY, payload) {
-        const key = getTargetGridCellKey(worldX, worldY);
-        if (!grid.has(key)) {
-            grid.set(key, []);
-        }
-        grid.get(key).push(payload);
-    }
-
     function createCivilianSprite() {
         const sprite = new PIXI.Graphics();
         sprite.circle(CIVILIAN_RADIUS, CIVILIAN_RADIUS, CIVILIAN_RADIUS);
         sprite.fill(0xffd79a);
         sprite.stroke({ width: 1, color: 0x5c4323 });
         return sprite;
-    }
-
-    function getBuildingCenter(building) {
-        return {
-            x: (building.tileX + building.footprintW * 0.5) * TILE_SIZE,
-            y: (building.tileY + building.footprintH * 0.5) * TILE_SIZE
-        };
     }
 
     function rebuildProducerGrid() {
@@ -97,7 +98,7 @@ export function createCivilianSystem({
                 continue;
             }
             const center = getBuildingCenter(producer);
-            pushToTargetGrid(producerGrid, center.x, center.y, producer);
+            pushToTargetGrid(producerGrid, center.x, center.y, producer, CIVILIAN_TARGET_GRID_SIZE);
         }
     }
 
@@ -106,82 +107,8 @@ export function createCivilianSystem({
         const warehouses = buildingSystem.getWarehouses();
         for (const warehouse of warehouses) {
             const center = getBuildingCenter(warehouse);
-            pushToTargetGrid(warehouseGrid, center.x, center.y, warehouse);
+            pushToTargetGrid(warehouseGrid, center.x, center.y, warehouse, CIVILIAN_TARGET_GRID_SIZE);
         }
-    }
-
-    function queryNearbyGridEntries(grid, worldX, worldY) {
-        const centerCellX = Math.floor(worldX / CIVILIAN_TARGET_GRID_SIZE);
-        const centerCellY = Math.floor(worldY / CIVILIAN_TARGET_GRID_SIZE);
-        const matches = [];
-        for (let radius = 0; radius <= 2; radius++) {
-            for (let dy = -radius; dy <= radius; dy++) {
-                for (let dx = -radius; dx <= radius; dx++) {
-                    const isEdge = Math.abs(dx) === radius || Math.abs(dy) === radius;
-                    if (!isEdge) {
-                        continue;
-                    }
-                    const key = `${centerCellX + dx},${centerCellY + dy}`;
-                    const bucket = grid.get(key);
-                    if (!bucket) {
-                        continue;
-                    }
-                    matches.push(...bucket);
-                }
-            }
-            if (matches.length > 0) {
-                break;
-            }
-        }
-        return matches;
-    }
-
-    // Returns walkable perimeter tiles around a building footprint.
-    function getPerimeterTiles(building, padding = 1) {
-        const tiles = [];
-        const minX = building.tileX - padding;
-        const maxX = building.tileX + building.footprintW - 1 + padding;
-        const minY = building.tileY - padding;
-        const maxY = building.tileY + building.footprintH - 1 + padding;
-
-        for (let x = minX; x <= maxX; x++) {
-            tiles.push({ x, y: minY });
-            tiles.push({ x, y: maxY });
-        }
-        for (let y = minY + 1; y <= maxY - 1; y++) {
-            tiles.push({ x: minX, y });
-            tiles.push({ x: maxX, y });
-        }
-        return tiles.filter((tile) => isTileWalkable(tile.x, tile.y));
-    }
-
-    function findBestApproachPoint(building, fromX, fromY, laneSeed = 0) {
-        const candidates = getPerimeterTiles(building, 1);
-        if (candidates.length === 0) {
-            const fallback = getPerimeterTiles(building, 2);
-            if (fallback.length === 0) {
-                return getBuildingCenter(building);
-            }
-            candidates.push(...fallback);
-        }
-
-        const ranked = [];
-        for (const tile of candidates) {
-            const cx = tile.x * TILE_SIZE + TILE_SIZE * 0.5;
-            const cy = tile.y * TILE_SIZE + TILE_SIZE * 0.5;
-            const dx = cx - fromX;
-            const dy = cy - fromY;
-            const distSq = dx * dx + dy * dy;
-            ranked.push({ tile, distSq });
-        }
-        ranked.sort((a, b) => a.distSq - b.distSq);
-        // Spread workers over nearby perimeter points to avoid lane clumping.
-        const laneWindow = Math.min(4, ranked.length);
-        const chosen = ranked[Math.abs(laneSeed) % laneWindow]?.tile ?? ranked[0].tile;
-        return {
-            x: chosen.x * TILE_SIZE + TILE_SIZE * 0.5,
-            y: chosen.y * TILE_SIZE + TILE_SIZE * 0.5
-        };
     }
 
     // Civilians should spawn outside the house footprint. We prioritize "front"
@@ -201,9 +128,9 @@ export function createCivilianSystem({
         }
 
         // Perimeter fallback if front is blocked (prefer wider padding first).
-        candidates.push(...getPerimeterTiles(house, 3));
-        candidates.push(...getPerimeterTiles(house, 2));
-        candidates.push(...getPerimeterTiles(house, 1));
+        candidates.push(...getPerimeterTiles(house, isTileWalkable, 3));
+        candidates.push(...getPerimeterTiles(house, isTileWalkable, 2));
+        candidates.push(...getPerimeterTiles(house, isTileWalkable, 1));
 
         let firstWalkableCenter = null;
         for (const tile of candidates) {
@@ -301,75 +228,31 @@ export function createCivilianSystem({
     }
 
     function ensureHouseStates() {
-        const houses = buildingSystem.getHouses();
-        const houseIds = new Set(houses.map((house) => house.id));
-
-        for (const house of houses) {
-            if (!houseStates.has(house.id)) {
-                houseStates.set(house.id, {
-                    // New houses spawn one civilian immediately, then follow timer cadence.
-                    spawnTimer: 0,
-                    activeCivilianIds: new Set()
-                });
-            }
-            if (!houseTimerLabels.has(house.id)) {
-                const label = new PIXI.Text({
-                    text: '',
-                    style: {
-                        fill: '#f7f7f7',
-                        fontFamily: 'monospace',
-                        fontSize: 11
-                    }
-                });
-                label.anchor.set(0.5);
-                civilianLayer.addChild(label);
-                houseTimerLabels.set(house.id, label);
-            }
-        }
-
-        for (const [houseId, state] of houseStates) {
-            if (!houseIds.has(houseId)) {
-                for (const civilianId of state.activeCivilianIds) {
-                    const civilian = civilianById.get(civilianId);
-                    if (civilian) {
-                        civilian.homeHouseId = null;
-                    }
-                }
-                const label = houseTimerLabels.get(houseId);
-                if (label) {
-                    label.destroy();
-                    houseTimerLabels.delete(houseId);
-                }
-                houseStates.delete(houseId);
-            }
-        }
+        // House-state + UI-label reconciliation lives in a helper module so
+        // the core civilian update loop remains focused on gameplay transitions.
+        ensureHouseStatesAndLabels({
+            houses: buildingSystem.getHouses(),
+            houseStates,
+            houseTimerLabels,
+            civilianLayer,
+            civilians,
+            HOUSE_SPAWN_INTERVAL_FRAMES
+        });
     }
 
     function updateHouseTimerLabels() {
-        const houses = buildingSystem.getHouses();
-        for (const house of houses) {
-            const state = houseStates.get(house.id);
-            const label = houseTimerLabels.get(house.id);
-            if (!state || !label) {
-                continue;
-            }
-            const center = getBuildingCenter(house);
-            label.position.set(center.x, center.y - (house.footprintH * TILE_SIZE * 0.5) - 8);
-            const seconds = Math.max(0, Math.ceil(state.spawnTimer / 60));
-            label.text = `Civ ${state.activeCivilianIds.size}/${HOUSE_CIVILIAN_CAP_BONUS} | ${seconds}s`;
-        }
+        updateHouseTimerLabelsBase({
+            houses: buildingSystem.getHouses(),
+            houseStates,
+            houseTimerLabels,
+            getBuildingCenter,
+            TILE_SIZE,
+            HOUSE_CIVILIAN_CAP_BONUS
+        });
     }
 
     function getHouseTimerReplication() {
-        const entries = [];
-        for (const [houseId, state] of houseStates) {
-            entries.push({
-                houseId: Number(houseId),
-                activeCivilianCount: state.activeCivilianIds.size,
-                spawnTimerFrames: state.spawnTimer
-            });
-        }
-        return entries;
+        return getHouseTimerReplicationBase(houseStates);
     }
 
     function spawnCivilianFromHouse(house) {
@@ -423,100 +306,50 @@ export function createCivilianSystem({
     }
 
     function findNearestProducerWithOutput(civilian) {
-        perfStats.producerQueries += 1;
-        const fromX = civilian.x + CIVILIAN_RADIUS;
-        const fromY = civilian.y + CIVILIAN_RADIUS;
-        let producers = queryNearbyGridEntries(producerGrid, fromX, fromY);
-        if (producers.length === 0) {
-            producers = buildingSystem.getProducers();
-        }
-        let best = null;
-        let bestScore = -Infinity;
-        for (const producer of producers) {
-            if (producer.storedOutput <= 0 || !producer.outputResource) {
-                continue;
-            }
-            // Prioritize camps with more stored resources; distance only breaks ties.
-            const approach = findBestApproachPoint(producer, fromX, fromY, civilian.id);
-            const dx = approach.x - fromX;
-            const dy = approach.y - fromY;
-            const dist = Math.hypot(dx, dy);
-            const score = producer.storedOutput * 1000 - dist;
-            if (score > bestScore) {
-                bestScore = score;
-                best = producer;
-            }
-        }
-        return best;
+        return findNearestProducerWithOutputBase({
+            civilian,
+            civilianRadius: CIVILIAN_RADIUS,
+            producerGrid,
+            queryNearbyGridEntries,
+            targetGridSize: CIVILIAN_TARGET_GRID_SIZE,
+            buildingSystem,
+            findBestApproachPoint,
+            isTileWalkable,
+            perfStats
+        });
     }
 
     function buildProducerLoadMap() {
-        const loadByProducerId = new Map();
-        for (const civilian of civilians) {
-            if (civilian.isDead || !civilian.targetProducerId) {
-                continue;
-            }
-            if (civilian.state !== 'toProducer' && civilian.state !== 'queueProducer') {
-                continue;
-            }
-            loadByProducerId.set(
-                civilian.targetProducerId,
-                (loadByProducerId.get(civilian.targetProducerId) ?? 0) + 1
-            );
-        }
-        return loadByProducerId;
+        return buildProducerLoadMapBase(civilians);
     }
 
     function getProducerQueueCapacity(producer) {
-        const perimeterCount = getPerimeterTiles(producer, 1).length;
-        return Math.max(1, Math.min(4, Math.floor(perimeterCount / 3) || 2));
+        return getProducerQueueCapacityBase(producer, getPerimeterTiles, isTileWalkable);
     }
 
     function getProducerQueuePoint(civilian, producer, queueIndex) {
-        const fromX = civilian.x + CIVILIAN_RADIUS;
-        const fromY = civilian.y + CIVILIAN_RADIUS;
-        const approach = findBestApproachPoint(producer, fromX, fromY, civilian.id + queueIndex * 29);
-        const producerCenter = getBuildingCenter(producer);
-        const dx = approach.x - producerCenter.x;
-        const dy = approach.y - producerCenter.y;
-        const mag = Math.hypot(dx, dy);
-        if (mag < 0.001) {
-            return approach;
-        }
-        const distanceOut = TILE_SIZE * (1 + queueIndex * 0.8);
-        const queuePoint = {
-            x: approach.x + (dx / mag) * distanceOut,
-            y: approach.y + (dy / mag) * distanceOut
-        };
-        const tileX = Math.floor(queuePoint.x / TILE_SIZE);
-        const tileY = Math.floor(queuePoint.y / TILE_SIZE);
-        if (!isTileWalkable(tileX, tileY)) {
-            return approach;
-        }
-        return queuePoint;
+        return getProducerQueuePointBase({
+            civilian,
+            civilianRadius: CIVILIAN_RADIUS,
+            producer,
+            queueIndex,
+            findBestApproachPoint,
+            isTileWalkable,
+            getBuildingCenter
+        });
     }
 
     function findNearestWarehouse(civilian) {
-        perfStats.warehouseQueries += 1;
-        const fromX = civilian.x + CIVILIAN_RADIUS;
-        const fromY = civilian.y + CIVILIAN_RADIUS;
-        let warehouses = queryNearbyGridEntries(warehouseGrid, fromX, fromY);
-        if (warehouses.length === 0) {
-            warehouses = buildingSystem.getWarehouses();
-        }
-        let best = null;
-        let bestDistSq = Infinity;
-        for (const warehouse of warehouses) {
-            const center = getBuildingCenter(warehouse);
-            const dx = center.x - fromX;
-            const dy = center.y - fromY;
-            const distSq = dx * dx + dy * dy;
-            if (distSq < bestDistSq) {
-                bestDistSq = distSq;
-                best = warehouse;
-            }
-        }
-        return best;
+        return findNearestWarehouseBase({
+            civilian,
+            civilianRadius: CIVILIAN_RADIUS,
+            warehouseGrid,
+            queryNearbyGridEntries,
+            targetGridSize: CIVILIAN_TARGET_GRID_SIZE,
+            buildingSystem,
+            getBuildingCenter,
+            perfStats
+        });
     }
 
     // Travel diversity:
@@ -598,7 +431,7 @@ export function createCivilianSystem({
         }
         const fromX = civilian.x + CIVILIAN_RADIUS;
         const fromY = civilian.y + CIVILIAN_RADIUS;
-        const patrolPoint = findBestApproachPoint(anchor, fromX, fromY, civilian.id + (updateFrameIndex * 13));
+        const patrolPoint = findBestApproachPoint(anchor, fromX, fromY, civilian.id + (updateFrameIndex * 13), isTileWalkable);
         civilian.state = 'idlePatrol';
         setCivilianTravelTarget(civilian, patrolPoint.x, patrolPoint.y, true);
         civilian.patrolRecheckFrames = CIVILIAN_PATROL_RECHECK_FRAMES;
@@ -618,7 +451,7 @@ export function createCivilianSystem({
 
         const fromX = civilian.x + CIVILIAN_RADIUS;
         const fromY = civilian.y + CIVILIAN_RADIUS;
-        let producers = queryNearbyGridEntries(producerGrid, fromX, fromY);
+        let producers = queryNearbyGridEntries(producerGrid, fromX, fromY, CIVILIAN_TARGET_GRID_SIZE);
         if (producers.length === 0) {
             producers = buildingSystem.getProducers();
         }
@@ -627,7 +460,7 @@ export function createCivilianSystem({
             if (producer.storedOutput <= 0 || !producer.outputResource) {
                 continue;
             }
-            const approach = findBestApproachPoint(producer, fromX, fromY, civilian.id);
+            const approach = findBestApproachPoint(producer, fromX, fromY, civilian.id, isTileWalkable);
             const dx = approach.x - fromX;
             const dy = approach.y - fromY;
             const dist = Math.hypot(dx, dy);
@@ -670,7 +503,7 @@ export function createCivilianSystem({
         }
 
         if (selectedProducer) {
-            const producerCenter = findBestApproachPoint(selectedProducer, fromX, fromY, civilian.id);
+            const producerCenter = findBestApproachPoint(selectedProducer, fromX, fromY, civilian.id, isTileWalkable);
             civilian.state = 'toProducer';
             civilian.targetProducerId = selectedProducer.id;
             civilian.targetWarehouseId = warehouse.id;
@@ -938,7 +771,7 @@ export function createCivilianSystem({
             }
             const fromX = civilian.x + CIVILIAN_RADIUS;
             const fromY = civilian.y + CIVILIAN_RADIUS;
-            const warehouseCenter = findBestApproachPoint(warehouse, fromX, fromY, civilian.id);
+            const warehouseCenter = findBestApproachPoint(warehouse, fromX, fromY, civilian.id, isTileWalkable);
             civilian.state = 'toWarehouse';
             setCivilianTravelTarget(civilian, warehouseCenter.x, warehouseCenter.y, true);
             return;
@@ -988,108 +821,15 @@ export function createCivilianSystem({
     }
 
     function resolveCivilianCollisions() {
-        if (civilians.length <= 1) {
-            return;
-        }
-        const denseMode = civilians.length >= CIVILIAN_COLLISION_DENSE_THRESHOLD;
-        const minDistance = CIVILIAN_RADIUS * 2 + CIVILIAN_SEPARATION_PADDING;
-        const minDistanceSq = minDistance * minDistance;
-        const cellSize = minDistance;
-        const maxPasses = denseMode ? 2 : CIVILIAN_SEPARATION_PASSES;
-        let separatedCount = 0;
-        for (let pass = 0; pass < maxPasses; pass++) {
-            const grid = new Map();
-            for (let i = 0; i < civilians.length; i++) {
-                const civilian = civilians[i];
-                if (civilian.isDead) {
-                    continue;
-                }
-                const cx = Math.floor((civilian.x + CIVILIAN_RADIUS) / cellSize);
-                const cy = Math.floor((civilian.y + CIVILIAN_RADIUS) / cellSize);
-                const key = `${cx},${cy}`;
-                if (!grid.has(key)) {
-                    grid.set(key, []);
-                }
-                grid.get(key).push(i);
-            }
-
-            for (let i = 0; i < civilians.length; i++) {
-                const base = civilians[i];
-                if (base.isDead) {
-                    continue;
-                }
-                const bxCell = Math.floor((base.x + CIVILIAN_RADIUS) / cellSize);
-                const byCell = Math.floor((base.y + CIVILIAN_RADIUS) / cellSize);
-                for (let oy = -1; oy <= 1; oy++) {
-                    for (let ox = -1; ox <= 1; ox++) {
-                        const bucket = grid.get(`${bxCell + ox},${byCell + oy}`);
-                        if (!bucket) {
-                            continue;
-                        }
-                        for (const j of bucket) {
-                            if (j <= i) {
-                                continue;
-                            }
-                            const a = civilians[i];
-                            const b = civilians[j];
-                            if (a.isDead || b.isDead) {
-                                continue;
-                            }
-                            const ax = a.x + CIVILIAN_RADIUS;
-                            const ay = a.y + CIVILIAN_RADIUS;
-                            const bx = b.x + CIVILIAN_RADIUS;
-                            const by = b.y + CIVILIAN_RADIUS;
-                            let dx = bx - ax;
-                            let dy = by - ay;
-                            let distSq = dx * dx + dy * dy;
-                            if (distSq >= minDistanceSq) {
-                                continue;
-                            }
-                            if (distSq < 0.0001) {
-                                const angle = (a.id * 0.43 + b.id * 0.79) % (Math.PI * 2);
-                                dx = Math.cos(angle);
-                                dy = Math.sin(angle);
-                                distSq = 1;
-                            }
-                            const dist = Math.sqrt(distSq);
-                            const overlap = minDistance - dist;
-                            const nx = dx / dist;
-                            const ny = dy / dist;
-                            separatedCount += 1;
-                            const halfPushX = nx * overlap * 0.65;
-                            const halfPushY = ny * overlap * 0.65;
-                            const newAX = a.x - halfPushX;
-                            const newAY = a.y - halfPushY;
-                            const newBX = b.x + halfPushX;
-                            const newBY = b.y + halfPushY;
-                            const aTileX = Math.floor((newAX + CIVILIAN_RADIUS) / TILE_SIZE);
-                            const aTileY = Math.floor((newAY + CIVILIAN_RADIUS) / TILE_SIZE);
-                            const bTileX = Math.floor((newBX + CIVILIAN_RADIUS) / TILE_SIZE);
-                            const bTileY = Math.floor((newBY + CIVILIAN_RADIUS) / TILE_SIZE);
-                            const canMoveA = isTileWalkable(aTileX, aTileY);
-                            const canMoveB = isTileWalkable(bTileX, bTileY);
-                            if (canMoveA && canMoveB) {
-                                a.x = newAX;
-                                a.y = newAY;
-                                b.x = newBX;
-                                b.y = newBY;
-                            } else if (canMoveA) {
-                                a.x -= nx * overlap;
-                                a.y -= ny * overlap;
-                            } else if (canMoveB) {
-                                b.x += nx * overlap;
-                                b.y += ny * overlap;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        perfStats.collisionPasses = maxPasses;
-        perfStats.civiliansResolvedCollisions = separatedCount;
-        for (const civilian of civilians) {
-            civilian.sprite.position.set(civilian.x, civilian.y);
-        }
+        resolveCivilianCollisionsBase({
+            civilians,
+            isTileWalkable,
+            civilianRadius: CIVILIAN_RADIUS,
+            separationPadding: CIVILIAN_SEPARATION_PADDING,
+            separationPasses: CIVILIAN_SEPARATION_PASSES,
+            denseThreshold: CIVILIAN_COLLISION_DENSE_THRESHOLD,
+            perfStats
+        });
     }
 
     function update(deltaFrames, deltaMoveScale) {
@@ -1145,49 +885,15 @@ export function createCivilianSystem({
     // - Player cannot phase through civilians.
     // - Player movement can push civilians away when there is space.
     function resolvePlayerCollision(playerCenterX, playerCenterY, playerRadius, applyPlayerPush) {
-        const minDistance = playerRadius + CIVILIAN_RADIUS;
-        const minDistanceSq = minDistance * minDistance;
-        let collisions = 0;
-
-        for (const civilian of civilians) {
-            if (civilian.isDead) {
-                continue;
-            }
-            const cx = civilian.x + CIVILIAN_RADIUS;
-            const cy = civilian.y + CIVILIAN_RADIUS;
-            let dx = cx - playerCenterX;
-            let dy = cy - playerCenterY;
-            let distSq = dx * dx + dy * dy;
-            if (distSq >= minDistanceSq) {
-                continue;
-            }
-            if (distSq < 0.0001) {
-                const angle = (civilian.id * 0.53) % (Math.PI * 2);
-                dx = Math.cos(angle);
-                dy = Math.sin(angle);
-                distSq = 1;
-            }
-
-            collisions += 1;
-            const dist = Math.sqrt(distSq);
-            const overlap = minDistance - dist;
-            const nx = dx / dist;
-            const ny = dy / dist;
-            const pushCivilian = overlap * 0.85;
-            const targetCivilianX = civilian.x + nx * pushCivilian;
-            const targetCivilianY = civilian.y + ny * pushCivilian;
-            const civilianTileX = Math.floor((targetCivilianX + CIVILIAN_RADIUS) / TILE_SIZE);
-            const civilianTileY = Math.floor((targetCivilianY + CIVILIAN_RADIUS) / TILE_SIZE);
-            if (isTileWalkable(civilianTileX, civilianTileY)) {
-                civilian.x = targetCivilianX;
-                civilian.y = targetCivilianY;
-                civilian.sprite.position.set(civilian.x, civilian.y);
-            } else {
-                applyPlayerPush(-nx * overlap * 0.6, -ny * overlap * 0.6);
-            }
-        }
-
-        return collisions;
+        return resolvePlayerCivilianCollision({
+            civilians,
+            isTileWalkable,
+            civilianRadius: CIVILIAN_RADIUS,
+            playerCenterX,
+            playerCenterY,
+            playerRadius,
+            applyPlayerPush
+        });
     }
 
     function getStats() {
@@ -1237,108 +943,37 @@ export function createCivilianSystem({
     }
 
     function syncReplicatedHouseTimers(entries) {
-        const source = Array.isArray(entries) ? entries : [];
-        const houseById = new Map();
-        for (const house of buildingSystem.getHouses()) {
-            houseById.set(Number(house.id), house);
-        }
-        const seen = new Set();
-        for (const entry of source) {
-            const houseId = Number(entry?.houseId);
-            if (!Number.isFinite(houseId)) {
-                continue;
-            }
-            const house = houseById.get(houseId);
-            if (!house) {
-                continue;
-            }
-            seen.add(houseId);
-            let label = houseTimerLabels.get(houseId);
-            if (!label) {
-                label = new PIXI.Text({
-                    text: '',
-                    style: {
-                        fill: '#f7f7f7',
-                        fontFamily: 'monospace',
-                        fontSize: 11
-                    }
-                });
-                label.anchor.set(0.5);
-                civilianLayer.addChild(label);
-                houseTimerLabels.set(houseId, label);
-            }
-            const center = getBuildingCenter(house);
-            label.position.set(center.x, center.y - (house.footprintH * TILE_SIZE * 0.5) - 8);
-            const activeCount = Math.max(0, Math.floor(Number(entry?.activeCivilianCount) || 0));
-            const seconds = Math.max(0, Math.ceil((Number(entry?.spawnTimerFrames) || 0) / 60));
-            label.text = `Civ ${activeCount}/${HOUSE_CIVILIAN_CAP_BONUS} | ${seconds}s`;
-            label.visible = true;
-        }
-        for (const [houseId, label] of houseTimerLabels) {
-            if (!seen.has(Number(houseId))) {
-                label.visible = false;
-            }
-        }
+        syncReplicatedHouseTimersBase({
+            entries,
+            houses: buildingSystem.getHouses(),
+            houseTimerLabels,
+            civilianLayer,
+            getBuildingCenter,
+            TILE_SIZE,
+            HOUSE_CIVILIAN_CAP_BONUS
+        });
     }
 
     function syncReplicatedState(entries, houseTimerEntries = []) {
-        const source = Array.isArray(entries) ? entries : [];
-        civilianById.clear();
-        while (civilians.length < source.length) {
-            const sprite = createCivilianSprite();
-            civilianLayer.addChild(sprite);
-            const civilian = {
-                id: civilianIdCounter++,
-                homeHouseId: null,
-                x: 0,
-                y: 0,
-                hp: CIVILIAN_MAX_HP,
-                maxHp: CIVILIAN_MAX_HP,
-                isDead: false,
-                state: 'replicated',
-                cargoResource: null,
-                cargoAmount: 0,
-                targetProducerId: null,
-                targetWarehouseId: null,
-                targetX: 0,
-                targetY: 0,
-                finalTargetX: 0,
-                finalTargetY: 0,
-                hasTravelWaypoint: false,
-                routeSalt: 0,
-                stuckFrames: 0,
-                stuckRecoveryCooldownFrames: 0,
-                patrolRecheckFrames: 0,
-                sprite
-            };
-            civilians.push(civilian);
-            civilianById.set(civilian.id, civilian);
-        }
-        for (let i = 0; i < source.length; i++) {
-            const civilian = civilians[i];
-            const entry = source[i];
-            const centerX = Number(entry?.x) || 0;
-            const centerY = Number(entry?.y) || 0;
-            civilian.id = Number(entry?.id) || civilian.id;
-            civilian.x = centerX - CIVILIAN_RADIUS;
-            civilian.y = centerY - CIVILIAN_RADIUS;
-            civilian.hp = Number(entry?.hp) || civilian.hp;
-            civilian.maxHp = Number(entry?.maxHp) || civilian.maxHp;
-            civilian.isDead = Boolean(entry?.isDead);
-            civilian.state = 'replicated';
-            civilian.sprite.visible = !civilian.isDead;
-            civilian.sprite.position.set(civilian.x, civilian.y);
-            civilianById.set(civilian.id, civilian);
-        }
-        for (let i = civilians.length - 1; i >= source.length; i--) {
-            const civilian = civilians[i];
-            civilian.sprite.destroy();
-            civilians.splice(i, 1);
-        }
-        for (const [, label] of houseTimerLabels) {
-            label.visible = false;
-        }
-        syncReplicatedHouseTimers(houseTimerEntries);
+        syncReplicatedStateFromSnapshot({
+            entries,
+            civilians,
+            civilianById,
+            civilianLayer,
+            createCivilianSprite,
+            civilianIdCounterRef: {
+                get value() {
+                    return civilianIdCounter;
+                },
+                set value(nextValue) {
+                    civilianIdCounter = nextValue;
+                }
+            },
+            civilianRadius: CIVILIAN_RADIUS,
+            civilianMaxHp: CIVILIAN_MAX_HP,
+            syncReplicatedHouseTimers,
+            houseTimerEntries
+        });
     }
 
     return {
