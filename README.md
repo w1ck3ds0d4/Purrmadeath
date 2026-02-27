@@ -82,6 +82,10 @@ npm run build
 |  |  |- constants.js              # gameplay/perf/network tuning constants
 |  |- net/
 |  |  |- multiplayerClient.js      # browser network client + telemetry
+|  |  |- latencyHeuristics.js      # latency verdict helper (debug server panel)
+|  |  |- replicationStateHash.js   # lightweight hash for replication change detection
+|  |- multiplayer/
+|  |  |- runtimePlayers.js         # shared runtime-player sync helpers
 |  |- systems/
 |  |  |- worldSystem.js            # terrain, tiles, resources
 |  |  |- playerSystem.js           # local player state/visuals
@@ -144,3 +148,10 @@ flowchart LR
   - simulation now runs on fixed 60Hz steps for consistent gameplay across different render FPS
   - dev console has a dedicated server section to inspect host tick/sim/net load
   - server section includes a color-coded latency verdict hint (server-bound vs network-bound vs mixed)
+  - follower harvest/resource-cheat actions relay to host authority and sync shared resources correctly
+  - enemy ranged combat and damage processing include all connected players
+  - civilians and house spawns are replicated to followers
+  - multiplayer kill counter is attributed per player via replicated player state
+|  |- ui/
+|  |  |- debugConsoleCommands.js   # debug slash-command parsing + view map
+|  |  |- debugOverlaySections.js   # debug section line builders

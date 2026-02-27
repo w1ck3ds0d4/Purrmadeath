@@ -35,7 +35,12 @@ import {
     WEAPONS
 } from './config/constants.js';
 import { createBuildingSystem } from './systems/buildingSystem.js';
+import { resolveDebugCommandView, ALLOWED_DEBUG_VIEWS } from './ui/debugConsoleCommands.js';
+import { buildCheatsSectionLines, buildMultiplayerSectionLines, buildServerSectionLines } from './ui/debugOverlaySections.js';
 import { createMultiplayerClient } from './net/multiplayerClient.js';
+import { getLatencyVerdict } from './net/latencyHeuristics.js';
+import { computeBuildingStateHash } from './net/replicationStateHash.js';
+import { ensureRuntimePlayer as ensureRuntimePlayerEntry, getRuntimePlayerCenterById, syncRuntimePlayersFromSnapshot as syncRuntimePlayersFromSnapshotEntries } from './multiplayer/runtimePlayers.js';
 import { createCivilianSystem } from './systems/civilianSystem.js';
 import { createEnemySystem } from './systems/enemySystem.js';
 import { createPlayerSystem } from './systems/playerSystem.js';
@@ -188,7 +193,7 @@ async function init() {
     let lastOutboundBuildingStateHash = '';
     // Multiplayer sync tuning knobs (host authority side).
     const ENTITY_SNAPSHOT_INTERVAL_MS = 50;
-    const BUILDING_SYNC_INTERVAL_MS = 750;
+    const BUILDING_SYNC_INTERVAL_MS = 250;
     // Reconciliation tuning for local player correction against server snapshots.
     const PLAYER_RECONCILE_HARD_SNAP_DISTANCE = TILE_SIZE * 3;
     const PLAYER_RECONCILE_BLEND = 0.22;
@@ -576,8 +581,7 @@ async function init() {
     }
 
     function setDebugOverlayView(view) {
-        const allowed = new Set(['core', 'perf', 'cheats', 'multiplayer', 'server', 'logs', 'all']);
-        if (!allowed.has(view)) {
+        if (!ALLOWED_DEBUG_VIEWS.has(view)) {
             return false;
         }
         debugOverlayView = view;
@@ -586,33 +590,15 @@ async function init() {
     }
 
     function executeDebugCommand(commandText) {
-        const command = commandText.trim().toLowerCase();
-        if (command === '/core') {
-            return setDebugOverlayView('core');
+        const resolved = resolveDebugCommandView(commandText);
+        if (resolved.view) {
+            return setDebugOverlayView(resolved.view);
         }
-        if (command === '/perf') {
-            return setDebugOverlayView('perf');
-        }
-        if (command === '/cheats') {
-            return setDebugOverlayView('cheats');
-        }
-        if (command === '/multiplayer' || command === '/mp') {
-            return setDebugOverlayView('multiplayer');
-        }
-        if (command === '/server' || command === '/sv') {
-            return setDebugOverlayView('server');
-        }
-        if (command === '/logs') {
-            return setDebugOverlayView('logs');
-        }
-        if (command === '/all') {
-            return setDebugOverlayView('all');
-        }
-        if (command === '/help') {
+        if (resolved.help) {
             logDebug('Commands: /core /perf /cheats /multiplayer /server /logs /all');
             return true;
         }
-        logDebug(`Unknown command: ${command}`);
+        logDebug(`Unknown command: ${resolved.unknown ?? commandText.trim().toLowerCase()}`);
         return false;
     }
 
@@ -731,40 +717,14 @@ async function init() {
         }
 
         if (showAll || debugOverlayView === 'multiplayer') {
-            pushSection('Multiplayer', [
-                `State: ${multiplayerStats.connected ? 'CONNECTED' : 'DISCONNECTED'} | URL: ${multiplayerStats.url}`,
-                `Session: ${multiplayerStats.sessionId ?? 'none'} | Player ID: ${multiplayerStats.playerId ?? '-'}`,
-                `Authority: ${multiplayerStats.authorityPlayerId ?? '-'} | Role: ${multiplayerStats.isAuthority ? 'HOST_AUTH' : 'FOLLOWER'}`,
-                `Protocol: v${multiplayerStats.protocolVersion ?? 1}`,
-                `Ping: ${Math.round(multiplayerStats.pingMs)} ms | Tick: ${multiplayerStats.tickRate}`,
-                `Snapshots: tick ${multiplayerStats.snapshotTick} | remote ${multiplayerStats.remotePlayerCount} | age ${Math.round(multiplayerStats.snapshotAgeMs ?? 0)} ms`,
-                `Snapshot interval: ${Math.round(multiplayerStats.snapshotIntervalMs ?? 0)} ms | jitter ${Math.round(multiplayerStats.snapshotJitterMs ?? 0)} ms`,
-                `Relevance: ${multiplayerStats.relevantPlayersSeen ?? 0}/${multiplayerStats.totalPlayersSeen ?? 0} players in scope`,
-                `Replicated non-player seq: ${multiplayerStats.nonPlayerSeq ?? 0} | Totals E/P/T/EP: ${(multiplayerStats.nonPlayerTotals?.enemies ?? 0)}/${(multiplayerStats.nonPlayerTotals?.playerProjectiles ?? 0)}/${(multiplayerStats.nonPlayerTotals?.towerProjectiles ?? 0)}/${(multiplayerStats.nonPlayerTotals?.enemyProjectiles ?? 0)}`,
-                `Net rate: in ${Number(multiplayerStats.inboundKbps ?? 0).toFixed(2)} kB/s | out ${Number(multiplayerStats.outboundKbps ?? 0).toFixed(2)} kB/s`,
-                `Msg rate: snapshots ${multiplayerStats.snapshotRate ?? 0}/s | inputs ${multiplayerStats.inputRate ?? 0}/s`,
-                `Reconnect token: ${multiplayerStats.reconnectToken} | Attempts: ${multiplayerStats.connectAttempts}`,
-                `Last error: ${multiplayerStats.lastError ?? 'none'}`,
-                `LAN host hint: ${DEV_LAN_HOST_HINT}`,
-                `LAN join: ${multiplayerStats.joinHintUrl ?? 'connect first to detect host LAN IP'}`,
-                `Manual join: ${window.location.protocol}//${DEV_LAN_HOST_HINT}:${window.location.port || '3001'}/?mp=1&mpHost=${DEV_LAN_HOST_HINT}`
-            ]);
+            pushSection(
+                'Multiplayer',
+                buildMultiplayerSectionLines(multiplayerStats, DEV_LAN_HOST_HINT, window.location.protocol, window.location.port)
+            );
         }
 
         if (showAll || debugOverlayView === 'server') {
-            if (!serverPerfStats) {
-                pushSection('Server', [
-                    'No server metrics yet (connect first).'
-                ]);
-            } else {
-                pushSection('Server', [
-                    `Tick: ${serverPerfStats.tickRate} Hz | Target: ${Number(serverPerfStats.targetTickMs ?? 0).toFixed(2)} ms`,
-                    `Sim avg/peak: ${Number(serverPerfStats.simMsAvg ?? 0).toFixed(2)} / ${Number(serverPerfStats.simMsPeak ?? 0).toFixed(2)} ms`,
-                    `Loop lag avg: ${Number(serverPerfStats.loopLagMsAvg ?? 0).toFixed(2)} ms`,
-                    `Net in/out: ${Number(serverPerfStats.inboundKbps ?? 0).toFixed(2)} / ${Number(serverPerfStats.outboundKbps ?? 0).toFixed(2)} kB/s`,
-                    `Connected clients: ${serverPerfStats.connectedClients ?? 0}`
-                ]);
-            }
+            pushSection('Server', buildServerSectionLines(serverPerfStats));
         }
 
         if (showAll || debugOverlayView === 'perf') {
@@ -784,13 +744,15 @@ async function init() {
         }
 
         if (showAll || debugOverlayView === 'cheats') {
-            pushSection('Cheats/Dev Actions', [
-                `H: +100 resources | K: enemy toggle (${enemiesDisabled ? 'ON' : 'OFF'})`,
-                `J: force reset | F8: export crash logs`,
-                `L: perf profile (${activePerfProfileKey}) | O: auto governor (${autoPerfGovernorEnabled ? 'ON' : 'OFF'})`,
-                `U: start benchmark`,
-                `Build mode: ${buildingSystem.getUiState().buildMode ? 'ON' : 'OFF'}`
-            ]);
+            pushSection(
+                'Cheats/Dev Actions',
+                buildCheatsSectionLines(
+                    enemiesDisabled,
+                    activePerfProfileKey,
+                    autoPerfGovernorEnabled,
+                    buildingSystem.getUiState().buildMode
+                )
+            );
         }
 
         // Remove trailing blank section spacer.
@@ -941,6 +903,7 @@ async function init() {
             runtime.isDead = false;
             runtime.invulnFrames = 0;
             runtime.respawnTimer = 0;
+            runtime.kills = 0;
             runtime.x = respawn.x + TILE_SIZE / 2;
             runtime.y = respawn.y + TILE_SIZE / 2;
         }
@@ -1051,7 +1014,7 @@ async function init() {
         return true;
     }
 
-    function applyDamage(target, amount, source) {
+    function applyDamage(target, amount, source, attackerPlayerId = null) {
         if (!target || target.isDead || amount <= 0) {
             return false;
         }
@@ -1076,7 +1039,13 @@ async function init() {
                 clearSavedGameState();
                 logDebug(`Player defeated by ${source}`);
             } else if (enemySystem?.isEnemyEntity(target)) {
-                combatStats.enemiesKilled += 1;
+                const multiplayerStats = multiplayerClient.getStats();
+                if (multiplayerStats.connected && multiplayerStats.isAuthority && attackerPlayerId !== null && attackerPlayerId !== undefined) {
+                    const runtime = ensureRuntimePlayer(attackerPlayerId);
+                    runtime.kills = (runtime.kills ?? 0) + 1;
+                } else {
+                    combatStats.enemiesKilled += 1;
+                }
                 inventory.gold += GOLD_PER_ENEMY_KILL;
                 updateHud();
             }
@@ -1085,10 +1054,12 @@ async function init() {
         return true;
     }
 
-    function performSwordAttack(playerCenterX, playerCenterY, dirX, dirY) {
+    function performSwordAttack(playerCenterX, playerCenterY, dirX, dirY, options = {}) {
         const cfg = WEAPONS.sword;
         const cosHalfArc = Math.cos(cfg.arcRadians / 2);
-        playerSystem.triggerSwordSwing(dirX, dirY);
+        if (options.showVisual !== false) {
+            playerSystem.triggerSwordSwing(dirX, dirY);
+        }
 
         for (const enemy of enemies) {
             if (enemy.isDead) {
@@ -1110,7 +1081,7 @@ async function init() {
                 continue;
             }
 
-            const hit = applyDamage(enemy, cfg.damage, 'sword');
+            const hit = applyDamage(enemy, cfg.damage, 'sword', options.attackerPlayerId ?? null);
             if (hit) {
                 enemy.knockbackVX += nx * cfg.knockbackSpeed;
                 enemy.knockbackVY += ny * cfg.knockbackSpeed;
@@ -1168,6 +1139,7 @@ async function init() {
             damage: 0,
             radius: 4,
             team: 'player',
+            ownerPlayerId: null,
             sprite: null
         };
     }
@@ -1183,6 +1155,7 @@ async function init() {
         projectile.damage = 0;
         projectile.radius = 4;
         projectile.team = 'player';
+        projectile.ownerPlayerId = null;
         projectile.sprite = null;
         projectileObjectPool.push(projectile);
     }
@@ -1203,13 +1176,14 @@ async function init() {
         bullet.damage = config.damage;
         bullet.radius = config.radius ?? 4;
         bullet.team = config.team;
+        bullet.ownerPlayerId = config.ownerPlayerId ?? null;
         bullet.sprite = sprite;
         sprite.position.set(bullet.x, bullet.y);
         projectileLayer.addChild(sprite);
         sourceList.push(bullet);
     }
 
-    function spawnBullet(playerCenterX, playerCenterY, dirX, dirY) {
+    function spawnBullet(playerCenterX, playerCenterY, dirX, dirY, ownerPlayerId = null) {
         const cfg = WEAPONS.pistol;
         spawnFriendlyProjectile(projectiles, MAX_BULLETS, {
             originX: playerCenterX,
@@ -1220,6 +1194,7 @@ async function init() {
             lifetimeFrames: cfg.bulletLifetimeFrames,
             damage: cfg.damage,
             team: 'player',
+            ownerPlayerId,
             fillColor: 0xf7e56a,
             strokeColor: 0x2a2409,
             radius: 4
@@ -1230,40 +1205,18 @@ async function init() {
         const mag = Math.hypot(playerCombat.facingX, playerCombat.facingY);
         const dirX = mag > 0.001 ? playerCombat.facingX / mag : 1;
         const dirY = mag > 0.001 ? playerCombat.facingY / mag : 0;
+        const localPlayerId = multiplayerClient.getStats().playerId;
 
         if (playerCombat.weapon === 'sword') {
-            performSwordAttack(playerCenterX, playerCenterY, dirX, dirY);
+            performSwordAttack(playerCenterX, playerCenterY, dirX, dirY, {
+                showVisual: true,
+                attackerPlayerId: localPlayerId
+            });
             playerCombat.cooldownFrames = WEAPONS.sword.cooldownFrames;
         } else {
-            spawnBullet(playerCenterX, playerCenterY, dirX, dirY);
+            spawnBullet(playerCenterX, playerCenterY, dirX, dirY, localPlayerId);
             playerCombat.cooldownFrames = WEAPONS.pistol.cooldownFrames;
         }
-    }
-
-    function getLatencyVerdict(serverPerfStats, multiplayerStats) {
-        if (!multiplayerStats.connected) {
-            return { text: 'Verdict: offline', color: '#8df7ff' };
-        }
-        if (!serverPerfStats) {
-            return { text: 'Verdict: waiting for server metrics', color: '#8df7ff' };
-        }
-        const targetTickMs = Math.max(1, Number(serverPerfStats.targetTickMs) || 1);
-        const simMsAvg = Number(serverPerfStats.simMsAvg) || 0;
-        const loopLagMsAvg = Number(serverPerfStats.loopLagMsAvg) || 0;
-        const pingMs = Number(multiplayerStats.pingMs) || 0;
-        const snapshotJitterMs = Number(multiplayerStats.snapshotJitterMs) || 0;
-        const serverCpuBound = simMsAvg >= targetTickMs * 0.8 || loopLagMsAvg >= Math.max(4, targetTickMs * 0.35);
-        const networkBound = pingMs >= 35 || snapshotJitterMs >= 10;
-        if (serverCpuBound && networkBound) {
-            return { text: 'Verdict: mixed pressure (server + network)', color: '#ffc14d' };
-        }
-        if (serverCpuBound) {
-            return { text: 'Verdict: likely host-laptop/server bound', color: '#ff8f8f' };
-        }
-        if (networkBound) {
-            return { text: 'Verdict: likely network/Wi-Fi bound', color: '#ffd166' };
-        }
-        return { text: 'Verdict: stable (no obvious bottleneck)', color: '#9ce9a0' };
     }
 
     function performPredictedAttackVisual(playerCenterX, playerCenterY) {
@@ -1313,11 +1266,23 @@ async function init() {
                     continue;
                 }
 
-                const dxPlayer = snapshot.playerCenter.x - bulletCenterX;
-                const dyPlayer = snapshot.playerCenter.y - bulletCenterY;
-                const playerHitDistance = PLAYER_COLLISION_RADIUS + bullet.radius;
-                if (dxPlayer * dxPlayer + dyPlayer * dyPlayer <= playerHitDistance * playerHitDistance) {
-                    applyDamage(playerState, bullet.damage, 'enemy_projectile');
+                const playerTargets = Array.isArray(snapshot.playerTargets) ? snapshot.playerTargets : [];
+                let hitPlayer = false;
+                for (const playerTarget of playerTargets) {
+                    if (playerTarget.isDead) {
+                        continue;
+                    }
+                    const dxPlayer = playerTarget.x - bulletCenterX;
+                    const dyPlayer = playerTarget.y - bulletCenterY;
+                    const playerHitDistance = (playerTarget.radius ?? PLAYER_COLLISION_RADIUS) + bullet.radius;
+                    if (dxPlayer * dxPlayer + dyPlayer * dyPlayer > playerHitDistance * playerHitDistance) {
+                        continue;
+                    }
+                    snapshot.onPlayerHit?.(playerTarget.id, bullet.damage, 'enemy_projectile');
+                    hitPlayer = true;
+                    break;
+                }
+                if (hitPlayer) {
                     releaseProjectileSprite(bullet.team, bullet.sprite);
                     releaseProjectileObject(bullet);
                     list.splice(i, 1);
@@ -1364,7 +1329,7 @@ async function init() {
                 const dy = (enemy.y + ENEMY_RADIUS) - bulletCenterY;
                 const hitDistance = ENEMY_RADIUS + bullet.radius;
                 if (dx * dx + dy * dy <= hitDistance * hitDistance) {
-                    applyDamage(enemy, bullet.damage, `${bullet.team}_projectile`);
+                    applyDamage(enemy, bullet.damage, `${bullet.team}_projectile`, bullet.ownerPlayerId ?? null);
                     hitEnemy = true;
                     break;
                 }
@@ -1446,9 +1411,46 @@ async function init() {
     }
 
     function updateProjectiles(deltaMoveScale, civilianTargetsSnapshot = null) {
+        const multiplayerStats = multiplayerClient.getStats();
+        let playerTargets = [];
+        if (multiplayerStats.connected && multiplayerStats.isAuthority) {
+            playerTargets = [...multiplayerPlayerRuntime.values()].map((runtime) => ({
+                id: runtime.id,
+                x: runtime.x,
+                y: runtime.y,
+                radius: PLAYER_COLLISION_RADIUS,
+                isDead: runtime.isDead
+            }));
+        } else {
+            const playerCenter = playerSystem.getCenter();
+            playerTargets = [{
+                id: multiplayerStats.playerId ?? 'local',
+                x: playerCenter.x,
+                y: playerCenter.y,
+                radius: PLAYER_COLLISION_RADIUS,
+                isDead: playerState.isDead
+            }];
+        }
         const snapshot = {
-            playerCenter: playerSystem.getCenter(),
-            civilians: civilianTargetsSnapshot ?? civilianSystem.getTargets()
+            playerTargets,
+            civilians: civilianTargetsSnapshot ?? civilianSystem.getTargets(),
+            onPlayerHit: (playerId, amount, source) => {
+                if (multiplayerStats.connected && multiplayerStats.isAuthority) {
+                    const runtime = ensureRuntimePlayer(playerId ?? multiplayerStats.playerId);
+                    applyDamage(runtime, amount, source);
+                    if (runtime.isDead && runtime.respawnTimer <= 0) {
+                        runtime.respawnTimer = PLAYER_RESPAWN_SECONDS;
+                    }
+                    if (String(multiplayerStats.playerId) === String(runtime.id)) {
+                        playerState.hp = runtime.hp;
+                        playerState.maxHp = runtime.maxHp;
+                        playerState.isDead = runtime.isDead;
+                        playerState.invulnFrames = runtime.invulnFrames ?? 0;
+                    }
+                    return;
+                }
+                applyDamage(playerState, amount, source);
+            }
         };
         updateProjectileList(projectiles, deltaMoveScale, snapshot);
         updateProjectileList(towerProjectiles, deltaMoveScale, snapshot);
@@ -1520,7 +1522,20 @@ async function init() {
             return;
         }
         const rangeSq = PROJECTILES.enemy.range * PROJECTILES.enemy.range;
-        const playerCenter = playerSystem.getCenter();
+        const multiplayerStats = multiplayerClient.getStats();
+        const playerTargets = (multiplayerStats.connected && multiplayerStats.isAuthority)
+            ? [...multiplayerPlayerRuntime.values()].map((runtime) => ({
+                id: runtime.id,
+                x: runtime.x,
+                y: runtime.y,
+                isDead: runtime.isDead
+            }))
+            : [{
+                id: multiplayerStats.playerId ?? 'local',
+                x: playerSystem.getCenter().x,
+                y: playerSystem.getCenter().y,
+                isDead: playerState.isDead
+            }];
         for (const enemy of enemies) {
             if (enemy.isDead || !enemy.isRanged) {
                 continue;
@@ -1533,9 +1548,20 @@ async function init() {
             }
             const enemyCenterX = enemy.x + ENEMY_RADIUS;
             const enemyCenterY = enemy.y + ENEMY_RADIUS;
-            let targetX = playerCenter.x;
-            let targetY = playerCenter.y;
-            let bestDistSq = (playerCenter.x - enemyCenterX) ** 2 + (playerCenter.y - enemyCenterY) ** 2;
+            let targetX = enemyCenterX;
+            let targetY = enemyCenterY;
+            let bestDistSq = Infinity;
+            for (const playerTarget of playerTargets) {
+                if (playerTarget.isDead) {
+                    continue;
+                }
+                const playerDistSq = (playerTarget.x - enemyCenterX) ** 2 + (playerTarget.y - enemyCenterY) ** 2;
+                if (playerDistSq < bestDistSq) {
+                    bestDistSq = playerDistSq;
+                    targetX = playerTarget.x;
+                    targetY = playerTarget.y;
+                }
+            }
 
             const civilianCandidates = querySpatialIndexInto(civilianSpatialIndex, enemyCenterX, enemyCenterY, PROJECTILES.enemy.range, queryBufferB);
             for (const civilian of civilianCandidates) {
@@ -1648,24 +1674,7 @@ async function init() {
         };
     }
 
-    function computeBuildingStateHash(state) {
-        if (!state || !Array.isArray(state.buildings)) {
-            return '0';
-        }
-        // Compact hash to avoid shipping full building snapshots when nothing changed.
-        return JSON.stringify(state.buildings.map((building) => ([
-            building.id,
-            building.type,
-            building.tileX,
-            building.tileY,
-            Math.round(Number(building.hp) || 0),
-            Math.round(Number(building.storedOutput) || 0),
-            Math.round(Number(building.cycleTimerFrames) || 0),
-            Math.round(Number(building.towerCooldownRemainingFrames) || 0)
-        ])));
-    }
-
-    function runPlayerAction(action, actorCenter = null) {
+    function runPlayerAction(action, actorCenter = null, actorPlayerId = null) {
         if (!action || typeof action.type !== 'string') {
             return;
         }
@@ -1683,9 +1692,13 @@ async function init() {
             const nx = dirX / mag;
             const ny = dirY / mag;
             if (action.weapon === 'sword') {
-                performSwordAttack(centerX, centerY, nx, ny);
+                const localPlayerId = multiplayerClient.getStats().playerId;
+                performSwordAttack(centerX, centerY, nx, ny, {
+                    showVisual: String(actorPlayerId) === String(localPlayerId),
+                    attackerPlayerId: actorPlayerId
+                });
             } else {
-                spawnBullet(centerX, centerY, nx, ny);
+                spawnBullet(centerX, centerY, nx, ny, actorPlayerId);
             }
             return;
         }
@@ -1730,52 +1743,37 @@ async function init() {
                 inventory[collected.resourceType] += collected.amount;
                 updateHud();
             }
+            return;
+        }
+        if (action.type === 'dev_add_resources') {
+            inventory.wood += 100;
+            inventory.stone += 100;
+            inventory.iron += 100;
+            inventory.gold += 100;
+            updateHud();
         }
     }
 
     function getMultiplayerPlayerCenterById(playerId) {
-        const snapshot = multiplayerClient.getSnapshotState();
-        const entry = snapshot.players.find((playerEntry) => String(playerEntry.playerId) === String(playerId));
-        if (!entry) {
-            return null;
-        }
-        return {
-            x: Number(entry.x) + TILE_SIZE / 2,
-            y: Number(entry.y) + TILE_SIZE / 2
-        };
+        return getRuntimePlayerCenterById(multiplayerClient.getSnapshotState().players, playerId, TILE_SIZE);
     }
 
     function ensureRuntimePlayer(playerId) {
-        const key = String(playerId);
-        if (!multiplayerPlayerRuntime.has(key)) {
-            multiplayerPlayerRuntime.set(key, {
-                __entity: 'player',
-                id: key,
-                hp: PLAYER_MAX_HP,
-                maxHp: PLAYER_MAX_HP,
-                isDead: false,
-                invulnFrames: 0,
-                respawnTimer: 0,
-                x: playerWorldX + TILE_SIZE / 2,
-                y: playerWorldY + TILE_SIZE / 2
-            });
-        }
-        return multiplayerPlayerRuntime.get(key);
+        return ensureRuntimePlayerEntry(multiplayerPlayerRuntime, playerId, {
+            maxHp: PLAYER_MAX_HP,
+            centerX: playerWorldX + TILE_SIZE / 2,
+            centerY: playerWorldY + TILE_SIZE / 2
+        });
     }
 
     function syncRuntimePlayersFromSnapshot(multiplayerSnapshot) {
-        const seen = new Set();
-        for (const entry of multiplayerSnapshot.players) {
-            const runtime = ensureRuntimePlayer(entry.playerId);
-            runtime.x = Number(entry.x) + TILE_SIZE / 2;
-            runtime.y = Number(entry.y) + TILE_SIZE / 2;
-            seen.add(String(entry.playerId));
-        }
-        for (const [id] of multiplayerPlayerRuntime) {
-            if (!seen.has(id)) {
-                multiplayerPlayerRuntime.delete(id);
-            }
-        }
+        syncRuntimePlayersFromSnapshotEntries(
+            multiplayerPlayerRuntime,
+            multiplayerSnapshot.players,
+            TILE_SIZE,
+            { x: playerWorldX + TILE_SIZE / 2, y: playerWorldY + TILE_SIZE / 2 },
+            PLAYER_MAX_HP
+        );
     }
     // Building placement + production system.
     buildingSystem = createBuildingSystem({
@@ -2029,12 +2027,18 @@ async function init() {
             logDebug('Crash logs exported');
         }
         if ((key === 'h') && debugOverlayEnabled) {
-            inventory.wood += 100;
-            inventory.stone += 100;
-            inventory.iron += 100;
-            inventory.gold += 100;
-            updateHud();
-            logDebug('Dev resources added (+100 each)');
+            const multiplayerStats = multiplayerClient.getStats();
+            if (multiplayerStats.connected && !multiplayerStats.isAuthority) {
+                multiplayerClient.sendPlayerAction({ type: 'dev_add_resources' });
+                logDebug('Dev resources request sent (+100 each)');
+            } else {
+                inventory.wood += 100;
+                inventory.stone += 100;
+                inventory.iron += 100;
+                inventory.gold += 100;
+                updateHud();
+                logDebug('Dev resources added (+100 each)');
+            }
         }
         if ((key === 'l') && debugOverlayEnabled) {
             activePerfProfileKey = activePerfProfileKey === 'quality' ? 'stress' : 'quality';
@@ -2196,33 +2200,9 @@ async function init() {
         if (multiplayerStats.connected && multiplayerStats.playerId !== null) {
             syncRuntimePlayersFromSnapshot(multiplayerSnapshot);
             const localRuntime = ensureRuntimePlayer(multiplayerStats.playerId);
-            const localServerPlayer = multiplayerSnapshot.players.find(
-                (entry) => String(entry.playerId) === String(multiplayerStats.playerId)
-            );
-            if (localServerPlayer) {
-                const localDx = localServerPlayer.x - playerWorldX;
-                const localDy = localServerPlayer.y - playerWorldY;
-                const correctionDistSq = localDx * localDx + localDy * localDy;
-                const hardSnapDistanceSq = PLAYER_RECONCILE_HARD_SNAP_DISTANCE * PLAYER_RECONCILE_HARD_SNAP_DISTANCE;
-                let candidateX = playerWorldX;
-                let candidateY = playerWorldY;
-                if (correctionDistSq > hardSnapDistanceSq) {
-                    candidateX = localServerPlayer.x;
-                    candidateY = localServerPlayer.y;
-                } else if (correctionDistSq > 4) {
-                    candidateX += localDx * PLAYER_RECONCILE_BLEND;
-                    candidateY += localDy * PLAYER_RECONCILE_BLEND;
-                }
-                const candidateTileX = Math.floor((candidateX + TILE_SIZE / 2) / TILE_SIZE);
-                const candidateTileY = Math.floor((candidateY + TILE_SIZE / 2) / TILE_SIZE);
-                if (isTileWalkable(candidateTileX, candidateTileY)) {
-                    playerWorldX = candidateX;
-                    playerWorldY = candidateY;
-                    playerSystem.setWorldPosition(playerWorldX, playerWorldY);
-                }
-                localRuntime.x = Number(localServerPlayer.x) + TILE_SIZE / 2;
-                localRuntime.y = Number(localServerPlayer.y) + TILE_SIZE / 2;
-            }
+            const localCenter = playerSystem.getCenter();
+            localRuntime.x = localCenter.x;
+            localRuntime.y = localCenter.y;
             if (multiplayerSnapshot.tick !== lastAppliedMultiplayerSnapshotTick) {
                 lastAppliedMultiplayerSnapshotTick = multiplayerSnapshot.tick;
                 remotePlayerSystem.sync(multiplayerSnapshot.players, multiplayerStats.playerId);
@@ -2231,7 +2211,7 @@ async function init() {
             if (replicatedAuthority) {
                 const peerActions = multiplayerClient.drainPeerActions();
                 for (const pending of peerActions) {
-                    runPlayerAction(pending.action, getMultiplayerPlayerCenterById(pending.actorPlayerId));
+                    runPlayerAction(pending.action, getMultiplayerPlayerCenterById(pending.actorPlayerId), pending.actorPlayerId);
                 }
             }
             if (replicatedFollower) {
@@ -2257,6 +2237,7 @@ async function init() {
                             playerState.hp = Number(localState.hp) || 0;
                             playerState.maxHp = Number(localState.maxHp) || PLAYER_MAX_HP;
                             playerState.isDead = Boolean(localState.isDead);
+                            combatStats.enemiesKilled = Number(localState.kills) || 0;
                             if (playerState.isDead) {
                                 deathText.text = `You are down\nRespawn in ${Math.ceil(Number(localState.respawnTimer) || 0)}s`;
                                 deathText.visible = true;
@@ -2271,7 +2252,11 @@ async function init() {
                         Number(nonPlayerSnapshot.buildingsRevision || 0) !== lastAppliedBuildingsRevision
                     ) {
                         lastAppliedBuildingsRevision = Number(nonPlayerSnapshot.buildingsRevision || 0);
-                        buildingSystem.importState(nonPlayerSnapshot.buildingsState);
+                        buildingSystem.importReplicationState(nonPlayerSnapshot.buildingsState);
+                        updateHud();
+                    }
+                    if (Array.isArray(nonPlayerSnapshot.civilians)) {
+                        civilianSystem.syncReplicatedState(nonPlayerSnapshot.civilians);
                         updateHud();
                     }
                 }
@@ -2298,6 +2283,7 @@ async function init() {
                 playerState.maxHp = localRuntime.maxHp;
                 playerState.isDead = localRuntime.isDead;
                 playerState.invulnFrames = localRuntime.invulnFrames ?? 0;
+                combatStats.enemiesKilled = Number(localRuntime.kills) || 0;
                 if (playerState.isDead) {
                     deathText.text = `You are down\nRespawn in ${Math.ceil(localRuntime.respawnTimer)}s`;
                     deathText.visible = true;
@@ -2590,7 +2576,7 @@ async function init() {
             let buildingsState = null;
             if (hasFollowers && outboundBuildingSyncTimerMs <= 0) {
                 outboundBuildingSyncTimerMs = BUILDING_SYNC_INTERVAL_MS;
-                const candidateState = buildingSystem.exportState();
+                const candidateState = buildingSystem.exportReplicationState();
                 const candidateHash = computeBuildingStateHash(candidateState);
                 if (candidateHash !== lastOutboundBuildingStateHash) {
                     lastOutboundBuildingStateHash = candidateHash;
@@ -2613,8 +2599,10 @@ async function init() {
                         hp: runtime.hp,
                         maxHp: runtime.maxHp,
                         isDead: runtime.isDead,
-                        respawnTimer: runtime.respawnTimer
+                        respawnTimer: runtime.respawnTimer,
+                        kills: runtime.kills ?? 0
                     })),
+                    civilians: civilianSystem.getTargets(),
                     sharedResources: { ...inventory },
                     buildingsState,
                     buildingsRevision: outboundBuildingRevision
