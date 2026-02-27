@@ -4,6 +4,7 @@
 // - Tracks basic connection/replication stats for dev console.
 export function createMultiplayerClient({
     url,
+    joinToken = '',
     onLog = () => {}
 }) {
     const PROTOCOL_VERSION = 1;
@@ -28,6 +29,8 @@ export function createMultiplayerClient({
     let snapshotPlayers = [];
     let desiredMoveX = 0;
     let desiredMoveY = 0;
+    let desiredWorldX = 0;
+    let desiredWorldY = 0;
     let lastSentMoveX = 0;
     let lastSentMoveY = 0;
     let inputSendTimerMs = 0;
@@ -56,6 +59,9 @@ export function createMultiplayerClient({
         totals: { enemies: 0, playerProjectiles: 0, towerProjectiles: 0, enemyProjectiles: 0 },
         playerStates: [],
         civilians: [],
+        houseTimers: [],
+        sessionTimeSeconds: 0,
+        sessionState: null,
         sharedResources: null,
         buildingsState: null,
         buildingsRevision: 0
@@ -68,6 +74,7 @@ export function createMultiplayerClient({
         }
         return entries
             .map((entry) => ({
+                id: Number(entry?.id) || 0,
                 x: Number(entry?.x) || 0,
                 y: Number(entry?.y) || 0
             }))
@@ -75,7 +82,9 @@ export function createMultiplayerClient({
     }
 
     function applyProjectileDelta(previous, delta) {
-        const next = Array.isArray(previous) ? previous.map((entry) => ({ x: entry.x, y: entry.y })) : [];
+        const next = Array.isArray(previous)
+            ? previous.map((entry) => ({ id: Number(entry.id) || 0, x: entry.x, y: entry.y }))
+            : [];
         if (!delta || typeof delta !== 'object') {
             return next;
         }
@@ -86,6 +95,7 @@ export function createMultiplayerClient({
                 continue;
             }
             next[Math.floor(index)] = {
+                id: Number(patch?.id) || 0,
                 x: Number(patch?.x) || 0,
                 y: Number(patch?.y) || 0
             };
@@ -140,6 +150,9 @@ export function createMultiplayerClient({
             },
             playerStates: Array.isArray(np.playerStates) ? np.playerStates : currentSnapshot.playerStates,
             civilians: Array.isArray(np.civilians) ? np.civilians : currentSnapshot.civilians,
+            houseTimers: Array.isArray(np.houseTimers) ? np.houseTimers : currentSnapshot.houseTimers,
+            sessionTimeSeconds: Number(np.sessionTimeSeconds) || currentSnapshot.sessionTimeSeconds,
+            sessionState: np.sessionState ?? currentSnapshot.sessionState,
             sharedResources: np.sharedResources ?? currentSnapshot.sharedResources,
             buildingsState: np.buildingsState ?? currentSnapshot.buildingsState,
             buildingsRevision: Number(np.buildingsRevision) || currentSnapshot.buildingsRevision
@@ -172,7 +185,8 @@ export function createMultiplayerClient({
             send({
                 v: PROTOCOL_VERSION,
                 type: 'hello',
-                reconnectToken
+                reconnectToken,
+                joinToken
             });
             onLog(`Multiplayer connected (${url})`);
         });
@@ -224,7 +238,8 @@ export function createMultiplayerClient({
                 if (preferredAddress) {
                     const browserProtocol = window.location.protocol;
                     const browserPort = window.location.port ? `:${window.location.port}` : '';
-                    joinHintUrl = `${browserProtocol}//${preferredAddress}${browserPort}/?mp=1&mpHost=${preferredAddress}`;
+                    const tokenQuery = joinToken ? `&joinToken=${encodeURIComponent(joinToken)}` : '';
+                    joinHintUrl = `${browserProtocol}//${preferredAddress}${browserPort}/?mp=1&mpHost=${preferredAddress}${tokenQuery}`;
                 } else {
                     joinHintUrl = null;
                 }
@@ -290,6 +305,9 @@ export function createMultiplayerClient({
                         },
                         playerStates: Array.isArray(np.playerStates) ? np.playerStates : [],
                         civilians: Array.isArray(np.civilians) ? np.civilians : [],
+                        houseTimers: Array.isArray(np.houseTimers) ? np.houseTimers : [],
+                        sessionTimeSeconds: Number(np.sessionTimeSeconds) || 0,
+                        sessionState: np.sessionState ?? null,
                         sharedResources: np.sharedResources ?? null,
                         buildingsState: np.buildingsState ?? null,
                         buildingsRevision: Number(np.buildingsRevision) || 0
@@ -345,6 +363,9 @@ export function createMultiplayerClient({
         nonPlayerSnapshot.projectiles.enemy = [];
         nonPlayerSnapshot.playerStates = [];
         nonPlayerSnapshot.civilians = [];
+        nonPlayerSnapshot.houseTimers = [];
+        nonPlayerSnapshot.sessionTimeSeconds = 0;
+        nonPlayerSnapshot.sessionState = null;
         nonPlayerSnapshot.sharedResources = null;
         nonPlayerSnapshot.buildingsState = null;
         nonPlayerSnapshot.buildingsRevision = 0;
@@ -382,7 +403,9 @@ export function createMultiplayerClient({
                     type: 'input',
                     inputSeq,
                     moveX: desiredMoveX,
-                    moveY: desiredMoveY
+                    moveY: desiredMoveY,
+                    clientX: desiredWorldX,
+                    clientY: desiredWorldY
                 });
                 inputCountWindow += 1;
                 lastSentMoveX = desiredMoveX;
@@ -405,12 +428,18 @@ export function createMultiplayerClient({
         }
     }
 
-    function sendInput(moveX, moveY) {
+    function sendInput(moveX, moveY, worldX = null, worldY = null) {
         if (!connected) {
             return;
         }
         desiredMoveX = moveX;
         desiredMoveY = moveY;
+        if (Number.isFinite(worldX)) {
+            desiredWorldX = worldX;
+        }
+        if (Number.isFinite(worldY)) {
+            desiredWorldY = worldY;
+        }
     }
 
     function sendEntitySnapshot(seq, payload) {

@@ -6,7 +6,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const PORT = Number(process.env.PORT || 8080);
 const TICK_RATE = Number(process.env.TICK_RATE || 30);
 const TICK_MS = 1000 / TICK_RATE;
-const PLAYER_SPEED = Number(process.env.PLAYER_SPEED || 220);
+const PLAYER_SPEED = Number(process.env.PLAYER_SPEED || 200);
 const MAX_PLAYERS = Number(process.env.MAX_PLAYERS || 4);
 const PROTOCOL_VERSION = 1;
 const PLAYER_RELEVANCE_RADIUS = Number(process.env.PLAYER_RELEVANCE_RADIUS || 2200);
@@ -16,14 +16,39 @@ const MAX_INPUT_MAGNITUDE = 1.0;
 const PLAYER_TIMEOUT_MS = 30000;
 const MAX_REPLICATED_ENEMIES = Number(process.env.MAX_REPLICATED_ENEMIES || 2000);
 const MAX_REPLICATED_PROJECTILES = Number(process.env.MAX_REPLICATED_PROJECTILES || 4000);
+const MAX_MESSAGE_BYTES = Number(process.env.MAX_MESSAGE_BYTES || 131072);
+const MAX_MESSAGES_PER_SECOND = Number(process.env.MAX_MESSAGES_PER_SECOND || 150);
+const MAX_CONNECTIONS_PER_MINUTE_PER_IP = Number(process.env.MAX_CONNECTIONS_PER_MINUTE_PER_IP || 30);
+const HELLO_TIMEOUT_MS = Number(process.env.HELLO_TIMEOUT_MS || 5000);
+const PRIVATE_NETWORK_ONLY = (process.env.PRIVATE_NETWORK_ONLY || '1') !== '0';
+const JOIN_TOKEN = process.env.JOIN_TOKEN || '';
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
 
-const wss = new WebSocketServer({ host: HOST, port: PORT });
+const wss = new WebSocketServer({
+    host: HOST,
+    port: PORT,
+    maxPayload: MAX_MESSAGE_BYTES,
+    perMessageDeflate: false
+});
+// Avoid crashing with a noisy stack when the port is already in use.
+wss.on('error', (error) => {
+    if (error?.code === 'EADDRINUSE') {
+        console.error(`[multiplayer] port ${PORT} is already in use. Stop the existing server or run with a different PORT.`);
+        process.exit(1);
+    }
+    console.error('[multiplayer] websocket server error:', error);
+    process.exit(1);
+});
 const clients = new Map();
 const reconnectIndex = new Map();
 let tick = 0;
 let nextPlayerId = 1;
 const sessionId = randomUUID();
 let authorityPlayerId = null;
+let serverSessionTimeSeconds = 0;
 let nonPlayerState = {
     seq: 0,
     enemies: [],
@@ -34,11 +59,16 @@ let nonPlayerState = {
     },
     playerStates: [],
     civilians: [],
+    houseTimers: [],
+    sessionTimeSeconds: 0,
+    sessionState: null,
     sharedResources: null,
     buildingsState: null,
     buildingsRevision: 0
 };
 const perSocketNonPlayerCache = new WeakMap();
+const connectionRateByIp = new Map();
+const socketSecurityState = new WeakMap();
 const serverPerf = {
     tickRate: TICK_RATE,
     targetTickMs: TICK_MS,
@@ -54,6 +84,70 @@ const serverPerf = {
 let lastTickStartedAt = Date.now();
 let lastNetWindowAt = Date.now();
 
+function normalizeRemoteAddress(rawAddress) {
+    if (typeof rawAddress !== 'string') {
+        return '';
+    }
+    const mappedPrefix = '::ffff:';
+    if (rawAddress.startsWith(mappedPrefix)) {
+        return rawAddress.slice(mappedPrefix.length);
+    }
+    return rawAddress;
+}
+
+function isPrivateIpv4(ipAddress) {
+    if (ipAddress.startsWith('10.')) {
+        return true;
+    }
+    if (ipAddress.startsWith('192.168.')) {
+        return true;
+    }
+    if (ipAddress.startsWith('127.')) {
+        return true;
+    }
+    const parts = ipAddress.split('.').map((value) => Number(value));
+    if (parts.length === 4 && parts.every(Number.isFinite)) {
+        if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function isPrivateIp(rawAddress) {
+    const address = normalizeRemoteAddress(rawAddress);
+    if (!address) {
+        return false;
+    }
+    if (address === '::1' || address === 'localhost') {
+        return true;
+    }
+    if (address.includes(':')) {
+        // IPv6 private ranges (ULA/link-local) plus loopback.
+        return address.startsWith('fc') || address.startsWith('fd') || address.startsWith('fe80:') || address === '::1';
+    }
+    return isPrivateIpv4(address);
+}
+
+function isOriginAllowed(originHeader) {
+    if (!ALLOWED_ORIGINS.length) {
+        return true;
+    }
+    if (typeof originHeader !== 'string' || !originHeader) {
+        return false;
+    }
+    return ALLOWED_ORIGINS.includes(originHeader);
+}
+
+function checkConnectionRateLimit(ipAddress) {
+    const now = Date.now();
+    const existing = connectionRateByIp.get(ipAddress) ?? [];
+    const recent = existing.filter((timestamp) => now - timestamp <= 60000);
+    recent.push(now);
+    connectionRateByIp.set(ipAddress, recent);
+    return recent.length <= MAX_CONNECTIONS_PER_MINUTE_PER_IP;
+}
+
 function clampInputMagnitude(x, y) {
     const mag = Math.hypot(x, y);
     if (mag <= MAX_INPUT_MAGNITUDE || mag <= 0.0001) {
@@ -68,6 +162,10 @@ function createPlayerState(playerId, reconnectToken) {
         reconnectToken,
         x: 16,
         y: 16,
+        clientX: 16,
+        clientY: 16,
+        hasClientPose: false,
+        lastClientPoseAt: 0,
         inputX: 0,
         inputY: 0,
         lastInputSeq: 0,
@@ -104,6 +202,21 @@ function attachConnection(socket, state) {
         port: PORT,
         lanAddresses: getLanAddresses()
     });
+}
+
+function closeWithError(socket, code, reason, extra = {}) {
+    sendMessage(socket, {
+        v: PROTOCOL_VERSION,
+        type: 'error',
+        code,
+        reason,
+        ...extra
+    });
+    try {
+        socket.close();
+    } catch {
+        // Ignore close errors on dead sockets.
+    }
 }
 
 function sanitizeEnemyEntries(raw) {
@@ -148,10 +261,12 @@ function sanitizeProjectileEntries(raw) {
         }
         const x = Number(entry.x);
         const y = Number(entry.y);
+        const id = Number(entry.id);
         if (!Number.isFinite(x) || !Number.isFinite(y)) {
             continue;
         }
         result.push({
+            id: Number.isFinite(id) ? Math.floor(id) : 0,
             x: quantizePosition(x),
             y: quantizePosition(y)
         });
@@ -185,11 +300,15 @@ function sanitizePlayerStates(raw) {
         const maxHp = Number(entry.maxHp);
         const respawnTimer = Number(entry.respawnTimer);
         const kills = Number(entry.kills);
+        const x = Number(entry.x);
+        const y = Number(entry.y);
         if (!Number.isFinite(playerId)) {
             continue;
         }
         result.push({
             playerId: Math.floor(playerId),
+            x: Number.isFinite(x) ? quantizePosition(x) : null,
+            y: Number.isFinite(y) ? quantizePosition(y) : null,
             hp: Math.max(0, Number.isFinite(hp) ? hp : 0),
             maxHp: Math.max(1, Number.isFinite(maxHp) ? maxHp : 1),
             isDead: Boolean(entry.isDead),
@@ -229,6 +348,39 @@ function sanitizeCivilianStates(raw) {
     return result;
 }
 
+function sanitizeHouseTimers(raw) {
+    if (!Array.isArray(raw)) {
+        return [];
+    }
+    const result = [];
+    for (const entry of raw) {
+        if (!entry || typeof entry !== 'object') {
+            continue;
+        }
+        const houseId = Number(entry.houseId);
+        const activeCivilianCount = Number(entry.activeCivilianCount);
+        const spawnTimerFrames = Number(entry.spawnTimerFrames);
+        if (!Number.isFinite(houseId)) {
+            continue;
+        }
+        result.push({
+            houseId: Math.floor(houseId),
+            activeCivilianCount: Math.max(0, Math.floor(Number.isFinite(activeCivilianCount) ? activeCivilianCount : 0)),
+            spawnTimerFrames: Math.max(0, Number.isFinite(spawnTimerFrames) ? spawnTimerFrames : 0)
+        });
+    }
+    return result;
+}
+
+function sanitizeSessionState(raw) {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+    return {
+        paused: Boolean(raw.paused)
+    };
+}
+
 function filterNonPlayerStateForViewer(viewer) {
     const radiusSq = NON_PLAYER_RELEVANCE_RADIUS * NON_PLAYER_RELEVANCE_RADIUS;
     const filterByDistance = (entries) => entries.filter((entry) => {
@@ -248,6 +400,9 @@ function filterNonPlayerStateForViewer(viewer) {
         },
         playerStates: nonPlayerState.playerStates,
         civilians: nonPlayerState.civilians,
+        houseTimers: nonPlayerState.houseTimers,
+        sessionTimeSeconds: Number(nonPlayerState.sessionTimeSeconds) || 0,
+        sessionState: nonPlayerState.sessionState,
         sharedResources: nonPlayerState.sharedResources,
         buildingsState: nonPlayerState.buildingsState,
         buildingsRevision: nonPlayerState.buildingsRevision,
@@ -268,13 +423,13 @@ function buildProjectileDelta(previousEntries, nextEntries) {
     for (let i = 0; i < sharedLength; i++) {
         const p = prev[i];
         const n = next[i];
-        if (!p || !n || p.x !== n.x || p.y !== n.y) {
-            set.push({ i, x: n.x, y: n.y });
+        if (!p || !n || p.id !== n.id || p.x !== n.x || p.y !== n.y) {
+            set.push({ i, id: n.id, x: n.x, y: n.y });
         }
     }
     for (let i = sharedLength; i < next.length; i++) {
         const n = next[i];
-        set.push({ i, x: n.x, y: n.y });
+        set.push({ i, id: n.id, x: n.x, y: n.y });
     }
     return {
         set,
@@ -340,6 +495,9 @@ function buildDeltaNonPlayerPayload(socket, fullPayload) {
         totals: fullPayload.totals,
         playerStates: fullPayload.playerStates,
         civilians: fullPayload.civilians,
+        houseTimers: fullPayload.houseTimers,
+        sessionTimeSeconds: fullPayload.sessionTimeSeconds,
+        sessionState: fullPayload.sessionState,
         sharedResources: fullPayload.sharedResources,
         buildingsState: fullPayload.buildingsState,
         buildingsRevision: fullPayload.buildingsRevision
@@ -420,6 +578,8 @@ function simulateTick() {
     tick += 1;
     const dt = TICK_MS / 1000;
     const now = Date.now();
+    serverSessionTimeSeconds += dt;
+    nonPlayerState.sessionTimeSeconds = serverSessionTimeSeconds;
 
     for (const [socket, state] of clients) {
         if (now - state.lastSeenAt > PLAYER_TIMEOUT_MS) {
@@ -431,6 +591,34 @@ function simulateTick() {
             : null;
         if (playerState?.isDead) {
             continue;
+        }
+        if (
+            state.playerId === authorityPlayerId &&
+            playerState &&
+            Number.isFinite(playerState.x) &&
+            Number.isFinite(playerState.y)
+        ) {
+            state.x = playerState.x;
+            state.y = playerState.y;
+            continue;
+        }
+        if (state.playerId !== authorityPlayerId && state.hasClientPose) {
+            const freshPose = (now - state.lastClientPoseAt) <= 250;
+            if (freshPose) {
+                const maxStep = PLAYER_SPEED * dt * 2.5 + 4;
+                const dxPose = state.clientX - state.x;
+                const dyPose = state.clientY - state.y;
+                const distPose = Math.hypot(dxPose, dyPose);
+                if (distPose <= maxStep || distPose <= 0.001) {
+                    state.x = state.clientX;
+                    state.y = state.clientY;
+                } else {
+                    const scale = maxStep / distPose;
+                    state.x += dxPose * scale;
+                    state.y += dyPose * scale;
+                }
+                continue;
+            }
         }
         state.x += state.inputX * PLAYER_SPEED * dt;
         state.y += state.inputY * PLAYER_SPEED * dt;
@@ -454,27 +642,33 @@ function simulateTick() {
 }
 
 function handleHello(socket, message) {
+    const sec = socketSecurityState.get(socket);
+    if (!sec) {
+        return;
+    }
+    if (JOIN_TOKEN && message.joinToken !== JOIN_TOKEN) {
+        closeWithError(socket, 'auth_required', 'Invalid join token');
+        return;
+    }
     const reconnectToken = typeof message.reconnectToken === 'string' ? message.reconnectToken : null;
     if (reconnectToken && reconnectIndex.has(reconnectToken)) {
         const previous = reconnectIndex.get(reconnectToken);
         previous.lastSeenAt = Date.now();
         attachConnection(socket, previous);
+        sec.hasCompletedHello = true;
+        clearTimeout(sec.helloTimerId);
         return;
     }
     if (clients.size >= MAX_PLAYERS) {
-        sendMessage(socket, {
-            v: PROTOCOL_VERSION,
-            type: 'error',
-            code: 'session_full',
-            maxPlayers: MAX_PLAYERS
-        });
-        socket.close();
+        closeWithError(socket, 'session_full', 'Session is full', { maxPlayers: MAX_PLAYERS });
         return;
     }
 
     const token = randomUUID();
     const state = createPlayerState(nextPlayerId++, token);
     attachConnection(socket, state);
+    sec.hasCompletedHello = true;
+    clearTimeout(sec.helloTimerId);
 }
 
 function handleInput(socket, message) {
@@ -491,6 +685,14 @@ function handleInput(socket, message) {
     const clamped = clampInputMagnitude(rawX, rawY);
     state.inputX = clamped.x;
     state.inputY = clamped.y;
+    const clientX = Number(message.clientX);
+    const clientY = Number(message.clientY);
+    if (Number.isFinite(clientX) && Number.isFinite(clientY)) {
+        state.clientX = clientX;
+        state.clientY = clientY;
+        state.hasClientPose = true;
+        state.lastClientPoseAt = Date.now();
+    }
     state.lastInputSeq = Math.max(state.lastInputSeq, Math.floor(seq));
     state.lastSeenAt = Date.now();
 }
@@ -524,6 +726,10 @@ function handleEntitySnapshot(socket, message) {
         },
         playerStates: sanitizePlayerStates(payload.playerStates),
         civilians: sanitizeCivilianStates(payload.civilians),
+        houseTimers: sanitizeHouseTimers(payload.houseTimers),
+        // Session runtime is authoritative on server tick, never on host payload.
+        sessionTimeSeconds: serverSessionTimeSeconds,
+        sessionState: sanitizeSessionState(payload.sessionState) ?? nonPlayerState.sessionState,
         sharedResources: sanitizeSharedResources(payload.sharedResources) ?? nonPlayerState.sharedResources,
         buildingsState: payload.buildingsState ?? nonPlayerState.buildingsState,
         buildingsRevision: Number(payload.buildingsRevision) || nonPlayerState.buildingsRevision
@@ -556,13 +762,59 @@ function handlePlayerAction(socket, message) {
     });
 }
 
-wss.on('connection', (socket) => {
+wss.on('connection', (socket, request) => {
+    const remoteAddress = normalizeRemoteAddress(request?.socket?.remoteAddress || socket._socket?.remoteAddress || '');
+    const originHeader = request?.headers?.origin || '';
+    if (PRIVATE_NETWORK_ONLY && !isPrivateIp(remoteAddress)) {
+        closeWithError(socket, 'ip_rejected', 'Only private/LAN addresses are allowed');
+        return;
+    }
+    if (!checkConnectionRateLimit(remoteAddress || 'unknown')) {
+        closeWithError(socket, 'rate_limited', 'Too many connections from this address');
+        return;
+    }
+    if (!isOriginAllowed(originHeader)) {
+        closeWithError(socket, 'origin_rejected', 'Origin is not allowed');
+        return;
+    }
+    const helloTimerId = setTimeout(() => {
+        const sec = socketSecurityState.get(socket);
+        if (sec && !sec.hasCompletedHello) {
+            closeWithError(socket, 'hello_timeout', 'Handshake timed out');
+        }
+    }, HELLO_TIMEOUT_MS);
+    socketSecurityState.set(socket, {
+        hasCompletedHello: false,
+        helloTimerId,
+        rateWindowStartedAt: Date.now(),
+        messageCountInWindow: 0,
+        parseErrors: 0
+    });
+
     socket.on('message', (buffer) => {
+        const sec = socketSecurityState.get(socket);
+        if (!sec) {
+            return;
+        }
+        const now = Date.now();
+        if (now - sec.rateWindowStartedAt >= 1000) {
+            sec.rateWindowStartedAt = now;
+            sec.messageCountInWindow = 0;
+        }
+        sec.messageCountInWindow += 1;
+        if (sec.messageCountInWindow > MAX_MESSAGES_PER_SECOND) {
+            closeWithError(socket, 'msg_rate_limited', 'Too many messages per second');
+            return;
+        }
         serverPerf.inboundBytesWindow += Buffer.byteLength(buffer);
         let message = null;
         try {
             message = JSON.parse(buffer.toString());
         } catch {
+            sec.parseErrors += 1;
+            if (sec.parseErrors >= 3) {
+                closeWithError(socket, 'bad_json', 'Invalid message format');
+            }
             return;
         }
         if (!message || typeof message.type !== 'string') {
@@ -570,6 +822,9 @@ wss.on('connection', (socket) => {
         }
         const version = Number(message.v ?? PROTOCOL_VERSION);
         if (version !== PROTOCOL_VERSION) {
+            closeWithError(socket, 'protocol_mismatch', 'Protocol version mismatch', {
+                serverVersion: PROTOCOL_VERSION
+            });
             return;
         }
         if (message.type === 'hello') {
@@ -594,6 +849,10 @@ wss.on('connection', (socket) => {
     });
 
     socket.on('close', () => {
+        const sec = socketSecurityState.get(socket);
+        if (sec) {
+            clearTimeout(sec.helloTimerId);
+        }
         const disconnected = clients.get(socket);
         clients.delete(socket);
         if (disconnected && disconnected.playerId === authorityPlayerId) {

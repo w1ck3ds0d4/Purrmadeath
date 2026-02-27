@@ -360,6 +360,18 @@ export function createCivilianSystem({
         }
     }
 
+    function getHouseTimerReplication() {
+        const entries = [];
+        for (const [houseId, state] of houseStates) {
+            entries.push({
+                houseId: Number(houseId),
+                activeCivilianCount: state.activeCivilianIds.size,
+                spawnTimerFrames: state.spawnTimer
+            });
+        }
+        return entries;
+    }
+
     function spawnCivilianFromHouse(house) {
         const center = findHouseSpawnPoint(house);
         const sprite = createCivilianSprite();
@@ -1224,7 +1236,52 @@ export function createCivilianSystem({
         civiliansKilled = 0;
     }
 
-    function syncReplicatedState(entries) {
+    function syncReplicatedHouseTimers(entries) {
+        const source = Array.isArray(entries) ? entries : [];
+        const houseById = new Map();
+        for (const house of buildingSystem.getHouses()) {
+            houseById.set(Number(house.id), house);
+        }
+        const seen = new Set();
+        for (const entry of source) {
+            const houseId = Number(entry?.houseId);
+            if (!Number.isFinite(houseId)) {
+                continue;
+            }
+            const house = houseById.get(houseId);
+            if (!house) {
+                continue;
+            }
+            seen.add(houseId);
+            let label = houseTimerLabels.get(houseId);
+            if (!label) {
+                label = new PIXI.Text({
+                    text: '',
+                    style: {
+                        fill: '#f7f7f7',
+                        fontFamily: 'monospace',
+                        fontSize: 11
+                    }
+                });
+                label.anchor.set(0.5);
+                civilianLayer.addChild(label);
+                houseTimerLabels.set(houseId, label);
+            }
+            const center = getBuildingCenter(house);
+            label.position.set(center.x, center.y - (house.footprintH * TILE_SIZE * 0.5) - 8);
+            const activeCount = Math.max(0, Math.floor(Number(entry?.activeCivilianCount) || 0));
+            const seconds = Math.max(0, Math.ceil((Number(entry?.spawnTimerFrames) || 0) / 60));
+            label.text = `Civ ${activeCount}/${HOUSE_CIVILIAN_CAP_BONUS} | ${seconds}s`;
+            label.visible = true;
+        }
+        for (const [houseId, label] of houseTimerLabels) {
+            if (!seen.has(Number(houseId))) {
+                label.visible = false;
+            }
+        }
+    }
+
+    function syncReplicatedState(entries, houseTimerEntries = []) {
         const source = Array.isArray(entries) ? entries : [];
         civilianById.clear();
         while (civilians.length < source.length) {
@@ -1281,6 +1338,7 @@ export function createCivilianSystem({
         for (const [, label] of houseTimerLabels) {
             label.visible = false;
         }
+        syncReplicatedHouseTimers(houseTimerEntries);
     }
 
     return {
@@ -1289,6 +1347,7 @@ export function createCivilianSystem({
         applyDamage,
         resolvePlayerCollision,
         getStats,
+        getHouseTimerReplication,
         syncReplicatedState,
         reset
     };
