@@ -13,7 +13,7 @@ import {
   EnemyVariantComponent,
   DodgeRollComponent,
 } from '@shared/components';
-import { MELEE_RANGE, MELEE_ARC, MELEE_DAMAGE, MELEE_KNOCKBACK, TICK_MS, PLAYER_RADIUS, ENEMY_RADIUS, buildingHalfExtent, CRIT_CHANCE, CRIT_MULTIPLIER, GATHERING_DAMAGE } from '@shared/constants';
+import { MELEE_RANGE, MELEE_ARC, MELEE_DAMAGE, MELEE_KNOCKBACK, TICK_MS, PLAYER_RADIUS, ENEMY_RADIUS, CIVILIAN_RADIUS, buildingHalfExtent, CRIT_CHANCE, CRIT_MULTIPLIER, GATHERING_DAMAGE } from '@shared/constants';
 
 export interface HitResult {
   sourceId: number;
@@ -151,6 +151,8 @@ export class CombatSystem {
 
       // Player attacks don't damage own buildings (no friendly fire on structures)
       if (srcFaction?.type === 'player' && tgtFaction?.type === 'building') continue;
+      // Players and guards don't damage civilians (no friendly fire on NPCs)
+      if ((srcFaction?.type === 'player' || srcFaction?.type === 'guard') && tgtFaction?.type === 'civilian') continue;
 
       const tgtPos = world.getComponent<PositionComponent>(targetId, C.Position)!;
       const dx = tgtPos.x - attackX;
@@ -161,6 +163,7 @@ export class CombatSystem {
       const bldgComp = world.getComponent<BuildingComponent>(targetId, C.Building);
       if (bldgComp) tgtRadius = buildingHalfExtent(bldgComp.buildingType);
       else if (world.getComponent(targetId, C.PlayerIndex)) tgtRadius = PLAYER_RADIUS;
+      else if (tgtFaction?.type === 'civilian') tgtRadius = CIVILIAN_RADIUS;
       else {
         const enemyStats = world.getComponent<EnemyStatsComponent>(targetId, C.EnemyStats);
         tgtRadius = enemyStats?.radius ?? ENEMY_RADIUS;

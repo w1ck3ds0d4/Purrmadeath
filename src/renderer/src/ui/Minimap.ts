@@ -29,6 +29,8 @@ const DOT_COLORS: Record<string, number> = {
   portal: 0xaa44ff,
   building: 0xe8c96a,
   resource: 0x66aa66, // fallback
+  civilian: 0xf5c06a,
+  guard: 0x4488cc,
 };
 
 const RESOURCE_DOT_COLORS: Record<string, number> = {
@@ -44,6 +46,8 @@ const DOT_SIZES: Record<string, number> = {
   portal: 3,
   building: 2.5,
   resource: 1.5,
+  civilian: 2,
+  guard: 2,
 };
 
 /** Function that returns a tile ID for a given tile coordinate. */

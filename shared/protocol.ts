@@ -196,6 +196,20 @@ export enum MessageType {
   POTION_USE = 'POTION_USE',
   /** Server → Client: full potion state sync (after use, equip, restock, save load). */
   POTION_STATE = 'POTION_STATE',
+
+  // ── Phase 8: Civilians ──────────────────────────────────────────────────
+  /** Server → all: a civilian said something (speech bubble). */
+  CIVILIAN_SPEECH = 'CIVILIAN_SPEECH',
+  /** Server → all: a civilian was killed. */
+  CIVILIAN_DIED = 'CIVILIAN_DIED',
+  /** Server → all: a new civilian was spawned. */
+  CIVILIAN_SPAWNED = 'CIVILIAN_SPAWNED',
+  /** Client → Server: request civilian panel state. */
+  CIVILIAN_PANEL_REQUEST = 'CIVILIAN_PANEL_REQUEST',
+  /** Server → Client: full civilian panel state. */
+  CIVILIAN_PANEL_STATE = 'CIVILIAN_PANEL_STATE',
+  /** Client → Server: assign a civilian to a building (or unassign). */
+  CIVILIAN_ASSIGN = 'CIVILIAN_ASSIGN',
 }
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
@@ -276,6 +290,8 @@ export interface SessionAckMessage extends BaseMessage {
   players: LobbySlot[];
   /** Advanced classes this player has unlocked via lifetime milestones. */
   unlockedClasses?: string[];
+  /** Permanent buff achievements this player has completed. */
+  completedBuffs?: { displayName: string; reward: string; medalColor: string }[];
 }
 
 export interface LobbySlot {
@@ -331,7 +347,7 @@ export interface EntitySnapshot {
   /** Slot index if this is a player entity. Absent for enemies. */
   slot?: number;
   /** Faction - used by the client renderer to pick the visual. */
-  faction?: 'player' | 'enemy' | 'portal' | 'resource' | 'item' | 'building' | 'guard';
+  faction?: 'player' | 'enemy' | 'portal' | 'resource' | 'item' | 'building' | 'guard' | 'civilian';
   x: number;
   y: number;
   vx: number;
@@ -368,6 +384,14 @@ export interface EntitySnapshot {
   playerClass?: string;
   /** True when entity is mid-dodge-roll (invincible + ghost visual). */
   dodging?: boolean;
+  /** Civilian NPC name. Only present for civilian faction. */
+  civilianName?: string;
+  /** Civilian AI state (idle/working/fleeing/wandering). Only present for civilian faction. */
+  civilianState?: string;
+  /** Civilian hunger level 0–100. Only present for civilian faction. */
+  civilianHunger?: number;
+  /** True if this production building has an assigned worker. Only present for building faction. */
+  workerAssigned?: boolean;
 }
 
 /** Full world snapshot sent on game start or player rejoin. */
@@ -914,6 +938,70 @@ export interface PotionStateMessage extends BaseMessage {
   cooldownMax: number;
 }
 
+// ── Phase 8: Civilian Messages ──────────────────────────────────────────────
+
+/** Server → all: a civilian said something. */
+export interface CivilianSpeechMessage extends BaseMessage {
+  type: typeof MessageType.CIVILIAN_SPEECH;
+  entityId: number;
+  text: string;
+}
+
+/** Server → all: a civilian was killed. */
+export interface CivilianDiedMessage extends BaseMessage {
+  type: typeof MessageType.CIVILIAN_DIED;
+  entityId: number;
+  name: string;
+}
+
+/** Server → all: a new civilian was spawned. */
+export interface CivilianSpawnedMessage extends BaseMessage {
+  type: typeof MessageType.CIVILIAN_SPAWNED;
+  entityId: number;
+  name: string;
+}
+
+/** Client → Server: request civilian panel data. */
+export interface CivilianPanelRequestMessage extends BaseMessage {
+  type: typeof MessageType.CIVILIAN_PANEL_REQUEST;
+}
+
+/** One civilian's info for the panel. */
+export interface CivilianPanelEntry {
+  entityId: number;
+  name: string;
+  state: string;
+  hunger: number;
+  hp: number;
+  maxHp: number;
+  assignedBuildingId: number | null;
+  assignedBuildingType: string | null;
+  downed: boolean;
+}
+
+/** One production building available for assignment. */
+export interface WorkableBuildingEntry {
+  entityId: number;
+  buildingType: string;
+  workerName: string | null;
+}
+
+/** Server → Client: full civilian panel state. */
+export interface CivilianPanelStateMessage extends BaseMessage {
+  type: typeof MessageType.CIVILIAN_PANEL_STATE;
+  civilians: CivilianPanelEntry[];
+  buildings: WorkableBuildingEntry[];
+  population: number;
+  housingCapacity: number;
+}
+
+/** Client → Server: assign a civilian to a building (or null to unassign). */
+export interface CivilianAssignMessage extends BaseMessage {
+  type: typeof MessageType.CIVILIAN_ASSIGN;
+  civilianId: number;
+  buildingId: number | null;
+}
+
 // ─── Union ────────────────────────────────────────────────────────────────────
 
 export type AnyMessage =
@@ -988,4 +1076,10 @@ export type AnyMessage =
   | PotionRestockMessage
   | PotionUseMessage
   | PotionStateMessage
+  | CivilianSpeechMessage
+  | CivilianDiedMessage
+  | CivilianSpawnedMessage
+  | CivilianPanelRequestMessage
+  | CivilianPanelStateMessage
+  | CivilianAssignMessage
   | BaseMessage;

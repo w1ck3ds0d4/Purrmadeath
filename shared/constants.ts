@@ -309,6 +309,7 @@ export const BUILDING_SIZES: Record<string, number> = {
   wall: 1, campfire: 3, warehouse: 3, lumbermill: 2, quarry: 2, mine: 2, farm: 2,
   arrow_turret: 1, cannon_turret: 2, spike_trap: 1, bridge: 1,
   light_tower: 1, healing_shrine: 1, barracks: 2, potion_shop: 2,
+  cat_house: 2, dormitory: 2,
 };
 
 /** Half-extent in world pixels for a building of the given type. */
@@ -368,6 +369,10 @@ export const HEALING_SHRINE_MAX_HEALTH = 100;
 export const BARRACKS_MAX_HEALTH = 200;
 /** Potion shop HP. */
 export const POTION_SHOP_MAX_HEALTH = 150;
+/** Cat house HP. */
+export const CAT_HOUSE_MAX_HEALTH = 100;
+/** Dormitory HP. */
+export const DORMITORY_MAX_HEALTH = 150;
 
 /** Radius (px) for auto-depositing player resources into the warehouse. */
 export const WAREHOUSE_DEPOSIT_RADIUS = 80;
@@ -392,6 +397,8 @@ export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'i
   healing_shrine: { stone: 10, iron: 5 },
   barracks:       { wood: 15, iron: 10 },
   potion_shop:    { wood: 15, stone: 10, food: 5 },
+  cat_house:      { wood: 10, stone: 5 },
+  dormitory:      { wood: 20, stone: 15, iron: 5 },
 };
 
 /** Ordered list of building types the player can cycle through in build mode. */
@@ -399,6 +406,7 @@ export const PLACEABLE_BUILDINGS: string[] = [
   'wall', 'warehouse', 'lumbermill', 'quarry', 'mine', 'farm',
   'arrow_turret', 'cannon_turret', 'spike_trap', 'bridge',
   'light_tower', 'healing_shrine', 'potion_shop',
+  'cat_house', 'dormitory',
 ];
 
 // ─── Production Buildings ──────────────────────────────────────────────────
@@ -462,6 +470,7 @@ export const BUILDING_MAX_LEVEL: Record<BuildingType, number> = {
   wall: 3, warehouse: 3, lumbermill: 3, quarry: 3, mine: 3, farm: 3,
   arrow_turret: 3, cannon_turret: 3, spike_trap: 3,
   light_tower: 3, healing_shrine: 3, barracks: 3, potion_shop: 3,
+  cat_house: 3, dormitory: 3,
 };
 
 /** Cost multiplier for each upgrade level (index 0 = level 2, index 1 = level 3, etc.). */
@@ -555,3 +564,56 @@ export function getRepairCost(
   }
   return hasAnyCost ? cost : null;
 }
+
+// ─── Civilians (Phase 8) ──────────────────────────────────────────────────
+
+/** Collision/render radius of a civilian in world pixels. */
+export const CIVILIAN_RADIUS = 8;
+/** Base walk speed for civilians (px/s). */
+export const CIVILIAN_SPEED = 50;
+/** Civilian max HP. */
+export const CIVILIAN_MAX_HP = 30;
+/** Speed when fleeing from enemies (px/s). */
+export const CIVILIAN_FLEE_SPEED = 100;
+/** Distance (px) at which civilians start fleeing from enemies. */
+export const CIVILIAN_FLEE_RANGE = 200;
+/** Range (px) a civilian must be within to count as "at work". */
+export const CIVILIAN_WORK_RANGE = 50;
+
+/** Seconds between hunger ticks. */
+export const CIVILIAN_HUNGER_INTERVAL = 60;
+/** Hunger increase per tick when no food is available. */
+export const CIVILIAN_HUNGER_PER_TICK = 10;
+/** Food consumed from warehouse per hunger tick. */
+export const CIVILIAN_FOOD_CONSUME = 1;
+/** Damage per tick when hunger reaches 100. */
+export const CIVILIAN_STARVATION_DAMAGE = 5;
+
+/** Number of civilians that spawn at game start. */
+export const CIVILIAN_INITIAL_COUNT = 2;
+/** A new civilian spawns every N cleared waves (if housing allows). */
+export const CIVILIAN_SPAWN_WAVE_INTERVAL = 3;
+/** Hard cap on total civilian population. */
+export const CIVILIAN_MAX_POPULATION = 20;
+/** Base housing capacity provided by the campfire (no building needed). */
+export const CAMPFIRE_HOUSING_CAPACITY = 3;
+
+/** Seconds a speech bubble stays visible. */
+export const CIVILIAN_SPEECH_DURATION = 4;
+/** Seconds a downed civilian bleeds out before dying permanently. */
+export const CIVILIAN_BLEED_TIME = 30;
+
+/** Housing capacity per upgrade level for cat_house. */
+export const CAT_HOUSE_CAPACITY = [2, 3, 4];
+/** Housing capacity per upgrade level for dormitory. */
+export const DORMITORY_CAPACITY = [5, 7, 10];
+
+/** Pool of cat names for civilians. */
+export const CAT_NAMES: string[] = [
+  'Whiskers', 'Mittens', 'Mochi', 'Biscuit', 'Pudding',
+  'Luna', 'Salem', 'Ginger', 'Cinnamon', 'Pepper',
+  'Noodle', 'Waffle', 'Tofu', 'Muffin', 'Pickle',
+  'Smokey', 'Shadow', 'Patches', 'Marble', 'Caramel',
+  'Clover', 'Peanut', 'Sprout', 'Toffee', 'Churro',
+  'Sesame', 'Basil', 'Olive', 'Truffle', 'Fig',
+];

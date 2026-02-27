@@ -73,6 +73,9 @@ const BUILDING_COLORS: Record<string, { body: number; border: number }> = {
   light_tower:    { body: 0xeedd44, border: 0xccbb22 },
   healing_shrine: { body: 0x44cc66, border: 0x228844 },
   barracks:       { body: 0x886644, border: 0x664422 },
+  potion_shop:    { body: 0x9944aa, border: 0x772288 },
+  cat_house:      { body: 0xc49a4a, border: 0xa07a30 },
+  dormitory:      { body: 0xb08040, border: 0x906020 },
 };
 // Production resource tag colors
 const PRODUCTION_TAG_COLORS: Record<string, number> = {
@@ -126,6 +129,8 @@ export class PlayerRendererSystem {
   private healthBarGfx: Graphics;
   /** Production building resource tags (Text objects managed per-entity). */
   private productionTags = new Map<EntityId, { bg: Graphics; text: Text }>();
+  private civilianTags = new Map<EntityId, { bg: Graphics; text: Text }>();
+  private speechBubbles = new Map<EntityId, { bg: Graphics; text: Text }>();
   private tagContainer: Container;
   /** Per-entity dirty flags: true when geometry needs rebuild, false when just position update suffices. */
   private dirty = new Map<EntityId, boolean>();
@@ -137,6 +142,7 @@ export class PlayerRendererSystem {
   private _itemIds     = new Set<EntityId>();
   private _buildingIds = new Set<EntityId>();
   private _guardIds    = new Set<EntityId>();
+  private _civilianIds = new Set<EntityId>();
   private _living      = new Set<EntityId>();
   /** Per-entity: was entity flashing last frame? */
   private wasFlashing = new Map<EntityId, boolean>();
@@ -225,6 +231,7 @@ export class PlayerRendererSystem {
     const itemIds = this._itemIds;        itemIds.clear();
     const buildingIds = this._buildingIds; buildingIds.clear();
     const guardIds = this._guardIds;      guardIds.clear();
+    const civilianIds = this._civilianIds; civilianIds.clear();
     const living = this._living;          living.clear();
 
     for (const id of world.query(C.Position, C.PlayerIndex)) {
@@ -239,6 +246,7 @@ export class PlayerRendererSystem {
       else if (f.type === 'item') { itemIds.add(id); living.add(id); }
       else if (f.type === 'building') { buildingIds.add(id); living.add(id); }
       else if (f.type === 'guard') { guardIds.add(id); living.add(id); }
+      else if (f.type === 'civilian') { civilianIds.add(id); living.add(id); }
     }
 
     // Remove sprites for entities that no longer exist; clean up all timers
@@ -305,7 +313,7 @@ export class PlayerRendererSystem {
       const isFlashing = flashT > 0;
       const prevFlashing = this.wasFlashing.get(id) ?? false;
       const hasArc = this.attackArcs.has(id);
-      const isDowned = this.downedEntities.has(id);
+      const isDowned = this.downedEntities.has(id) || world.hasComponent(id, C.Downed);
       const prevDowned = this.wasDowned.get(id) ?? false;
       const revProg = this.reviveProgress.get(id) ?? -1;
       const prevRevProg = this.lastReviveProg.get(id) ?? -1;
@@ -575,6 +583,18 @@ export class PlayerRendererSystem {
           gfx.poly([0, -sh, sw, -sh + 3, sw, sh - 3, 0, sh, -sw, sh - 3, -sw, -sh + 3]);
           gfx.stroke({ color: 0xddccaa, alpha: 0.8, width: 2 });
         }
+        // Cat house: house silhouette
+        if (bType === 'cat_house') {
+          gfx.poly([0, -8, 7, -2, 7, 6, -7, 6, -7, -2]);
+          gfx.stroke({ color: 0xeeddbb, alpha: 0.8, width: 1.5 });
+        }
+        // Dormitory: larger house outline
+        if (bType === 'dormitory') {
+          gfx.poly([0, -10, 9, -3, 9, 8, -9, 8, -9, -3]);
+          gfx.stroke({ color: 0xeeddbb, alpha: 0.8, width: 1.5 });
+          gfx.moveTo(-3, 8); gfx.lineTo(-3, 2); gfx.lineTo(3, 2); gfx.lineTo(3, 8);
+          gfx.stroke({ color: 0xeeddbb, alpha: 0.6, width: 1 });
+        }
 
         // Selection highlight: pulsing yellow border + turret range circle
         if (this.selectedBuildingId === id) {
@@ -634,6 +654,7 @@ export class PlayerRendererSystem {
         }
 
         const isGuard = guardIds.has(id);
+        const isCivilian = civilianIds.has(id);
         const ev = isEnemy ? world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant) : undefined;
         const ghostState = isEnemy ? world.getComponent<GhostStateComponent>(id, C.GhostState) : undefined;
         const enemyStats = isEnemy ? world.getComponent<EnemyStatsComponent>(id, C.EnemyStats) : undefined;
@@ -641,7 +662,9 @@ export class PlayerRendererSystem {
 
         // Variant-specific colors
         let baseColor: number;
-        if (isGuard) {
+        if (isCivilian) {
+          baseColor = 0xf5c06a; // warm orange for cat civilians
+        } else if (isGuard) {
           baseColor = 0x4488cc; // friendly blue for guards
         } else if (!isEnemy) {
           baseColor = PLAYER_COLORS[pIdx?.index ?? 0] ?? PLAYER_COLORS[0];
@@ -663,7 +686,7 @@ export class PlayerRendererSystem {
         }
         const color = flashT > 0 ? lerpColor(baseColor, 0xffffff, flashT * 0.6) : baseColor;
         // Use per-entity radius (giants are 2x), default to PLAYER_RADIUS
-        const r = (enemyStats?.radius && enemyStats.radius !== 10) ? enemyStats.radius : PLAYER_RADIUS;
+        const r = isCivilian ? 8 : (enemyStats?.radius && enemyStats.radius !== 10) ? enemyStats.radius : PLAYER_RADIUS;
         // Ghost hidden: render barely visible shimmer
         const ghostAlpha = (ghostState?.hidden) ? 0.06 : 1;
 
@@ -729,6 +752,28 @@ export class PlayerRendererSystem {
 
           gfx.circle(0, 0, r);
           gfx.stroke({ color: 0x000000, alpha: 0.45 * ghostAlpha, width: 2 });
+        }
+
+        // ── Civilian state indicators ─────────────────────────────────────────
+
+        if (isCivilian && !isDowned) {
+          const civComp = world.getComponent<import('@shared/components').CivilianComponent>(id, C.Civilian);
+          if (civComp?.state === 'working') {
+            // Animated work dots
+            const t = performance.now() / 400;
+            for (let di = 0; di < 3; di++) {
+              const dotBob = Math.sin(t + di * 1.2) * 2;
+              gfx.circle(-4 + di * 4, -r - 6 + dotBob, 1.5);
+              gfx.fill({ color: 0xffdd44, alpha: 0.8 });
+            }
+          } else if (civComp?.state === 'delivering') {
+            // Small resource square above head to show carrying
+            const bob = Math.sin(performance.now() / 500) * 1.5;
+            gfx.rect(-3, -r - 9 + bob, 6, 6);
+            gfx.fill({ color: 0x88cc44, alpha: 0.9 });
+            gfx.rect(-3, -r - 9 + bob, 6, 6);
+            gfx.stroke({ color: 0xffffff, alpha: 0.4, width: 1 });
+          }
         }
 
         // ── Facing triangle (local player only, skip when downed) ────────────────
@@ -807,6 +852,8 @@ export class PlayerRendererSystem {
         }
       } else if (guardIds.has(id)) {
         barW = BAR_W; barH = BAR_H; barY = BAR_Y; alwaysShow = false;
+      } else if (civilianIds.has(id)) {
+        barW = 20; barH = 3; barY = -14; alwaysShow = false;
       } else {
         continue; // players don't show health bars (HUD instead)
       }
@@ -901,6 +948,120 @@ export class PlayerRendererSystem {
         this.productionTags.delete(id);
       }
     }
+
+    // ── Civilian name tags ──────────────────────────────────────────────────
+    const activeCivilianIds = new Set<EntityId>();
+    for (const id of civilianIds) {
+      activeCivilianIds.add(id);
+      const pos = world.getComponent<PositionComponent>(id, C.Position)!;
+      const civ = world.getComponent<import('@shared/components').CivilianComponent>(id, C.Civilian);
+      if (!civ) continue;
+
+      // Hide name tag when downed
+      const civDowned = this.downedEntities.has(id) || world.hasComponent(id, C.Downed);
+      let tag = this.civilianTags.get(id);
+      if (!tag) {
+        const bg = new Graphics();
+        const text = new Text({
+          text: '',
+          style: { fontSize: 9, fill: 0xffffff, fontFamily: 'monospace' },
+        });
+        text.anchor.set(0.5, 0.5);
+        this.tagContainer.addChild(bg);
+        this.tagContainer.addChild(text);
+        tag = { bg, text };
+        this.civilianTags.set(id, tag);
+      }
+
+      if (civDowned) {
+        tag.bg.visible = false;
+        tag.text.visible = false;
+        continue;
+      }
+      tag.bg.visible = true;
+      tag.text.visible = true;
+
+      tag.text.text = civ.name;
+      const tagY = pos.y - 24;
+      const tagW = Math.max(20, tag.text.width + 10);
+      const tagH = 12;
+
+      tag.bg.clear();
+      tag.bg.roundRect(pos.x - tagW / 2, tagY - tagH / 2, tagW, tagH, 3);
+      // State-based background tint
+      const bgColor = civ.state === 'fleeing' ? 0x441111 : (civ.state === 'working' || civ.state === 'delivering') ? 0x113311 : 0x111111;
+      tag.bg.fill({ color: bgColor, alpha: 0.7 });
+
+      tag.text.position.set(pos.x, tagY);
+    }
+    // Clean up civilian tags for removed entities
+    for (const [id, tag] of this.civilianTags) {
+      if (!activeCivilianIds.has(id)) {
+        this.tagContainer.removeChild(tag.bg);
+        this.tagContainer.removeChild(tag.text);
+        tag.bg.destroy();
+        tag.text.destroy();
+        this.civilianTags.delete(id);
+      }
+    }
+
+    // ── Speech bubbles ──────────────────────────────────────────────────────
+    for (const id of civilianIds) {
+      const pos = world.getComponent<PositionComponent>(id, C.Position)!;
+      const civ = world.getComponent<import('@shared/components').CivilianComponent>(id, C.Civilian);
+      if (!civ) continue;
+
+      // Tick down speech timer
+      if (civ.speechTimer > 0) {
+        civ.speechTimer -= dt;
+        if (civ.speechTimer <= 0) {
+          civ.speechBubble = null;
+          civ.speechTimer = 0;
+        }
+      }
+
+      if (civ.speechBubble) {
+        let bubble = this.speechBubbles.get(id);
+        if (!bubble) {
+          const bg = new Graphics();
+          const text = new Text({
+            text: '',
+            style: { fontSize: 9, fill: 0xffffff, fontFamily: 'monospace' },
+          });
+          text.anchor.set(0.5, 0.5);
+          this.tagContainer.addChild(bg);
+          this.tagContainer.addChild(text);
+          bubble = { bg, text };
+          this.speechBubbles.set(id, bubble);
+        }
+        bubble.text.text = civ.speechBubble;
+        const bubbleY = pos.y - 36;
+        const bW = Math.max(30, bubble.text.width + 12);
+        const bH = 14;
+        bubble.bg.clear();
+        bubble.bg.roundRect(pos.x - bW / 2, bubbleY - bH / 2, bW, bH, 4);
+        bubble.bg.fill({ color: 0x222222, alpha: 0.85 });
+        bubble.text.position.set(pos.x, bubbleY);
+        bubble.bg.visible = true;
+        bubble.text.visible = true;
+      } else {
+        const bubble = this.speechBubbles.get(id);
+        if (bubble) {
+          bubble.bg.visible = false;
+          bubble.text.visible = false;
+        }
+      }
+    }
+    // Clean up speech bubbles for removed entities
+    for (const [id, bubble] of this.speechBubbles) {
+      if (!activeCivilianIds.has(id)) {
+        this.tagContainer.removeChild(bubble.bg);
+        this.tagContainer.removeChild(bubble.text);
+        bubble.bg.destroy();
+        bubble.text.destroy();
+        this.speechBubbles.delete(id);
+      }
+    }
   }
 
   /** Destroy all entity graphics (call on quit to menu or world reset). */
@@ -928,5 +1089,19 @@ export class PlayerRendererSystem {
       tag.text.destroy();
     }
     this.productionTags.clear();
+    for (const [, tag] of this.civilianTags) {
+      this.tagContainer.removeChild(tag.bg);
+      this.tagContainer.removeChild(tag.text);
+      tag.bg.destroy();
+      tag.text.destroy();
+    }
+    this.civilianTags.clear();
+    for (const [, bubble] of this.speechBubbles) {
+      this.tagContainer.removeChild(bubble.bg);
+      this.tagContainer.removeChild(bubble.text);
+      bubble.bg.destroy();
+      bubble.text.destroy();
+    }
+    this.speechBubbles.clear();
   }
 }

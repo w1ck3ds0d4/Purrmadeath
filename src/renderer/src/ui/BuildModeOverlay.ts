@@ -192,6 +192,12 @@ export class BuildModeOverlay {
       case 'potion_shop':
         stats = 'Brew and equip potions';
         break;
+      case 'cat_house':
+        stats = 'Houses 2 civilians';
+        break;
+      case 'dormitory':
+        stats = 'Houses 5 civilians';
+        break;
       default: {
         const prod = PROD_RESOURCE[buildingType];
         if (prod) stats = `Produces: ${prod}`;

@@ -15,6 +15,7 @@ import type { BarracksSpawnerComponent } from '@shared/components';
 import {
   PLAYER_MAX_HEALTH,
   DOWNED_BLEED_TIME,
+  CIVILIAN_BLEED_TIME,
   REVIVE_DURATION,
   REVIVE_HP_PERCENT,
   RESPAWN_DELAY,
@@ -68,6 +69,10 @@ export interface RespawnManagerDeps {
   trackKill: (attackerEntityId: number, enemyVariant: string) => void;
   onTitanKilled: (deadId: number, send: SendFn) => void;
   fireRunEnd: () => void;
+  /** Called when a downed civilian's bleed timer expires. */
+  onCivilianDeath?: (entityId: number, send: SendFn) => void;
+  /** Set of entity IDs that are civilians (for downed-state routing). */
+  civilianEntityIds?: Set<number>;
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
@@ -113,7 +118,8 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
 
   function revivePlayer(entityId: number, send: SendFn): void {
     const hp = world.getComponent<HealthComponent>(entityId, C.Health);
-    const reviveBonus = deps.getReviveHpBonus(entityId);
+    const isCivilian = deps.civilianEntityIds?.has(entityId) ?? false;
+    const reviveBonus = isCivilian ? 0 : deps.getReviveHpBonus(entityId);
     if (hp) hp.current = Math.round(hp.max * Math.min(1, REVIVE_HP_PERCENT + reviveBonus));
     world.removeComponent(entityId, C.Downed);
 
@@ -125,7 +131,11 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
       hp: hp?.current ?? 0,
     };
     for (const p of players.values()) send(p.client, msg);
-    console.log(`[Death] Player ${sp?.slot ?? '?'} revived at ${hp?.current ?? 0} HP`);
+    if (isCivilian) {
+      console.log(`[Death] Civilian ${entityId} revived at ${hp?.current ?? 0} HP`);
+    } else {
+      console.log(`[Death] Player ${sp?.slot ?? '?'} revived at ${hp?.current ?? 0} HP`);
+    }
   }
 
   function respawnPlayer(clientId: string, send: SendFn): void {
@@ -353,6 +363,31 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
         }
       }
 
+      // Civilian → enter downed state (can be revived)
+      if (faction?.type === 'civilian' && deps.civilianEntityIds?.has(deadId)) {
+        if (!world.hasComponent(deadId, C.Downed)) {
+          world.addComponent(deadId, C.Downed, {
+            bleedTimer: CIVILIAN_BLEED_TIME,
+            reviveProgress: 0,
+            reviverId: -1,
+          } as DownedComponent);
+          // Stop civilian movement
+          const inp = world.getComponent<PlayerInputComponent>(deadId, C.PlayerInput);
+          if (inp) { inp.dx = 0; inp.dy = 0; inp.sprint = false; }
+          // Broadcast downed notification (reuse PLAYER_DOWNED — works for any entity)
+          if (send) {
+            const msg: PlayerDownedMessage = {
+              type: MessageType.PLAYER_DOWNED,
+              entityId: deadId,
+              slot: -1,
+              bleedTimer: CIVILIAN_BLEED_TIME,
+            };
+            for (const p of players.values()) send(p.client, msg);
+          }
+        }
+        continue;
+      }
+
       // Building → broadcast destruction, clean up warehouse, check campfire game-over
       if (faction?.type === 'building' && send) {
         const destroyedMsg: BuildDestroyedMessage = {
@@ -434,6 +469,13 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
 
       downed.bleedTimer -= dt;
       if (downed.bleedTimer <= 0) {
+        // Civilian bleed-out → permanent death
+        if (deps.civilianEntityIds?.has(id)) {
+          world.removeComponent(id, C.Downed);
+          if (deps.onCivilianDeath) deps.onCivilianDeath(id, send);
+          world.destroyEntity(id);
+          continue;
+        }
         if (players.size <= 1) {
           handlePartyWipe(send);
         } else {

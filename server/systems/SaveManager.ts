@@ -19,11 +19,11 @@ import {
 import type {
   EnemyStatsComponent, GhostStateComponent,
   LightRevealComponent, HealAuraComponent, BarracksSpawnerComponent,
-  SpeedComponent,
+  SpeedComponent, WorkerSlotComponent, HousingComponent,
 } from '@shared/components';
 import type {
   SaveData, SavedBuilding, SavedPlayer, SavedEnemy,
-  SavedPortal, SavedResourceNode, SavedItemDrop,
+  SavedPortal, SavedResourceNode, SavedItemDrop, SavedCivilian,
 } from '@shared/SaveFormat';
 import type { WaveState } from './WaveController';
 import type { SessionPlayer } from '../GameSession';
@@ -40,6 +40,7 @@ export interface LoadedSaveState {
   itemDrops: SavedItemDrop[];
   wavePhase: 'idle' | 'prep' | 'active' | 'cleared';
   prepTimeRemaining: number | null;
+  civilians: SavedCivilian[];
 }
 
 // ── Dependencies ────────────────────────────────────────────────────────────
@@ -120,6 +121,12 @@ export function createSaveManager(deps: SaveManagerDeps) {
 
       const bs = world.getComponent<BarracksSpawnerComponent>(id, C.BarracksSpawner);
       if (bs) saved.barracksSpawner = { maxGuards: bs.maxGuards, spawnInterval: bs.spawnInterval };
+
+      const wsComp = world.getComponent<WorkerSlotComponent>(id, C.WorkerSlot);
+      if (wsComp) saved.workerSlot = { workerId: wsComp.workerId };
+
+      const hComp = world.getComponent<HousingComponent>(id, C.Housing);
+      if (hComp) saved.housing = { capacity: hComp.capacity };
 
       buildings.push(saved);
     }
@@ -301,6 +308,7 @@ export function createSaveManager(deps: SaveManagerDeps) {
       itemDrops: save.itemDrops ?? [],
       wavePhase: save.wavePhase ?? 'prep',
       prepTimeRemaining: save.prepTimeRemaining ?? null,
+      civilians: save.civilians ?? [],
     };
   }
 

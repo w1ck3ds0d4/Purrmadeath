@@ -22,6 +22,7 @@ export enum Action {
   SkillR,
   UsePotion,
   SkillTree,
+  CivilianPanel,
   Cancel,
 }
 
@@ -46,6 +47,7 @@ const DEFAULT_BINDINGS: Readonly<Record<Action, readonly string[]>> = {
   [Action.SkillR]:             ['r'],
   [Action.UsePotion]:          ['3'],
   [Action.SkillTree]:          ['k'],
+  [Action.CivilianPanel]:      ['c'],
   [Action.Cancel]:             ['MouseRight'],
 };
 

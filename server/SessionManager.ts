@@ -39,6 +39,7 @@ import { GAME_VERSION, RECONNECT_GRACE_MS } from '@shared/constants';
 import type { MetaStats } from '@shared/MetaStats';
 import { emptyMetaStats, mergeRunStats } from '@shared/MetaStats';
 import { computeUnlockedClasses } from '@shared/MilestoneDefinitions';
+import { computeCompletedBuffs } from '@shared/ProgressionDefinitions';
 import type { MetaStatsRequestMessage, CardPickMessage } from '@shared/protocol';
 
 /** Minimum interval (ms) between SESSION_CREATE or SESSION_JOIN per client. */
@@ -129,6 +130,8 @@ export class SessionManager {
     socket.on(MessageType.POTION_EQUIP,            (c, m) => this.session?.handlePotionEquip(c.id, m as PotionEquipMessage, (cl, msg) => this.socket.send(cl, msg)));
     socket.on(MessageType.POTION_RESTOCK,          (c, m) => this.session?.handlePotionRestock(c.id, m as PotionRestockMessage, (cl, msg) => this.socket.send(cl, msg)));
     socket.on(MessageType.POTION_USE,              (c) => this.session?.handlePotionUse(c.id, (cl, msg) => this.socket.send(cl, msg)));
+    socket.on(MessageType.CIVILIAN_PANEL_REQUEST,  (c) => this.session?.handleCivilianPanelRequest(c.id, (cl, msg) => this.socket.send(cl, msg)));
+    socket.on(MessageType.CIVILIAN_ASSIGN,         (c, m) => this.session?.handleCivilianAssign(c.id, m as import('@shared/protocol').CivilianAssignMessage, (cl, msg) => this.socket.send(cl, msg)));
     socket.onDisconnect((c) => this.onDisconnect(c));
 
     // Load persisted saves and meta stats from disk
@@ -244,6 +247,7 @@ export class SessionManager {
           playerId: player.playerId,
           isHost: player.isHost,
           players: this.session.getLobbySlots(),
+          completedBuffs: this.getCompletedBuffs(client.id),
         };
         this.socket.send(client, ack);
         return;
@@ -359,6 +363,7 @@ export class SessionManager {
       isHost: true,
       players: this.session.getLobbySlots(),
       unlockedClasses: unlocked,
+      completedBuffs: this.getCompletedBuffs(client.id),
     };
     this.socket.send(client, ack);
     this.beacon.update({ code: this.session.code, playerCount: this.session.playerCount });
@@ -444,6 +449,7 @@ export class SessionManager {
       isHost: false,
       players: this.session.getLobbySlots(),
       unlockedClasses: unlocked,
+      completedBuffs: this.getCompletedBuffs(client.id),
     };
     this.socket.send(client, ack);
 
@@ -568,6 +574,15 @@ export class SessionManager {
 
     // Close their connection
     targetClient.ws.close();
+  }
+
+  /** Get the completed buff achievements for a client. */
+  private getCompletedBuffs(clientId: string): { displayName: string; reward: string; medalColor: string }[] {
+    const playerId = this.clientPlayerIds.get(clientId);
+    if (!playerId) return [];
+    const meta = this.metaStats.get(playerId);
+    if (!meta) return [];
+    return computeCompletedBuffs(meta);
   }
 
   /** Get the list of advanced classes a client has unlocked. */

@@ -20,6 +20,7 @@ import {
   PORTAL_RADIUS,
   RESOURCE_NODE_RADIUS,
   ENTITY_SEPARATION_ITERATIONS,
+  CIVILIAN_RADIUS,
   buildingHalfExtent,
   DODGE_ROLL_SPEED,
 } from '@shared/constants';
@@ -34,6 +35,7 @@ function getEntityRadius(factionType: string): number {
     case 'player':   return PLAYER_RADIUS;
     case 'enemy':    return ENEMY_RADIUS;
     case 'guard':    return ENEMY_RADIUS;
+    case 'civilian': return CIVILIAN_RADIUS;
     case 'portal':   return PORTAL_RADIUS;
     case 'resource': return RESOURCE_NODE_RADIUS;
     default:         return 0;
@@ -113,10 +115,11 @@ export class MovementSystem {
       const speed = world.getComponent<SpeedComponent>(id, C.Speed)!;
       const inp   = world.getComponent<PlayerInputComponent>(id, C.PlayerInput)!;
 
-      // Determine collision radius: enemies/guards use their per-variant radius
+      // Determine collision radius per entity type
       const faction = world.getComponent<FactionComponent>(id, C.Faction);
       const entityRadius = (faction?.type === 'enemy' || faction?.type === 'guard')
         ? (world.getComponent<EnemyStatsComponent>(id, C.EnemyStats)?.radius ?? ENEMY_RADIUS)
+        : faction?.type === 'civilian' ? CIVILIAN_RADIUS
         : PLAYER_RADIUS;
 
       // Dodge roll override: during active dodge, force velocity to dash direction
@@ -210,7 +213,7 @@ export class MovementSystem {
         : getEntityRadius(faction.type);
       if (r <= 0) continue;
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
-      const movable = faction.type === 'player' || faction.type === 'enemy' || faction.type === 'guard';
+      const movable = faction.type === 'player' || faction.type === 'enemy' || faction.type === 'guard' || faction.type === 'civilian';
       bodies.push({ id, pos, r, movable, square: isSquareEntity(faction.type) });
     }
 

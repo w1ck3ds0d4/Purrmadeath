@@ -1,6 +1,6 @@
 import type { MetaStats } from './MetaStats';
 
-export type AchievementCategory = 'class' | 'buff' | 'building' | 'ability';
+export type AchievementCategory = 'class' | 'buff' | 'building';
 
 export interface Achievement {
   id: string;
@@ -9,31 +9,44 @@ export interface Achievement {
   description: string;
   /** Short label for what the player earns. */
   reward: string;
+  /** CSS hex color for the medal circle when completed. */
+  medalColor: string;
   /** Target value to complete the achievement. */
   target: number;
   /** Returns the player's current progress toward `target`. */
   progress: (stats: MetaStats) => number;
 }
 
+// Tier colors: diamond > gold > silver > bronze
+const DIAMOND = '#b9f2ff';
+const GOLD    = '#ffd700';
+const SILVER  = '#c0c0c0';
+const BRONZE  = '#cd7f32';
+
 export const ACHIEVEMENTS: Achievement[] = [
-  // ── Classes ──────────────────────────────────────────────────────────────
+  // ── Classes (ordered diamond → bronze) ────────────────────────────────────
+  {
+    id: 'unlock_beastmaster',
+    category: 'class',
+    displayName: 'Beastmaster',
+    description: 'Gather 5,000 resources',
+    reward: 'Unlock Beastmaster class',
+    medalColor: DIAMOND,
+    target: 5000,
+    progress: (s) => {
+      const r = s.resourcesGathered;
+      return r.wood + r.stone + r.iron + r.diamond;
+    },
+  },
   {
     id: 'unlock_assassin',
     category: 'class',
     displayName: 'Assassin',
     description: 'Kill 500 enemies',
     reward: 'Unlock Assassin class',
+    medalColor: GOLD,
     target: 500,
     progress: (s) => s.totalEnemiesKilled,
-  },
-  {
-    id: 'unlock_paladin',
-    category: 'class',
-    displayName: 'Paladin',
-    description: 'Build 50 buildings',
-    reward: 'Unlock Paladin class',
-    target: 50,
-    progress: (s) => s.totalBuildingsBuilt,
   },
   {
     id: 'unlock_necromancer',
@@ -41,48 +54,40 @@ export const ACHIEVEMENTS: Achievement[] = [
     displayName: 'Necromancer',
     description: 'Survive to wave 15',
     reward: 'Unlock Necromancer class',
+    medalColor: SILVER,
     target: 15,
     progress: (s) => s.highestWaveSurvived,
   },
   {
-    id: 'unlock_beastmaster',
+    id: 'unlock_paladin',
     category: 'class',
-    displayName: 'Beastmaster',
-    description: 'Gather 2,000 resources',
-    reward: 'Unlock Beastmaster class',
-    target: 2000,
-    progress: (s) => {
-      const r = s.resourcesGathered;
-      return r.wood + r.stone + r.iron + r.diamond;
-    },
+    displayName: 'Paladin',
+    description: 'Build 30 buildings',
+    reward: 'Unlock Paladin class',
+    medalColor: BRONZE,
+    target: 30,
+    progress: (s) => s.totalBuildingsBuilt,
   },
 
-  // ── Permanent Buffs ──────────────────────────────────────────────────────
-  {
-    id: 'buff_veteran',
-    category: 'buff',
-    displayName: 'Veteran',
-    description: 'Complete 10 runs',
-    reward: '+5 Max HP',
-    target: 10,
-    progress: (s) => s.totalRuns,
-  },
+  // ── Permanent Buffs (ordered diamond → bronze) ────────────────────────────
   {
     id: 'buff_iron_hide',
     category: 'buff',
     displayName: 'Iron Hide',
-    description: 'Deal 25,000 total damage',
+    description: 'Deal 50,000 total damage',
     reward: '+1 Defense',
-    target: 25000,
+    medalColor: DIAMOND,
+    target: 50000,
     progress: (s) => s.totalDamageDealt,
   },
   {
-    id: 'buff_fleet_footed',
+    id: 'buff_thick_fur',
     category: 'buff',
-    displayName: 'Fleet Footed',
-    description: 'Survive 50 total waves',
-    reward: '+5% Speed',
-    target: 50,
+    displayName: 'Thick Fur',
+    description: 'Survive 200 total waves',
+    reward: '+2 Defense',
+    medalColor: DIAMOND,
+    target: 200,
     progress: (s) => s.totalWavesSurvived,
   },
   {
@@ -91,8 +96,29 @@ export const ACHIEVEMENTS: Achievement[] = [
     displayName: 'Sharp Claws',
     description: 'Kill 1,000 enemies',
     reward: '+5% Crit Chance',
+    medalColor: GOLD,
     target: 1000,
     progress: (s) => s.totalEnemiesKilled,
+  },
+  {
+    id: 'buff_nine_lives',
+    category: 'buff',
+    displayName: 'Nine Lives',
+    description: 'Complete 50 runs',
+    reward: '+10 Max HP',
+    medalColor: GOLD,
+    target: 50,
+    progress: (s) => s.totalRuns,
+  },
+  {
+    id: 'buff_fleet_footed',
+    category: 'buff',
+    displayName: 'Fleet Footed',
+    description: 'Survive 50 total waves',
+    reward: '+5% Speed',
+    medalColor: SILVER,
+    target: 50,
+    progress: (s) => s.totalWavesSurvived,
   },
   {
     id: 'buff_endurance',
@@ -100,19 +126,54 @@ export const ACHIEVEMENTS: Achievement[] = [
     displayName: 'Endurance',
     description: 'Play for 2 hours total',
     reward: '+10 Max Stamina',
+    medalColor: SILVER,
     target: 7200,
     progress: (s) => s.totalTimePlayed,
   },
-
-  // ── Buildings ────────────────────────────────────────────────────────────
   {
-    id: 'building_ballista',
+    id: 'buff_veteran',
+    category: 'buff',
+    displayName: 'Veteran',
+    description: 'Complete 10 runs',
+    reward: '+5 Max HP',
+    medalColor: BRONZE,
+    target: 10,
+    progress: (s) => s.totalRuns,
+  },
+  {
+    id: 'buff_gatherer',
+    category: 'buff',
+    displayName: 'Gatherer',
+    description: 'Gather 500 resources',
+    reward: '+10% Gather Speed',
+    medalColor: BRONZE,
+    target: 500,
+    progress: (s) => {
+      const r = s.resourcesGathered;
+      return r.wood + r.stone + r.iron + r.diamond;
+    },
+  },
+
+  // ── Buildings (ordered diamond → bronze) ──────────────────────────────────
+  {
+    id: 'building_fortress',
     category: 'building',
-    displayName: 'Ballista Plans',
-    description: 'Kill 200 enemies',
-    reward: 'Unlock Ballista turret',
-    target: 200,
-    progress: (s) => s.totalEnemiesKilled,
+    displayName: 'Fortress Design',
+    description: 'Survive to wave 20',
+    reward: 'Unlock Fortress Wall',
+    medalColor: DIAMOND,
+    target: 20,
+    progress: (s) => s.highestWaveSurvived,
+  },
+  {
+    id: 'building_healing_shrine',
+    category: 'building',
+    displayName: 'Sacred Shrine',
+    description: 'Play for 5 hours total',
+    reward: 'Unlock Healing Shrine',
+    medalColor: DIAMOND,
+    target: 18000,
+    progress: (s) => s.totalTimePlayed,
   },
   {
     id: 'building_workshop',
@@ -120,54 +181,71 @@ export const ACHIEVEMENTS: Achievement[] = [
     displayName: 'Workshop Blueprint',
     description: 'Build 75 buildings',
     reward: 'Unlock Workshop',
+    medalColor: GOLD,
     target: 75,
     progress: (s) => s.totalBuildingsBuilt,
   },
   {
-    id: 'building_fortress',
+    id: 'building_cannon',
     category: 'building',
-    displayName: 'Fortress Design',
-    description: 'Survive to wave 20',
-    reward: 'Unlock Fortress Wall',
-    target: 20,
-    progress: (s) => s.highestWaveSurvived,
+    displayName: 'Cannon Schematic',
+    description: 'Kill 750 enemies',
+    reward: 'Unlock Cannon turret',
+    medalColor: GOLD,
+    target: 750,
+    progress: (s) => s.totalEnemiesKilled,
+  },
+  {
+    id: 'building_light_tower',
+    category: 'building',
+    displayName: 'Light Tower',
+    description: 'Gather 1,500 stone',
+    reward: 'Unlock Light Tower',
+    medalColor: SILVER,
+    target: 1500,
+    progress: (s) => s.resourcesGathered.stone,
+  },
+  {
+    id: 'building_ballista',
+    category: 'building',
+    displayName: 'Ballista Plans',
+    description: 'Kill 200 enemies',
+    reward: 'Unlock Ballista turret',
+    medalColor: BRONZE,
+    target: 200,
+    progress: (s) => s.totalEnemiesKilled,
+  },
+  {
+    id: 'building_spike_trap',
+    category: 'building',
+    displayName: 'Spike Trap',
+    description: 'Build 15 buildings',
+    reward: 'Unlock Spike Trap',
+    medalColor: BRONZE,
+    target: 15,
+    progress: (s) => s.totalBuildingsBuilt,
   },
 
-  // ── Abilities ────────────────────────────────────────────────────────────
-  {
-    id: 'ability_war_cry',
-    category: 'ability',
-    displayName: 'Battle Cry',
-    description: 'Survive 25 total waves',
-    reward: 'Unlock War Cry ability',
-    target: 25,
-    progress: (s) => s.totalWavesSurvived,
-  },
-  {
-    id: 'ability_lifesteal',
-    category: 'ability',
-    displayName: 'Life Drain',
-    description: 'Deal 50,000 total damage',
-    reward: 'Unlock Lifesteal ability',
-    target: 50000,
-    progress: (s) => s.totalDamageDealt,
-  },
-  {
-    id: 'ability_tracking',
-    category: 'ability',
-    displayName: 'Eagle Eye',
-    description: 'Complete 15 runs',
-    reward: 'Unlock Tracking ability',
-    target: 15,
-    progress: (s) => s.totalRuns,
-  },
 ];
 
 export const CATEGORY_LABELS: Record<AchievementCategory, string> = {
   class: 'Classes',
   buff: 'Permanent Buffs',
   building: 'Buildings',
-  ability: 'Abilities',
 };
 
-export const CATEGORY_ORDER: AchievementCategory[] = ['class', 'buff', 'building', 'ability'];
+export const CATEGORY_ORDER: AchievementCategory[] = ['class', 'buff', 'building'];
+
+/** Buff achievement info sent to clients for in-game display. */
+export interface CompletedBuff {
+  displayName: string;
+  reward: string;
+  medalColor: string;
+}
+
+/** Compute which buff achievements a player has completed. */
+export function computeCompletedBuffs(stats: MetaStats): CompletedBuff[] {
+  return ACHIEVEMENTS
+    .filter(a => a.category === 'buff' && a.progress(stats) >= a.target)
+    .map(a => ({ displayName: a.displayName, reward: a.reward, medalColor: a.medalColor }));
+}

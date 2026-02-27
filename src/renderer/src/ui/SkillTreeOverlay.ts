@@ -38,6 +38,7 @@ export class SkillTreeOverlay {
   private pointsEl: HTMLElement;
   private branchContainers: HTMLElement[] = [];
   private cardsContainer: HTMLElement;
+  private buffsContainer: HTMLElement;
   private nodeEls = new Map<SkillNodeId, HTMLElement>();
   private onAllocate: ((nodeId: string) => void) | null = null;
 
@@ -45,6 +46,7 @@ export class SkillTreeOverlay {
   private skillPoints = 0;
   private playerClass: PlayerClass = 'warrior';
   private pickedCardIds: string[] = [];
+  private completedBuffs: { displayName: string; reward: string; medalColor: string }[] = [];
 
   constructor() {
     this.screen = document.createElement('div');
@@ -117,6 +119,14 @@ export class SkillTreeOverlay {
     `;
     this.screen.appendChild(this.cardsContainer);
 
+    // Permanent buffs section
+    this.buffsContainer = document.createElement('div');
+    this.buffsContainer.style.cssText = `
+      width: 100%; max-width: ${3 * NODE_W + 2 * BRANCH_GAP_X + 40}px;
+      margin-top: 20px;
+    `;
+    this.screen.appendChild(this.buffsContainer);
+
     // Key hint
     const hint = document.createElement('div');
     hint.style.cssText = 'font-family:monospace;font-size:11px;color:#4a5a6a;margin-top:16px;user-select:none;';
@@ -130,12 +140,13 @@ export class SkillTreeOverlay {
     return this.screen.style.display !== 'none';
   }
 
-  show(playerClass: PlayerClass, allocated: Set<string>, skillPoints: number, onAllocate: (nodeId: string) => void, pickedCardIds?: string[]): void {
+  show(playerClass: PlayerClass, allocated: Set<string>, skillPoints: number, onAllocate: (nodeId: string) => void, pickedCardIds?: string[], completedBuffs?: { displayName: string; reward: string; medalColor: string }[]): void {
     this.playerClass = playerClass;
     this.allocated = allocated;
     this.skillPoints = skillPoints;
     this.onAllocate = onAllocate;
     if (pickedCardIds) this.pickedCardIds = pickedCardIds;
+    if (completedBuffs) this.completedBuffs = completedBuffs;
     this.screen.style.display = 'flex';
     this.rebuild();
   }
@@ -205,6 +216,7 @@ export class SkillTreeOverlay {
     }
 
     this.rebuildCards();
+    this.rebuildBuffs();
   }
 
   private rebuildCards(): void {
@@ -242,6 +254,38 @@ export class SkillTreeOverlay {
       grid.appendChild(el);
     }
     this.cardsContainer.appendChild(grid);
+  }
+
+  private rebuildBuffs(): void {
+    this.buffsContainer.innerHTML = '';
+    if (this.completedBuffs.length === 0) return;
+
+    const header = document.createElement('div');
+    header.style.cssText = `
+      font-family:'Segoe UI',sans-serif;font-size:14px;font-weight:700;
+      color:#55cc77;letter-spacing:2px;margin-bottom:10px;user-select:none;
+    `;
+    header.textContent = `PERMANENT BUFFS (${this.completedBuffs.length})`;
+    this.buffsContainer.appendChild(header);
+
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;';
+
+    for (const buff of this.completedBuffs) {
+      const el = document.createElement('div');
+      el.style.cssText = `
+        width:140px;padding:8px 10px;border-radius:6px;
+        background:${buff.medalColor}18;border:1px solid ${buff.medalColor};
+        user-select:none;
+      `;
+      el.innerHTML = `
+        <div style="font-family:'Segoe UI',sans-serif;font-size:12px;font-weight:600;color:#d8e2ef;">${buff.displayName}</div>
+        <div style="font-family:monospace;font-size:10px;color:${buff.medalColor};margin-top:4px;">${buff.reward}</div>
+      `;
+      grid.appendChild(el);
+    }
+
+    this.buffsContainer.appendChild(grid);
   }
 
   private nodeStyle(node: SkillNode, branch: SkillBranch, allocated: boolean, available: boolean): string {

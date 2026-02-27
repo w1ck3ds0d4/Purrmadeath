@@ -65,6 +65,7 @@ import { StatsOverlay } from './ui/StatsOverlay';
 import { CardPickerOverlay } from './ui/CardPickerOverlay';
 import { SkillTreeOverlay } from './ui/SkillTreeOverlay';
 import { PotionShopOverlay } from './ui/PotionShopOverlay';
+import { CivilianPanelOverlay } from './ui/CivilianPanelOverlay';
 import { CLASS_STATS, DEFAULT_CLASS } from '@shared/ClassDefinitions';
 import { getActiveAbilities, type SkillActiveAbility, type AbilityParams } from '@shared/SkillDefinitions';
 import type { PlayerClass } from '@shared/ClassDefinitions';
@@ -254,6 +255,7 @@ async function main(): Promise<void> {
   let potionMaxCharges = 0;
   let potionCooldown = 0;
   let potionCooldownMax = 0;
+  let completedBuffs: { displayName: string; reward: string; medalColor: string }[] = [];
 
   // ── Death / respawn state ──────────────────────────────────────────────────
   let localDowned   = false;
@@ -294,6 +296,7 @@ async function main(): Promise<void> {
   const statsOverlay = new StatsOverlay();
   const cardPicker = new CardPickerOverlay();
   const skillTree = new SkillTreeOverlay();
+  const civilianPanel = new CivilianPanelOverlay();
   const lobbyOverlay = new LobbyOverlay();
   const pauseBanner  = new PauseBanner();
   const waveHUD      = new WaveHUD();
@@ -411,6 +414,7 @@ async function main(): Promise<void> {
     hud.setVisible(false);
     weaponHotbar.setVisible(false);
     skillTree.hide();
+    civilianPanel.hide();
     world.clear();
     playerRenderer.destroy();
     projectileRenderer.destroy();
@@ -553,6 +557,7 @@ async function main(): Promise<void> {
     get selectedClass() { return selectedClass; }, set selectedClass(v) { selectedClass = v; },
     get lastServerStats() { return lastServerStats; }, set lastServerStats(v) { lastServerStats = v; },
     get handshakeSent() { return handshakeSent; }, set handshakeSent(v) { handshakeSent = v; },
+    get localPlayerId() { return localPlayerId; }, set localPlayerId(_v) { /* read-only */ },
     get seed() { return seed; }, set seed(v) { seed = v; },
     get skillAllocated() { return skillAllocated; }, set skillAllocated(v) { skillAllocated = v; },
     get skillPoints() { return skillPoints; }, set skillPoints(v) { skillPoints = v; },
@@ -568,6 +573,7 @@ async function main(): Promise<void> {
     get potionMaxCharges() { return potionMaxCharges; }, set potionMaxCharges(v) { potionMaxCharges = v; },
     get potionCooldown() { return potionCooldown; }, set potionCooldown(v) { potionCooldown = v; },
     get potionCooldownMax() { return potionCooldownMax; }, set potionCooldownMax(v) { potionCooldownMax = v; },
+    get completedBuffs() { return completedBuffs; }, set completedBuffs(v) { completedBuffs = v; },
   };
 
   registerMessageHandlers(net, handlerState, {
@@ -581,7 +587,7 @@ async function main(): Promise<void> {
     },
     stateMgr, menuOverlay, lobbyOverlay, pauseBanner, waveHUD, resourceHUD,
     deathOverlay, gameOverOverlay, chatOverlay, debug, buildOverlay, buildGhost,
-    warehouseHUD, cardPicker, skillTree, statsOverlay, abilityVFX, potionShopOverlay, buildMenu, combinedResources, electronAPI,
+    warehouseHUD, cardPicker, skillTree, statsOverlay, abilityVFX, potionShopOverlay, buildMenu, civilianPanel, combinedResources, electronAPI,
   });
 
   // ── Session action helper ─────────────────────────────────────────────────
@@ -693,7 +699,7 @@ async function main(): Promise<void> {
       } else if (buildCtrl.phase !== 'inactive' && state === GameState.Playing) {
         buildMenu.hide();
         buildCtrl.exitBuildMode();
-      } else if (state === GameState.Playing && (targetingSlot >= 0 || skillTree.isVisible)) {
+      } else if (state === GameState.Playing && (targetingSlot >= 0 || skillTree.isVisible || civilianPanel.isVisible)) {
         // Handled in the Playing block below (targeting cancel / skill tree close)
       } else if (!localGameOver && !chatOverlay.isOpen && (state === GameState.Playing || state === GameState.Paused)) {
         net.send({ type: MessageType.PAUSE_VOTE });
@@ -714,16 +720,24 @@ async function main(): Promise<void> {
         else if (!localDowned && !localDead && !localGameOver && !cardPicker.isVisible) {
           skillTree.show(selectedClass, skillAllocated, skillPoints, (nodeId) => {
             net.send({ type: MessageType.SKILL_ALLOCATE, nodeId });
-          }, pickedCardIds);
+          }, pickedCardIds, completedBuffs);
         }
       }
-      // ESC: cancel targeting first, then close skill tree, then pause
+      // C key: toggle civilian management panel
+      if (input.isJustPressed(Action.CivilianPanel)) {
+        if (civilianPanel.isVisible) civilianPanel.hide();
+        else if (!localDowned && !localDead && !localGameOver && !cardPicker.isVisible) {
+          net.send({ type: MessageType.CIVILIAN_PANEL_REQUEST });
+        }
+      }
+      // ESC: cancel targeting first, then close overlays, then pause
       if (input.isJustPressed(Action.Pause)) {
         if (targetingSlot >= 0) cancelTargeting();
         else if (skillTree.isVisible) skillTree.hide();
+        else if (civilianPanel.isVisible) civilianPanel.hide();
       }
 
-      const canAct = !localDowned && !localDead && !localGameOver && !chatOverlay.isOpen && !cardPicker.isPicking && !potionShopOverlay.isVisible && !buildMenu.isVisible;
+      const canAct = !localDowned && !localDead && !localGameOver && !chatOverlay.isOpen && !cardPicker.isPicking && !potionShopOverlay.isVisible && !buildMenu.isVisible && !civilianPanel.isVisible;
 
       // Auto-cancel targeting when player can't act
       if (!canAct && targetingSlot >= 0) cancelTargeting();

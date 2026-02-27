@@ -12,6 +12,8 @@ import {
   GhostStateComponent,
   EnemyStatsComponent,
   DodgeRollComponent,
+  DownedComponent,
+  CivilianComponent,
 } from '@shared/components';
 import type { SnapshotMessage, DeltaMessage, EntitySnapshot } from '@shared/protocol';
 
@@ -180,6 +182,18 @@ export class RemotePlayerSystem {
           maxStored: snap.productionMax ?? 0,
         } as ProductionComponent);
       }
+      // Civilian metadata (for name tag rendering)
+      if (snap.civilianName) {
+        world.addComponent(snap.entityId, C.Civilian, {
+          name: snap.civilianName,
+          state: snap.civilianState ?? 'idle',
+          assignedBuildingId: null,
+          hunger: snap.civilianHunger ?? 0,
+          hungerTimer: 0,
+          speechBubble: null,
+          speechTimer: 0,
+        } as CivilianComponent);
+      }
     } else {
       // Update velocity + health immediately; position is interpolated in interpolate()
       const vel = world.getComponent<VelocityComponent>(snap.entityId, C.Velocity);
@@ -217,6 +231,15 @@ export class RemotePlayerSystem {
         }
       }
 
+      // Update civilian state
+      if (snap.civilianState !== undefined) {
+        const civ = world.getComponent<CivilianComponent>(snap.entityId, C.Civilian);
+        if (civ) {
+          civ.state = snap.civilianState as CivilianComponent['state'];
+          if (snap.civilianHunger !== undefined) civ.hunger = snap.civilianHunger;
+        }
+      }
+
       // Dodge roll state
       if (snap.dodging) {
         if (!world.hasComponent(snap.entityId, C.DodgeRoll)) {
@@ -226,6 +249,17 @@ export class RemotePlayerSystem {
         }
       } else if (world.hasComponent(snap.entityId, C.DodgeRoll)) {
         world.removeComponent(snap.entityId, C.DodgeRoll);
+      }
+
+      // Downed state (synced from snapshot for civilians and late-joining clients)
+      if (snap.downed) {
+        if (!world.hasComponent(snap.entityId, C.Downed)) {
+          world.addComponent(snap.entityId, C.Downed, {
+            bleedTimer: 30, reviveProgress: 0, reviverId: -1,
+          } as DownedComponent);
+        }
+      } else if (world.hasComponent(snap.entityId, C.Downed)) {
+        world.removeComponent(snap.entityId, C.Downed);
       }
 
       // On full snapshot (rejoin), hard-snap position

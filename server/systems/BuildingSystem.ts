@@ -16,6 +16,7 @@ import {
 import type {
   EnemyStatsComponent, GhostStateComponent, LightRevealComponent,
   HealAuraComponent, BarracksSpawnerComponent, GuardComponent,
+  WorkerSlotComponent, HousingComponent,
 } from '@shared/components';
 import {
   TILE_SIZE, PLAYER_RADIUS, ENEMY_RADIUS, RESOURCE_NODE_RADIUS,
@@ -38,6 +39,7 @@ import {
   UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RATE, UPGRADE_HEAL_RANGE,
   BARRACKS_MAX_GUARDS, BARRACKS_SPAWN_INTERVAL,
   BARRACKS_GUARD_HP, BARRACKS_GUARD_DAMAGE, BARRACKS_GUARD_SPEED, BARRACKS_GUARD_PATROL_RADIUS,
+  CAT_HOUSE_MAX_HEALTH, DORMITORY_MAX_HEALTH, CAT_HOUSE_CAPACITY, DORMITORY_CAPACITY,
   getUpgradeCost, getRepairCost,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
@@ -61,6 +63,8 @@ const HP_MAP: Record<string, number> = {
   light_tower: LIGHT_TOWER_MAX_HEALTH, healing_shrine: HEALING_SHRINE_MAX_HEALTH,
   barracks: BARRACKS_MAX_HEALTH,
   potion_shop: POTION_SHOP_MAX_HEALTH,
+  cat_house: CAT_HOUSE_MAX_HEALTH,
+  dormitory: DORMITORY_MAX_HEALTH,
 };
 
 // ── Dependencies injected from GameSession ──────────────────────────────────
@@ -294,6 +298,15 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
         maxGuards: BARRACKS_MAX_GUARDS[0], spawnTimer: BARRACKS_SPAWN_INTERVAL,
         spawnInterval: BARRACKS_SPAWN_INTERVAL, guardIds: [],
       } as BarracksSpawnerComponent);
+    } else if (msg.buildingType === 'cat_house') {
+      world.addComponent(id, C.Housing, { capacity: CAT_HOUSE_CAPACITY[0], residentIds: [] } as HousingComponent);
+    } else if (msg.buildingType === 'dormitory') {
+      world.addComponent(id, C.Housing, { capacity: DORMITORY_CAPACITY[0], residentIds: [] } as HousingComponent);
+    }
+
+    // Attach WorkerSlot to production buildings so civilians can staff them
+    if (['lumbermill', 'quarry', 'mine', 'farm'].includes(msg.buildingType)) {
+      world.addComponent(id, C.WorkerSlot, { workerId: null } as WorkerSlotComponent);
     }
 
     send(player.client, { type: MessageType.BUILD_CONFIRM, success: true } as BuildConfirmMessage);
@@ -461,6 +474,15 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     const barracks = world.getComponent<BarracksSpawnerComponent>(targetId, C.BarracksSpawner);
     if (barracks && lvlIdx < BARRACKS_MAX_GUARDS.length) barracks.maxGuards = BARRACKS_MAX_GUARDS[lvlIdx];
 
+    // Scale housing
+    const housing = world.getComponent<HousingComponent>(targetId, C.Housing);
+    if (housing && bldg.buildingType === 'cat_house' && lvlIdx < CAT_HOUSE_CAPACITY.length) {
+      housing.capacity = CAT_HOUSE_CAPACITY[lvlIdx];
+    }
+    if (housing && bldg.buildingType === 'dormitory' && lvlIdx < DORMITORY_CAPACITY.length) {
+      housing.capacity = DORMITORY_CAPACITY[lvlIdx];
+    }
+
     send(player.client, {
       type: MessageType.BUILD_UPGRADE_CONFIRM, success: true, entityId: targetId, newLevel,
     } as BuildUpgradeConfirmMessage);
@@ -555,6 +577,11 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
   function tickProduction(dt: number): void {
     const intervalMult = cards.debuffs.productionIntervalMult;
     for (const id of world.query(C.Production, C.Position)) {
+      // Worker gating: buildings with WorkerSlot only produce when staffed
+      const ws = world.getComponent<WorkerSlotComponent>(id, C.WorkerSlot);
+      if (ws && ws.workerId === null) continue;
+      if (ws && ws.workerId !== null && !world.hasEntity(ws.workerId)) { ws.workerId = null; continue; }
+
       const prod = world.getComponent<ProductionComponent>(id, C.Production)!;
       prod.timer += dt;
       const effectiveInterval = prod.interval * intervalMult;

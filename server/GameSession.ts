@@ -118,6 +118,7 @@ import { createSaveManager, type SaveManager, type LoadedSaveState } from './sys
 import { createRespawnManager, type RespawnManager } from './systems/RespawnManager';
 import { createStatsCollector, type StatsCollector } from './systems/StatsCollector';
 import { createPotionSystem, type PotionSystem } from './systems/PotionSystem';
+import { createCivilianSystem, type CivilianSystem } from './systems/CivilianSystem';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -180,6 +181,7 @@ export class GameSession {
   private saveManager!: SaveManager;
   private respawn!: RespawnManager;
   private stats!: StatsCollector;
+  private civilians!: CivilianSystem;
 
   private players = new Map<string, SessionPlayer>(); // keyed by clientId
   /** Fast lookup: entity IDs that belong to players (updated on spawn/despawn). */
@@ -313,6 +315,18 @@ export class GameSession {
       destroyDeadEntities: (deaths, attackerMap, send) => this.respawn.destroyDeadEntities(deaths, attackerMap, send),
     });
 
+    this.civilians = createCivilianSystem({
+      world: this.world,
+      warehousePool: this.warehousePool as Record<string, number>,
+      warehouseIds: this.warehouseIds,
+      players: this.players,
+      getCampfirePosition: () => {
+        if (this.campfireEntityId < 0) return null;
+        const p = this.world.getComponent<PositionComponent>(this.campfireEntityId, C.Position);
+        return p ? { x: p.x, y: p.y } : null;
+      },
+    });
+
     this.potions = createPotionSystem({
       world: this.world,
       players: this.players as any,
@@ -405,6 +419,8 @@ export class GameSession {
       trackKill: (eid, variant) => this.stats.trackKill(eid, variant),
       onTitanKilled: (deadId, send) => this.handleTitanCardDrop(send),
       fireRunEnd: () => this.fireRunEnd(),
+      civilianEntityIds: this.civilians.civilianIds,
+      onCivilianDeath: (entityId, send) => this.civilians.handleCivilianDeath(entityId, send),
     });
 
     this.stats = createStatsCollector({
@@ -711,6 +727,17 @@ export class GameSession {
             guardIds: [],
           } as BarracksSpawnerComponent);
         }
+        if (sb.workerSlot) {
+          this.world.addComponent(eid, C.WorkerSlot, {
+            workerId: null, // Will be reassigned by civilians.restore()
+          } as import('@shared/components').WorkerSlotComponent);
+        }
+        if (sb.housing) {
+          this.world.addComponent(eid, C.Housing, {
+            capacity: sb.housing.capacity,
+            residentIds: [],
+          } as import('@shared/components').HousingComponent);
+        }
       }
 
       // Restore player resources and class from save (match by playerId)
@@ -848,6 +875,14 @@ export class GameSession {
       } else {
         this.waveState.prepTimer = WAVE_PREP_BETWEEN;
       }
+    }
+
+    // Spawn / restore civilians
+    if (!hasSave) {
+      this.civilians.spawnInitialCivilians(origin, send);
+    } else if (save?.civilians && save.civilians.length > 0) {
+      this.civilians.restore(save.civilians);
+      console.log(`[GameSession] Restored ${save.civilians.length} civilians from save`);
     }
 
     // Broadcast SESSION_STARTING
@@ -1366,9 +1401,11 @@ export class GameSession {
 
   handleBuildPlace(clientId: string, msg: BuildPlaceMessage, send: SendFn): void {
     this.buildings.handlePlace(clientId, msg, send);
+    this.civilians.onBuildingPlaced();
   }
 
   handleBuildDemolish(clientId: string, msg: BuildDemolishMessage, send: SendFn): void {
+    this.civilians.onBuildingDestroyed(msg.entityId);
     this.buildings.handleDemolish(clientId, msg, send);
   }
 
@@ -1831,6 +1868,26 @@ export class GameSession {
     this.potions.handleUse(clientId, send);
   }
 
+  // ── Civilian panel handlers ──────────────────────────────────────────────────
+
+  handleCivilianPanelRequest(clientId: string, send: SendFn): void {
+    if (this.phase !== 'playing') return;
+    const player = this.players.get(clientId);
+    if (!player) return;
+    const state = this.civilians.gatherPanelState();
+    send(player.client, state);
+  }
+
+  handleCivilianAssign(clientId: string, msg: import('@shared/protocol').CivilianAssignMessage, send: SendFn): void {
+    if (this.phase !== 'playing') return;
+    const player = this.players.get(clientId);
+    if (!player) return;
+    this.civilians.handleAssign(msg.civilianId, msg.buildingId);
+    // Send updated panel state back to requester
+    const state = this.civilians.gatherPanelState();
+    send(player.client, state);
+  }
+
   /** Called by WaveController when a wave is cleared. */
   private onWaveCleared(wave: number, send: SendFn): void {
     // Grant 1 skill point to every alive player
@@ -1841,6 +1898,9 @@ export class GameSession {
     if (wave >= 3 && wave % 3 === 0) {
       this.sendCardOffers(send);
     }
+    // Civilian spawn on wave clear
+    this.civilians.onWaveCleared(wave, send);
+
     // Auto-save after wave clear
     if (this.onSave) {
       const saveData = this.serializeSave();
@@ -1895,6 +1955,8 @@ export class GameSession {
     }
     // Save session-wide card debuffs
     data.cardDebuffs = { ...this.cards.debuffs };
+    // Save civilians
+    data.civilians = this.civilians.serialize();
     return data;
   }
 
@@ -2293,6 +2355,7 @@ export class GameSession {
     // ── Buildings (warehouse, production, turrets, traps, shrines, barracks) ──
     const _t6 = performance.now();
     if (!this.gameOver) this.buildings.tick(dt, send);
+    if (!this.gameOver) this.civilians.tick(dt, send);
     const _t7 = performance.now();
 
     // ── Card system ──────────────────────────────────────────────────────────
@@ -2476,6 +2539,18 @@ export class GameSession {
       // Player class
       if (playerEntry) snap.playerClass = playerEntry.playerClass;
 
+      // Civilian metadata
+      const civ = this.world.getComponent<import('@shared/components').CivilianComponent>(id, C.Civilian);
+      if (civ) {
+        snap.civilianName = civ.name;
+        snap.civilianState = civ.state;
+        snap.civilianHunger = civ.hunger;
+      }
+
+      // Worker assignment on production buildings
+      const ws = this.world.getComponent<import('@shared/components').WorkerSlotComponent>(id, C.WorkerSlot);
+      if (ws) snap.workerAssigned = ws.workerId !== null;
+
       snaps.push(snap);
     }
     return snaps;
@@ -2494,7 +2569,10 @@ export class GameSession {
       prev.upgradeLevel !== curr.upgradeLevel ||
       prev.productionStored !== curr.productionStored ||
       prev.ghostHidden !== curr.ghostHidden ||
-      prev.enemyRadius !== curr.enemyRadius
+      prev.enemyRadius !== curr.enemyRadius ||
+      prev.civilianState !== curr.civilianState ||
+      prev.civilianHunger !== curr.civilianHunger ||
+      prev.workerAssigned !== curr.workerAssigned
     );
   }
 

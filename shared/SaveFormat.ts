@@ -18,6 +18,7 @@ export interface SaveData {
   portals?: SavedPortal[];
   resourceNodes?: SavedResourceNode[];
   itemDrops?: SavedItemDrop[];
+  civilians?: SavedCivilian[];
   /** Session-wide card debuffs from trap cards. */
   cardDebuffs?: {
     playerDamageMult: number; enemySpeedMult: number; enemyDamageMult: number;
@@ -74,6 +75,12 @@ export interface SavedBuilding {
   barracksSpawner?: {
     maxGuards: number;
     spawnInterval: number;
+  };
+  workerSlot?: {
+    workerId: number | null;
+  };
+  housing?: {
+    capacity: number;
   };
 }
 
@@ -160,6 +167,16 @@ export interface SavedItemDrop {
   quantity: number;
   autoPickup: boolean;
   lifetime: number;
+}
+
+export interface SavedCivilian {
+  x: number;
+  y: number;
+  name: string;
+  currentHp: number;
+  maxHp: number;
+  hunger: number;
+  state: string;
 }
 
 export interface SaveSlotInfo {

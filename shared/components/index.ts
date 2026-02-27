@@ -45,6 +45,10 @@ export const C = {
   ActiveBuffs:     'ActiveBuffs',
   BurnDot:         'BurnDot',
   SlowEffect:      'SlowEffect',
+  // ── Phase 8 ──────────────────────────────────────────────────────────────
+  Civilian:        'Civilian',
+  Housing:         'Housing',
+  WorkerSlot:      'WorkerSlot',
 } as const;
 
 // ─── Component interfaces ──────────────────────────────────────────────────────
@@ -113,7 +117,7 @@ export interface FacingComponent {
 
 /** Which team an entity belongs to. Determines targetting and rendering. */
 export interface FactionComponent {
-  type: 'player' | 'enemy' | 'portal' | 'resource' | 'item' | 'building' | 'guard';
+  type: 'player' | 'enemy' | 'portal' | 'resource' | 'item' | 'building' | 'guard' | 'civilian';
   /** Named enemy faction (e.g. 'bandits', 'undead'). Enemies of different factions fight each other. */
   enemyFaction?: string;
 }
@@ -218,7 +222,8 @@ export interface ResourcesComponent {
 
 export type BuildingType = 'campfire' | 'wall' | 'warehouse' | 'lumbermill' | 'quarry' | 'mine' | 'farm'
   | 'arrow_turret' | 'cannon_turret' | 'spike_trap' | 'bridge'
-  | 'light_tower' | 'healing_shrine' | 'barracks' | 'potion_shop';
+  | 'light_tower' | 'healing_shrine' | 'barracks' | 'potion_shop'
+  | 'cat_house' | 'dormitory';
 
 /** Tags an entity as a player-built (or pre-placed) structure. */
 export interface BuildingComponent {
@@ -424,4 +429,42 @@ export interface SlowEffectComponent {
   factor: number;
   /** Seconds remaining. */
   remaining: number;
+}
+
+// ── Phase 8 components ──────────────────────────────────────────────────────
+
+export type CivilianState = 'idle' | 'working' | 'fleeing' | 'wandering' | 'delivering';
+
+/** Tags an entity as a cat civilian NPC. */
+export interface CivilianComponent {
+  name: string;
+  state: CivilianState;
+  /** Entity ID of the production building this civilian is assigned to, or null. */
+  assignedBuildingId: number | null;
+  /** Hunger level 0–100. At 100, civilian takes starvation damage. */
+  hunger: number;
+  /** Accumulator counting toward next hunger tick. */
+  hungerTimer: number;
+  /** Current speech bubble text, or null if none. */
+  speechBubble: string | null;
+  /** Seconds remaining for the current speech bubble. */
+  speechTimer: number;
+  /** Resource type being carried to the warehouse, or null. */
+  carryResource: string | null;
+  /** Amount of resource being carried. */
+  carryAmount: number;
+}
+
+/** Attached to housing buildings (cat_house, dormitory) and campfire. */
+export interface HousingComponent {
+  /** Max civilians this building can house. */
+  capacity: number;
+  /** Entity IDs of civilians currently housed here. */
+  residentIds: number[];
+}
+
+/** Attached to production buildings — tracks assigned worker. */
+export interface WorkerSlotComponent {
+  /** Entity ID of the assigned civilian worker, or null if unoccupied. */
+  workerId: number | null;
 }

@@ -20,6 +20,7 @@ import {
   PROJECTILE_RADIUS,
   PLAYER_RADIUS,
   ENEMY_RADIUS,
+  CIVILIAN_RADIUS,
   RESOURCE_NODE_RADIUS,
   buildingHalfExtent,
   CRIT_CHANCE,
@@ -250,6 +251,8 @@ export class ProjectileSystem {
 
         // Player projectiles don't damage own buildings (no friendly fire on structures)
         if (projFaction?.type === 'player' && tgtFaction?.type === 'building') continue;
+        // Player/guard projectiles don't damage civilians (no friendly fire on NPCs)
+        if ((projFaction?.type === 'player' || projFaction?.type === 'guard') && tgtFaction?.type === 'civilian') continue;
 
         // Skip the owner entity (can't shoot yourself)
         if (targetId === proj.ownerId) continue;
@@ -271,11 +274,14 @@ export class ProjectileSystem {
 
         // Target radius varies by entity type
         const isResource = tgtFaction?.type === 'resource';
+        const isCivilian = tgtFaction?.type === 'civilian';
         const tgtRadius = isResource
           ? RESOURCE_NODE_RADIUS
-          : world.getComponent(targetId, C.PlayerIndex)
-            ? PLAYER_RADIUS
-            : (world.getComponent<EnemyStatsComponent>(targetId, C.EnemyStats)?.radius ?? ENEMY_RADIUS);
+          : isCivilian
+            ? CIVILIAN_RADIUS
+            : world.getComponent(targetId, C.PlayerIndex)
+              ? PLAYER_RADIUS
+              : (world.getComponent<EnemyStatsComponent>(targetId, C.EnemyStats)?.radius ?? ENEMY_RADIUS);
         const collisionDist = PROJECTILE_RADIUS + tgtRadius;
 
         // Skip entities already hit by this piercing projectile

@@ -117,7 +117,7 @@ export class WaveHUD {
       const mins = Math.floor(this.prepTimer / 60);
       const secs = Math.floor(this.prepTimer % 60);
       const ss = secs.toString().padStart(2, '0');
-      const pauseTag = this.paused ? ' <span style="color:#ffaa33;font-weight:bold">PAUSED</span>' : '';
+      const pauseTag = this.paused ? '<div style="color:#ffaa33;font-weight:bold;font-size:12px;margin-top:4px">PAUSED</div>' : '';
       this.el.innerHTML = `Wave ${this.waveNumber} starts in ${mins}:${ss}${pauseTag}`;
     } else if (this.phase === 'active') {
       this.el.innerHTML = `Wave ${this.waveNumber} <span style="color:#ff6644;font-weight:bold">ACTIVE</span>`;

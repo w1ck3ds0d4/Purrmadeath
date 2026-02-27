@@ -1,11 +1,12 @@
 import { World } from '@shared/ecs/World';
-import { C, PositionComponent, FactionComponent, HealthComponent, BuildingComponent } from '@shared/components';
+import { C, PositionComponent, FactionComponent, HealthComponent, BuildingComponent, CivilianComponent } from '@shared/components';
 import { MessageType } from '@shared/protocol';
 import {
   PLAYER_BASE_SPEED,
   PLAYER_MAX_STAMINA,
   PLAYER_STAMINA_REGEN,
   GAME_VERSION,
+  CIVILIAN_SPEECH_DURATION,
 } from '@shared/constants';
 import type {
   HandshakeAckMessage,
@@ -49,6 +50,10 @@ import type {
   AbilityEffectMessage,
   PotionShopStateMessage,
   PotionStateMessage,
+  CivilianSpeechMessage,
+  CivilianDiedMessage,
+  CivilianSpawnedMessage,
+  CivilianPanelStateMessage,
   LobbySlot,
 } from '@shared/protocol';
 import type { SaveSlotInfo } from '@shared/SaveFormat';
@@ -81,6 +86,7 @@ import type { SkillTreeOverlay } from '../ui/SkillTreeOverlay';
 import type { AbilityVFXSystem } from '../systems/AbilityVFXSystem';
 import type { PotionShopOverlay, PotionShopData } from '../ui/PotionShopOverlay';
 import type { BuildMenuOverlay } from '../ui/BuildMenuOverlay';
+import type { CivilianPanelOverlay } from '../ui/CivilianPanelOverlay';
 
 // ── Shared mutable state ────────────────────────────────────────────────────
 
@@ -114,6 +120,7 @@ export interface GameplayState {
     tickProfile?: { combat: number; enemy: number; movement: number; projectile: number; buildings: number; waves: number; total: number };
   };
   handshakeSent: boolean;
+  localPlayerId: string;
   seed: number;
   skillAllocated: Set<string>;
   skillPoints: number;
@@ -126,6 +133,7 @@ export interface GameplayState {
   potionMaxCharges: number;
   potionCooldown: number;
   potionCooldownMax: number;
+  completedBuffs: { displayName: string; reward: string; medalColor: string }[];
 }
 
 // ── Dependencies ────────────────────────────────────────────────────────────
@@ -160,6 +168,7 @@ export interface NetworkHandlerDeps {
   statsOverlay: StatsOverlay;
   potionShopOverlay: PotionShopOverlay;
   buildMenu: BuildMenuOverlay;
+  civilianPanel: CivilianPanelOverlay;
   combinedResources: () => Record<string, number>;
   electronAPI?: { checkForUpdates?: () => void };
 }
@@ -207,6 +216,7 @@ export function registerMessageHandlers(
 
     // Apply milestone class unlocks
     d.lobbyOverlay.setUnlockedClasses(ack.unlockedClasses ?? []);
+    s.completedBuffs = ack.completedBuffs ?? [];
 
     // Check if local player's class is locked from a loaded save
     const localSlotData = ack.players.find(p => p.slot === ack.slot);
@@ -663,6 +673,41 @@ export function registerMessageHandlers(
     d.debug.log('Campfire destroyed!');
   });
 
+  // ── Civilians ────────────────────────────────────────────────────────────
+
+  net.on(MessageType.CIVILIAN_SPEECH, (msg) => {
+    const m = msg as unknown as CivilianSpeechMessage;
+    const civ = d.world.getComponent<CivilianComponent>(m.entityId, C.Civilian);
+    if (civ) {
+      civ.speechBubble = m.text;
+      civ.speechTimer = CIVILIAN_SPEECH_DURATION;
+    }
+  });
+
+  net.on(MessageType.CIVILIAN_DIED, (msg) => {
+    const m = msg as unknown as CivilianDiedMessage;
+    d.debug.log(`${m.name} has died!`);
+  });
+
+  net.on(MessageType.CIVILIAN_SPAWNED, (msg) => {
+    const m = msg as unknown as CivilianSpawnedMessage;
+    d.debug.log(`${m.name} has arrived!`);
+  });
+
+  net.on(MessageType.CIVILIAN_PANEL_STATE, (msg) => {
+    const m = msg as unknown as CivilianPanelStateMessage;
+    if (d.civilianPanel.isVisible) {
+      d.civilianPanel.update(m.civilians, m.buildings, m.population, m.housingCapacity);
+    } else {
+      d.civilianPanel.show(m.civilians, m.buildings, m.population, m.housingCapacity, {
+        onAssign: (civilianId, buildingId) => {
+          net.send({ type: MessageType.CIVILIAN_ASSIGN, civilianId, buildingId });
+        },
+        onClose: () => {},
+      });
+    }
+  });
+
   // ── Errors ──────────────────────────────────────────────────────────────
 
   net.on(MessageType.ERROR, (msg) => {
@@ -690,6 +735,12 @@ export function registerMessageHandlers(
 
   net.onConnect(() => {
     d.menuOverlay.setConnectionStatus('connecting');
+    // Send handshake eagerly so the server has our playerId for META_STATS_REQUEST
+    if (!s.handshakeSent) {
+      const name = d.menuOverlay.displayName || 'Player';
+      net.send({ type: MessageType.HANDSHAKE, displayName: name, version: GAME_VERSION, playerId: s.localPlayerId });
+      s.handshakeSent = true;
+    }
   });
 
   net.onDrop(() => {
