@@ -36,10 +36,10 @@ import {
 } from '../config/constants.js';
 import { createBuildingSystem } from '../systems/buildingSystem.js';
 import { resolveDebugCommandView, ALLOWED_DEBUG_VIEWS } from '../ui/debugConsoleCommands.js';
-import { buildCheatsSectionLines, buildMultiplayerSectionLines, buildServerSectionLines } from '../ui/debugOverlaySections.js';
 import { createMultiplayerClient } from '../net/multiplayerClient.js';
-import { getLatencyVerdict } from '../net/latencyHeuristics.js';
 import { computeBuildingStateHash } from '../net/replicationStateHash.js';
+import { appendDebugLog, downloadDebugSessionLogs as exportDebugSessionLogs } from '../ui/debugConsoleLogs.js';
+import { buildDebugOverlayLines, renderDebugOverlayPanel } from '../ui/debugConsoleOverlayRenderer.js';
 import { ensureRuntimePlayer as ensureRuntimePlayerEntry, getRuntimePlayerCenterById, syncRuntimePlayersFromSnapshot as syncRuntimePlayersFromSnapshotEntries } from '../multiplayer/runtimePlayers.js';
 import { createCivilianSystem } from '../systems/civilianSystem.js';
 import { createEnemySystem } from '../systems/enemySystem.js';
@@ -50,14 +50,20 @@ import {
     addToSpatialIndex,
     clearSpatialIndex,
     formatGameClock,
-    querySpatialIndex,
     querySpatialIndexInto
 } from './runtimeUtils.js';
 import { createCrashLogger } from './crashLogger.js';
 import { createPersistenceController } from './persistenceController.js';
+import { createProjectileRuntime } from './projectileRuntime.js';
 import { createSimulationLoopController } from './simulationLoopController.js';
+import {
+    updateBuildMenuPanel,
+    updateClockAndSessionCard,
+    updateHealthHudBar,
+    updatePauseMenuTextForSession
+} from './hudRenderer.js';
 
-export async function startGame() {
+export async function startGame(startOptions = {}) {
     const TOP_BAR_HEIGHT = 40;
     const SIDE_PANEL_MARGIN = 12;
     const SIDE_PANEL_TOP = TOP_BAR_HEIGHT + 12;
@@ -114,23 +120,10 @@ export async function startGame() {
     const playerCombat = playerSystem.combat;
     const floatingTexts = [];
     const enemies = [];
-    const projectiles = [];
-    const towerProjectiles = [];
-    const enemyProjectiles = [];
-    const projectileObjectPool = [];
-    const projectileSpritePools = {
-        player: [],
-        tower: [],
-        enemy: []
-    };
     const floatingTextPool = [];
     const floatingTextEntryPool = [];
     const queryBufferA = [];
     const queryBufferB = [];
-    const projectileSnapshot = {
-        playerCenter: { x: 0, y: 0 },
-        civilians: []
-    };
     const benchmarkState = {
         active: false,
         elapsedMs: 0,
@@ -142,7 +135,6 @@ export async function startGame() {
     let uiRefreshTimer = 0;
     let saveTimerFrames = 0;
     let gameTimeSeconds = 0;
-    let nextProjectileReplicationId = 1;
     const sharedSessionState = {
         paused: false,
         restartVersion: 0,
@@ -207,6 +199,10 @@ export async function startGame() {
     let buildingSystem = null;
     let civilianSystem = null;
     let enemySystem = null;
+    let projectileRuntime = null;
+    let projectiles = [];
+    let towerProjectiles = [];
+    let enemyProjectiles = [];
     let lastAppliedMultiplayerSnapshotTick = -1;
     let lastAppliedNonPlayerSnapshotSeq = -1;
     let lastAppliedBuildingsRevision = -1;
@@ -227,10 +223,14 @@ export async function startGame() {
     const PLAYER_RECONCILE_MAX_STEP = TILE_SIZE * 0.6;
     const remotePlayerSystem = createRemotePlayerSystem({ layer: remotePlayerLayer });
     const urlParams = new URLSearchParams(window.location.search);
-    const multiplayerQueryEnabled = urlParams.get('multiplayer') === '1' || urlParams.get('mp') === '1';
+    const optionsMode = typeof startOptions.mode === 'string' ? startOptions.mode : '';
+    const multiplayerQueryEnabled = optionsMode === 'multiplayer'
+        || urlParams.get('multiplayer') === '1'
+        || urlParams.get('mp') === '1';
     // LAN host hint for dev console sharing. Defaults to a placeholder to avoid
     // committing personal/local network addresses into source control.
-    const DEV_LAN_HOST_HINT = urlParams.get('lanHostHint')
+    const DEV_LAN_HOST_HINT = startOptions.multiplayer?.lanHostHint
+        || urlParams.get('lanHostHint')
         || (window.location.hostname !== 'localhost' && window.location.hostname !== '0.0.0.0' ? window.location.hostname : '<HOST_LAN_IP>');
     const multiplayerProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
     // Multiplayer host override for LAN join testing (example: ?mp=1&mpHost=192.168.1.10).
@@ -238,9 +238,9 @@ export async function startGame() {
     const defaultMultiplayerHost = (window.location.hostname === '0.0.0.0' || window.location.hostname === '::')
         ? 'localhost'
         : window.location.hostname;
-    const multiplayerHost = urlParams.get('mpHost') || defaultMultiplayerHost;
-    const multiplayerPort = Number(urlParams.get('mpPort')) || 8080;
-    const multiplayerJoinToken = urlParams.get('joinToken') || '';
+    const multiplayerHost = startOptions.multiplayer?.host || urlParams.get('mpHost') || defaultMultiplayerHost;
+    const multiplayerPort = Number(startOptions.multiplayer?.port ?? urlParams.get('mpPort')) || 8080;
+    const multiplayerJoinToken = startOptions.multiplayer?.joinToken || urlParams.get('joinToken') || '';
     const multiplayerUrl = `${multiplayerProtocol}://${multiplayerHost}:${multiplayerPort}`;
     const multiplayerClient = createMultiplayerClient({
         url: multiplayerUrl,
@@ -294,6 +294,19 @@ export async function startGame() {
         }
     });
     app.stage.addChild(clockText);
+    const sessionCardText = new PIXI.Text({
+        text: '',
+        style: {
+            fill: '#bfffd1',
+            fontFamily: 'monospace',
+            fontSize: 12
+        }
+    });
+    sessionCardText.visible = false;
+    app.stage.addChild(sessionCardText);
+    const sessionCardBackground = new PIXI.Graphics();
+    sessionCardBackground.visible = false;
+    app.stage.addChildAt(sessionCardBackground, app.stage.getChildIndex(sessionCardText));
     const topBarBackground = new PIXI.Graphics();
     app.stage.addChildAt(topBarBackground, app.stage.getChildIndex(hudText));
 
@@ -365,13 +378,12 @@ export async function startGame() {
 
     function updatePauseMenuText() {
         const multiplayerStats = multiplayerClient.getStats();
-        if (!multiplayerStats.connected) {
-            pauseText.text = 'Paused\nPress ESC to resume\nPress R to restart run';
-            return;
-        }
-        const restartVotes = Math.max(0, Number(sharedSessionState.restartVotes) || 0);
-        const restartEligible = Math.max(0, Number(sharedSessionState.restartEligiblePlayers) || 0);
-        pauseText.text = `Paused\nPress ESC to vote pause/resume\nPress R to vote restart run\nRestart vote: ${restartVotes}/${restartEligible}`;
+        updatePauseMenuTextForSession(
+            pauseText,
+            multiplayerStats.connected,
+            sharedSessionState.restartVotes,
+            sharedSessionState.restartEligiblePlayers
+        );
     }
 
     const debugText = new PIXI.Text({
@@ -443,12 +455,17 @@ export async function startGame() {
     }
 
     function updateClockHud() {
-        clockText.text = `Time ${formatGameClock(gameTimeSeconds)}`;
-        clockText.position.set(window.innerWidth - 150, 10);
-    }
-
-    function formatCost(cost) {
-        return `W:${cost.wood ?? 0} S:${cost.stone ?? 0} I:${cost.iron ?? 0} G:${cost.gold ?? 0}`;
+        const multiplayerStats = multiplayerClient.getStats();
+        updateClockAndSessionCard({
+            clockText,
+            gameTimeText: `Time ${formatGameClock(gameTimeSeconds)}`,
+            windowWidth: window.innerWidth,
+            sessionCardBackground,
+            sessionCardText,
+            multiplayerConnected: multiplayerStats.connected,
+            multiplayerIsAuthority: multiplayerStats.isAuthority,
+            remotePlayerCount: multiplayerStats.remotePlayerCount
+        });
     }
 
     function rebuildRuntimeSpatialIndexes(civilianTargets = null) {
@@ -470,97 +487,36 @@ export async function startGame() {
     }
 
     function updateBuildMenu() {
-        if (!buildingSystem) {
-            buildMenuText.visible = false;
-            return;
-        }
-        const buildUi = buildingSystem.getUiState();
-        if (!buildUi.buildMode && !buildUi.selectedPlacedBuilding) {
-            buildMenuBackground.visible = false;
-            buildMenuText.visible = false;
-            return;
-        }
-
-        const lines = [];
-        if (buildUi.buildMode) {
-            lines.push('Build Menu', 'Tab/Wheel: Select | LClick: Place | Del/X: Remove');
-            for (const entry of buildingSystem.getMenuEntries()) {
-                lines.push(`${entry.selected ? '> ' : '  '}${entry.label} [${formatCost(entry.cost)}]`);
-            }
-        }
-
-        if (buildUi.selectedPlacedBuilding) {
-            if (lines.length > 0) {
-                lines.push('');
-            }
-            lines.push(`Selected: ${buildUi.selectedPlacedBuilding.label}`);
-            if ((buildUi.selectedPlacedBuilding.maxHp ?? 0) > 0) {
-                lines.push(`HP: ${Math.max(0, Math.ceil(buildUi.selectedPlacedBuilding.hp ?? 0))}/${buildUi.selectedPlacedBuilding.maxHp}`);
-            }
-            if (buildUi.selectedPlacedBuilding.role === 'producer') {
-                lines.push(`Stored: ${buildUi.selectedPlacedBuilding.storedOutput}/${buildUi.selectedPlacedBuilding.storageCap} ${buildUi.selectedPlacedBuilding.outputResource}`);
-            }
-        }
-        const estimatedLineHeight = 18;
-        const maxVisibleLines = Math.max(
-            4,
-            Math.floor((window.innerHeight - SIDE_PANEL_TOP - SIDE_PANEL_MARGIN - 24) / estimatedLineHeight)
-        );
-        const visibleLines = lines.length > maxVisibleLines
-            ? [...lines.slice(0, maxVisibleLines - 1), `... (${lines.length - maxVisibleLines + 1} more)`]
-            : lines;
-        buildMenuText.text = visibleLines.join('\n');
-        const panelPadding = 12;
-        const panelX = SIDE_PANEL_MARGIN;
-        const panelY = SIDE_PANEL_TOP;
-        const maxPanelWidth = Math.max(280, Math.floor(window.innerWidth * 0.4));
-        const panelWidth = Math.min(maxPanelWidth, Math.max(280, Math.ceil(buildMenuText.width + panelPadding * 2)));
-        const requestedHeight = Math.max(46, Math.ceil(buildMenuText.height + panelPadding * 2));
-        const maxPanelHeight = Math.max(80, window.innerHeight - panelY - SIDE_PANEL_MARGIN);
-        const panelHeight = Math.min(requestedHeight, maxPanelHeight);
-        buildMenuText.position.set(panelX + panelPadding, panelY + panelPadding);
-        buildMenuBackground.clear();
-        buildMenuBackground.rect(panelX, panelY, panelWidth, panelHeight);
-        buildMenuBackground.fill(0x141414);
-        buildMenuBackground.alpha = 0.84;
-        buildMenuBackground.stroke({ width: 1, color: 0x333333 });
-        buildMenuBackground.visible = true;
-        buildMenuText.visible = true;
+        updateBuildMenuPanel({
+            buildingSystem,
+            buildMenuText,
+            buildMenuBackground,
+            sidePanelTop: SIDE_PANEL_TOP,
+            sidePanelMargin: SIDE_PANEL_MARGIN,
+            windowWidth: window.innerWidth,
+            windowHeight: window.innerHeight
+        });
     }
 
     function updateHealthHud() {
-        const barWidth = 260;
-        const barHeight = 18;
-        const barX = Math.floor((window.innerWidth - barWidth) / 2);
-        const barY = window.innerHeight - 34;
-        const ratio = Math.max(0, Math.min(1, playerState.hp / playerState.maxHp));
-
-        healthBarBackground.clear();
-        healthBarBackground.rect(barX, barY, barWidth, barHeight);
-        healthBarBackground.fill(0x2a2a2a);
-        healthBarBackground.stroke({ width: 1, color: 0x000000 });
-
-        healthBarFill.clear();
-        healthBarFill.rect(barX, barY, barWidth * ratio, barHeight);
-        healthBarFill.fill(0xd94b4b);
-
-        healthText.text = `HP: ${Math.max(0, Math.ceil(playerState.hp))}/${playerState.maxHp}`;
-        healthText.position.set(barX + 8, barY + 1);
-        weaponText.text = `Weapon: ${playerCombat.weapon}`;
-        let weaponX = barX + barWidth + 14;
-        const maxWeaponX = window.innerWidth - weaponText.width - 16;
-        if (weaponX > maxWeaponX) {
-            weaponX = Math.max(16, maxWeaponX);
-        }
-        weaponText.position.set(weaponX, barY + 1);
+        updateHealthHudBar({
+            playerState,
+            playerWeapon: playerCombat.weapon,
+            healthBarBackground,
+            healthBarFill,
+            healthText,
+            weaponText,
+            windowWidth: window.innerWidth,
+            windowHeight: window.innerHeight
+        });
     }
 
-    function logDebug(message) {
-        const stamp = new Date().toLocaleTimeString();
-        debugLogs.push(`[${stamp}] ${message}`);
-        if (debugLogs.length > 6) {
-            debugLogs.shift();
-        }
+    function logDebug(message, level = null) {
+        appendDebugLog(debugLogs, message, level, 300);
+    }
+
+    function downloadDebugSessionLogs() {
+        exportDebugSessionLogs(debugLogs);
     }
 
     function setDebugOverlayView(view) {
@@ -587,8 +543,13 @@ export async function startGame() {
             executeForceReset();
             return true;
         }
+        if (resolved.action === 'export_logs') {
+            downloadDebugSessionLogs();
+            logDebug('Info/warn logs exported');
+            return true;
+        }
         if (resolved.help) {
-            logDebug('Commands: /core /perf /cheats /multiplayer /server /logs /all /force-reset');
+            logDebug('Commands: /core /perf /cheats /multiplayer /server /logs /all /force-reset /export-logs');
             return true;
         }
         logDebug(`Unknown command: ${resolved.unknown ?? commandText.trim().toLowerCase()}`);
@@ -689,177 +650,71 @@ export async function startGame() {
             collisionPasses: 0,
             civiliansResolvedCollisions: 0
         };
+        const buildUi = buildingSystem?.getUiState?.() ?? { buildMode: false };
+        const overlayLines = buildDebugOverlayLines({
+            debugOverlayView,
+            smoothedFps,
+            frameMs,
+            playerState,
+            playerCombat,
+            playerWorldX,
+            playerWorldY,
+            tileSize: TILE_SIZE,
+            enemies,
+            enemyMaxCount: ENEMY_MAX_COUNT,
+            enemiesDisabled,
+            projectiles,
+            towerProjectiles,
+            enemyProjectiles,
+            crashLogsLength: crashLogs.length,
+            worldStats,
+            buildingStats,
+            civilianStats,
+            pathStats,
+            multiplayerStats,
+            serverPerfStats,
+            civPerf,
+            activePerfProfileKey,
+            autoPerfGovernorEnabled,
+            benchmarkState,
+            overBudgetFrameStreak,
+            stableFrameStreak,
+            systemPerfMs,
+            activePerfProfile,
+            systemDeferred,
+            systemOverBudget,
+            devLanHostHint: DEV_LAN_HOST_HINT,
+            locationProtocol: window.location.protocol,
+            locationPort: window.location.port,
+            buildModeEnabled: Boolean(buildUi.buildMode),
+            debugLogs
+        });
 
-        const lines = [
-            'DEV CONSOLE (F4 or \\u00e7)',
-            `View: ${debugOverlayView.toUpperCase()}`,
-            `FPS: ${smoothedFps.toFixed(1)} | Frame: ${frameMs.toFixed(2)} ms`,
-            ''
-        ];
-
-        const pushSection = (name, sectionLines) => {
-            if (sectionLines.length === 0) {
-                return;
-            }
-            lines.push(`-- ${name} --`);
-            for (const line of sectionLines) {
-                lines.push(line);
-            }
-            lines.push('');
-        };
-
-        const showAll = debugOverlayView === 'all';
-        if (showAll || debugOverlayView === 'core') {
-            pushSection('Core', [
-                `Player HP: ${Math.ceil(playerState.hp)}/${playerState.maxHp} | Weapon: ${playerCombat.weapon}`,
-                `Coords: ${Math.floor(playerWorldX)}, ${Math.floor(playerWorldY)} | Tile: ${Math.floor((playerWorldX + TILE_SIZE / 2) / TILE_SIZE)}, ${Math.floor((playerWorldY + TILE_SIZE / 2) / TILE_SIZE)}`,
-                `Enemies: ${enemies.length}/${ENEMY_MAX_COUNT} | Ranged: ${enemies.filter((enemy) => enemy.isRanged).length}`,
-                `Enemies disabled: ${enemiesDisabled ? 'YES' : 'NO'} (K while console open)`,
-                `Bullets P/T/E: ${projectiles.length}/${towerProjectiles.length}/${enemyProjectiles.length}`,
-                `Buildings: ${buildingStats.buildingCount} | Producers: ${buildingStats.producerCount ?? 0}`,
-                `Civilians: ${civilianStats.civilianCount}/${civilianStats.civilianCap} | Lost: ${civilianStats.civiliansKilled}`,
-                `Crash logs stored: ${crashLogs.length}`,
-                `Tiles cached: ${worldStats.tilesCached} | Resources active: ${worldStats.resourcesActive}`
-            ]);
-        }
-
-        if (showAll || debugOverlayView === 'multiplayer') {
-            pushSection(
-                'Multiplayer',
-                buildMultiplayerSectionLines(multiplayerStats, DEV_LAN_HOST_HINT, window.location.protocol, window.location.port)
-            );
-        }
-
-        if (showAll || debugOverlayView === 'server') {
-            pushSection('Server', buildServerSectionLines(serverPerfStats));
-        }
-
-        if (showAll || debugOverlayView === 'perf') {
-            pushSection('Performance', [
-                `Perf profile: ${activePerfProfileKey} | Auto governor: ${autoPerfGovernorEnabled ? 'ON' : 'OFF'}`,
-                `Governor streak O/S: ${overBudgetFrameStreak}/${stableFrameStreak}`,
-                `Benchmark: ${benchmarkState.active ? 'RUNNING' : 'idle'} | Frames: ${benchmarkState.frameCount}`,
-                `Path req/exe/def: ${pathStats.requests}/${pathStats.executed}/${pathStats.deferred} | Budget: ${pathStats.budget}`,
-                `Path stride-skip: ${pathStats.skippedByStride ?? 0}`,
-                `System ms B/C/E/T/R/P/UI: ${systemPerfMs.buildings.toFixed(2)}/${systemPerfMs.civilians.toFixed(2)}/${systemPerfMs.enemies.toFixed(2)}/${systemPerfMs.towerCombat.toFixed(2)}/${systemPerfMs.enemyRanged.toFixed(2)}/${systemPerfMs.projectiles.toFixed(2)}/${systemPerfMs.ui.toFixed(2)}`,
-                `Budgets ms B/C/E/T/R/P/UI: ${activePerfProfile.budgetsMs.buildings.toFixed(1)}/${activePerfProfile.budgetsMs.civilians.toFixed(1)}/${activePerfProfile.budgetsMs.enemies.toFixed(1)}/${activePerfProfile.budgetsMs.towerCombat.toFixed(1)}/${activePerfProfile.budgetsMs.enemyRanged.toFixed(1)}/${activePerfProfile.budgetsMs.projectiles.toFixed(1)}/${activePerfProfile.budgetsMs.ui.toFixed(1)}`,
-                `Deferred C/T/R: ${systemDeferred.civilianSkippedFrames}/${systemDeferred.towerSkippedFrames}/${systemDeferred.enemyRangedSkippedFrames}`,
-                `Over budget B/C/E/T/R/P/UI: ${systemOverBudget.buildings}/${systemOverBudget.civilians}/${systemOverBudget.enemies}/${systemOverBudget.towerCombat}/${systemOverBudget.enemyRanged}/${systemOverBudget.projectiles}/${systemOverBudget.ui}`,
-                `Civ update: ${civPerf.updateMs.toFixed(2)} ms | Assign ${civPerf.assignmentCalls} (${civPerf.assignmentSkippedByBudget} delayed)`,
-                `Civ queries P/W: ${civPerf.producerQueries}/${civPerf.warehouseQueries} | Civ sep: ${civPerf.civiliansResolvedCollisions} in ${civPerf.collisionPasses} pass`
-            ]);
-        }
-
-        if (showAll || debugOverlayView === 'cheats') {
-            pushSection(
-                'Cheats/Dev Actions',
-                buildCheatsSectionLines(
-                    enemiesDisabled,
-                    activePerfProfileKey,
-                    autoPerfGovernorEnabled,
-                    buildingSystem.getUiState().buildMode
-                )
-            );
-        }
-
-        // Remove trailing blank section spacer.
-        while (lines.length > 0 && lines[lines.length - 1] === '') {
-            lines.pop();
-        }
-
-        const logLines = ['', '-- Logs --'];
-        if (debugLogs.length === 0) {
-            logLines.push('(empty)');
-        } else {
-            for (const entry of debugLogs) {
-                logLines.push(entry);
-            }
-        }
-
-        const maxPanelWidth = Math.max(320, Math.floor(window.innerWidth * 0.45));
-        debugText.style.wordWrap = false;
-        debugText.text = lines.join('\n');
-        const measuredWidth = Math.ceil(debugText.width + 28);
-        const panelWidth = Math.max(300, Math.min(maxPanelWidth, measuredWidth));
-        const panelX = window.innerWidth - panelWidth - SIDE_PANEL_MARGIN;
-        debugText.style.wordWrap = true;
-        debugText.style.wordWrapWidth = panelWidth - 24;
-        debugText.text = lines.join('\n');
-        debugNavText.style.wordWrapWidth = panelWidth - 24;
-        const maxPanelHeight = window.innerHeight - SIDE_PANEL_TOP - DEBUG_PANEL_MARGIN;
-        let panelHeight = Math.ceil(debugText.height + 78);
-        panelHeight = Math.max(170, Math.min(maxPanelHeight, panelHeight));
-        const headerHeight = 62;
-        const inputHeight = 26;
-        const navTop = SIDE_PANEL_TOP + 8;
-        const inputTop = SIDE_PANEL_TOP + 28;
-        const dividerY = SIDE_PANEL_TOP + headerHeight - 6;
-        const verdictState = getLatencyVerdict(serverPerfStats, multiplayerStats);
-        const shouldShowVerdict = showAll || debugOverlayView === 'server';
-        const verdictHeight = shouldShowVerdict ? 18 : 0;
-        const contentTop = SIDE_PANEL_TOP + headerHeight + verdictHeight;
-        const contentHeight = Math.max(80, panelHeight - headerHeight - verdictHeight - 12);
-        const maxLines = Math.max(6, Math.floor(contentHeight / 16));
-        const minBodyLines = debugOverlayView === 'logs' ? 5 : 8;
-        const maxLogLinesForView = (showAll || debugOverlayView === 'logs')
-            ? Math.max(3, Math.floor(maxLines * 0.5))
-            : 4;
-        const reservedForLogs = Math.min(
-            logLines.length,
-            Math.max(2, Math.min(maxLogLinesForView, maxLines - minBodyLines))
-        );
-        const bodyBudget = Math.max(0, maxLines - reservedForLogs);
-        let bodyLines = lines;
-        if (bodyLines.length > bodyBudget) {
-            const headKeep = Math.min(3, bodyBudget);
-            const tailKeep = Math.max(0, bodyBudget - headKeep - 1);
-            bodyLines = bodyLines
-                .slice(0, headKeep)
-                .concat('... (truncated)')
-                .concat(tailKeep > 0 ? bodyLines.slice(-tailKeep) : []);
-        }
-        const clampedLines = [...bodyLines, ...logLines.slice(-reservedForLogs)];
-
-        debugText.position.set(panelX + 12, contentTop);
-        debugNavText.position.set(panelX + 12, navTop);
-        debugNavText.text = `View: ${debugOverlayView.toUpperCase()} | Tab or / to type`;
-
-        debugPanelBackground.clear();
-        debugPanelBackground.rect(panelX, SIDE_PANEL_TOP, panelWidth, panelHeight);
-        debugPanelBackground.fill(0x101010);
-        debugPanelBackground.alpha = 0.84;
-        debugPanelBackground.stroke({ width: 1, color: 0x2f2f2f });
-        debugPanelBackground.visible = true;
-
-        debugPanelBackground.rect(panelX + 10, dividerY, panelWidth - 20, 1);
-        debugPanelBackground.fill(0x2b2b2b);
-        debugInputBackground.clear();
-        debugInputBackground.rect(panelX + 10, inputTop, panelWidth - 20, inputHeight);
-        debugInputBackground.fill(0x06140a);
-        debugInputBackground.alpha = 1;
-        debugInputBackground.stroke({ width: 1, color: 0x3fa35e });
-        debugInputBackground.visible = true;
-        debugInputText.text = debugCommandActive ? `> ${debugCommandBuffer}_` : '> type /help';
-        debugInputText.position.set(panelX + 16, inputTop + 4);
-        debugInputText.visible = true;
-        if (shouldShowVerdict) {
-            debugVerdictText.text = verdictState.text;
-            debugVerdictText.style.fill = verdictState.color;
-            debugVerdictText.position.set(panelX + 12, SIDE_PANEL_TOP + headerHeight + 1);
-            debugVerdictText.visible = true;
-        } else {
-            debugVerdictText.visible = false;
-        }
-        debugNavText.visible = false;
-        debugText.text = clampedLines.join('\n');
-        debugText.visible = true;
-    }
-
-    function removeProjectileAt(index) {
-        const projectile = projectiles[index];
-        releaseProjectileSprite(projectile.team, projectile.sprite);
-        releaseProjectileObject(projectile);
-        projectiles.splice(index, 1);
+        renderDebugOverlayPanel({
+            panelElements: {
+                debugText,
+                debugNavText,
+                debugInputBackground,
+                debugInputText,
+                debugVerdictText,
+                debugPanelBackground
+            },
+            viewport: {
+                windowWidth: window.innerWidth,
+                windowHeight: window.innerHeight,
+                sidePanelMargin: SIDE_PANEL_MARGIN,
+                sidePanelTop: SIDE_PANEL_TOP,
+                debugPanelMargin: DEBUG_PANEL_MARGIN
+            },
+            debugOverlayView,
+            lines: overlayLines.lines,
+            logLines: overlayLines.logLines,
+            showAll: overlayLines.showAll,
+            serverPerfStats,
+            multiplayerStats,
+            debugCommandActive,
+            debugCommandBuffer
+        });
     }
 
     function resetCombatEntities() {
@@ -867,11 +722,7 @@ export async function startGame() {
         remotePlayerSystem.clear();
         lastAppliedMultiplayerSnapshotTick = -1;
         lastAppliedNonPlayerSnapshotSeq = -1;
-        for (let i = projectiles.length - 1; i >= 0; i--) {
-            removeProjectileAt(i);
-        }
-        clearProjectileList(towerProjectiles);
-        clearProjectileList(enemyProjectiles);
+        projectileRuntime?.resetAllProjectiles();
     }
 
     // Full run reset: player, world, buildings, civilians, enemies, and resources.
@@ -1048,121 +899,8 @@ export async function startGame() {
         }
     }
 
-    function createBulletSprite(fillColor = 0xf7e56a, strokeColor = 0x2a2409, radius = 4) {
-        const sprite = new PIXI.Graphics();
-        sprite.circle(radius, radius, radius);
-        sprite.fill(fillColor);
-        sprite.stroke({ width: 1, color: strokeColor });
-        return sprite;
-    }
-
-    function acquireProjectileSprite(team) {
-        const pool = projectileSpritePools[team];
-        if (pool && pool.length > 0) {
-            const sprite = pool.pop();
-            sprite.visible = true;
-            return sprite;
-        }
-        if (team === 'tower') {
-            return createBulletSprite(0xb08bff, 0x2f1c4f, 4);
-        }
-        if (team === 'enemy') {
-            return createBulletSprite(0xff8d8d, 0x4f1b1b, 4);
-        }
-        return createBulletSprite(0xf7e56a, 0x2a2409, 4);
-    }
-
-    function releaseProjectileSprite(team, sprite) {
-        if (!sprite) {
-            return;
-        }
-        sprite.visible = false;
-        sprite.position.set(-99999, -99999);
-        const pool = projectileSpritePools[team];
-        if (pool) {
-            pool.push(sprite);
-        } else {
-            sprite.destroy();
-        }
-    }
-
-    function acquireProjectileObject() {
-        return projectileObjectPool.pop() ?? {
-            replicationId: null,
-            x: 0,
-            y: 0,
-            targetX: 0,
-            targetY: 0,
-            vx: 0,
-            vy: 0,
-            ttl: 0,
-            damage: 0,
-            radius: 4,
-            team: 'player',
-            ownerPlayerId: null,
-            sprite: null
-        };
-    }
-
-    function releaseProjectileObject(projectile) {
-        projectile.replicationId = null;
-        projectile.x = 0;
-        projectile.y = 0;
-        projectile.targetX = 0;
-        projectile.targetY = 0;
-        projectile.vx = 0;
-        projectile.vy = 0;
-        projectile.ttl = 0;
-        projectile.damage = 0;
-        projectile.radius = 4;
-        projectile.team = 'player';
-        projectile.ownerPlayerId = null;
-        projectile.sprite = null;
-        projectileObjectPool.push(projectile);
-    }
-
-    function spawnFriendlyProjectile(sourceList, maxCount, config) {
-        if (sourceList.length >= maxCount) {
-            return;
-        }
-        const bullet = acquireProjectileObject();
-        const sprite = acquireProjectileSprite(config.team);
-        bullet.replicationId = Number.isFinite(config.replicationId)
-            ? Math.floor(config.replicationId)
-            : nextProjectileReplicationId++;
-        bullet.x = config.originX - (config.radius ?? 4);
-        bullet.y = config.originY - (config.radius ?? 4);
-        bullet.targetX = bullet.x;
-        bullet.targetY = bullet.y;
-        bullet.vx = config.dirX * config.speed;
-        bullet.vy = config.dirY * config.speed;
-        bullet.ttl = config.lifetimeFrames;
-        bullet.damage = config.damage;
-        bullet.radius = config.radius ?? 4;
-        bullet.team = config.team;
-        bullet.ownerPlayerId = config.ownerPlayerId ?? null;
-        bullet.sprite = sprite;
-        sprite.position.set(bullet.x, bullet.y);
-        projectileLayer.addChild(sprite);
-        sourceList.push(bullet);
-    }
-
     function spawnBullet(playerCenterX, playerCenterY, dirX, dirY, ownerPlayerId = null, damageMultiplier = 1) {
-        const cfg = WEAPONS.pistol;
-        spawnFriendlyProjectile(projectiles, MAX_BULLETS, {
-            originX: playerCenterX,
-            originY: playerCenterY,
-            dirX,
-            dirY,
-            speed: cfg.bulletSpeed,
-            lifetimeFrames: cfg.bulletLifetimeFrames,
-            damage: cfg.damage * damageMultiplier,
-            team: 'player',
-            ownerPlayerId,
-            fillColor: 0xf7e56a,
-            strokeColor: 0x2a2409,
-            radius: 4
-        });
+        projectileRuntime?.spawnPlayerBullet(playerCenterX, playerCenterY, dirX, dirY, ownerPlayerId, damageMultiplier);
     }
 
     function performAttack(playerCenterX, playerCenterY) {
@@ -1196,430 +934,16 @@ export async function startGame() {
         spawnFloatingFeedback('*', muzzleX, muzzleY, '#ffd166', 16);
     }
 
-    function updateProjectileList(list, deltaMoveScale, snapshot) {
-        for (let i = list.length - 1; i >= 0; i--) {
-            const bullet = list[i];
-            bullet.ttl -= (deltaMoveScale * 60);
-            bullet.x += bullet.vx * deltaMoveScale;
-            bullet.y += bullet.vy * deltaMoveScale;
-            bullet.targetX = bullet.x;
-            bullet.targetY = bullet.y;
-            bullet.sprite.position.set(bullet.x, bullet.y);
-
-            if (bullet.ttl <= 0) {
-                releaseProjectileSprite(bullet.team, bullet.sprite);
-                releaseProjectileObject(bullet);
-                list.splice(i, 1);
-                continue;
-            }
-
-            const bulletCenterX = bullet.x + bullet.radius;
-            const bulletCenterY = bullet.y + bullet.radius;
-            const bulletTileX = Math.floor(bulletCenterX / TILE_SIZE);
-            const bulletTileY = Math.floor(bulletCenterY / TILE_SIZE);
-
-            if (bullet.team === 'enemy') {
-                if (snapshot.serverOwnsEnemyProjectileDamage) {
-                    // Dedicated server authority resolves enemy-projectile damage in multiplayer sessions.
-                    continue;
-                }
-                if (buildingSystem.isProjectileBlockedForTeam(bulletTileX, bulletTileY, 'enemy')) {
-                    const result = buildingSystem.applyDamageAtTile(bulletTileX, bulletTileY, bullet.damage, 'enemy_projectile');
-                    releaseProjectileSprite(bullet.team, bullet.sprite);
-                    releaseProjectileObject(bullet);
-                    list.splice(i, 1);
-                    if (result?.destroyed) {
-                        updateHud();
-                    }
-                    continue;
-                }
-
-                const playerTargets = Array.isArray(snapshot.playerTargets) ? snapshot.playerTargets : [];
-                let hitPlayer = false;
-                for (const playerTarget of playerTargets) {
-                    if (playerTarget.isDead) {
-                        continue;
-                    }
-                    const dxPlayer = playerTarget.x - bulletCenterX;
-                    const dyPlayer = playerTarget.y - bulletCenterY;
-                    const playerHitDistance = (playerTarget.radius ?? PLAYER_COLLISION_RADIUS) + bullet.radius;
-                    if (dxPlayer * dxPlayer + dyPlayer * dyPlayer > playerHitDistance * playerHitDistance) {
-                        continue;
-                    }
-                    snapshot.onPlayerHit?.(playerTarget.id, bullet.damage, 'enemy_projectile');
-                    hitPlayer = true;
-                    break;
-                }
-                if (hitPlayer) {
-                    releaseProjectileSprite(bullet.team, bullet.sprite);
-                    releaseProjectileObject(bullet);
-                    list.splice(i, 1);
-                    continue;
-                }
-
-                const civilians = snapshot.civilians;
-                let hitCivilian = false;
-                for (const civilian of civilians) {
-                    if (civilian.isDead) {
-                        continue;
-                    }
-                    const dxCivilian = civilian.x - bulletCenterX;
-                    const dyCivilian = civilian.y - bulletCenterY;
-                    const hitDistance = 8 + bullet.radius;
-                    if (dxCivilian * dxCivilian + dyCivilian * dyCivilian <= hitDistance * hitDistance) {
-                        civilianSystem.applyDamage(civilian.id, bullet.damage, 'enemy_projectile');
-                        hitCivilian = true;
-                        break;
-                    }
-                }
-                if (hitCivilian) {
-                    releaseProjectileSprite(bullet.team, bullet.sprite);
-                    releaseProjectileObject(bullet);
-                    list.splice(i, 1);
-                }
-                continue;
-            }
-
-            const blockingTeam = bullet.team === 'tower' ? 'tower' : 'friendly';
-            if (buildingSystem.isProjectileBlockedForTeam(bulletTileX, bulletTileY, blockingTeam)) {
-                releaseProjectileSprite(bullet.team, bullet.sprite);
-                releaseProjectileObject(bullet);
-                list.splice(i, 1);
-                continue;
-            }
-
-            let hitEnemy = false;
-            for (const enemy of enemies) {
-                if (enemy.isDead) {
-                    continue;
-                }
-                const dx = (enemy.x + ENEMY_RADIUS) - bulletCenterX;
-                const dy = (enemy.y + ENEMY_RADIUS) - bulletCenterY;
-                const hitDistance = ENEMY_RADIUS + bullet.radius;
-                if (dx * dx + dy * dy <= hitDistance * hitDistance) {
-                    applyDamage(enemy, bullet.damage, `${bullet.team}_projectile`, bullet.ownerPlayerId ?? null);
-                    hitEnemy = true;
-                    break;
-                }
-            }
-
-            if (hitEnemy) {
-                releaseProjectileSprite(bullet.team, bullet.sprite);
-                releaseProjectileObject(bullet);
-                list.splice(i, 1);
-            }
-        }
-    }
-
-    function clearProjectileList(list) {
-        for (let i = list.length - 1; i >= 0; i--) {
-            releaseProjectileSprite(list[i].team, list[i].sprite);
-            releaseProjectileObject(list[i]);
-            list.splice(i, 1);
-        }
-    }
-
-    function syncReplicatedProjectileList(targetList, sourceEntries, team) {
-        const source = Array.isArray(sourceEntries) ? sourceEntries : [];
-        const byId = new Map();
-        for (const projectile of targetList) {
-            if (Number.isFinite(projectile.replicationId)) {
-                byId.set(projectile.replicationId, projectile);
-            }
-        }
-        const seenIds = new Set();
-        for (let i = 0; i < source.length; i++) {
-            const entry = source[i];
-            const entryId = Number(entry?.id);
-            const replicationId = Number.isFinite(entryId) && entryId > 0 ? Math.floor(entryId) : (i + 1);
-            let projectile = byId.get(replicationId);
-            if (!projectile) {
-                projectile = acquireProjectileObject();
-                const sprite = acquireProjectileSprite(team);
-                projectile.replicationId = replicationId;
-                projectile.x = 0;
-                projectile.y = 0;
-                projectile.targetX = 0;
-                projectile.targetY = 0;
-                projectile.vx = 0;
-                projectile.vy = 0;
-                projectile.ttl = 60;
-                projectile.damage = 0;
-                projectile.radius = 4;
-                projectile.team = team;
-                projectile.sprite = sprite;
-                sprite.position.set(projectile.x, projectile.y);
-                projectileLayer.addChild(sprite);
-                targetList.push(projectile);
-            }
-            const nextX = Number(entry.x) || 0;
-            const nextY = Number(entry.y) || 0;
-            if (!Number.isFinite(projectile.x) || !Number.isFinite(projectile.y)) {
-                projectile.x = nextX;
-                projectile.y = nextY;
-            }
-            projectile.targetX = nextX;
-            projectile.targetY = nextY;
-            seenIds.add(replicationId);
-        }
-        for (let i = targetList.length - 1; i >= 0; i--) {
-            if (seenIds.has(targetList[i].replicationId)) {
-                continue;
-            }
-            releaseProjectileSprite(targetList[i].team, targetList[i].sprite);
-            releaseProjectileObject(targetList[i]);
-            targetList.splice(i, 1);
-        }
-    }
-
-    function updateReplicatedProjectileList(list, deltaMoveScale) {
-        const alpha = Math.max(0.05, Math.min(1, deltaMoveScale * 18));
-        for (const projectile of list) {
-            projectile.x += (projectile.targetX - projectile.x) * alpha;
-            projectile.y += (projectile.targetY - projectile.y) * alpha;
-            projectile.sprite.position.set(projectile.x, projectile.y);
-        }
-    }
-
-    function exportReplicatedProjectileList(sourceList) {
-        const result = [];
-        for (const projectile of sourceList) {
-            result.push({
-                id: Number.isFinite(projectile.replicationId) ? Math.floor(projectile.replicationId) : 0,
-                x: projectile.x,
-                y: projectile.y
-            });
-        }
-        return result;
-    }
-
     function updateProjectiles(deltaMoveScale, civilianTargetsSnapshot = null) {
-        const multiplayerStats = multiplayerClient.getStats();
-        const serverOwnsEnemyProjectileDamage = multiplayerStats.connected && multiplayerStats.isAuthority;
-        let playerTargets = [];
-        if (multiplayerStats.connected && multiplayerStats.isAuthority) {
-            playerTargets = [...multiplayerPlayerRuntime.values()].map((runtime) => ({
-                id: runtime.id,
-                x: runtime.x,
-                y: runtime.y,
-                radius: PLAYER_COLLISION_RADIUS,
-                isDead: runtime.isDead
-            }));
-        } else {
-            const playerCenter = playerSystem.getCenter();
-            playerTargets = [{
-                id: multiplayerStats.playerId ?? 'local',
-                x: playerCenter.x,
-                y: playerCenter.y,
-                radius: PLAYER_COLLISION_RADIUS,
-                isDead: playerState.isDead
-            }];
-        }
-        const snapshot = {
-            serverOwnsEnemyProjectileDamage,
-            playerTargets,
-            civilians: civilianTargetsSnapshot ?? civilianSystem.getTargets(),
-            onPlayerHit: (playerId, amount, source) => {
-                if (multiplayerStats.connected && multiplayerStats.isAuthority) {
-                    const runtime = ensureRuntimePlayer(playerId ?? multiplayerStats.playerId);
-                    applyDamage(runtime, amount, source);
-                    if (runtime.isDead && runtime.respawnTimer <= 0) {
-                        runtime.respawnTimer = PLAYER_RESPAWN_SECONDS;
-                    }
-                    if (String(multiplayerStats.playerId) === String(runtime.id)) {
-                        playerState.hp = runtime.hp;
-                        playerState.maxHp = runtime.maxHp;
-                        playerState.isDead = runtime.isDead;
-                        playerState.invulnFrames = runtime.invulnFrames ?? 0;
-                    }
-                    return;
-                }
-                applyDamage(playerState, amount, source);
-            }
-        };
-        updateProjectileList(projectiles, deltaMoveScale, snapshot);
-        updateProjectileList(towerProjectiles, deltaMoveScale, snapshot);
-        updateProjectileList(enemyProjectiles, deltaMoveScale, snapshot);
+        projectileRuntime?.updateProjectiles(deltaMoveScale, civilianTargetsSnapshot);
     }
 
     function updateTowerCombat(aiDirectives = null) {
-        const towers = buildingSystem.getTowers?.() ?? [];
-        if (towers.length === 0) {
-            return;
-        }
-        for (const tower of towers) {
-            if ((tower.towerCooldownRemainingFrames ?? 0) > 0) {
-                continue;
-            }
-            const centerX = (tower.tileX + tower.footprintW * 0.5) * TILE_SIZE;
-            const centerY = (tower.tileY + tower.footprintH * 0.5) * TILE_SIZE;
-            const range = tower.towerRange || PROJECTILES.tower.range;
-            const rangeSq = range * range;
-            let targetEnemy = null;
-            let bestHp = -1;
-            let bestDistSq = rangeSq;
-            const directedEnemyId = Number(aiDirectives?.towers?.[String(tower.id)] || 0);
-            if (directedEnemyId > 0) {
-                const directedEnemy = enemies.find((enemy) => Number(enemy.id) === directedEnemyId && !enemy.isDead);
-                if (directedEnemy) {
-                    const dx = (directedEnemy.x + ENEMY_RADIUS) - centerX;
-                    const dy = (directedEnemy.y + ENEMY_RADIUS) - centerY;
-                    const distSq = dx * dx + dy * dy;
-                    if (distSq <= rangeSq) {
-                        targetEnemy = directedEnemy;
-                    }
-                }
-            }
-            if (!targetEnemy) {
-                querySpatialIndexInto(enemySpatialIndex, centerX, centerY, range, queryBufferA);
-                for (const enemy of queryBufferA) {
-                    if (enemy.isDead) {
-                        continue;
-                    }
-                    const dx = (enemy.x + ENEMY_RADIUS) - centerX;
-                    const dy = (enemy.y + ENEMY_RADIUS) - centerY;
-                    const distSq = dx * dx + dy * dy;
-                    if (distSq > rangeSq) {
-                        continue;
-                    }
-                    // Target the strongest enemy first; distance breaks ties.
-                    if (enemy.hp > bestHp || (enemy.hp === bestHp && distSq < bestDistSq)) {
-                        bestHp = enemy.hp;
-                        bestDistSq = distSq;
-                        targetEnemy = enemy;
-                    }
-                }
-            }
-            if (!targetEnemy) {
-                continue;
-            }
-            const dx = (targetEnemy.x + ENEMY_RADIUS) - centerX;
-            const dy = (targetEnemy.y + ENEMY_RADIUS) - centerY;
-            const mag = Math.hypot(dx, dy);
-            if (mag <= 0.001) {
-                continue;
-            }
-            spawnFriendlyProjectile(towerProjectiles, MAX_TOWER_PROJECTILES, {
-                originX: centerX,
-                originY: centerY,
-                dirX: dx / mag,
-                dirY: dy / mag,
-                speed: tower.towerProjectileSpeed || PROJECTILES.tower.speed,
-                lifetimeFrames: tower.towerProjectileLifetimeFrames || PROJECTILES.tower.lifetimeFrames,
-                damage: tower.towerProjectileDamage || PROJECTILES.tower.damage,
-                team: 'tower',
-                fillColor: 0xb08bff,
-                strokeColor: 0x2f1c4f,
-                radius: 4
-            });
-            tower.towerCooldownRemainingFrames = tower.towerCooldownFrames || PROJECTILES.tower.cooldownFrames;
-        }
+        projectileRuntime?.updateTowerCombat(aiDirectives, queryBufferA);
     }
 
     function updateEnemyRangedCombat(deltaFrames, aiDirectives = null) {
-        if (enemiesDisabled) {
-            return;
-        }
-        const rangeSq = PROJECTILES.enemy.range * PROJECTILES.enemy.range;
-        const multiplayerStats = multiplayerClient.getStats();
-        const playerTargets = (multiplayerStats.connected && multiplayerStats.isAuthority)
-            ? [...multiplayerPlayerRuntime.values()].map((runtime) => ({
-                id: runtime.id,
-                x: runtime.x,
-                y: runtime.y,
-                isDead: runtime.isDead
-            }))
-            : [{
-                id: multiplayerStats.playerId ?? 'local',
-                x: playerSystem.getCenter().x,
-                y: playerSystem.getCenter().y,
-                isDead: playerState.isDead
-            }];
-        for (const enemy of enemies) {
-            if (enemy.isDead || !enemy.isRanged) {
-                continue;
-            }
-            enemy.rangedCooldownFrames = Number.isFinite(enemy.rangedCooldownFrames)
-                ? enemy.rangedCooldownFrames - deltaFrames
-                : Math.floor(Math.random() * PROJECTILES.enemy.cooldownFrames);
-            if (enemy.rangedCooldownFrames > 0) {
-                continue;
-            }
-            const enemyCenterX = enemy.x + ENEMY_RADIUS;
-            const enemyCenterY = enemy.y + ENEMY_RADIUS;
-            let targetX = enemyCenterX;
-            let targetY = enemyCenterY;
-            let bestDistSq = Infinity;
-            querySpatialIndexInto(civilianSpatialIndex, enemyCenterX, enemyCenterY, PROJECTILES.enemy.range, queryBufferB);
-            const directedTarget = aiDirectives?.rangedEnemies?.[String(enemy.id)];
-            if (directedTarget?.type === 'player') {
-                const directedPlayerId = Number(directedTarget.id);
-                const directedPlayer = playerTargets.find((entry) => Number(entry.id) === directedPlayerId && !entry.isDead);
-                if (directedPlayer) {
-                    targetX = directedPlayer.x;
-                    targetY = directedPlayer.y;
-                    bestDistSq = (targetX - enemyCenterX) ** 2 + (targetY - enemyCenterY) ** 2;
-                }
-            } else if (directedTarget?.type === 'civilian') {
-                const directedCivilianId = Number(directedTarget.id);
-                const directedCivilian = queryBufferB.find((entry) => Number(entry.id) === directedCivilianId && !entry.isDead);
-                if (directedCivilian) {
-                    targetX = directedCivilian.x;
-                    targetY = directedCivilian.y;
-                    bestDistSq = (targetX - enemyCenterX) ** 2 + (targetY - enemyCenterY) ** 2;
-                }
-            }
-            for (const playerTarget of playerTargets) {
-                if (playerTarget.isDead) {
-                    continue;
-                }
-                const playerDistSq = (playerTarget.x - enemyCenterX) ** 2 + (playerTarget.y - enemyCenterY) ** 2;
-                if (playerDistSq < bestDistSq) {
-                    bestDistSq = playerDistSq;
-                    targetX = playerTarget.x;
-                    targetY = playerTarget.y;
-                }
-            }
-            for (const civilian of queryBufferB) {
-                if (civilian.isDead) {
-                    continue;
-                }
-                const distSq = (civilian.x - enemyCenterX) ** 2 + (civilian.y - enemyCenterY) ** 2;
-                if (distSq < bestDistSq) {
-                    bestDistSq = distSq;
-                    targetX = civilian.x;
-                    targetY = civilian.y;
-                }
-            }
-            if (bestDistSq > rangeSq) {
-                continue;
-            }
-            const dx = targetX - enemyCenterX;
-            const dy = targetY - enemyCenterY;
-            const mag = Math.hypot(dx, dy);
-            if (mag <= 0.001) {
-                continue;
-            }
-            if (enemyProjectiles.length >= MAX_ENEMY_PROJECTILES) {
-                break;
-            }
-            const projectile = acquireProjectileObject();
-            const sprite = acquireProjectileSprite('enemy');
-            projectile.replicationId = nextProjectileReplicationId++;
-            projectile.x = enemyCenterX - 4;
-            projectile.y = enemyCenterY - 4;
-            projectile.vx = (dx / mag) * PROJECTILES.enemy.speed;
-            projectile.vy = (dy / mag) * PROJECTILES.enemy.speed;
-            projectile.ttl = PROJECTILES.enemy.lifetimeFrames;
-            projectile.damage = PROJECTILES.enemy.damage;
-            projectile.radius = 4;
-            projectile.team = 'enemy';
-            projectile.sprite = sprite;
-            sprite.position.set(projectile.x, projectile.y);
-            projectileLayer.addChild(sprite);
-            enemyProjectiles.push(projectile);
-            enemy.rangedCooldownFrames = PROJECTILES.enemy.cooldownFrames;
-        }
+        projectileRuntime?.updateEnemyRangedCombat(deltaFrames, enemiesDisabled, aiDirectives, queryBufferB);
     }
 
     function spawnFloatingFeedback(textValue, worldX, worldY, color = '#ffffff', ttlFrames = 75) {
@@ -1966,6 +1290,10 @@ export async function startGame() {
         },
         onPlayerContactDamage: (amount, source, playerId) => {
             const stats = multiplayerClient.getStats();
+            if (stats.connected && stats.isAuthority) {
+                // Dedicated server authority resolves enemy melee contact damage in multiplayer.
+                return;
+            }
             if (!stats.connected || !stats.isAuthority) {
                 applyDamage(playerState, amount, source);
                 return;
@@ -1988,7 +1316,14 @@ export async function startGame() {
         },
         getWalls: () => buildingSystem.getWalls(),
         getCivilianTargets: () => civilianSystem?.getTargets() ?? [],
-        onCivilianContactDamage: (civilianId, amount, source) => civilianSystem?.applyDamage(civilianId, amount, source)
+        onCivilianContactDamage: (civilianId, amount, source) => {
+            const stats = multiplayerClient.getStats();
+            if (stats.connected && stats.isAuthority) {
+                // Dedicated server authority resolves enemy melee contact damage in multiplayer.
+                return false;
+            }
+            return civilianSystem?.applyDamage(civilianId, amount, source);
+        }
     });
 
     // Civilian logistics system: workers haul producer output into global warehouse stock.
@@ -2004,11 +1339,42 @@ export async function startGame() {
         },
         onLog: (message) => logDebug(message)
     });
+    projectileRuntime = createProjectileRuntime({
+        PIXI,
+        projectileLayer,
+        enemies,
+        multiplayerClient,
+        multiplayerPlayerRuntime,
+        playerSystem,
+        playerState,
+        buildingSystem,
+        civilianSystem,
+        enemySpatialIndex,
+        civilianSpatialIndex,
+        querySpatialIndexInto,
+        ensureRuntimePlayer,
+        applyDamage,
+        updateHud,
+        constants: {
+            ENEMY_RADIUS,
+            MAX_BULLETS,
+            MAX_ENEMY_PROJECTILES,
+            MAX_TOWER_PROJECTILES,
+            PLAYER_COLLISION_RADIUS,
+            PLAYER_RESPAWN_SECONDS,
+            PROJECTILES,
+            TILE_SIZE,
+            WEAPONS
+        }
+    });
+    projectiles = projectileRuntime.lists.projectiles;
+    towerProjectiles = projectileRuntime.lists.towerProjectiles;
+    enemyProjectiles = projectileRuntime.lists.enemyProjectiles;
 
     updateHud();
     updateHealthHud();
     updateVisibleWorld();
-    if (restoreSavedGameState()) {
+    if (!multiplayerQueryEnabled && restoreSavedGameState()) {
         logDebug('Saved game restored');
     }
     if (multiplayerQueryEnabled) {
@@ -2096,6 +1462,10 @@ export async function startGame() {
                 enemySystem.resetEnemies();
             }
             logDebug(`Enemies ${enemiesDisabled ? 'disabled' : 'enabled'} (dev toggle)`);
+        }
+        if (key === 'f7') {
+            downloadDebugSessionLogs();
+            logDebug('Info/warn logs exported');
         }
         if (key === 'f8') {
             downloadCrashLogs();
@@ -2397,15 +1767,25 @@ export async function startGame() {
                     }
                 }
             }
-            if (replicatedFollower) {
+            if (replicatedFollower || replicatedAuthority) {
                 const nonPlayerSnapshot = multiplayerClient.getNonPlayerSnapshotState();
                 if (nonPlayerSnapshot.seq !== lastAppliedNonPlayerSnapshotSeq) {
                     lastAppliedNonPlayerSnapshotSeq = nonPlayerSnapshot.seq;
                     enemySystem.syncReplicatedState(nonPlayerSnapshot.enemies);
-                    syncReplicatedProjectileList(projectiles, nonPlayerSnapshot.projectiles.player, 'player');
-                    syncReplicatedProjectileList(towerProjectiles, nonPlayerSnapshot.projectiles.tower, 'tower');
-                    syncReplicatedProjectileList(enemyProjectiles, nonPlayerSnapshot.projectiles.enemy, 'enemy');
+                    projectileRuntime?.syncReplicatedProjectiles(nonPlayerSnapshot.projectiles);
                     if (Array.isArray(nonPlayerSnapshot.playerStates) && nonPlayerSnapshot.playerStates.length > 0) {
+                        for (const replicatedPlayerState of nonPlayerSnapshot.playerStates) {
+                            const replicatedPlayerId = Number(replicatedPlayerState.playerId);
+                            if (!Number.isFinite(replicatedPlayerId)) {
+                                continue;
+                            }
+                            const runtime = ensureRuntimePlayer(replicatedPlayerId);
+                            runtime.hp = Number(replicatedPlayerState.hp) || 0;
+                            runtime.maxHp = Number(replicatedPlayerState.maxHp) || PLAYER_MAX_HP;
+                            runtime.isDead = Boolean(replicatedPlayerState.isDead);
+                            runtime.respawnTimer = Math.max(0, Number(replicatedPlayerState.respawnTimer) || 0);
+                            runtime.kills = Number(replicatedPlayerState.kills) || 0;
+                        }
                         const localState = nonPlayerSnapshot.playerStates.find(
                             (entry) => String(entry.playerId) === String(multiplayerStats.playerId)
                         );
@@ -2424,6 +1804,7 @@ export async function startGame() {
                         }
                     }
                     if (
+                        replicatedFollower &&
                         nonPlayerSnapshot.buildingsState &&
                         Number(nonPlayerSnapshot.buildingsRevision || 0) !== lastAppliedBuildingsRevision
                     ) {
@@ -2436,6 +1817,8 @@ export async function startGame() {
                         updateHud();
                     }
                 }
+            }
+            if (replicatedFollower) {
                 const actionResults = multiplayerClient.drainActionResults();
                 for (const result of actionResults) {
                     const actionId = Math.floor(Number(result?.clientActionId) || 0);
@@ -2520,11 +1903,7 @@ export async function startGame() {
                     outboundEntitySnapshotSeq += 1;
                     multiplayerClient.sendEntitySnapshot(outboundEntitySnapshotSeq, {
                         enemies: enemySystem.exportReplicatedState(),
-                        projectiles: {
-                            player: exportReplicatedProjectileList(projectiles),
-                            tower: exportReplicatedProjectileList(towerProjectiles),
-                            enemy: exportReplicatedProjectileList(enemyProjectiles)
-                        },
+                        projectiles: projectileRuntime?.exportReplicatedProjectiles() ?? { player: [], tower: [], enemy: [] },
                         playerStates: [...multiplayerPlayerRuntime.values()].map((runtime) => ({
                             playerId: Number(runtime.id),
                             x: runtime.x - TILE_SIZE / 2,
@@ -2701,9 +2080,7 @@ export async function startGame() {
         } else {
             const tProjStart = performance.now();
             enemySystem.updateReplicatedInterpolation(deltaMoveScale);
-            updateReplicatedProjectileList(projectiles, deltaMoveScale);
-            updateReplicatedProjectileList(towerProjectiles, deltaMoveScale);
-            updateReplicatedProjectileList(enemyProjectiles, deltaMoveScale);
+            projectileRuntime?.updateReplicatedProjectiles(deltaMoveScale);
             systemPerfMs.projectiles = performance.now() - tProjStart;
         }
 
@@ -2870,11 +2247,7 @@ export async function startGame() {
                 outboundEntitySnapshotSeq += 1;
                 multiplayerClient.sendEntitySnapshot(outboundEntitySnapshotSeq, {
                     enemies: enemySystem.exportReplicatedState(),
-                    projectiles: {
-                        player: exportReplicatedProjectileList(projectiles),
-                        tower: exportReplicatedProjectileList(towerProjectiles),
-                        enemy: exportReplicatedProjectileList(enemyProjectiles)
-                    },
+                    projectiles: projectileRuntime?.exportReplicatedProjectiles() ?? { player: [], tower: [], enemy: [] },
                     playerStates: [...multiplayerPlayerRuntime.values()].map((runtime) => ({
                         playerId: Number(runtime.id),
                         x: runtime.x - TILE_SIZE / 2,

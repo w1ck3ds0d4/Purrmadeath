@@ -42,6 +42,11 @@ export function buildServerSectionLines(serverPerfStats) {
         `Restart votes: ${serverPerfStats.restartVotes ?? 0}/${serverPerfStats.restartEligiblePlayers ?? 0} | Restarts: ${serverPerfStats.restartsTriggered ?? 0}`,
         `Combat corrections K/G: ${serverPerfStats.killCorrections ?? 0}/${serverPerfStats.goldCorrections ?? 0}`,
         `Enemy projectile authority D/P/C/B: ${serverPerfStats.enemyProjectileDamageApplied ?? 0}/${serverPerfStats.enemyProjectilePlayerHits ?? 0}/${serverPerfStats.enemyProjectileCivilianHits ?? 0}/${serverPerfStats.enemyProjectileBuildingHits ?? 0}`,
+        `Tower projectile authority D/E: ${serverPerfStats.towerProjectileDamageApplied ?? 0}/${serverPerfStats.towerProjectileEnemyHits ?? 0}`,
+        `Enemy melee authority D/P/C: ${serverPerfStats.enemyMeleeDamageApplied ?? 0}/${serverPerfStats.enemyMeleePlayerHits ?? 0}/${serverPerfStats.enemyMeleeCivilianHits ?? 0}`,
+        `Authority snapshot age: ${Math.round(serverPerfStats.authoritySnapshotAgeMs ?? 0)} ms | Combat freeze: ${(serverPerfStats.combatFrozenBySnapshotStall ?? 0) ? 'ON' : 'OFF'}`,
+        `Freeze ticks: ${serverPerfStats.combatFreezeTicks ?? 0} | Dropped queued hits: ${serverPerfStats.droppedQueuedEnemyHits ?? 0}`,
+        `AI directive budget: ${Number(serverPerfStats.aiDirectiveBudgetMs ?? 0).toFixed(3)} ms | Over budget ticks: ${serverPerfStats.aiDirectiveOverBudgetTicks ?? 0}`,
         `AI directives ms/t/r/c: ${Number(serverPerfStats.aiDirectiveMsAvg ?? 0).toFixed(3)}/${serverPerfStats.aiTowerAssignments ?? 0}/${serverPerfStats.aiRangedAssignments ?? 0}/${serverPerfStats.aiCivilianAssignments ?? 0}`,
         `Building hash mismatch count: ${serverPerfStats.buildingStateMismatchCount ?? 0}`
     ];
@@ -51,7 +56,7 @@ export function buildCheatsSectionLines(enemiesDisabled, activePerfProfileKey, a
     return [
         `K: enemy toggle (${enemiesDisabled ? 'ON' : 'OFF'})`,
         'H: +100 resources',
-        'J: force reset | F8: export crash logs',
+        'J: force reset | F8: export crash logs | F7: export info/warn logs',
         `L: perf profile (${activePerfProfileKey}) | O: auto governor (${autoPerfGovernorEnabled ? 'ON' : 'OFF'})`,
         'U: start benchmark',
         `Build mode: ${buildMode ? 'ON' : 'OFF'}`

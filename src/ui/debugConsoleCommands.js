@@ -29,5 +29,8 @@ export function resolveDebugCommandView(commandText) {
     if (command === '/force-reset' || command === '/forcereset' || command === '/force-server-reset') {
         return { action: 'force_reset' };
     }
+    if (command === '/export-logs' || command === '/exportlogs' || command === '/logs-export') {
+        return { action: 'export_logs' };
+    }
     return { unknown: command };
 }
