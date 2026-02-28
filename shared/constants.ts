@@ -687,3 +687,25 @@ export const CAT_NAMES: string[] = [
   'Clover', 'Peanut', 'Sprout', 'Toffee', 'Churro',
   'Sesame', 'Basil', 'Olive', 'Truffle', 'Fig',
 ];
+
+// ── Status effect bitmask (synced via EntitySnapshot.statusEffects) ────────
+export const STATUS_BURN    = 1;
+export const STATUS_POISON  = 2;
+export const STATUS_SLOW    = 4;
+export const STATUS_STUN    = 8;
+export const STATUS_HOLY    = 16;
+export const STATUS_SHADOW  = 32;
+export const STATUS_ARCANE  = 64;
+export const STATUS_NATURE  = 128;
+
+// ── Element colors (for damage number tinting) ────────────────────────────
+export const ELEMENT_COLORS: Record<string, number> = {
+  fire:    0xff6622,
+  ice:     0x44aaff,
+  poison:  0x44dd44,
+  thunder: 0xffdd44,
+  holy:    0xffe866,
+  shadow:  0x9944dd,
+  arcane:  0xdd44ff,
+  nature:  0x66cc44,
+};

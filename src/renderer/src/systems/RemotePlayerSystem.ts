@@ -189,6 +189,8 @@ export class RemotePlayerSystem {
           hungerTimer: 0,
           speechBubble: null,
           speechTimer: 0,
+          carryResource: null,
+          carryAmount: 0,
         } as CivilianComponent);
       }
     } else {
@@ -257,6 +259,16 @@ export class RemotePlayerSystem {
         }
       } else if (world.hasComponent(snap.entityId, C.Downed)) {
         world.removeComponent(snap.entityId, C.Downed);
+      }
+
+      // Status effects bitmask (for visual debuff rendering)
+      if (snap.statusEffects !== undefined) {
+        const se = world.getComponent<import('@shared/components').StatusEffectsComponent>(snap.entityId, C.StatusEffects);
+        if (se) se.bitmask = snap.statusEffects;
+        else world.addComponent(snap.entityId, C.StatusEffects, { bitmask: snap.statusEffects });
+      } else if (world.hasComponent(snap.entityId, C.StatusEffects)) {
+        const se = world.getComponent<import('@shared/components').StatusEffectsComponent>(snap.entityId, C.StatusEffects);
+        if (se) se.bitmask = 0;
       }
 
       // On full snapshot (rejoin), hard-snap position

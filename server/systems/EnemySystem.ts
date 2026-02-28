@@ -201,6 +201,14 @@ export class EnemySystem {
 
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
       const inp = world.getComponent<PlayerInputComponent>(id, C.PlayerInput)!;
+
+      // Stunned enemies cannot move or attack
+      if (world.hasComponent(id, C.StunEffect)) {
+        inp.dx = 0;
+        inp.dy = 0;
+        continue;
+      }
+
       const ev = world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant);
       const variant = ev?.variant ?? 'melee';
 

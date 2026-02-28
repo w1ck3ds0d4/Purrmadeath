@@ -45,6 +45,13 @@ export const C = {
   ActiveBuffs:     'ActiveBuffs',
   BurnDot:         'BurnDot',
   SlowEffect:      'SlowEffect',
+  PoisonDot:       'PoisonDot',
+  StunEffect:      'StunEffect',
+  HolyMark:        'HolyMark',
+  ShadowDrain:     'ShadowDrain',
+  ArcaneMark:      'ArcaneMark',
+  NatureBlessing:  'NatureBlessing',
+  StatusEffects:   'StatusEffects',
   // ── Phase 8 ──────────────────────────────────────────────────────────────
   Civilian:        'Civilian',
   Housing:         'Housing',
@@ -429,6 +436,52 @@ export interface SlowEffectComponent {
   factor: number;
   /** Seconds remaining. */
   remaining: number;
+}
+
+/** Poison damage-over-time (longer duration, lower dps than burn). */
+export interface PoisonDotComponent {
+  dps: number;
+  remaining: number;
+  sourceId: number;
+}
+
+/** Brief stun effect - prevents movement and attacks. */
+export interface StunEffectComponent {
+  remaining: number;
+  sourceId: number;
+}
+
+/** Holy mark - enemies take bonus damage if undead. */
+export interface HolyMarkComponent {
+  bonusDamage: number;
+  remaining: number;
+  sourceId: number;
+}
+
+/** Shadow drain - heals the attacker on tick. */
+export interface ShadowDrainComponent {
+  dps: number;
+  remaining: number;
+  sourceId: number;
+}
+
+/** Arcane mark - slows enemy attack speed. */
+export interface ArcaneMarkComponent {
+  attackSlowFactor: number;
+  remaining: number;
+}
+
+/** Nature blessing - heals nearby allies in radius. */
+export interface NatureBlessingComponent {
+  healPerSecond: number;
+  radius: number;
+  remaining: number;
+  sourceId: number;
+}
+
+/** Client-side only: bitmask of active status effects for rendering. */
+export interface StatusEffectsComponent {
+  bitmask: number;
 }
 
 // ── Phase 8 components ──────────────────────────────────────────────────────

@@ -209,8 +209,9 @@ async function main(): Promise<void> {
   // ── Skill tree state ────────────────────────────────────────────────────────
   let skillAllocated = new Set<string>();
   let skillPoints = 0;
-  /** Cached active abilities from skill allocation. */
-  let activeAbilities: SkillActiveAbility[] = [];
+  let slotAssignments: [string | null, string | null, string | null] = [null, null, null];
+  /** Cached active abilities from skill allocation (null = empty slot). */
+  let activeAbilities: (SkillActiveAbility | null)[] = [null, null, null];
   /** Client-side ability cooldowns [Q, E, R] - ticked down locally, synced from server. */
   let abilityCooldowns = [0, 0, 0];
   let abilityCooldownMaxes = [0, 0, 0];
@@ -450,7 +451,8 @@ async function main(): Promise<void> {
     nightOverlay.setDarkness(0);
     skillAllocated = new Set();
     skillPoints = 0;
-    activeAbilities = [];
+    activeAbilities = [null, null, null];
+    slotAssignments = [null, null, null];
     abilityCooldowns = [0, 0, 0];
     abilityCooldownMaxes = [0, 0, 0];
     cardAbilities = [];
@@ -578,9 +580,10 @@ async function main(): Promise<void> {
     get seed() { return seed; }, set seed(v) { seed = v; },
     get skillAllocated() { return skillAllocated; }, set skillAllocated(v) { skillAllocated = v; },
     get skillPoints() { return skillPoints; }, set skillPoints(v) { skillPoints = v; },
+    get slotAssignments() { return slotAssignments; }, set slotAssignments(v) { slotAssignments = v; },
     onSkillStateUpdate: () => {
-      // Rebuild active abilities from updated allocation
-      activeAbilities = getActiveAbilities({ allocated: skillAllocated, skillPoints });
+      // Rebuild active abilities from updated allocation with slot assignments
+      activeAbilities = getActiveAbilities({ allocated: skillAllocated, skillPoints, slotAssignments });
     },
     get cardAbilities() { return cardAbilities; }, set cardAbilities(v) { cardAbilities = v; },
     get pickedCardIds() { return pickedCardIds; }, set pickedCardIds(v) { pickedCardIds = v; },
@@ -757,8 +760,10 @@ async function main(): Promise<void> {
             waveHUD.setVisible(true);
             minimap.setVisible(true);
             resourceHUD.setVisible(true);
-            warehouseHUD.show();
+            if (warehouseExists) warehouseHUD.show();
             coordsEl.style.display = 'block';
+          }, slotAssignments, (slot, abilityId) => {
+            net.send({ type: MessageType.ABILITY_SLOT_ASSIGN, slot: slot as 0 | 1 | 2, abilityId });
           });
         }
       }
@@ -960,7 +965,7 @@ async function main(): Promise<void> {
         const abilityKeys = [Action.SkillQ, Action.SkillE, Action.SkillR] as const;
         for (let ai = 0; ai < 3; ai++) {
           if (input.isJustPressed(abilityKeys[ai]) && activeAbilities[ai] && abilityCooldowns[ai] <= 0.05) {
-            const ab = activeAbilities[ai];
+            const ab = activeAbilities[ai]!;
             const mode = getTargetMode(ab.params);
 
             if (mode === 'self') {
@@ -1196,7 +1201,7 @@ async function main(): Promise<void> {
       for (let ai = 0; ai < 3; ai++) {
         if (activeAbilities[ai]) {
           unlockedSlots.add(1 + ai);
-          abilityNames.push(activeAbilities[ai].name);
+          abilityNames.push(activeAbilities[ai]!.name);
         } else {
           abilityNames.push('');
         }

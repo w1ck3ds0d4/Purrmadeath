@@ -14,8 +14,9 @@ import {
   GhostStateComponent,
   EnemyStatsComponent,
   DodgeRollComponent,
+  StatusEffectsComponent,
 } from '@shared/components';
-import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, ENEMY_MELEE_RANGE, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, buildingHalfExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RANGE } from '@shared/constants';
+import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, ENEMY_MELEE_RANGE, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, buildingHalfExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RANGE, STATUS_BURN, STATUS_POISON, STATUS_SLOW, STATUS_STUN, STATUS_HOLY, STATUS_SHADOW, STATUS_ARCANE, STATUS_NATURE } from '@shared/constants';
 import { FACTION_COLORS, type EnemyFaction } from '@shared/definitions/EnemyVariants';
 
 /** Turret type → base range in pixels. */
@@ -321,7 +322,7 @@ export class PlayerRendererSystem {
       const prevRevProg = this.lastReviveProg.get(id) ?? -1;
 
       // Always-animated entities need per-frame redraw
-      const alwaysAnimated = isPortal || isItem || id === localEntityId || this.selectedBuildingId === id;
+      const alwaysAnimated = isPortal || isItem || civilianIds.has(id) || id === localEntityId || this.selectedBuildingId === id;
 
       let needsRedraw = isNew || alwaysAnimated
         || isFlashing || prevFlashing !== isFlashing
@@ -766,6 +767,105 @@ export class PlayerRendererSystem {
           gfx.stroke({ color: 0x000000, alpha: 0.45 * ghostAlpha, width: 2 });
         }
 
+        // ── Status effect visuals ───────────────────────────────────────────
+        const statusFx = world.getComponent<StatusEffectsComponent>(id, C.StatusEffects);
+        if (statusFx && statusFx.bitmask && !isDowned) {
+          const now = Date.now();
+          const mask = statusFx.bitmask;
+
+          // Fire: flickering orange ring
+          if (mask & STATUS_BURN) {
+            const fa = 0.4 + 0.3 * Math.sin(now / 100);
+            gfx.circle(0, 0, r + 3);
+            gfx.stroke({ color: 0xff6622, alpha: fa, width: 2 });
+          }
+
+          // Poison: green ring + small bubbles
+          if (mask & STATUS_POISON) {
+            gfx.circle(0, 0, r + 3);
+            gfx.stroke({ color: 0x44dd44, alpha: 0.5, width: 1.5 });
+            for (let bi = 0; bi < 3; bi++) {
+              const by = -r - 4 - ((now / 300 + bi * 40) % 12);
+              const bx = Math.sin(now / 400 + bi * 2.1) * 4;
+              gfx.circle(bx, by, 1.5);
+              gfx.fill({ color: 0x44dd44, alpha: 0.6 });
+            }
+          }
+
+          // Ice: blue frost ring
+          if (mask & STATUS_SLOW) {
+            gfx.circle(0, 0, r + 2);
+            gfx.stroke({ color: 0x44aaff, alpha: 0.6, width: 2.5 });
+            // Frost sparkle dots
+            for (let fi = 0; fi < 4; fi++) {
+              const a = (now / 800 + fi * Math.PI / 2) % (Math.PI * 2);
+              gfx.circle(Math.cos(a) * (r + 2), Math.sin(a) * (r + 2), 1.5);
+              gfx.fill({ color: 0xcceeFF, alpha: 0.7 });
+            }
+          }
+
+          // Thunder: brief yellow flash + sparks
+          if (mask & STATUS_STUN) {
+            const sa = 0.5 + 0.4 * Math.sin(now / 60);
+            gfx.circle(0, 0, r + 5);
+            gfx.fill({ color: 0xffdd44, alpha: sa * 0.25 });
+            // Spark lines
+            for (let si = 0; si < 3; si++) {
+              const a = (now / 150 + si * 2.1) % (Math.PI * 2);
+              const len = r + 4 + Math.sin(now / 80 + si) * 3;
+              gfx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+              gfx.lineTo(Math.cos(a) * len, Math.sin(a) * len);
+              gfx.stroke({ color: 0xffdd44, alpha: 0.8, width: 1.5 });
+            }
+          }
+
+          // Holy: soft gold glow ring
+          if (mask & STATUS_HOLY) {
+            const ha = 0.3 + 0.15 * Math.sin(now / 300);
+            gfx.circle(0, 0, r + 5);
+            gfx.fill({ color: 0xffe866, alpha: ha * 0.2 });
+            gfx.circle(0, 0, r + 5);
+            gfx.stroke({ color: 0xffe866, alpha: ha, width: 1.5 });
+          }
+
+          // Shadow: dark purple wisps
+          if (mask & STATUS_SHADOW) {
+            for (let wi = 0; wi < 4; wi++) {
+              const a = (now / 500 + wi * 1.57) % (Math.PI * 2);
+              const wr = r + 2 + Math.sin(now / 300 + wi) * 3;
+              const wx = Math.cos(a) * wr;
+              const wy = Math.sin(a) * wr;
+              const wa = 0.4 + 0.2 * Math.sin(now / 200 + wi);
+              gfx.moveTo(wx, wy);
+              gfx.lineTo(wx + Math.cos(a + 0.5) * 4, wy + Math.sin(a + 0.5) * 4);
+              gfx.stroke({ color: 0x9944dd, alpha: wa, width: 1.5 });
+            }
+          }
+
+          // Arcane: magenta pulsing ring
+          if (mask & STATUS_ARCANE) {
+            const aa = 0.3 + 0.3 * Math.sin(now / 200);
+            gfx.circle(0, 0, r + 4);
+            gfx.stroke({ color: 0xdd44ff, alpha: aa, width: 2 });
+          }
+
+          // Nature: small green particles floating up
+          if (mask & STATUS_NATURE) {
+            for (let ni = 0; ni < 3; ni++) {
+              const ny = -r - 3 - ((now / 400 + ni * 30) % 10);
+              const nx = Math.sin(now / 500 + ni * 2.5) * 5;
+              const na = 0.5 + 0.3 * Math.sin(now / 300 + ni);
+              // Tiny leaf-like diamond
+              gfx.moveTo(nx, ny - 2);
+              gfx.lineTo(nx + 1.5, ny);
+              gfx.lineTo(nx, ny + 2);
+              gfx.lineTo(nx - 1.5, ny);
+              gfx.closePath();
+              gfx.fill({ color: 0x66cc44, alpha: na });
+            }
+          }
+        }
+
         // ── Civilian state indicators ─────────────────────────────────────────
 
         if (isCivilian && !isDowned) {
@@ -774,17 +874,17 @@ export class PlayerRendererSystem {
             // Animated work dots
             const t = performance.now() / 400;
             for (let di = 0; di < 3; di++) {
-              const dotBob = Math.sin(t + di * 1.2) * 2;
-              gfx.circle(-4 + di * 4, -r - 6 + dotBob, 1.5);
-              gfx.fill({ color: 0xffdd44, alpha: 0.8 });
+              const dotBob = Math.sin(t + di * 1.2) * 3;
+              gfx.circle(-5 + di * 5, -r - 8 + dotBob, 2.5);
+              gfx.fill({ color: 0xffdd44, alpha: 0.9 });
             }
           } else if (civComp?.state === 'delivering') {
-            // Small resource square above head to show carrying
-            const bob = Math.sin(performance.now() / 500) * 1.5;
-            gfx.rect(-3, -r - 9 + bob, 6, 6);
+            // Resource square above head to show carrying
+            const bob = Math.sin(performance.now() / 500) * 2;
+            gfx.rect(-4, -r - 12 + bob, 8, 8);
             gfx.fill({ color: 0x88cc44, alpha: 0.9 });
-            gfx.rect(-3, -r - 9 + bob, 6, 6);
-            gfx.stroke({ color: 0xffffff, alpha: 0.4, width: 1 });
+            gfx.rect(-4, -r - 12 + bob, 8, 8);
+            gfx.stroke({ color: 0xffffff, alpha: 0.5, width: 1 });
           }
         }
 

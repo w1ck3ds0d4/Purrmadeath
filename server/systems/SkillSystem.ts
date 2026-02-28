@@ -8,6 +8,11 @@ import {
   ActiveBuffsComponent,
   BurnDotComponent,
   SlowEffectComponent,
+  PoisonDotComponent,
+  StunEffectComponent,
+  ShadowDrainComponent,
+  ArcaneMarkComponent,
+  NatureBlessingComponent,
   FactionComponent,
   PositionComponent,
 } from '@shared/components';
@@ -21,6 +26,7 @@ import {
   canAllocate,
   computeSkillBuffs,
   getActiveAbilities,
+  getUnlockedAbilities,
   getNode,
   SKILL_BRANCHES,
 } from '@shared/definitions/SkillDefinitions';
@@ -76,6 +82,7 @@ export function createSkillSystem(deps: SkillSystemDeps) {
       allocated: [...alloc.allocated],
       skillPoints: alloc.skillPoints,
       abilityCooldowns: cooldowns,
+      slotAssignments: [...alloc.slotAssignments] as [string | null, string | null, string | null],
     };
     send(player.client, msg);
   }
@@ -93,7 +100,7 @@ export function createSkillSystem(deps: SkillSystemDeps) {
     // Apply stat changes to entity
     applyPassivesToEntity(clientId);
 
-    // If tier-5 capstone, init cooldown component
+    // If tier-5 capstone, init cooldown component and auto-assign to first empty slot
     const node = getNode(nodeId);
     if (node?.active && player.entityId != null) {
       let sc = deps.world.getComponent<SkillCooldownsComponent>(player.entityId, C.SkillCooldowns);
@@ -102,6 +109,13 @@ export function createSkillSystem(deps: SkillSystemDeps) {
         deps.world.addComponent(player.entityId, C.SkillCooldowns, sc);
       }
       sc.cooldowns[node.active.abilityId] = 0; // Ready immediately
+
+      // Auto-assign to first empty slot if not already assigned
+      const aid = node.active.abilityId;
+      if (!alloc.slotAssignments.includes(aid)) {
+        const emptySlot = alloc.slotAssignments.indexOf(null);
+        if (emptySlot !== -1) alloc.slotAssignments[emptySlot] = aid;
+      }
     }
 
     sendState(clientId, send);
@@ -117,7 +131,7 @@ export function createSkillSystem(deps: SkillSystemDeps) {
 
     const alloc = getAllocation(clientId);
     const abilities = getActiveAbilities(alloc);
-    const ability = abilities.find(a => a.abilityId === msg.abilityId);
+    const ability = abilities.find((a): a is SkillActiveAbility => a != null && a.abilityId === msg.abilityId);
     if (!ability) return { hits: [], deaths: [] };
 
     // Check cooldown
@@ -134,6 +148,27 @@ export function createSkillSystem(deps: SkillSystemDeps) {
     for (const p of deps.players.values()) send(p.client, result.effect);
 
     return { hits: result.hits, deaths: result.deaths };
+  }
+
+  function handleSlotAssign(clientId: string, slot: number, abilityId: string | null, send: SendFn): void {
+    if (slot < 0 || slot > 2) return;
+    const alloc = getAllocation(clientId);
+
+    if (abilityId != null) {
+      // Validate ability is actually unlocked
+      const unlocked = getUnlockedAbilities(alloc);
+      if (!unlocked.some(a => a.abilityId === abilityId)) return;
+
+      // If ability is already in another slot, clear that slot (swap)
+      for (let i = 0; i < 3; i++) {
+        if (alloc.slotAssignments[i] === abilityId) {
+          alloc.slotAssignments[i] = null;
+        }
+      }
+    }
+
+    alloc.slotAssignments[slot] = abilityId;
+    sendState(clientId, send);
   }
 
   function grantSkillPoint(clientId: string, send: SendFn): void {
@@ -180,6 +215,69 @@ export function createSkillSystem(deps: SkillSystemDeps) {
         if (speed) speed.multiplier = Math.min(speed.multiplier / (1 - slow.factor), 2);
       }
     }
+
+    // Tick poison DOT
+    for (const id of deps.world.query(C.PoisonDot, C.Health)) {
+      const poison = deps.world.getComponent<PoisonDotComponent>(id, C.PoisonDot)!;
+      const hp = deps.world.getComponent<HealthComponent>(id, C.Health)!;
+      poison.remaining -= dt;
+      hp.current = Math.max(0, hp.current - poison.dps * dt);
+      if (poison.remaining <= 0) deps.world.removeComponent(id, C.PoisonDot);
+    }
+
+    // Tick stun effects
+    for (const id of deps.world.query(C.StunEffect)) {
+      const stun = deps.world.getComponent<StunEffectComponent>(id, C.StunEffect)!;
+      stun.remaining -= dt;
+      if (stun.remaining <= 0) deps.world.removeComponent(id, C.StunEffect);
+    }
+
+    // Tick shadow drain (damage target, heal source)
+    for (const id of deps.world.query(C.ShadowDrain, C.Health)) {
+      const drain = deps.world.getComponent<ShadowDrainComponent>(id, C.ShadowDrain)!;
+      const hp = deps.world.getComponent<HealthComponent>(id, C.Health)!;
+      drain.remaining -= dt;
+      const dmg = drain.dps * dt;
+      hp.current = Math.max(0, hp.current - dmg);
+      // Heal the source entity
+      const srcHp = deps.world.getComponent<HealthComponent>(drain.sourceId, C.Health);
+      if (srcHp) srcHp.current = Math.min(srcHp.max, srcHp.current + dmg);
+      if (drain.remaining <= 0) deps.world.removeComponent(id, C.ShadowDrain);
+    }
+
+    // Tick arcane mark (expires naturally)
+    for (const id of deps.world.query(C.ArcaneMark)) {
+      const arcane = deps.world.getComponent<ArcaneMarkComponent>(id, C.ArcaneMark)!;
+      arcane.remaining -= dt;
+      if (arcane.remaining <= 0) deps.world.removeComponent(id, C.ArcaneMark);
+    }
+
+    // Tick nature blessing (heal nearby allies)
+    for (const id of deps.world.query(C.NatureBlessing)) {
+      const nature = deps.world.getComponent<NatureBlessingComponent>(id, C.NatureBlessing)!;
+      nature.remaining -= dt;
+      if (nature.remaining <= 0) { deps.world.removeComponent(id, C.NatureBlessing); continue; }
+      // Heal nearby player entities
+      const pos = deps.world.getComponent<PositionComponent>(id, C.Position);
+      if (!pos) continue;
+      for (const pid of deps.world.query(C.Position, C.Health, C.Faction)) {
+        const pf = deps.world.getComponent<FactionComponent>(pid, C.Faction);
+        if (pf?.type !== 'player') continue;
+        const pp = deps.world.getComponent<PositionComponent>(pid, C.Position)!;
+        const dx = pp.x - pos.x, dy = pp.y - pos.y;
+        if (dx * dx + dy * dy <= nature.radius * nature.radius) {
+          const ph = deps.world.getComponent<HealthComponent>(pid, C.Health)!;
+          ph.current = Math.min(ph.max, ph.current + nature.healPerSecond * dt);
+        }
+      }
+    }
+
+    // Holy mark expires naturally (bonus damage applied in CombatSystem)
+    for (const id of deps.world.query(C.HolyMark)) {
+      const holy = deps.world.getComponent<import('@shared/components').HolyMarkComponent>(id, C.HolyMark)!;
+      holy.remaining -= dt;
+      if (holy.remaining <= 0) deps.world.removeComponent(id, C.HolyMark);
+    }
   }
 
   function applyPassivesToEntity(clientId: string): void {
@@ -212,15 +310,16 @@ export function createSkillSystem(deps: SkillSystemDeps) {
 
   // ── Save/Load ────────────────────────────────────────────────────────────
 
-  function serialize(clientId: string): { skillNodes: string[]; skillPoints: number } {
+  function serialize(clientId: string): { skillNodes: string[]; skillPoints: number; slotAssignments: [string | null, string | null, string | null] } {
     const alloc = getAllocation(clientId);
-    return { skillNodes: [...alloc.allocated], skillPoints: alloc.skillPoints };
+    return { skillNodes: [...alloc.allocated], skillPoints: alloc.skillPoints, slotAssignments: [...alloc.slotAssignments] as [string | null, string | null, string | null] };
   }
 
-  function restore(clientId: string, skillNodes: string[], skillPoints: number): void {
+  function restore(clientId: string, skillNodes: string[], skillPoints: number, slotAssignments?: [string | null, string | null, string | null]): void {
     const alloc = getAllocation(clientId);
     alloc.allocated = new Set(skillNodes);
     alloc.skillPoints = skillPoints;
+    if (slotAssignments) alloc.slotAssignments = [...slotAssignments] as [string | null, string | null, string | null];
     rebuildBuffs(clientId);
   }
 
@@ -233,6 +332,7 @@ export function createSkillSystem(deps: SkillSystemDeps) {
     getAllocation,
     getSkillBuffs,
     handleAllocate,
+    handleSlotAssign,
     handleAbilityUse,
     grantSkillPoint,
     tick,

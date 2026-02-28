@@ -103,6 +103,8 @@ export interface SavedPlayer {
   skillNodes?: string[];
   /** Unspent skill points (defaults to 0 for old saves). */
   skillPoints?: number;
+  /** Ability-to-hotbar-slot assignments [Q, E, R]. */
+  slotAssignments?: [string | null, string | null, string | null];
   /** Card buff state (defaults to empty for old saves). */
   cardBuffs?: {
     damageMultiplier: number;

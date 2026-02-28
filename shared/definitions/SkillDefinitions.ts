@@ -25,11 +25,14 @@ export interface SkillPassiveEffect {
   mode: 'add' | 'multiply';
 }
 
-export type SpecialEffectType = 'lifesteal' | 'burn_dot' | 'thorns' | 'slow_on_hit';
+export type SpecialEffectType = 'lifesteal' | 'burn_dot' | 'thorns' | 'slow_on_hit'
+  | 'poison_dot' | 'stun_on_hit' | 'holy_mark' | 'shadow_drain' | 'arcane_mark' | 'nature_blessing';
 
 export interface SkillSpecialEffect {
   type: SpecialEffectType;
-  /** lifesteal = fraction (0.05 = 5%), burn_dot = dps, thorns = flat dmg, slow_on_hit = fraction (0.2 = 20%). */
+  /** lifesteal = fraction, burn_dot/poison_dot = dps, thorns = flat dmg, slow_on_hit = fraction,
+   *  stun_on_hit = duration(s), holy_mark = bonus dmg fraction, shadow_drain = dps,
+   *  arcane_mark = attack slow factor, nature_blessing = heal/s. */
   value: number;
 }
 
@@ -90,7 +93,7 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
       { id: 'berserker_t2', tier: 2, branch: 'berserker', name: 'Frenzy', description: '+15% attack speed',
         passive: [{ stat: 'attackSpeed', value: 0.15, mode: 'multiply' }] },
       { id: 'berserker_t3', tier: 3, branch: 'berserker', name: 'Bloodlust', description: '5% lifesteal on hit',
-        special: [{ type: 'lifesteal', value: 0.05 }] },
+        special: [{ type: 'lifesteal', value: 0.05 }, { type: 'burn_dot', value: 2 }] },
       { id: 'berserker_t4', tier: 4, branch: 'berserker', name: 'Carnage', description: '+20% damage',
         passive: [{ stat: 'damage', value: 0.20, mode: 'multiply' }] },
       { id: 'berserker_t5', tier: 5, branch: 'berserker', name: 'Whirlwind', description: '360° spin dealing 3× damage',
@@ -245,7 +248,7 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
       { id: 'poisoner_t1', tier: 1, branch: 'poisoner', name: 'Poison Tips', description: 'Burn enemies for 2 dps',
         special: [{ type: 'burn_dot', value: 2 }] },
       { id: 'poisoner_t2', tier: 2, branch: 'poisoner', name: 'Weakening Venom', description: 'Slow enemies 15% on hit',
-        special: [{ type: 'slow_on_hit', value: 0.15 }] },
+        special: [{ type: 'slow_on_hit', value: 0.15 }, { type: 'poison_dot', value: 2.5 }] },
       { id: 'poisoner_t3', tier: 3, branch: 'poisoner', name: 'Virulent Strain', description: 'Burn enemies for 4 dps',
         special: [{ type: 'burn_dot', value: 4 }] },
       { id: 'poisoner_t4', tier: 4, branch: 'poisoner', name: 'Debilitating Toxin', description: 'Slow enemies 25% on hit',
@@ -281,7 +284,8 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
       { id: 'frost_mage_t1', tier: 1, branch: 'frost_mage', name: 'Chill', description: 'Slow enemies 15% on hit',
         special: [{ type: 'slow_on_hit', value: 0.15 }] },
       { id: 'frost_mage_t2', tier: 2, branch: 'frost_mage', name: 'Ice Armor', description: '+10 max HP',
-        passive: [{ stat: 'maxHp', value: 10, mode: 'add' }] },
+        passive: [{ stat: 'maxHp', value: 10, mode: 'add' }],
+        special: [{ type: 'slow_on_hit', value: 0.25 }] },
       { id: 'frost_mage_t3', tier: 3, branch: 'frost_mage', name: 'Frostbite', description: '+10% damage',
         passive: [{ stat: 'damage', value: 0.10, mode: 'multiply' }] },
       { id: 'frost_mage_t4', tier: 4, branch: 'frost_mage', name: 'Deep Freeze', description: 'Slow enemies 30% on hit',
@@ -298,7 +302,8 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
       { id: 'arcanist_t1', tier: 1, branch: 'arcanist', name: 'Arcane Flow', description: '+5% movement speed',
         passive: [{ stat: 'speed', value: 0.05, mode: 'multiply' }] },
       { id: 'arcanist_t2', tier: 2, branch: 'arcanist', name: 'Mana Shield', description: '+1 HP/s regen',
-        passive: [{ stat: 'hpRegen', value: 1, mode: 'add' }] },
+        passive: [{ stat: 'hpRegen', value: 1, mode: 'add' }],
+        special: [{ type: 'arcane_mark', value: 0.2 }] },
       { id: 'arcanist_t3', tier: 3, branch: 'arcanist', name: 'Arcane Power', description: '+15% damage',
         passive: [{ stat: 'damage', value: 0.15, mode: 'multiply' }] },
       { id: 'arcanist_t4', tier: 4, branch: 'arcanist', name: 'Arcane Barrier', description: '+20 max HP',
@@ -318,7 +323,8 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
       { id: 'stormcaller_t2', tier: 2, branch: 'stormcaller', name: 'Lightning Bolt', description: '+10% damage',
         passive: [{ stat: 'damage', value: 0.10, mode: 'multiply' }] },
       { id: 'stormcaller_t3', tier: 3, branch: 'stormcaller', name: 'Overcharge', description: '+15% attack speed',
-        passive: [{ stat: 'attackSpeed', value: 0.15, mode: 'multiply' }] },
+        passive: [{ stat: 'attackSpeed', value: 0.15, mode: 'multiply' }],
+        special: [{ type: 'stun_on_hit', value: 0.5 }] },
       { id: 'stormcaller_t4', tier: 4, branch: 'stormcaller', name: 'Chain Lightning', description: '+15% damage',
         passive: [{ stat: 'damage', value: 0.15, mode: 'multiply' }] },
       { id: 'stormcaller_t5', tier: 5, branch: 'stormcaller', name: 'Meteor', description: 'Lightning storm at target area',
@@ -335,7 +341,8 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
       { id: 'rift_walker_t2', tier: 2, branch: 'rift_walker', name: 'Spatial Rend', description: '+10% damage',
         passive: [{ stat: 'damage', value: 0.10, mode: 'multiply' }] },
       { id: 'rift_walker_t3', tier: 3, branch: 'rift_walker', name: 'Dimensional Rift', description: '+12% movement speed',
-        passive: [{ stat: 'speed', value: 0.12, mode: 'multiply' }] },
+        passive: [{ stat: 'speed', value: 0.12, mode: 'multiply' }],
+        special: [{ type: 'arcane_mark', value: 0.15 }] },
       { id: 'rift_walker_t4', tier: 4, branch: 'rift_walker', name: 'Void Touch', description: '5% lifesteal on hit',
         special: [{ type: 'lifesteal', value: 0.05 }] },
       { id: 'rift_walker_t5', tier: 5, branch: 'rift_walker', name: 'Teleport', description: 'Rift-step to cursor (250px max)',
@@ -371,7 +378,7 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
       { id: 'shadow_t2', tier: 2, branch: 'shadow', name: 'Ambush', description: '+15% damage',
         passive: [{ stat: 'damage', value: 0.15, mode: 'multiply' }] },
       { id: 'shadow_t3', tier: 3, branch: 'shadow', name: 'Drain', description: '5% lifesteal on hit',
-        special: [{ type: 'lifesteal', value: 0.05 }] },
+        special: [{ type: 'lifesteal', value: 0.05 }, { type: 'shadow_drain', value: 2 }] },
       { id: 'shadow_t4', tier: 4, branch: 'shadow', name: 'Phantom', description: '+15% movement speed',
         passive: [{ stat: 'speed', value: 0.15, mode: 'multiply' }] },
       { id: 'shadow_t5', tier: 5, branch: 'shadow', name: 'Shadow Step', description: 'Teleport 150px forward',
@@ -386,7 +393,7 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
       { id: 'venom_t1', tier: 1, branch: 'venom', name: 'Toxic Blade', description: 'Burn enemies for 2 dps',
         special: [{ type: 'burn_dot', value: 2 }] },
       { id: 'venom_t2', tier: 2, branch: 'venom', name: 'Cripple', description: 'Slow enemies 15% on hit',
-        special: [{ type: 'slow_on_hit', value: 0.15 }] },
+        special: [{ type: 'slow_on_hit', value: 0.15 }, { type: 'poison_dot', value: 3 }] },
       { id: 'venom_t3', tier: 3, branch: 'venom', name: 'Lethal Dose', description: '+15% damage',
         passive: [{ stat: 'damage', value: 0.15, mode: 'multiply' }] },
       { id: 'venom_t4', tier: 4, branch: 'venom', name: 'Neurotoxin', description: 'Slow enemies 25% on hit',
@@ -440,7 +447,8 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
       { id: 'holy_knight_t1', tier: 1, branch: 'holy_knight', name: 'Divine Grace', description: '+1 HP/s regen',
         passive: [{ stat: 'hpRegen', value: 1, mode: 'add' }] },
       { id: 'holy_knight_t2', tier: 2, branch: 'holy_knight', name: 'Holy Armor', description: '+1 flat defense',
-        passive: [{ stat: 'defense', value: 1, mode: 'add' }] },
+        passive: [{ stat: 'defense', value: 1, mode: 'add' }],
+        special: [{ type: 'holy_mark', value: 0.3 }] },
       { id: 'holy_knight_t3', tier: 3, branch: 'holy_knight', name: 'Blessed Strikes', description: '5% lifesteal on hit',
         special: [{ type: 'lifesteal', value: 0.05 }] },
       { id: 'holy_knight_t4', tier: 4, branch: 'holy_knight', name: 'Sanctuary', description: '+25 max HP',
@@ -474,7 +482,8 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
       { id: 'crusader_t1', tier: 1, branch: 'crusader', name: 'Smite', description: '+10% damage',
         passive: [{ stat: 'damage', value: 0.10, mode: 'multiply' }] },
       { id: 'crusader_t2', tier: 2, branch: 'crusader', name: 'Judgment', description: '+5% crit chance',
-        passive: [{ stat: 'critChance', value: 0.05, mode: 'add' }] },
+        passive: [{ stat: 'critChance', value: 0.05, mode: 'add' }],
+        special: [{ type: 'holy_mark', value: 0.2 }] },
       { id: 'crusader_t3', tier: 3, branch: 'crusader', name: 'Zeal', description: '+15% attack speed',
         passive: [{ stat: 'attackSpeed', value: 0.15, mode: 'multiply' }] },
       { id: 'crusader_t4', tier: 4, branch: 'crusader', name: 'Wrath', description: '+20% damage',
@@ -528,7 +537,8 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
       { id: 'death_mage_t1', tier: 1, branch: 'death_mage', name: 'Decay', description: 'Burn enemies for 3 dps',
         special: [{ type: 'burn_dot', value: 3 }] },
       { id: 'death_mage_t2', tier: 2, branch: 'death_mage', name: 'Blight', description: '+10% damage',
-        passive: [{ stat: 'damage', value: 0.10, mode: 'multiply' }] },
+        passive: [{ stat: 'damage', value: 0.10, mode: 'multiply' }],
+        special: [{ type: 'shadow_drain', value: 2.5 }] },
       { id: 'death_mage_t3', tier: 3, branch: 'death_mage', name: 'Necrosis', description: '+5% crit chance',
         passive: [{ stat: 'critChance', value: 0.05, mode: 'add' }] },
       { id: 'death_mage_t4', tier: 4, branch: 'death_mage', name: 'Plague', description: 'Burn enemies for 5 dps',
@@ -547,7 +557,7 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
       { id: 'cursed_t2', tier: 2, branch: 'cursed', name: 'Wither', description: '+10% damage',
         passive: [{ stat: 'damage', value: 0.10, mode: 'multiply' }] },
       { id: 'cursed_t3', tier: 3, branch: 'cursed', name: 'Soul Siphon', description: '5% lifesteal on hit',
-        special: [{ type: 'lifesteal', value: 0.05 }] },
+        special: [{ type: 'lifesteal', value: 0.05 }, { type: 'shadow_drain', value: 2 }] },
       { id: 'cursed_t4', tier: 4, branch: 'cursed', name: 'Entropy', description: 'Slow enemies 30% on hit',
         special: [{ type: 'slow_on_hit', value: 0.30 }] },
       { id: 'cursed_t5', tier: 5, branch: 'cursed', name: 'Blizzard', description: 'Cursed zone that slows all enemies',
@@ -650,7 +660,8 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
       { id: 'survivalist_t1', tier: 1, branch: 'survivalist', name: 'Nimble', description: '+10% movement speed',
         passive: [{ stat: 'speed', value: 0.10, mode: 'multiply' }] },
       { id: 'survivalist_t2', tier: 2, branch: 'survivalist', name: 'Natural Armor', description: '+1 flat defense',
-        passive: [{ stat: 'defense', value: 1, mode: 'add' }] },
+        passive: [{ stat: 'defense', value: 1, mode: 'add' }],
+        special: [{ type: 'nature_blessing', value: 2 }] },
       { id: 'survivalist_t3', tier: 3, branch: 'survivalist', name: 'Leech', description: '5% lifesteal on hit',
         special: [{ type: 'lifesteal', value: 0.05 }] },
       { id: 'survivalist_t4', tier: 4, branch: 'survivalist', name: 'Evasion', description: '+10% movement speed',
@@ -686,7 +697,8 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
       { id: 'warden_t2', tier: 2, branch: 'warden', name: 'Nature\'s Gift', description: '+1 HP/s regen',
         passive: [{ stat: 'hpRegen', value: 1, mode: 'add' }] },
       { id: 'warden_t3', tier: 3, branch: 'warden', name: 'Wild Growth', description: '+20 max HP',
-        passive: [{ stat: 'maxHp', value: 20, mode: 'add' }] },
+        passive: [{ stat: 'maxHp', value: 20, mode: 'add' }],
+        special: [{ type: 'nature_blessing', value: 3 }] },
       { id: 'warden_t4', tier: 4, branch: 'warden', name: 'Regrowth', description: '+2 HP/s regen',
         passive: [{ stat: 'hpRegen', value: 2, mode: 'add' }] },
       { id: 'warden_t5', tier: 5, branch: 'warden', name: 'War Cry', description: 'Nature\'s rally +20% damage for 8s',
@@ -727,10 +739,12 @@ export function getBranch(branchId: SkillBranchId): SkillBranch {
 export interface SkillAllocation {
   allocated: Set<SkillNodeId>;
   skillPoints: number;
+  /** Which ability is assigned to each hotbar slot (Q=0, E=1, R=2). */
+  slotAssignments: [string | null, string | null, string | null];
 }
 
 export function emptyAllocation(): SkillAllocation {
-  return { allocated: new Set(), skillPoints: 0 };
+  return { allocated: new Set(), skillPoints: 0, slotAssignments: [null, null, null] };
 }
 
 /** Check if a node can be allocated. */
@@ -764,6 +778,13 @@ export interface SkillBuffs {
   burnDot: number;
   thornsDamage: number;
   slowOnHit: number;
+  // Elemental effects
+  poisonDot: number;
+  stunOnHit: number;
+  holyMark: number;
+  shadowDrain: number;
+  arcaneMark: number;
+  natureBlessing: number;
 }
 
 export function emptySkillBuffs(): SkillBuffs {
@@ -771,6 +792,7 @@ export function emptySkillBuffs(): SkillBuffs {
     damageMultiplier: 1, speedMultiplier: 1, attackSpeedMultiplier: 1,
     maxHpBonus: 0, defenseBonus: 0, critChanceBonus: 0, hpRegen: 0,
     lifesteal: 0, burnDot: 0, thornsDamage: 0, slowOnHit: 0,
+    poisonDot: 0, stunOnHit: 0, holyMark: 0, shadowDrain: 0, arcaneMark: 0, natureBlessing: 0,
   };
 }
 
@@ -796,23 +818,59 @@ export function computeSkillBuffs(alloc: SkillAllocation): SkillBuffs {
     if (node.special) {
       for (const s of node.special) {
         switch (s.type) {
-          case 'lifesteal':   buffs.lifesteal = Math.max(buffs.lifesteal, s.value); break;
-          case 'burn_dot':    buffs.burnDot = Math.max(buffs.burnDot, s.value); break;
-          case 'thorns':      buffs.thornsDamage += s.value; break;
-          case 'slow_on_hit': buffs.slowOnHit = Math.max(buffs.slowOnHit, s.value); break;
+          case 'lifesteal':        buffs.lifesteal = Math.max(buffs.lifesteal, s.value); break;
+          case 'burn_dot':         buffs.burnDot = Math.max(buffs.burnDot, s.value); break;
+          case 'thorns':           buffs.thornsDamage += s.value; break;
+          case 'slow_on_hit':      buffs.slowOnHit = Math.max(buffs.slowOnHit, s.value); break;
+          case 'poison_dot':       buffs.poisonDot = Math.max(buffs.poisonDot, s.value); break;
+          case 'stun_on_hit':      buffs.stunOnHit = Math.max(buffs.stunOnHit, s.value); break;
+          case 'holy_mark':        buffs.holyMark = Math.max(buffs.holyMark, s.value); break;
+          case 'shadow_drain':     buffs.shadowDrain = Math.max(buffs.shadowDrain, s.value); break;
+          case 'arcane_mark':      buffs.arcaneMark = Math.max(buffs.arcaneMark, s.value); break;
+          case 'nature_blessing':  buffs.natureBlessing = Math.max(buffs.natureBlessing, s.value); break;
         }
       }
     }
   }
+  // Cap multipliers to prevent extreme stacking when many branches are unlocked
+  buffs.speedMultiplier = Math.min(buffs.speedMultiplier, 1.8);
+  buffs.damageMultiplier = Math.min(buffs.damageMultiplier, 5);
+  buffs.attackSpeedMultiplier = Math.min(buffs.attackSpeedMultiplier, 3);
   return buffs;
 }
 
-/** Get list of active abilities from allocated tier-5 capstones. */
-export function getActiveAbilities(alloc: SkillAllocation): SkillActiveAbility[] {
+/** Get all unlocked active abilities (unordered). */
+export function getUnlockedAbilities(alloc: SkillAllocation): SkillActiveAbility[] {
   const abilities: SkillActiveAbility[] = [];
   for (const nodeId of alloc.allocated) {
     const node = getNode(nodeId);
     if (node?.active) abilities.push(node.active);
   }
   return abilities;
+}
+
+/** Get active abilities ordered by slot assignment (Q=0, E=1, R=2).
+ *  Returns a 3-element array where each slot is the assigned ability or null. */
+export function getActiveAbilities(alloc: SkillAllocation): (SkillActiveAbility | null)[] {
+  const unlocked = getUnlockedAbilities(alloc);
+  const byId = new Map(unlocked.map(a => [a.abilityId, a]));
+  const result: (SkillActiveAbility | null)[] = [null, null, null];
+
+  // Fill from slot assignments
+  for (let i = 0; i < 3; i++) {
+    const id = alloc.slotAssignments[i];
+    if (id && byId.has(id)) {
+      result[i] = byId.get(id)!;
+    }
+  }
+
+  // Backward compat: if no assignments exist, auto-fill in unlock order
+  const hasAnyAssignment = result.some(r => r !== null);
+  if (!hasAnyAssignment && unlocked.length > 0) {
+    for (let i = 0; i < Math.min(unlocked.length, 3); i++) {
+      result[i] = unlocked[i] ?? null;
+    }
+  }
+
+  return result;
 }

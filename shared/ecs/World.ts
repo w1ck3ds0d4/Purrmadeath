@@ -126,9 +126,40 @@ export class World {
     if (cached) return cached;
 
     const result: EntityId[] = [];
-    for (const id of this.entities) {
-      if (types.every((t) => this.hasComponent(id, t))) result.push(id);
+
+    if (types.length === 1) {
+      // Fast path: single component - just return its storage keys
+      const store = this.storage.get(types[0]);
+      if (store) {
+        for (const id of store.keys()) {
+          if (this.entities.has(id)) result.push(id);
+        }
+      }
+    } else {
+      // Multi-component: iterate the smallest set and check the rest
+      let smallest: Map<EntityId, unknown> | undefined;
+      let smallestSize = Infinity;
+      for (const t of types) {
+        const store = this.storage.get(t);
+        if (!store || store.size === 0) {
+          this.queryCache.set(key, result);
+          return result; // one component has 0 entities - no matches
+        }
+        if (store.size < smallestSize) {
+          smallest = store;
+          smallestSize = store.size;
+        }
+      }
+      for (const id of smallest!.keys()) {
+        if (!this.entities.has(id)) continue;
+        let match = true;
+        for (const t of types) {
+          if (!this.storage.get(t)!.has(id)) { match = false; break; }
+        }
+        if (match) result.push(id);
+      }
     }
+
     this.queryCache.set(key, result);
     return result;
   }

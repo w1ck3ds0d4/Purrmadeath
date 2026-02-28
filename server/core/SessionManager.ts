@@ -127,6 +127,7 @@ export class SessionManager {
     socket.on(MessageType.META_STATS_REQUEST,      (c) => this.onMetaStatsRequest(c));
     socket.on(MessageType.CARD_PICK,               (c, m) => this.session?.handleCardPick(c.id, m as CardPickMessage, (cl, msg) => this.socket.send(cl, msg)));
     socket.on(MessageType.SKILL_ALLOCATE,          (c, m) => this.session?.handleSkillAllocate(c.id, m as SkillAllocateMessage, (cl, msg) => this.socket.send(cl, msg)));
+    socket.on(MessageType.ABILITY_SLOT_ASSIGN,     (c, m) => this.session?.handleSlotAssign(c.id, m as import('@shared/protocol').AbilitySlotAssignMessage, (cl, msg) => this.socket.send(cl, msg)));
     socket.on(MessageType.ABILITY_USE,             (c, m) => this.session?.handleAbilityUse(c.id, m as AbilityUseMessage, (cl, msg) => this.socket.send(cl, msg)));
     socket.on(MessageType.CLASS_SELECT,            (c, m) => this.onClassSelect(c, m as ClassSelectMessage));
     socket.on(MessageType.PLAYER_KICK,             (c, m) => this.onPlayerKick(c, m as PlayerKickMessage));

@@ -30,6 +30,8 @@ import type {
   ResourceType, BuildingType, EnemyVariantType, EnemyStatsComponent, GhostStateComponent,
   LightRevealComponent, HealAuraComponent, BarracksSpawnerComponent, FacingComponent,
   BurnDotComponent, SlowEffectComponent, SpeedComponent,
+  PoisonDotComponent, StunEffectComponent, HolyMarkComponent,
+  ShadowDrainComponent, ArcaneMarkComponent, NatureBlessingComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -779,7 +781,7 @@ export class GameSession {
           }
           // Restore skill tree allocations
           if (savedP.skillNodes) {
-            this.skills.restore(p.client.id, savedP.skillNodes, savedP.skillPoints ?? 0);
+            this.skills.restore(p.client.id, savedP.skillNodes, savedP.skillPoints ?? 0, savedP.slotAssignments);
             this.skills.applyPassivesToEntity(p.client.id);
           }
           // Restore card buffs
@@ -1617,13 +1619,14 @@ export class GameSession {
     for (const p of this.players.values()) send(p.client, performed);
 
     // Broadcast each hit to all players + track damage for meta stats
+    const element = this.getPrimaryElement(player.client.id);
     for (const hit of hits) {
-      const hitMsg: HitMessage = { type: MessageType.HIT, ...hit };
+      const hitMsg: HitMessage = { type: MessageType.HIT, ...hit, element };
       for (const p of this.players.values()) send(p.client, hitMsg);
       this.stats.trackDamage(hit.sourceId, hit.damage);
     }
 
-    // Apply on-hit special effects (lifesteal, burn, slow)
+    // Apply on-hit special effects (lifesteal, burn, slow, elemental)
     this.applyOnHitEffects(player.client.id, entityId, hits);
 
     // Build attacker map so destroyDeadEntities can credit resource harvesting
@@ -1752,6 +1755,27 @@ export class GameSession {
    * Apply skill-based on-hit effects for a player's hits.
    * Called after melee attacks and projectile hits.
    */
+  /** Determine primary element from a player's skill buffs (highest value wins). */
+  private getPrimaryElement(clientId: string): string | undefined {
+    const buffs = this.skills.getSkillBuffs(clientId);
+    const elements: [string, number][] = [
+      ['fire', buffs.burnDot],
+      ['poison', buffs.poisonDot],
+      ['ice', buffs.slowOnHit],
+      ['thunder', buffs.stunOnHit],
+      ['holy', buffs.holyMark],
+      ['shadow', buffs.shadowDrain],
+      ['arcane', buffs.arcaneMark],
+      ['nature', buffs.natureBlessing],
+    ];
+    let best: string | undefined;
+    let bestVal = 0;
+    for (const [name, val] of elements) {
+      if (val > bestVal) { bestVal = val; best = name; }
+    }
+    return best;
+  }
+
   private applyOnHitEffects(
     clientId: string,
     attackerEntityId: number,
@@ -1793,11 +1817,79 @@ export class GameSession {
       if (buffs.slowOnHit > 0) {
         const existing = this.world.getComponent<SlowEffectComponent>(hit.targetId, C.SlowEffect);
         if (!existing) {
-          // Apply slow by reducing speed multiplier
           const speed = this.world.getComponent<SpeedComponent>(hit.targetId, C.Speed);
           if (speed) speed.multiplier *= (1 - buffs.slowOnHit);
           this.world.addComponent<SlowEffectComponent>(hit.targetId, C.SlowEffect, {
             factor: buffs.slowOnHit, remaining: 2,
+          });
+        }
+      }
+
+      // Poison DOT: longer duration, lower dps than burn
+      if (buffs.poisonDot > 0 && this.world.getComponent<HealthComponent>(hit.targetId, C.Health)) {
+        const existing = this.world.getComponent<PoisonDotComponent>(hit.targetId, C.PoisonDot);
+        if (existing) {
+          existing.dps = Math.max(existing.dps, buffs.poisonDot);
+          existing.remaining = 4;
+        } else {
+          this.world.addComponent<PoisonDotComponent>(hit.targetId, C.PoisonDot, {
+            dps: buffs.poisonDot, remaining: 4, sourceId: attackerEntityId,
+          });
+        }
+      }
+
+      // Stun on hit: brief movement/attack stop
+      if (buffs.stunOnHit > 0 && !this.world.hasComponent(hit.targetId, C.StunEffect)) {
+        this.world.addComponent<StunEffectComponent>(hit.targetId, C.StunEffect, {
+          remaining: buffs.stunOnHit, sourceId: attackerEntityId,
+        });
+      }
+
+      // Holy mark: bonus damage vs undead
+      if (buffs.holyMark > 0) {
+        const existing = this.world.getComponent<HolyMarkComponent>(hit.targetId, C.HolyMark);
+        if (existing) {
+          existing.remaining = 3;
+        } else {
+          this.world.addComponent<HolyMarkComponent>(hit.targetId, C.HolyMark, {
+            bonusDamage: buffs.holyMark, remaining: 3, sourceId: attackerEntityId,
+          });
+        }
+      }
+
+      // Shadow drain: heals attacker on tick
+      if (buffs.shadowDrain > 0) {
+        const existing = this.world.getComponent<ShadowDrainComponent>(hit.targetId, C.ShadowDrain);
+        if (existing) {
+          existing.dps = Math.max(existing.dps, buffs.shadowDrain);
+          existing.remaining = 3;
+        } else {
+          this.world.addComponent<ShadowDrainComponent>(hit.targetId, C.ShadowDrain, {
+            dps: buffs.shadowDrain, remaining: 3, sourceId: attackerEntityId,
+          });
+        }
+      }
+
+      // Arcane mark: slows enemy attack speed
+      if (buffs.arcaneMark > 0) {
+        const existing = this.world.getComponent<ArcaneMarkComponent>(hit.targetId, C.ArcaneMark);
+        if (existing) {
+          existing.remaining = 2;
+        } else {
+          this.world.addComponent<ArcaneMarkComponent>(hit.targetId, C.ArcaneMark, {
+            attackSlowFactor: buffs.arcaneMark, remaining: 2,
+          });
+        }
+      }
+
+      // Nature blessing: heals nearby allies
+      if (buffs.natureBlessing > 0) {
+        const existing = this.world.getComponent<NatureBlessingComponent>(hit.targetId, C.NatureBlessing);
+        if (existing) {
+          existing.remaining = 3;
+        } else {
+          this.world.addComponent<NatureBlessingComponent>(hit.targetId, C.NatureBlessing, {
+            healPerSecond: buffs.natureBlessing, radius: 100, remaining: 3, sourceId: attackerEntityId,
           });
         }
       }
@@ -1849,6 +1941,11 @@ export class GameSession {
     this.skills.handleAllocate(clientId, msg.nodeId, send);
   }
 
+  handleSlotAssign(clientId: string, msg: import('@shared/protocol').AbilitySlotAssignMessage, send: SendFn): void {
+    if (this.phase !== 'playing') return;
+    this.skills.handleSlotAssign(clientId, msg.slot, msg.abilityId, send);
+  }
+
   handleAbilityUse(clientId: string, msg: AbilityUseMessage, send: SendFn): void {
     if (this.phase !== 'playing' || this.paused) return;
     const player = this.players.get(clientId);
@@ -1859,8 +1956,9 @@ export class GameSession {
     const { hits, deaths } = this.skills.handleAbilityUse(clientId, msg, send);
 
     // Broadcast hits + handle deaths (same pattern as melee/ranged)
+    const abilityElement = this.getPrimaryElement(clientId);
     for (const hit of hits) {
-      const hitMsg: HitMessage = { type: MessageType.HIT, ...hit };
+      const hitMsg: HitMessage = { type: MessageType.HIT, ...hit, element: abilityElement };
       for (const p of this.players.values()) send(p.client, hitMsg);
       this.stats.trackDamage(hit.sourceId, hit.damage);
     }
@@ -1869,6 +1967,9 @@ export class GameSession {
       if (!attackerMap.has(hit.targetId)) attackerMap.set(hit.targetId, hit.sourceId);
     }
     this.respawn.destroyDeadEntities(deaths, attackerMap, send);
+
+    // Apply on-hit effects for ability hits
+    this.applyOnHitEffects(clientId, player.entityId, hits);
   }
 
   // ── Potion handlers ──────────────────────────────────────────────────────────
@@ -1974,6 +2075,7 @@ export class GameSession {
           const sd = this.skills.serialize(p.client.id);
           sp.skillNodes = sd.skillNodes;
           sp.skillPoints = sd.skillPoints;
+          sp.slotAssignments = sd.slotAssignments;
           const cd = this.cards.serialize(p.client.id);
           sp.cardBuffs = cd.buffs;
           sp.pickedCards = cd.pickedCards;
@@ -2273,6 +2375,8 @@ export class GameSession {
     if (this.paused) return;
     this.tick++;
 
+    const _tickStart = performance.now();
+
     // Spawn resources near players (chunk-based, processed chunks are skipped)
     this.generateResourcesNearPlayers();
 
@@ -2354,7 +2458,12 @@ export class GameSession {
     const _t5 = performance.now();
 
     for (const hit of projResult.hits) {
-      const hitMsg: HitMessage = { type: MessageType.HIT, ...hit };
+      // Determine element from the projectile owner
+      let projElement: string | undefined;
+      for (const p of this.players.values()) {
+        if (p.entityId === hit.sourceId) { projElement = this.getPrimaryElement(p.client.id); break; }
+      }
+      const hitMsg: HitMessage = { type: MessageType.HIT, ...hit, element: projElement };
       for (const p of this.players.values()) send(p.client, hitMsg);
       this.stats.trackDamage(hit.sourceId, hit.damage);
     }
@@ -2453,10 +2562,18 @@ export class GameSession {
     }
     this.waveState.pendingIntros.length = 0;
 
+    const _tDelta0 = performance.now();
     const delta = this.buildDelta();
+    const _tDelta1 = performance.now();
     for (const p of this.players.values()) {
       delta.lastSeq = p.lastSeq;
       send(p.client, delta);
+    }
+
+    const _tickEnd = performance.now();
+    const _tickTotal = _tickEnd - _tickStart;
+    if (_tickTotal > 100) {
+      console.warn(`[PERF] Tick ${this.tick} took ${_tickTotal.toFixed(1)}ms | combat=${(_t1-_t0).toFixed(1)} enemy=${(_t2-_t1).toFixed(1)} movement=${(_t3-_t2).toFixed(1)} proj=${(_t5-_t4).toFixed(1)} buildings=${(_t7-_t6).toFixed(1)} skills=${(_t8-_t7).toFixed(1)} waves=${(_t9-_t8).toFixed(1)} delta=${(_tDelta1-_tDelta0).toFixed(1)} entities=${this.world.allEntities.size}`);
     }
 
     // prevSnapshot is now updated inline by buildDelta()
@@ -2616,6 +2733,20 @@ export class GameSession {
       const ws = this.world.getComponent<import('@shared/components').WorkerSlotComponent>(id, C.WorkerSlot);
       if (ws) snap.workerAssigned = ws.workerId !== null;
 
+      // Status effects bitmask (for client rendering)
+      if (faction === 'enemy') {
+        let effects = 0;
+        if (this.world.hasComponent(id, C.BurnDot))        effects |= 1;
+        if (this.world.hasComponent(id, C.PoisonDot))      effects |= 2;
+        if (this.world.hasComponent(id, C.SlowEffect))     effects |= 4;
+        if (this.world.hasComponent(id, C.StunEffect))     effects |= 8;
+        if (this.world.hasComponent(id, C.HolyMark))       effects |= 16;
+        if (this.world.hasComponent(id, C.ShadowDrain))    effects |= 32;
+        if (this.world.hasComponent(id, C.ArcaneMark))     effects |= 64;
+        if (this.world.hasComponent(id, C.NatureBlessing)) effects |= 128;
+        if (effects) snap.statusEffects = effects;
+      }
+
       snaps.push(snap);
     }
     return snaps;
@@ -2637,7 +2768,8 @@ export class GameSession {
       prev.enemyRadius !== curr.enemyRadius ||
       prev.civilianState !== curr.civilianState ||
       prev.civilianHunger !== curr.civilianHunger ||
-      prev.workerAssigned !== curr.workerAssigned
+      prev.workerAssigned !== curr.workerAssigned ||
+      prev.statusEffects !== curr.statusEffects
     );
   }
 

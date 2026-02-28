@@ -184,6 +184,8 @@ export enum MessageType {
   SKILL_ALLOCATE = 'SKILL_ALLOCATE',
   /** Server → Client: full skill allocation state. */
   SKILL_STATE = 'SKILL_STATE',
+  /** Client → Server: assign an ability to a hotbar slot. */
+  ABILITY_SLOT_ASSIGN = 'ABILITY_SLOT_ASSIGN',
   /** Client → Server: activate an ability (Q/E/R). */
   ABILITY_USE = 'ABILITY_USE',
   /** Server → all: broadcast ability visual effect. */
@@ -406,6 +408,8 @@ export interface EntitySnapshot {
   civilianHunger?: number;
   /** True if this production building has an assigned worker. Only present for building faction. */
   workerAssigned?: boolean;
+  /** Bitmask of active status effects (burn, poison, slow, stun, etc). Only present for enemies. */
+  statusEffects?: number;
 }
 
 /** Full world snapshot sent on game start or player rejoin. */
@@ -481,6 +485,8 @@ export interface HitMessage extends BaseMessage {
   knockbackVx: number;
   knockbackVy: number;
   crit?: boolean;
+  /** Primary element of the attack (for damage number tinting). */
+  element?: string;
 }
 
 /** Server → all: a new projectile was created (ranged attack). */
@@ -882,6 +888,14 @@ export interface SkillStateMessage extends BaseMessage {
   allocated: string[];
   skillPoints: number;
   abilityCooldowns: Record<string, number>;
+  slotAssignments?: [string | null, string | null, string | null];
+}
+
+/** Client → Server: assign an ability to a hotbar slot (Q=0, E=1, R=2). */
+export interface AbilitySlotAssignMessage extends BaseMessage {
+  type: typeof MessageType.ABILITY_SLOT_ASSIGN;
+  slot: 0 | 1 | 2;
+  abilityId: string | null;
 }
 
 /** Client → Server: activate an ability (Q/E/R). */
@@ -1121,6 +1135,7 @@ export type AnyMessage =
   | PlayerKickMessage
   | SkillAllocateMessage
   | SkillStateMessage
+  | AbilitySlotAssignMessage
   | AbilityUseMessage
   | AbilityEffectMessage
   | PotionShopStateMessage

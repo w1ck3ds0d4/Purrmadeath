@@ -515,11 +515,21 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
       if (world.hasEntity(id)) world.destroyEntity(id);
     }
 
+    // Periodic reassignment check (every 3s) to catch stale idle civilians
+    reassignAccum += dt;
+    if (reassignAccum >= 3) {
+      reassignAccum = 0;
+      reassignWorkers();
+    }
+
     tickAI(dt, send);
     tickHunger(dt, send);
     tickSpeech(dt);
     tickSpeechTriggers(dt, send);
   }
+
+  /** Accumulator for periodic worker reassignment checks. */
+  let reassignAccum = 0;
 
   /** Accumulator for periodic speech checks. */
   let speechCheckTimer = 0;

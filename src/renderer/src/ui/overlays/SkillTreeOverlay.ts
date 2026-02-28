@@ -6,18 +6,18 @@ import {
   type SkillNodeId,
   type SkillBranchId,
   canAllocate,
-  getActiveAbilities,
+  getUnlockedAbilities,
 } from '@shared/definitions/SkillDefinitions';
 import { CARD_POOL, RARITY_BORDER_COLORS, CATEGORY_COLORS } from '@shared/definitions/CardDefinitions';
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 
-const NODE_W = 148;
-const NODE_H = 56;
-const CAPSTONE_H = 68;
-const TIER_GAP_Y = 10;
-const BRANCH_GAP_X = 12;
-const HEADER_H = 36;
+const NODE_W = 180;
+const NODE_H = 68;
+const CAPSTONE_H = 80;
+const TIER_GAP_Y = 12;
+const BRANCH_GAP_X = 32;
+const HEADER_H = 56;
 const SIDE_PANEL_W = 280;
 const BRANCH_COUNT = 5;
 
@@ -48,9 +48,12 @@ export class SkillTreeOverlay {
 
   private allocated = new Set<string>();
   private skillPoints = 0;
+  private slotAssignments: [string | null, string | null, string | null] = [null, null, null];
   private playerClass: PlayerClass = 'warrior';
   private pickedCardIds: string[] = [];
   private completedBuffs: { displayName: string; reward: string; medalColor: string }[] = [];
+  private onSlotAssign: ((slot: number, abilityId: string | null) => void) | null = null;
+  private abilityBarEl: HTMLElement | null = null;
 
   constructor() {
     this.screen = document.createElement('div');
@@ -133,10 +136,20 @@ export class SkillTreeOverlay {
       this.branchContainers.push(col);
     }
 
+    // Ability assignment bar
+    this.abilityBarEl = document.createElement('div');
+    this.abilityBarEl.style.cssText = `
+      display:flex;gap:16px;justify-content:center;align-items:center;
+      margin-top:20px;padding:12px 0;flex-shrink:0;
+      border-top:1px solid rgba(255,255,255,0.06);
+      width:100%;max-width:${BRANCH_COUNT * NODE_W + (BRANCH_COUNT - 1) * BRANCH_GAP_X}px;
+    `;
+    center.appendChild(this.abilityBarEl);
+
     // Key hint at bottom of center
     const hint = document.createElement('div');
     hint.style.cssText = 'font-family:monospace;font-size:11px;color:#4a5a6a;margin-top:auto;padding-top:16px;user-select:none;flex-shrink:0;';
-    hint.textContent = 'Press K or ESC to close';
+    hint.textContent = 'Drag capstone abilities to slots below - Press K or ESC to close';
     center.appendChild(hint);
 
     // Right sidebar: Permanent buffs
@@ -161,7 +174,7 @@ export class SkillTreeOverlay {
     return this.screen.style.display !== 'none';
   }
 
-  show(playerClass: PlayerClass, allocated: Set<string>, skillPoints: number, onAllocate: (nodeId: string) => void, pickedCardIds?: string[], completedBuffs?: { displayName: string; reward: string; medalColor: string }[], onHide?: () => void): void {
+  show(playerClass: PlayerClass, allocated: Set<string>, skillPoints: number, onAllocate: (nodeId: string) => void, pickedCardIds?: string[], completedBuffs?: { displayName: string; reward: string; medalColor: string }[], onHide?: () => void, slotAssignments?: [string | null, string | null, string | null], onSlotAssign?: (slot: number, abilityId: string | null) => void): void {
     this.playerClass = playerClass;
     this.allocated = allocated;
     this.skillPoints = skillPoints;
@@ -169,6 +182,8 @@ export class SkillTreeOverlay {
     this.onHide = onHide ?? null;
     if (pickedCardIds) this.pickedCardIds = pickedCardIds;
     if (completedBuffs) this.completedBuffs = completedBuffs;
+    if (slotAssignments) this.slotAssignments = slotAssignments;
+    this.onSlotAssign = onSlotAssign ?? null;
     this.screen.style.display = 'flex';
     this.rebuild();
   }
@@ -181,9 +196,10 @@ export class SkillTreeOverlay {
   }
 
   /** Update state from server without full rebuild. */
-  updateState(allocated: Set<string>, skillPoints: number): void {
+  updateState(allocated: Set<string>, skillPoints: number, slotAssignments?: [string | null, string | null, string | null]): void {
     this.allocated = allocated;
     this.skillPoints = skillPoints;
+    if (slotAssignments) this.slotAssignments = slotAssignments;
     if (this.isVisible) this.rebuild();
   }
 
@@ -195,7 +211,7 @@ export class SkillTreeOverlay {
     this.pointsEl.textContent = `Skill Points: ${this.skillPoints}`;
     this.nodeEls.clear();
 
-    const alloc = { allocated: this.allocated, skillPoints: this.skillPoints };
+    const alloc = { allocated: this.allocated, skillPoints: this.skillPoints, slotAssignments: this.slotAssignments };
 
     for (let bi = 0; bi < BRANCH_COUNT; bi++) {
       const col = this.branchContainers[bi];
@@ -207,7 +223,7 @@ export class SkillTreeOverlay {
       // Branch header
       const branchHeader = document.createElement('div');
       branchHeader.style.cssText = `
-        font-family: 'Segoe UI', sans-serif; font-size: 14px; font-weight: 700;
+        font-family: 'Segoe UI', sans-serif; font-size: 15px; font-weight: 700;
         color: ${hexColor(branch.color)}; text-align: center;
         user-select: none; letter-spacing: 1px; height: ${HEADER_H}px;
         display: flex; align-items: center; justify-content: center;
@@ -240,17 +256,135 @@ export class SkillTreeOverlay {
 
         // Connector line between nodes (except after capstone)
         if (ni < branch.nodes.length - 1) {
-          const nextAllocated = this.allocated.has(branch.nodes[ni + 1].id);
-          const lineAlpha = (isAllocated && nextAllocated) ? 0.7 : (isAllocated || nextAllocated) ? 0.4 : 0.15;
+          const bColor = hexColor(branch.color);
+          const connectorColor = isAllocated ? bColor : `${bColor}4D`;
           const line = document.createElement('div');
-          line.style.cssText = `width:2px;height:${TIER_GAP_Y}px;background:${hexColor(branch.color)};opacity:${lineAlpha};flex-shrink:0;`;
+          line.style.cssText = `width:2px;height:${TIER_GAP_Y}px;background:${connectorColor};flex-shrink:0;`;
           col.appendChild(line);
         }
       }
     }
 
+    // Make allocated capstone nodes draggable
+    for (const nodeId of this.allocated) {
+      const el = this.nodeEls.get(nodeId);
+      if (!el) continue;
+      const branch = Object.values(SKILL_BRANCHES).find(b => b.nodes.some(n => n.id === nodeId));
+      const node = branch?.nodes.find(n => n.id === nodeId);
+      if (!node?.active) continue; // Only capstones with active abilities
+      el.draggable = true;
+      el.style.cursor = 'grab';
+      el.addEventListener('dragstart', (e) => {
+        e.dataTransfer!.setData('text/plain', node.active!.abilityId);
+        e.dataTransfer!.effectAllowed = 'move';
+        el.style.opacity = '0.5';
+      });
+      el.addEventListener('dragend', () => { el.style.opacity = '1'; });
+    }
+
+    this.rebuildAbilityBar();
     this.rebuildCards();
     this.rebuildBuffs();
+  }
+
+  private rebuildAbilityBar(): void {
+    const bar = this.abilityBarEl;
+    if (!bar) return;
+    bar.innerHTML = '';
+
+    const alloc = { allocated: this.allocated, skillPoints: this.skillPoints, slotAssignments: this.slotAssignments };
+    const unlocked = getUnlockedAbilities(alloc);
+    const slotKeys = ['Q', 'E', 'R'];
+
+    // Label
+    const label = document.createElement('div');
+    label.style.cssText = "font-family:'Segoe UI',sans-serif;font-size:13px;font-weight:600;color:#8a9aaa;user-select:none;margin-right:8px;";
+    label.textContent = 'ABILITY SLOTS:';
+    bar.appendChild(label);
+
+    for (let i = 0; i < 3; i++) {
+      const assignedId = this.slotAssignments[i];
+      const ability = unlocked.find(a => a.abilityId === assignedId);
+
+      const slot = document.createElement('div');
+      const hasAbility = ability != null;
+      slot.style.cssText = [
+        'width:140px',
+        'height:48px',
+        'border-radius:6px',
+        `border:2px dashed ${hasAbility ? '#e8c96a66' : '#3a3a4a'}`,
+        `background:${hasAbility ? '#2a2a3a' : '#1a1a2a'}`,
+        'display:flex',
+        'flex-direction:column',
+        'align-items:center',
+        'justify-content:center',
+        'user-select:none',
+        'transition:border-color 0.15s, background 0.15s',
+        'position:relative',
+      ].join(';');
+
+      // Key badge
+      const keyBadge = document.createElement('div');
+      keyBadge.style.cssText = `
+        position:absolute;top:-8px;left:8px;
+        background:#1a1a2a;border:1px solid #3a3a4a;border-radius:3px;
+        padding:0 5px;font-family:monospace;font-size:10px;color:#e8c96a;
+        font-weight:bold;
+      `;
+      keyBadge.textContent = slotKeys[i];
+      slot.appendChild(keyBadge);
+
+      if (hasAbility) {
+        const nameEl = document.createElement('div');
+        nameEl.style.cssText = "font-family:'Segoe UI',sans-serif;font-size:12px;font-weight:600;color:#e8eef5;";
+        nameEl.textContent = ability!.name;
+        slot.appendChild(nameEl);
+
+        const cdEl = document.createElement('div');
+        cdEl.style.cssText = 'font-family:monospace;font-size:10px;color:#8a9aaa;';
+        cdEl.textContent = `${ability!.cooldown}s CD`;
+        slot.appendChild(cdEl);
+      } else {
+        const emptyEl = document.createElement('div');
+        emptyEl.style.cssText = 'font-family:monospace;font-size:11px;color:#4a5a6a;';
+        emptyEl.textContent = 'Drop ability';
+        slot.appendChild(emptyEl);
+      }
+
+      // Drop handlers
+      const slotIndex = i;
+      slot.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer!.dropEffect = 'move';
+        slot.style.borderColor = '#e8c96a';
+        slot.style.background = '#2a2a3a';
+      });
+      slot.addEventListener('dragleave', () => {
+        slot.style.borderColor = hasAbility ? '#e8c96a66' : '#3a3a4a';
+        slot.style.background = hasAbility ? '#2a2a3a' : '#1a1a2a';
+      });
+      slot.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const abilityId = e.dataTransfer!.getData('text/plain');
+        if (abilityId && unlocked.some(a => a.abilityId === abilityId)) {
+          this.onSlotAssign?.(slotIndex, abilityId);
+        }
+        slot.style.borderColor = hasAbility ? '#e8c96a66' : '#3a3a4a';
+        slot.style.background = hasAbility ? '#2a2a3a' : '#1a1a2a';
+      });
+
+      // Right-click to clear slot
+      if (hasAbility) {
+        slot.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          this.onSlotAssign?.(slotIndex, null);
+        });
+        slot.style.cursor = 'pointer';
+        slot.title = 'Right-click to unequip';
+      }
+
+      bar.appendChild(slot);
+    }
   }
 
   private rebuildCards(): void {
@@ -284,13 +418,13 @@ export class SkillTreeOverlay {
       const catHex = '#' + CATEGORY_COLORS[card.category].toString(16).padStart(6, '0');
       const el = document.createElement('div');
       el.style.cssText = `
-        padding:8px 10px;border-radius:6px;
+        width:160px;padding:8px 10px;border-radius:6px;
         background:${catHex}18;border:1px solid ${RARITY_BORDER_COLORS[card.rarity]};
-        user-select:none;
+        user-select:none;box-sizing:border-box;
       `;
       el.innerHTML = `
         <div style="font-family:'Segoe UI',sans-serif;font-size:14px;font-weight:600;color:#e8eef5;">${card.name}</div>
-        <div style="font-family:monospace;font-size:12px;color:#a0b0c0;margin-top:2px;">${card.description}</div>
+        <div style="font-family:monospace;font-size:11px;color:#a0b0c0;margin-top:2px;">${card.description}</div>
         <div style="font-family:monospace;font-size:10px;color:${catHex};margin-top:3px;text-transform:uppercase;">${card.category} &middot; ${card.rarity}</div>
       `;
       container.appendChild(el);
@@ -334,6 +468,7 @@ export class SkillTreeOverlay {
 
   private nodeStyle(node: SkillNode, branch: SkillBranch, allocated: boolean, available: boolean): string {
     const color = hexColor(branch.color);
+    const isCapstone = node.tier === 5;
     let bg = LOCKED_COLOR;
     let border = LOCKED_BORDER;
     let shadow = 'none';
@@ -344,11 +479,12 @@ export class SkillTreeOverlay {
       shadow = `0 0 8px ${color}66`;
     } else if (available) {
       bg = '#1a1a2e';
-      border = node.tier === 5 ? '#e8c96a' : AVAILABLE_GLOW;
-      shadow = node.tier === 5 ? '0 0 14px rgba(232, 201, 106, 0.5)' : `0 0 12px ${AVAILABLE_GLOW}`;
+      border = isCapstone ? '#e8c96a' : AVAILABLE_GLOW;
+      shadow = isCapstone ? '0 0 14px rgba(232, 201, 106, 0.5)' : `0 0 12px ${AVAILABLE_GLOW}`;
+    } else if (isCapstone) {
+      border = '#e8c96a44';
     }
 
-    const isCapstone = node.tier === 5;
     const borderWidth = isCapstone ? '2px' : '1px';
     const h = isCapstone ? CAPSTONE_H : NODE_H;
 
@@ -376,7 +512,7 @@ export class SkillTreeOverlay {
     return `
       <div class="skill-tooltip">${node.description}</div>
       <div style="font-family:monospace;font-size:10px;color:${tierColor};margin-bottom:2px;">${tierLabel}</div>
-      <div style="font-family:'Segoe UI',sans-serif;font-size:15px;font-weight:600;color:${nameColor};">${node.name}</div>
+      <div style="font-family:'Segoe UI',sans-serif;font-size:14px;font-weight:600;color:${nameColor};">${node.name}</div>
       ${cdLine}
     `;
   }

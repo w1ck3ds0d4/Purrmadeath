@@ -7,6 +7,7 @@ import {
   PLAYER_STAMINA_REGEN,
   GAME_VERSION,
   CIVILIAN_SPEECH_DURATION,
+  ELEMENT_COLORS,
 } from '@shared/constants';
 import type {
   HandshakeAckMessage,
@@ -127,6 +128,7 @@ export interface GameplayState {
   seed: number;
   skillAllocated: Set<string>;
   skillPoints: number;
+  slotAssignments: [string | null, string | null, string | null];
   onSkillStateUpdate?: () => void;
   cardAbilities: string[];
   pickedCardIds: string[];
@@ -316,7 +318,10 @@ export function registerMessageHandlers(
     const tgtPos = d.world.getComponent<PositionComponent>(hit.targetId, C.Position);
     if (tgtPos) {
       const faction = d.world.getComponent<FactionComponent>(hit.targetId, C.Faction);
-      const color = faction?.type === 'building' ? 0xffa040
+      // Use element color if present, otherwise faction-based default
+      const elemColor = hit.element ? ELEMENT_COLORS[hit.element] : undefined;
+      const color = elemColor !== undefined ? elemColor
+                  : faction?.type === 'building' ? 0xffa040
                   : faction?.type === 'resource' ? 0xffffff
                   : 0xff4444;
       d.damageNumbers.add(tgtPos.x, tgtPos.y - 10, hit.damage, color, crit);
@@ -433,12 +438,13 @@ export function registerMessageHandlers(
     const ss = msg as SkillStateMessage;
     s.skillAllocated = new Set(ss.allocated);
     s.skillPoints = ss.skillPoints;
+    if (ss.slotAssignments) s.slotAssignments = ss.slotAssignments;
     // Sync ability cooldowns from server
     if (ss.abilityCooldowns) {
       // abilityCooldowns are keyed by abilityId - caller maps them to slots
     }
     s.onSkillStateUpdate?.();
-    d.skillTree.updateState(s.skillAllocated, s.skillPoints);
+    d.skillTree.updateState(s.skillAllocated, s.skillPoints, s.slotAssignments);
   });
 
   net.on(MessageType.ABILITY_EFFECT, (msg) => {

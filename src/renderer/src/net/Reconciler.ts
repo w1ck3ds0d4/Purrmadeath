@@ -13,13 +13,9 @@ import type { EntitySnapshot, DeltaMessage } from '@shared/protocol';
  * 2. Every DELTA message includes `lastSeq` - the last input sequence number
  *    the server successfully applied for this client.
  * 3. On receiving DELTA, we:
- *    a. Snap the local player position to the server-authoritative value.
- *    b. Discard all pending inputs up to and including `lastSeq`.
- *    c. Re-apply the remaining (unacknowledged) inputs on top of the
- *       server position to maintain smooth predicted movement.
- *
- * For LAN play the correction step rarely fires (round-trip < 5 ms), but it
- * ensures correctness when it does (e.g. wall collisions, lag spikes).
+ *    a. Snap to server position, replay unacknowledged inputs.
+ *    b. Blend the predicted position toward server truth to prevent drift.
+ *    c. Use visual smoothing so corrections never feel jarring.
  */
 export class Reconciler {
   private seq = 0;
@@ -30,13 +26,15 @@ export class Reconciler {
   /** Entity ID of the local player. Set by game.ts after spawn. */
   localEntityId: number | null = null;
 
-  /** Threshold (px) below which we skip correction entirely (rounding noise).
-   *  Set high enough to absorb the inherent divergence between per-frame client
-   *  prediction and per-tick server simulation (non-linear accel model). */
-  private static readonly CORRECTION_THRESHOLD = 8;
-
   /** Above this distance, hard-snap instead of blending (teleport / major desync). */
-  private static readonly HARD_SNAP_THRESHOLD = 100;
+  private static readonly HARD_SNAP_THRESHOLD = 200;
+
+  /** Below this, skip correction entirely (sub-pixel noise). */
+  private static readonly MIN_CORRECTION = 2;
+
+  /** Fraction of error to correct each delta (0 = ignore, 1 = full snap).
+   *  0.3 means we close 30% of the gap each server tick - smooth but responsive. */
+  private static readonly BLEND_FACTOR = 0.3;
 
   /** Visual offset that smooths out corrections over multiple render frames.
    *  Applied to camera target only - physics position stays clean for prediction. */
@@ -59,8 +57,7 @@ export class Reconciler {
 
   /**
    * Apply a server DELTA to the local player entity.
-   * - Snaps to server position if the error exceeds CORRECTION_THRESHOLD.
-   * - Replays unacknowledged inputs so predicted position stays smooth.
+   * Uses continuous blending to prevent drift accumulation at high speeds.
    */
   applyDelta(world: World, delta: DeltaMessage, moveFn: ReplayMoveFn): void {
     if (this.localEntityId === null) return;
@@ -79,25 +76,19 @@ export class Reconciler {
       hp.max     = serverSnap.maxHp ?? hp.max;
     }
 
-    // Step 2: measure error
+    // Step 2: measure error between client prediction and server
     const pos = world.getComponent<PositionComponent>(this.localEntityId, C.Position);
     if (!pos) return;
 
-    const errX = pos.x - serverSnap.x;
-    const errY = pos.y - serverSnap.y;
-    const err = distance(errX, errY);
+    const vel = world.getComponent<VelocityComponent>(this.localEntityId, C.Velocity);
 
-    if (err < Reconciler.CORRECTION_THRESHOLD) return; // no correction needed
-
-    // Save pre-correction visual position (physics + any remaining smoothing offset)
+    // Save pre-correction visual position
     const oldVisualX = pos.x + this.smoothX;
     const oldVisualY = pos.y + this.smoothY;
 
     // Step 3: snap to server position
     pos.x = serverSnap.x;
     pos.y = serverSnap.y;
-
-    const vel = world.getComponent<VelocityComponent>(this.localEntityId, C.Velocity);
     if (vel) { vel.vx = serverSnap.vx; vel.vy = serverSnap.vy; }
 
     // Step 4: replay unacknowledged inputs
@@ -111,12 +102,29 @@ export class Reconciler {
       }
     }
 
-    // Step 5: compute smoothing offset (difference between old visual and new physics)
+    // Step 5: measure post-replay error (prediction drift)
+    const errX = pos.x - serverSnap.x;
+    const errY = pos.y - serverSnap.y;
+    const err = distance(errX, errY);
+
     if (err >= Reconciler.HARD_SNAP_THRESHOLD) {
-      // Large desync (teleport) - no smoothing, snap immediately
+      // Major desync - snap to server, no smoothing
+      pos.x = serverSnap.x;
+      pos.y = serverSnap.y;
       this.smoothX = 0;
       this.smoothY = 0;
+    } else if (err > Reconciler.MIN_CORRECTION) {
+      // Blend predicted position toward server to prevent drift accumulation.
+      // Instead of waiting for error to grow large, continuously correct a fraction.
+      const blend = Reconciler.BLEND_FACTOR;
+      pos.x -= errX * blend;
+      pos.y -= errY * blend;
+
+      // Visual smoothing: offset camera so the blend doesn't cause a visual jump
+      this.smoothX = oldVisualX - pos.x;
+      this.smoothY = oldVisualY - pos.y;
     } else {
+      // Tiny error - just update visual smoothing for any remaining offset
       this.smoothX = oldVisualX - pos.x;
       this.smoothY = oldVisualY - pos.y;
     }
