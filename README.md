@@ -86,11 +86,24 @@ npm run build
 - `Tab` / Mouse Wheel: cycle build selection
 - `E`: harvest/collect nearby
 - `Delete` or `X`: remove selected building
-- `ESC`: pause/resume
+- `ESC`: pause/resume (multiplayer: unanimous pause vote across connected players; solo can pause immediately, dedicated server authoritative)
 - `F4` or `\u00e7`: toggle dev console
 - Dev sidebar sections: `C` perf, `V` cheats, `M` multiplayer, `N` logs, `G` core
 - Dev server metrics section: `Y` (shows server tick/sim/net load)
+- Server metrics include pause-vote state (`pauseVotes / pauseEligiblePlayers`)
+- Server metrics include restart-vote state (`restartVotes / restartEligiblePlayers`) and restart count
+- Server metrics include combat correction counters (`killCorrections / goldCorrections`)
+- Server attack diagnostics include target-validity rejects (`attackRejectedNoTarget`)
+- Follower sword hits are now server-applied to replicated enemy HP; host receives visual replay flag to avoid double damage
+- Follower pistol hits now follow the same server-applied damage + host visual-only replay path when flagged
+- Enemy projectile hits are now server-applied to replicated player/civilian/building state (with consumed-projectile culling on authority path)
+- Host-side local enemy-projectile damage application is disabled while connected to dedicated authority path (prevents double-apply)
+- server now replicates AI directives (tower targets, ranged-enemy targets, civilian job hints) computed on dedicated tick
+- authority host consumes replicated server AI directives for tower targeting, ranged-enemy targeting, and civilian producer/warehouse selection
+- multiplayer non-player state now includes replicated `aiDirectives` in both full and delta snapshot modes
+- server metrics now include AI-directive generation cost and assignment counts (tower/ranged/civilian)
 - Dev slash commands: `/core`, `/perf`, `/multiplayer`, `/server`, `/logs`, `/cheats`, `/all`, `/force-reset`
+- Dev terminal now keeps `FPS`/`Frame ms` in the header across views (`/server`, `/perf`, etc.)
 - Dev command textbox appears in the sidebar (press `Tab` or type `/` to start command input)
 - Multiplayer connect toggle in dev sidebar: `P`
 
@@ -175,7 +188,7 @@ flowchart LR
 
 - `0.0.0.0` is only a bind/listen address; clients should use the host LAN IP (for example `192.168.x.x`).
 - Open firewall access for TCP `3001` and `8080` on the host.
-- In-game dev console (`F4` or `\u00e7`) shows multiplayer status and LAN join hint.
+- In-game dev console (`F4` or `Ç`) shows multiplayer status and LAN join hint.
 - Dev console is a compact right terminal-style sidebar to avoid covering central gameplay view.
 - LAN session currently supports up to 4 simultaneous players.
 - Current 2.2.2 netcode improvements:
@@ -209,9 +222,14 @@ flowchart LR
   - house civilian timer labels are replicated to followers
   - follower movement delay reduced via client pose hints in input packets (server reconciliation)
   - follower correction tuned to reduce visible teleporting during desync recovery
+  - follower client now tracks WebSocket backpressure and drops stale input/ping packets when send buffers spike
   - replicated enemies/projectiles now interpolate on followers to reduce snap jitter
   - 2.2.4-A migration started: session clock ownership moved to dedicated server tick (host browser no longer owns runtime clock)
   - shared multiplayer pause/restart flow (followers request, authority applies, state replicated)
+  - pause now uses vote gating in co-op: all connected players must vote pause (single-player session pauses immediately)
+  - restart now uses vote gating in co-op: all connected players must vote restart before session reset
+  - pause menu now shows live restart-vote progress (`Restart vote: X/Y`) during multiplayer sessions
+  - host force reset now applies to all connected players via server-owned restart version
   - co-op revive interaction (use `E` near downed teammate)
   - dynamic enemy scaling by active player count in session
   - authority checkpoints for multiplayer session restore (per session id)
@@ -232,6 +250,7 @@ flowchart LR
   - harvest/revive and build/remove actions now enforce server-side origin/range checks
   - server-side privileged action boundary blocks follower force-reset and dev-resource actions
   - auto quality governor now also reacts to server-load signals (`simMsAvg`, `loopLagMsAvg`) to protect co-op stability
+  - server movement integration now uses elapsed wall-clock dt (clamped) to reduce slow follower movement when server tick jitter occurs
   - added dedicated multiplayer probes:
     - `npm run multiplayer:test:sync`
     - `npm run multiplayer:test:load`

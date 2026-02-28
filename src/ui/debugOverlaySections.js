@@ -11,6 +11,7 @@ export function buildMultiplayerSectionLines(multiplayerStats, lanHostHint, loca
         `Replicated non-player seq: ${multiplayerStats.nonPlayerSeq ?? 0} | Totals E/P/T/EP: ${(multiplayerStats.nonPlayerTotals?.enemies ?? 0)}/${(multiplayerStats.nonPlayerTotals?.playerProjectiles ?? 0)}/${(multiplayerStats.nonPlayerTotals?.towerProjectiles ?? 0)}/${(multiplayerStats.nonPlayerTotals?.enemyProjectiles ?? 0)}`,
         `Net rate: in ${Number(multiplayerStats.inboundKbps ?? 0).toFixed(2)} kB/s | out ${Number(multiplayerStats.outboundKbps ?? 0).toFixed(2)} kB/s`,
         `Msg rate: snapshots ${multiplayerStats.snapshotRate ?? 0}/s | inputs ${multiplayerStats.inputRate ?? 0}/s`,
+        `Backpressure drops (input/ping): ${multiplayerStats.droppedBackpressureInputs ?? 0}`,
         `Reconnect token: ${multiplayerStats.reconnectToken} | Attempts: ${multiplayerStats.connectAttempts}`,
         `Last error: ${multiplayerStats.lastError ?? 'none'}`,
         `LAN host hint: ${lanHostHint}`,
@@ -35,8 +36,13 @@ export function buildServerSectionLines(serverPerfStats) {
         `Tile reservations active: ${serverPerfStats.activeTileReservations ?? 0}`,
         `Producer sim avg: ${Number(serverPerfStats.producerSimUpdateMsAvg ?? 0).toFixed(3)} ms`,
         `Server harvest ok/rej: ${serverPerfStats.serverHarvestApplied ?? 0}/${serverPerfStats.serverHarvestRejected ?? 0}`,
-        `Attack fwd/rej(origin/cd): ${serverPerfStats.forwardedAttackActions ?? 0}/${serverPerfStats.attackRejectedOrigin ?? 0}/${serverPerfStats.attackRejectedCooldown ?? 0}`,
+        `Attack fwd/rej(origin/cd/target): ${serverPerfStats.forwardedAttackActions ?? 0}/${serverPerfStats.attackRejectedOrigin ?? 0}/${serverPerfStats.attackRejectedCooldown ?? 0}/${serverPerfStats.attackRejectedNoTarget ?? 0}`,
         `Range rejects(all): ${serverPerfStats.rangeRejectedActions ?? 0} | Privileged rejects: ${serverPerfStats.privilegedRejectedActions ?? 0}`,
+        `Pause votes: ${serverPerfStats.pauseVotes ?? 0}/${serverPerfStats.pauseEligiblePlayers ?? 0}`,
+        `Restart votes: ${serverPerfStats.restartVotes ?? 0}/${serverPerfStats.restartEligiblePlayers ?? 0} | Restarts: ${serverPerfStats.restartsTriggered ?? 0}`,
+        `Combat corrections K/G: ${serverPerfStats.killCorrections ?? 0}/${serverPerfStats.goldCorrections ?? 0}`,
+        `Enemy projectile authority D/P/C/B: ${serverPerfStats.enemyProjectileDamageApplied ?? 0}/${serverPerfStats.enemyProjectilePlayerHits ?? 0}/${serverPerfStats.enemyProjectileCivilianHits ?? 0}/${serverPerfStats.enemyProjectileBuildingHits ?? 0}`,
+        `AI directives ms/t/r/c: ${Number(serverPerfStats.aiDirectiveMsAvg ?? 0).toFixed(3)}/${serverPerfStats.aiTowerAssignments ?? 0}/${serverPerfStats.aiRangedAssignments ?? 0}/${serverPerfStats.aiCivilianAssignments ?? 0}`,
         `Building hash mismatch count: ${serverPerfStats.buildingStateMismatchCount ?? 0}`
     ];
 }

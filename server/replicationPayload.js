@@ -21,6 +21,7 @@ function filterNonPlayerStateForViewer(nonPlayerState, viewer, relevanceRadius) 
         sessionTimeSeconds: Number(nonPlayerState.sessionTimeSeconds) || 0,
         sessionState: nonPlayerState.sessionState,
         sharedResources: nonPlayerState.sharedResources,
+        aiDirectives: nonPlayerState.aiDirectives,
         buildingsState: nonPlayerState.buildingsState,
         buildingsRevision: nonPlayerState.buildingsRevision,
         totals: {
@@ -116,6 +117,7 @@ function buildDeltaNonPlayerPayload(socket, fullPayload, perSocketNonPlayerCache
         sessionTimeSeconds: fullPayload.sessionTimeSeconds,
         sessionState: fullPayload.sessionState,
         sharedResources: fullPayload.sharedResources,
+        aiDirectives: fullPayload.aiDirectives,
         buildingsState: fullPayload.buildingsState,
         buildingsRevision: fullPayload.buildingsRevision
     };
