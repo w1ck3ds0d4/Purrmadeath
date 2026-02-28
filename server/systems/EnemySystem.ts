@@ -1,4 +1,5 @@
 import { World } from '@shared/ecs/World';
+import { distance } from '@shared/math/utils';
 import {
   C,
   PositionComponent,
@@ -27,6 +28,15 @@ import {
   RESOURCE_NODE_RADIUS,
   PORTAL_RADIUS,
   ENEMY_RADIUS,
+  ENEMY_REPLAN_INTERVAL,
+  ENEMY_REPLAN_DIST_THRESHOLD,
+  ENEMY_WAYPOINT_REACH,
+  ENEMY_STUCK_DIST,
+  ENEMY_STUCK_TIME,
+  ENEMY_AVOIDANCE_LOOK_AHEAD,
+  ENEMY_AVOIDANCE_MARGIN,
+  ENEMY_AVOIDANCE_STRENGTH,
+  GUARD_DETECT_RANGE,
   buildingHalfExtent,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
@@ -49,12 +59,6 @@ const ENEMY_OVERRIDES_DEFAULT = {
   knockback: ENEMY_MELEE_KNOCKBACK,
 };
 
-/** How often (seconds) to recompute a path. */
-const REPLAN_INTERVAL = 0.5;
-/** If target moved more than this many pixels, force a replan. */
-const REPLAN_DIST_THRESHOLD = 64; // 2 tiles
-/** Distance (px) at which a waypoint is considered reached. */
-const WAYPOINT_REACH = 16; // half a tile
 
 /**
  * Server-side enemy AI - runs each tick.
@@ -67,14 +71,6 @@ const WAYPOINT_REACH = 16; // half a tile
  * Movement is executed by MovementSystem (runs after this), so enemies
  * share the same physics and tile-collision as players.
  */
-/** Stuck detection: if enemy hasn't moved more than this distance in STUCK_TIME, apply wiggle. */
-const STUCK_DIST = 8;
-const STUCK_TIME = 1;
-
-/** Local obstacle avoidance: scan ahead for resources/portals and steer around them. */
-const AVOIDANCE_LOOK_AHEAD = 48;   // 1.5 tiles forward scan (px)
-const AVOIDANCE_MARGIN = 8;        // extra padding beyond collision radii (px)
-const AVOIDANCE_STRENGTH = 1.5;    // perpendicular blend multiplier
 
 /** Circle-vs-AABB overlap test (no push vector needed). */
 function circleAABBOverlap(cx: number, cy: number, cr: number, bx: number, by: number, bHalf: number): boolean {
@@ -86,7 +82,7 @@ function circleAABBOverlap(cx: number, cy: number, cr: number, bx: number, by: n
 
 export class EnemySystem {
   private paths = new Map<number, CachedPath>();
-  /** Tiles occupied by building entities — used to block pathfinding. */
+  /** Tiles occupied by building entities - used to block pathfinding. */
   private buildingBlockedTiles = new Set<number>();
   /** Per-building tile keys (for excluding target building from blocked set). */
   private buildingTilesMap = new Map<number, number[]>();
@@ -119,7 +115,7 @@ export class EnemySystem {
       if (f.type !== 'building') continue;
       const bldg = world.getComponent<BuildingComponent>(bid, C.Building);
       if (!bldg) continue;
-      // Skip bridges and spike traps — enemies don't target them
+      // Skip bridges and spike traps - enemies don't target them
       if (bldg.buildingType === 'bridge' || bldg.buildingType === 'spike_trap') continue;
       if (bldg.buildingType === 'campfire') campfireIds.push(bid);
       else if (bldg.buildingType === 'wall') wallIds.push(bid);
@@ -136,7 +132,7 @@ export class EnemySystem {
       const bldg = world.getComponent<BuildingComponent>(bid, C.Building)!;
       const half = buildingHalfExtent(bldg.buildingType);
 
-      // Bridges are walkable, not blocked — track them separately
+      // Bridges are walkable, not blocked - track them separately
       if (bldg.buildingType === 'bridge') {
         const tx = Math.floor(bpos.x / TILE_SIZE);
         const ty = Math.floor(bpos.y / TILE_SIZE);
@@ -254,7 +250,7 @@ export class EnemySystem {
           const ppos = world.getComponent<PositionComponent>(pid, C.Position)!;
           const ddx = ppos.x - pos.x;
           const ddy = ppos.y - pos.y;
-          const dist = Math.sqrt(ddx * ddx + ddy * ddy);
+          const dist = distance(ddx, ddy);
           if (dist < maxRange && (!best || dist < best.dist)) {
             best = { pos: ppos, dist };
           }
@@ -270,13 +266,13 @@ export class EnemySystem {
           const bHalf = bldg ? buildingHalfExtent(bldg.buildingType) : 16;
           const edx = Math.max(0, Math.abs(bpos.x - pos.x) - bHalf);
           const edy = Math.max(0, Math.abs(bpos.y - pos.y) - bHalf);
-          const edgeDist = Math.sqrt(edx * edx + edy * edy);
+          const edgeDist = distance(edx, edy);
           if (edgeDist < maxRange && (!best || edgeDist < best.dist)) {
             // Closest point on AABB edge, then push outward so it's on a walkable tile
             const cx = Math.max(bpos.x - bHalf, Math.min(bpos.x + bHalf, pos.x));
             const cy = Math.max(bpos.y - bHalf, Math.min(bpos.y + bHalf, pos.y));
             const pdx = cx - bpos.x, pdy = cy - bpos.y;
-            const pLen = Math.sqrt(pdx * pdx + pdy * pdy);
+            const pLen = distance(pdx, pdy);
             let nx = pLen > 0 ? cx + (pdx / pLen) * navMargin : cx + navMargin;
             let ny = pLen > 0 ? cy + (pdy / pLen) * navMargin : cy;
             // If nav point lands on unwalkable terrain (e.g. water), try 4 cardinal sides
@@ -327,7 +323,7 @@ export class EnemySystem {
           }
           const epos = world.getComponent<PositionComponent>(eid, C.Position)!;
           const ddx = epos.x - pos.x, ddy = epos.y - pos.y;
-          const dist = Math.sqrt(ddx * ddx + ddy * ddy);
+          const dist = distance(ddx, ddy);
           if (dist < maxRange && (!best || dist < best.dist)) {
             best = { pos: epos, dist };
           }
@@ -338,7 +334,6 @@ export class EnemySystem {
       // ── Guard targeting: nearest enemy > patrol to barracks ────────────────
       if (isGuard) {
         const guard = world.getComponent<GuardComponent>(id, C.Guard);
-        const GUARD_DETECT_RANGE = 150;
         const hostileEnemy = findNearestHostileEnemy(GUARD_DETECT_RANGE);
         if (hostileEnemy) {
           targetPos = hostileEnemy.pos;
@@ -349,7 +344,7 @@ export class EnemySystem {
           const bpos = world.getComponent<PositionComponent>(guard.barracksId, C.Position);
           if (bpos) {
             const dx = bpos.x - pos.x, dy = bpos.y - pos.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
+            const dist = distance(dx, dy);
             if (dist > guard.patrolRadius) {
               targetPos = bpos;
               navPos = bpos;
@@ -406,7 +401,7 @@ export class EnemySystem {
           targetHalfExtent = 0;
           targetEntityId = null;
         }
-        // No campfire and no players — fall back to any building
+        // No campfire and no players - fall back to any building
         if (!targetPos) {
           const allBuildingIds = [...campfireIds, ...wallIds, ...otherBuildingIds];
           const nearest = tryBuildings(allBuildingIds, Infinity);
@@ -422,7 +417,7 @@ export class EnemySystem {
         // Standard targeting: campfire > players > walls > other buildings
         // (melee, ranger all use this)
 
-        // 1. Campfire (always the global objective — no range limit)
+        // 1. Campfire (always the global objective - no range limit)
         const campfire = tryBuildings(campfireIds, Infinity);
         if (campfire) {
           targetPos = campfire.pos;
@@ -476,10 +471,10 @@ export class EnemySystem {
         if (targetHalfExtent > 0) {
           const edx = Math.max(0, Math.abs(targetPos.x - pos.x) - targetHalfExtent);
           const edy = Math.max(0, Math.abs(targetPos.y - pos.y) - targetHalfExtent);
-          meleeCheckDist = Math.sqrt(edx * edx + edy * edy);
+          meleeCheckDist = distance(edx, edy);
         } else {
           const ddx = targetPos.x - pos.x, ddy = targetPos.y - pos.y;
-          meleeCheckDist = Math.sqrt(ddx * ddx + ddy * ddy);
+          meleeCheckDist = distance(ddx, ddy);
         }
 
         // Ranged attack: fire at targets within range (players and buildings)
@@ -508,10 +503,10 @@ export class EnemySystem {
         } else if (meleeCheckDist <= meleeRange) {
           // In melee range: face target center, attack
           if (targetHalfExtent > 0) {
-            // Buildings: keep closing distance — building collision stops naturally at surface
+            // Buildings: keep closing distance - building collision stops naturally at surface
             const tdx = targetPos.x - pos.x;
             const tdy = targetPos.y - pos.y;
-            const tlen = Math.sqrt(tdx * tdx + tdy * tdy);
+            const tlen = distance(tdx, tdy);
             inp.dx = tlen > 0 ? tdx / tlen : 0;
             inp.dy = tlen > 0 ? tdy / tlen : 0;
           } else {
@@ -542,7 +537,7 @@ export class EnemySystem {
         } else {
           // ── Movement toward target ────────────────────────────────────────
           const ddx = navPos.x - pos.x, ddy = navPos.y - pos.y;
-          const len = Math.sqrt(ddx * ddx + ddy * ddy);
+          const len = distance(ddx, ddy);
 
           // Assassin dash: instant lunge when target is a player within 200px
           if (variant === 'assassin' && dash && !dash.dashing && dash.cooldown <= 0
@@ -578,11 +573,11 @@ export class EnemySystem {
               this.stuckTimers.set(id, stuck);
             }
             const movedDx = pos.x - stuck.x, movedDy = pos.y - stuck.y;
-            if (movedDx * movedDx + movedDy * movedDy > STUCK_DIST * STUCK_DIST) {
+            if (movedDx * movedDx + movedDy * movedDy > ENEMY_STUCK_DIST * ENEMY_STUCK_DIST) {
               stuck.x = pos.x; stuck.y = pos.y; stuck.timer = 0;
             } else {
               stuck.timer += dt;
-              if (stuck.timer > STUCK_TIME) {
+              if (stuck.timer > ENEMY_STUCK_TIME) {
                 // Find nearest obstacle to push away from (resources, portals, and buildings)
                 let nearOX = 0, nearOY = 0, nearOD = Infinity;
                 let hasNear = false;
@@ -606,7 +601,7 @@ export class EnemySystem {
                   const oDist = Math.sqrt(nearOD);
                   const awayX = -nearOX / oDist, awayY = -nearOY / oDist;
                   const tDx = navPos!.x - pos.x, tDy = navPos!.y - pos.y;
-                  const tLen = Math.sqrt(tDx * tDx + tDy * tDy);
+                  const tLen = distance(tDx, tDy);
                   const tNx = tLen > 0 ? tDx / tLen : 0, tNy = tLen > 0 ? tDy / tLen : 0;
                   inp.dx = awayX * 0.6 + tNx * 0.4;
                   inp.dy = awayY * 0.6 + tNy * 0.4;
@@ -694,7 +689,7 @@ export class EnemySystem {
         const dx = epos.x - pos.x, dy = epos.y - pos.y;
         if (dx * dx + dy * dy > rangeSq) continue;
         const spd = world.getComponent<SpeedComponent>(eid, C.Speed)!;
-        // Set multiplier to rally level (idempotent — safe to call every tick)
+        // Set multiplier to rally level (idempotent - safe to call every tick)
         spd.multiplier = Math.max(spd.multiplier, rally.speedBuff);
       }
     }
@@ -730,10 +725,10 @@ export class EnemySystem {
       const wp = path.waypoints[path.nextIndex];
       const wpDx = wp.x - pos.x;
       const wpDy = wp.y - pos.y;
-      const wpLen = Math.sqrt(wpDx * wpDx + wpDy * wpDy);
+      const wpLen = distance(wpDx, wpDy);
 
       // Large enemies consider waypoints reached at greater distance
-      const wpReach = Math.max(WAYPOINT_REACH, enemyRadius);
+      const wpReach = Math.max(ENEMY_WAYPOINT_REACH, enemyRadius);
       if (wpLen < wpReach) {
         // Reached waypoint, advance to next
         path.nextIndex++;
@@ -746,7 +741,7 @@ export class EnemySystem {
           const next = path.waypoints[path.nextIndex];
           const nDx = next.x - pos.x;
           const nDy = next.y - pos.y;
-          const nLen = Math.sqrt(nDx * nDx + nDy * nDy);
+          const nLen = distance(nDx, nDy);
           inp.dx = nLen > 0 ? nDx / nLen : 0;
           inp.dy = nLen > 0 ? nDy / nLen : 0;
         }
@@ -778,7 +773,7 @@ export class EnemySystem {
       // Check if replan is needed
       const tdx = target.x - existing.targetX;
       const tdy = target.y - existing.targetY;
-      if (existing.age < REPLAN_INTERVAL && (tdx * tdx + tdy * tdy) < REPLAN_DIST_THRESHOLD * REPLAN_DIST_THRESHOLD) {
+      if (existing.age < ENEMY_REPLAN_INTERVAL && (tdx * tdx + tdy * tdy) < ENEMY_REPLAN_DIST_THRESHOLD * ENEMY_REPLAN_DIST_THRESHOLD) {
         return existing;
       }
     }
@@ -796,7 +791,7 @@ export class EnemySystem {
       waypoints,
       nextIndex: 0,
       // Jitter initial age so enemies don't all replan on the same tick
-      age: existing ? 0 : Math.random() * REPLAN_INTERVAL,
+      age: existing ? 0 : Math.random() * ENEMY_REPLAN_INTERVAL,
       targetX: target.x,
       targetY: target.y,
     };
@@ -808,7 +803,7 @@ export class EnemySystem {
   private isDirectPathClear(sx: number, sy: number, ex: number, ey: number, r = ENEMY_RADIUS): boolean {
     const dx = ex - sx;
     const dy = ey - sy;
-    const dist = Math.sqrt(dx * dx + dy * dy);
+    const dist = distance(dx, dy);
     const steps = Math.ceil(dist / (TILE_SIZE / 2)); // 16px resolution
 
     for (let i = 0; i <= steps; i++) {
@@ -851,7 +846,7 @@ export class EnemySystem {
     for (const b of this.buildingEntities) {
       const edx = Math.max(0, Math.abs(b.x - pos.x) - b.half);
       const edy = Math.max(0, Math.abs(b.y - pos.y) - b.half);
-      const edgeDist = Math.sqrt(edx * edx + edy * edy);
+      const edgeDist = distance(edx, edy);
       if (edgeDist <= range && (!closest || edgeDist < closest.dist)) {
         closest = { x: b.x, y: b.y, dist: edgeDist };
       }
@@ -875,8 +870,8 @@ export class EnemySystem {
       const dot = toX * inp.dx + toY * inp.dy;
       if (dot <= 0) return; // behind
       const distSq = toX * toX + toY * toY;
-      const combined = enemyRadius + obsRadius + AVOIDANCE_MARGIN;
-      if (distSq > (AVOIDANCE_LOOK_AHEAD + combined) ** 2) return; // too far
+      const combined = enemyRadius + obsRadius + ENEMY_AVOIDANCE_MARGIN;
+      if (distSq > (ENEMY_AVOIDANCE_LOOK_AHEAD + combined) ** 2) return; // too far
       const cross = Math.abs(toX * inp.dy - toY * inp.dx);
       if (cross >= combined) return; // beside path, not in it
 
@@ -889,7 +884,7 @@ export class EnemySystem {
       const [perpX, perpY] = (pAx * ttX + pAy * ttY >= pBx * ttX + pBy * ttY)
         ? [pAx, pAy] : [pBx, pBy];
       // Strength: 1.0 when touching, fades at distance
-      const strength = Math.max(0, Math.min(1, 1.0 - (dist - combined) / AVOIDANCE_LOOK_AHEAD));
+      const strength = Math.max(0, Math.min(1, 1.0 - (dist - combined) / ENEMY_AVOIDANCE_LOOK_AHEAD));
       totalPushX += perpX * strength;
       totalPushY += perpY * strength;
     };
@@ -911,8 +906,8 @@ export class EnemySystem {
 
     if (totalPushX === 0 && totalPushY === 0) return;
 
-    inp.dx += totalPushX * AVOIDANCE_STRENGTH;
-    inp.dy += totalPushY * AVOIDANCE_STRENGTH;
+    inp.dx += totalPushX * ENEMY_AVOIDANCE_STRENGTH;
+    inp.dy += totalPushY * ENEMY_AVOIDANCE_STRENGTH;
     const len = Math.sqrt(inp.dx * inp.dx + inp.dy * inp.dy);
     if (len > 0) { inp.dx /= len; inp.dy /= len; }
   }

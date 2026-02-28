@@ -1,8 +1,8 @@
 import { Container, Graphics, Text } from 'pixi.js';
-import { CLASS_STATS } from '@shared/ClassDefinitions';
-import type { PlayerClass } from '@shared/ClassDefinitions';
-import { POTION_POOL } from '@shared/PotionDefinitions';
-import type { PotionType } from '@shared/PotionDefinitions';
+import { CLASS_STATS } from '@shared/definitions/ClassDefinitions';
+import type { PlayerClass } from '@shared/definitions/ClassDefinitions';
+import { POTION_POOL } from '@shared/definitions/PotionDefinitions';
+import type { PotionType } from '@shared/definitions/PotionDefinitions';
 
 const SLOT_SIZE = 48;
 const SLOT_GAP  = 6;
@@ -39,6 +39,7 @@ export class WeaponHotbar {
 
   constructor(stage: Container) {
     this.container = new Container();
+    this.container.zIndex = 200; // above night overlay
     this.gfx = new Graphics();
     this.container.addChild(this.gfx);
 
@@ -134,7 +135,7 @@ export class WeaponHotbar {
         this.gfx.fill({ color: isSelected ? SLOT_BG_SELECTED : SLOT_BG, alpha: 0.85 });
       }
 
-      // Cooldown overlay — weapon slot
+      // Cooldown overlay - weapon slot
       if (i === 0 && cooldown > 0 && cooldownMax > 0) {
         const ratio = cooldown / cooldownMax;
         const fillH = SLOT_SIZE * ratio;
@@ -142,7 +143,7 @@ export class WeaponHotbar {
         this.gfx.fill({ color: COOLDOWN_OVERLAY, alpha: 0.45 });
       }
 
-      // Cooldown overlay — potion slot
+      // Cooldown overlay - potion slot
       if (i === 4 && potionCooldown > 0 && potionCooldownMax > 0) {
         const ratio = potionCooldown / potionCooldownMax;
         const fillH = SLOT_SIZE * ratio;
@@ -150,7 +151,7 @@ export class WeaponHotbar {
         this.gfx.fill({ color: COOLDOWN_OVERLAY, alpha: 0.45 });
       }
 
-      // Cooldown overlay — skill slots 1-3
+      // Cooldown overlay - skill slots 1-3
       if (i >= 1 && i <= 3 && abilityCooldowns && abilityCooldownMaxes) {
         const si = i - 1;
         const cd = abilityCooldowns[si] ?? 0;

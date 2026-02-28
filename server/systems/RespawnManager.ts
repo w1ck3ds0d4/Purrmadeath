@@ -36,7 +36,7 @@ import type {
   ResourceUpdateMessage,
 } from '@shared/protocol';
 import type { ConnectedClient } from '../net/ServerSocket';
-import type { SessionPlayer, SendFn } from '../GameSession';
+import type { SessionPlayer, SendFn } from '../core/GameSession';
 import type { WaveState } from './WaveController';
 import type { BuildingSystem } from './BuildingSystem';
 
@@ -374,7 +374,7 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
           // Stop civilian movement
           const inp = world.getComponent<PlayerInputComponent>(deadId, C.PlayerInput);
           if (inp) { inp.dx = 0; inp.dy = 0; inp.sprint = false; }
-          // Broadcast downed notification (reuse PLAYER_DOWNED — works for any entity)
+          // Broadcast downed notification (reuse PLAYER_DOWNED - works for any entity)
           if (send) {
             const msg: PlayerDownedMessage = {
               type: MessageType.PLAYER_DOWNED,

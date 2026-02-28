@@ -1,4 +1,5 @@
 import { World } from '@shared/ecs/World';
+import { distance } from '@shared/math/utils';
 import {
   C,
   PositionComponent,
@@ -157,8 +158,8 @@ export class CombatSystem {
       const tgtPos = world.getComponent<PositionComponent>(targetId, C.Position)!;
       const dx = tgtPos.x - attackX;
       const dy = tgtPos.y - attackY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      // Account for target size — hit if target edge is within range
+      const dist = distance(dx, dy);
+      // Account for target size - hit if target edge is within range
       let tgtRadius: number;
       const bldgComp = world.getComponent<BuildingComponent>(targetId, C.Building);
       if (bldgComp) tgtRadius = buildingHalfExtent(bldgComp.buildingType);
@@ -191,7 +192,7 @@ export class CombatSystem {
         if (tgtFaction?.type === 'building') dmg = Math.round(dmg * this.buildingDamageMult);
       }
 
-      // Critical hit (players only) — card buffs add to base crit
+      // Critical hit (players only) - card buffs add to base crit
       let crit = false;
       if (srcFaction?.type === 'player') {
         const totalCritChance = CRIT_CHANCE + (overrides?.critChance ?? 0);

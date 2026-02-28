@@ -1,4 +1,5 @@
 import { World } from '@shared/ecs/World';
+import { distance } from '@shared/math/utils';
 import {
   C,
   PositionComponent,
@@ -12,7 +13,7 @@ import {
   BurnDotComponent,
   SlowEffectComponent,
 } from '@shared/components';
-import type { AbilityParams, SkillActiveAbility } from '@shared/SkillDefinitions';
+import type { AbilityParams, SkillActiveAbility } from '@shared/definitions/SkillDefinitions';
 import type { AbilityEffectMessage } from '@shared/protocol';
 import { MessageType } from '@shared/protocol';
 import {
@@ -25,7 +26,7 @@ import {
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import type { WorldGenerator } from '@shared/world/WorldGenerator';
-import type { SessionPlayer } from '../GameSession';
+import type { SessionPlayer } from '../core/GameSession';
 import type { HitResult } from '../systems/CombatSystem';
 
 export interface AbilityResult {
@@ -81,7 +82,7 @@ export function executeAbility(
         let dmg = Math.round(params.damage * 18); // 3× warrior base damage
         if (def) dmg = Math.max(0, Math.round((dmg - def.flat) * (1 - def.percent)));
         hp.current = Math.max(0, hp.current - dmg);
-        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const dist = distance(dx, dy) || 1;
         const kbx = (dx / dist) * 200, kby = (dy / dist) * 200;
         const kb = world.getComponent<KnockbackReceiverComponent>(eid, C.KnockbackReceiver);
         if (kb) { kb.vx += kbx; kb.vy += kby; }
@@ -210,7 +211,7 @@ export function executeAbility(
     }
 
     case 'meteor': {
-      // Massive AOE damage at target — hits enemies, resources, and portals
+      // Massive AOE damage at target - hits enemies, resources, and portals
       const tx = msg.targetX ?? pos.x;
       const ty = msg.targetY ?? pos.y;
       baseEffect.targetX = tx;
@@ -231,7 +232,7 @@ export function executeAbility(
         let dmg = isObject ? params.damage * 3 : params.damage;
         if (def) dmg = Math.max(0, Math.round((dmg - def.flat) * (1 - def.percent)));
         hp.current = Math.max(0, hp.current - dmg);
-        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const dist = distance(dx, dy) || 1;
         const kbx = (dx / dist) * 300, kby = (dy / dist) * 300;
         const kb = world.getComponent<KnockbackReceiverComponent>(eid, C.KnockbackReceiver);
         if (kb) { kb.vx += kbx; kb.vy += kby; }
@@ -242,7 +243,7 @@ export function executeAbility(
     }
 
     case 'blizzard': {
-      // Create a slow zone — for simplicity, do immediate AOE damage + slow
+      // Create a slow zone - for simplicity, do immediate AOE damage + slow
       const tx = msg.targetX ?? pos.x;
       const ty = msg.targetY ?? pos.y;
       baseEffect.targetX = tx;
@@ -274,7 +275,7 @@ export function executeAbility(
       const tx = msg.targetX ?? pos.x;
       const ty = msg.targetY ?? pos.y;
       const dx = tx - pos.x, dy = ty - pos.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
+      const dist = distance(dx, dy);
       let destX: number, destY: number;
       if (dist <= params.maxDistance) {
         destX = tx;

@@ -1,9 +1,10 @@
 import { World } from '@shared/ecs/World';
+import { distance } from '@shared/math/utils';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
 import { spawnPlayer, findSpawnPoint } from '@shared/world/PlayerSpawner';
-import { CLASS_STATS, DEFAULT_CLASS } from '@shared/ClassDefinitions';
-import { CARD_POOL } from '@shared/CardDefinitions';
-import type { PlayerClass } from '@shared/ClassDefinitions';
+import { CLASS_STATS, DEFAULT_CLASS } from '@shared/definitions/ClassDefinitions';
+import { CARD_POOL } from '@shared/definitions/CardDefinitions';
+import type { PlayerClass } from '@shared/definitions/ClassDefinitions';
 import {
   C,
   PositionComponent,
@@ -102,23 +103,24 @@ import type {
   SkillAllocateMessage,
   AbilityUseMessage,
 } from '@shared/protocol';
-import { ItemDropSystem, PickupResult } from './systems/ItemDropSystem';
-import type { ConnectedClient } from './net/ServerSocket';
-import { MovementSystem } from './systems/MovementSystem';
-import { EnemySystem } from './systems/EnemySystem';
-import { CombatSystem } from './systems/CombatSystem';
-import { ProjectileSystem } from './systems/ProjectileSystem';
-import { PortalSystem } from './systems/PortalSystem';
-import { CardSystem } from './CardSystem';
-import { createSkillSystem, type SkillSystem } from './SkillSystem';
-import { createBuildingSystem, type BuildingSystem } from './systems/BuildingSystem';
-import { createWaveController, type WaveController, type WaveState } from './systems/WaveController';
-import { createCardDispenser, type CardDispenser, type CardState } from './systems/CardDispenser';
-import { createSaveManager, type SaveManager, type LoadedSaveState } from './systems/SaveManager';
-import { createRespawnManager, type RespawnManager } from './systems/RespawnManager';
-import { createStatsCollector, type StatsCollector } from './systems/StatsCollector';
-import { createPotionSystem, type PotionSystem } from './systems/PotionSystem';
-import { createCivilianSystem, type CivilianSystem } from './systems/CivilianSystem';
+import { ItemDropSystem, PickupResult } from '../systems/ItemDropSystem';
+import type { ConnectedClient } from '../net/ServerSocket';
+import { MovementSystem } from '../systems/MovementSystem';
+import { EnemySystem } from '../systems/EnemySystem';
+import { CombatSystem } from '../systems/CombatSystem';
+import { ProjectileSystem } from '../systems/ProjectileSystem';
+import { PortalSystem } from '../systems/PortalSystem';
+import { CardSystem } from '../systems/CardSystem';
+import { createSkillSystem, type SkillSystem } from '../systems/SkillSystem';
+import { createBuildingSystem, type BuildingSystem } from '../systems/BuildingSystem';
+import { createWaveController, type WaveController, type WaveState } from '../systems/WaveController';
+import { createCardDispenser, type CardDispenser, type CardState } from '../systems/CardDispenser';
+import { createSaveManager, type SaveManager, type LoadedSaveState } from '../systems/SaveManager';
+import { createRespawnManager, type RespawnManager } from '../systems/RespawnManager';
+import { createStatsCollector, type StatsCollector } from '../systems/StatsCollector';
+import { createPotionSystem, type PotionSystem } from '../systems/PotionSystem';
+import { createCivilianSystem, type CivilianSystem } from '../systems/CivilianSystem';
+import { createDayNightController, createDayNightState, type DayNightController, type DayNightState } from '../systems/DayNightController';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -189,13 +191,16 @@ export class GameSession {
   private phase: SessionPhase = 'lobby';
   private tick = 0;
 
-  /** Mutable wave state — shared with WaveController. */
+  /** Mutable wave state - shared with WaveController. */
   private waveState: WaveState = {
     phase: 'idle', currentWave: 0, prepTimer: 0,
     paused: false, syncTimer: 0, enemyCount: 0, wipeCount: 0,
     introducedTypes: new Set(), introducedFactions: new Set(), pendingIntros: [],
   };
   private waves!: WaveController;
+  /** Day/night cycle state - shared with DayNightController. */
+  private dayNightState: DayNightState = createDayNightState();
+  private dayNight!: DayNightController;
   /** Rolling average of per-system tick times (ms) for debug profiling. */
   private tickProfile = { combat: 0, enemy: 0, movement: 0, projectile: 0, buildings: 0, waves: 0, total: 0 };
   private static readonly WAVE_SYNC_INTERVAL = 5; // seconds
@@ -223,7 +228,7 @@ export class GameSession {
   private bridgePositions = new Map<string, number>();
 
 
-  /** Mutable card state — shared with CardDispenser. */
+  /** Mutable card state - shared with CardDispenser. */
   private cardState: CardState = { offerTimer: -1 };
   private cardDispenser!: CardDispenser;
   private static readonly CARD_OFFER_TIMEOUT = 35; // 5s pre-reveal + 30s pick window
@@ -258,7 +263,7 @@ export class GameSession {
   /** Per-player buildings built (keyed by playerId/UUID). */
   private buildingsByPlayer = new Map<string, number>();
   /** Called at game over with per-player run stats. */
-  onRunEnd?: (playerStats: Map<string, import('@shared/MetaStats').RunStats>) => void;
+  onRunEnd?: (playerStats: Map<string, import('@shared/definitions/MetaStats').RunStats>) => void;
 
   /** Snapshot of entity positions from the previous tick, for delta diffing. */
   private prevSnapshot = new Map<number, EntitySnapshot>();
@@ -312,6 +317,7 @@ export class GameSession {
       isActive: () => this.phase === 'playing' && !this.paused && !this.gameOver,
       isWalkable: (wx, wy) => this.isWalkable(wx, wy),
       spawnBuilding: (x, y, type, maxHp, permanent) => this.spawnBuilding(x, y, type as any, maxHp, permanent),
+      spawnItemDrop: (x, y, item, qty, auto) => this.spawnItemDrop(x, y, item, qty, auto),
       destroyDeadEntities: (deaths, attackerMap, send) => this.respawn.destroyDeadEntities(deaths, attackerMap, send),
     });
 
@@ -325,6 +331,7 @@ export class GameSession {
         const p = this.world.getComponent<PositionComponent>(this.campfireEntityId, C.Position);
         return p ? { x: p.x, y: p.y } : null;
       },
+      broadcastWarehouseUpdate: (send) => this.buildings.broadcastWarehouseUpdate(send),
     });
 
     this.potions = createPotionSystem({
@@ -337,6 +344,13 @@ export class GameSession {
       isActive: () => this.phase === 'playing' && !this.paused && !this.gameOver,
     });
 
+    this.dayNight = createDayNightController({
+      state: this.dayNightState,
+      players: this.players,
+      onNightStart: (send) => this.waves.activateWave(send),
+      onDayStart: (_send) => { /* day begins - players can build/gather */ },
+    });
+
     this.waves = createWaveController({
       world: this.world,
       generator: this.generator,
@@ -344,6 +358,7 @@ export class GameSession {
       state: this.waveState,
       players: this.players,
       cards: this.cards,
+      getNightBuffs: () => this.dayNight.getEnemyBuffs(),
       maxEnemies: GameSession.MAX_ENEMIES,
       waveSyncInterval: GameSession.WAVE_SYNC_INTERVAL,
       isWalkable: (wx, wy) => this.isWalkable(wx, wy),
@@ -466,7 +481,7 @@ export class GameSession {
     const slot = this.nextFreeSlot();
     const pid = persistentId ?? client.id;
 
-    // Check if this player exists in the loaded save — lock their class
+    // Check if this player exists in the loaded save - lock their class
     let lockedClass: PlayerClass | null = null;
     if (this.loadedSave) {
       const savedP = this.loadedSave.players.find(sp => sp.playerId === pid);
@@ -490,11 +505,13 @@ export class GameSession {
     return player;
   }
 
-  removePlayer(clientId: string): SessionPlayer | undefined {
+  removePlayer(clientId: string, send?: SendFn): SessionPlayer | undefined {
     const player = this.players.get(clientId);
     if (player) {
       this.players.delete(clientId);
       this.pauseVotes.delete(clientId);
+      // Notify day/night controller so sleep votes are re-checked
+      if (send) this.dayNight.onPlayerDisconnect(player.slot, send);
       if (player.entityId !== null) {
         this.playerEntityIds.delete(player.entityId);
         this.world.destroyEntity(player.entityId);
@@ -531,7 +548,7 @@ export class GameSession {
     if (!player) return undefined;
     this.players.delete(oldClientId);
     player.client = newClient;
-    // Keep persistent playerId (UUID) — only update the map key to new client ID
+    // Keep persistent playerId (UUID) - only update the map key to new client ID
     this.players.set(newClient.id, player);
     // Remap potion state to new client ID
     this.potions.remapClient(oldClientId, newClient.id);
@@ -585,7 +602,7 @@ export class GameSession {
     // For resumed saves, use saved spawn origin; otherwise find a new one
     const origin = hasSave ? this.spawnOrigin : findSpawnPoint(this.generator);
     this.spawnOrigin = origin;
-    const OFFSET = 72; // pixels from centre — clears campfire AABB + player radius
+    const OFFSET = 72; // pixels from centre - clears campfire AABB + player radius
     const offsets = [
       { dx: -OFFSET, dy: -OFFSET },
       { dx:  OFFSET, dy: -OFFSET },
@@ -620,11 +637,11 @@ export class GameSession {
       true,
     );
 
-    // Pre-generate resources for immediate spawn area (skip for saves — resources restored later)
+    // Pre-generate resources for immediate spawn area (skip for saves - resources restored later)
     if (!hasSave) {
       const pcx = Math.floor(origin.x / (TILE_SIZE * CHUNK_SIZE));
       const pcy = Math.floor(origin.y / (TILE_SIZE * CHUNK_SIZE));
-      const startupR = 1; // 3×3 chunks — just enough for first SNAPSHOT
+      const startupR = 1; // 3×3 chunks - just enough for first SNAPSHOT
       for (let cx = pcx - startupR; cx <= pcx + startupR; cx++) {
         for (let cy = pcy - startupR; cy <= pcy + startupR; cy++) {
           const key = `${cx},${cy}`;
@@ -648,7 +665,7 @@ export class GameSession {
     // ── Restore saved state ─────────────────────────────────────────────────
     if (hasSave && save) {
       console.log(`[GameSession] Restoring ${save.buildings.length} buildings from save (wave ${this.waveState.currentWave})`);
-      // Restore saved buildings (campfire was already placed above — just restore its state)
+      // Restore saved buildings (campfire was already placed above - just restore its state)
       for (const sb of save.buildings) {
         if (sb.buildingType === 'campfire') {
           // Restore campfire HP, upgrade level, and position from save
@@ -669,7 +686,7 @@ export class GameSession {
         if (hp) { hp.current = sb.currentHp; hp.max = sb.maxHp; }
         const bld = this.world.getComponent<BuildingComponent>(eid, C.Building);
         if (bld) bld.upgradeLevel = sb.upgradeLevel;
-        // Restore production component (must add — spawnBuilding doesn't)
+        // Restore production component (must add - spawnBuilding doesn't)
         if (sb.production) {
           this.world.addComponent(eid, C.Production, {
             resourceType: sb.production.resourceType,
@@ -682,7 +699,7 @@ export class GameSession {
             secondaryChance: sb.production.secondaryChance,
           } as ProductionComponent);
         }
-        // Restore turret component (must add — spawnBuilding doesn't)
+        // Restore turret component (must add - spawnBuilding doesn't)
         if (sb.turret) {
           this.world.addComponent(eid, C.Turret, {
             range: sb.turret.range,
@@ -692,7 +709,7 @@ export class GameSession {
             projectileSpeed: sb.turret.projectileSpeed,
           } as TurretComponent);
         }
-        // Restore spike trap component (must add — spawnBuilding doesn't)
+        // Restore spike trap component (must add - spawnBuilding doesn't)
         if (sb.spikeTrap) {
           this.world.addComponent(eid, C.SpikeTrap, {
             damage: sb.spikeTrap.damage,
@@ -859,22 +876,30 @@ export class GameSession {
       this.loadedSave = null;
     }
 
-    // Begin wave state
+    // Begin wave state + day/night cycle
     if (!hasSave) {
       this.waveState.currentWave = 1;
       this.waveState.phase = 'prep';
-      this.waveState.prepTimer = WAVE_PREP_INITIAL;
+      // Day/night: start first day (5-min day timer before first night/wave)
+      this.dayNight.startFirstDay(send);
     } else if (save?.wavePhase === 'active') {
-      // Resume mid-wave — portals and enemies already restored above
+      // Resume mid-wave - portals and enemies already restored above
       this.waveState.phase = 'active';
+      // Restore to night phase since wave is active
+      this.dayNightState.phase = 'night';
+      this.dayNightState.darkness = 1;
+      this.dayNight.broadcastSync(send);
     } else {
-      // Resume in prep phase
+      // Resume in prep/day phase
       this.waveState.phase = 'prep';
-      if (save?.prepTimeRemaining != null && save.prepTimeRemaining > 0) {
-        this.waveState.prepTimer = save.prepTimeRemaining;
-      } else {
-        this.waveState.prepTimer = WAVE_PREP_BETWEEN;
+      // Restore day timer from save or use default
+      if (save?.dayTimeRemaining != null && save.dayTimeRemaining > 0) {
+        this.dayNightState.dayTimer = save.dayTimeRemaining;
       }
+      if (save?.permanentNight) {
+        this.dayNightState.permanentNight = true;
+      }
+      this.dayNight.startFirstDay(send);
     }
 
     // Spawn / restore civilians
@@ -915,7 +940,7 @@ export class GameSession {
       this.skills.sendState(p.client.id, send);
     }
 
-    // Send card abilities sync (needed after save restore — no CARD_APPLIED was sent)
+    // Send card abilities sync (needed after save restore - no CARD_APPLIED was sent)
     if (hasSave) {
       for (const p of this.players.values()) {
         const buffs = this.cards.playerBuffs.get(p.client.id);
@@ -949,10 +974,11 @@ export class GameSession {
       };
       for (const p of this.players.values()) send(p.client, waveActive);
     } else {
+      // Prep phase - day timer managed by DayNightController (prepDuration=-1 signals "use day timer")
       const waveStart: WaveStartMessage = {
         type: MessageType.WAVE_START,
         waveNumber: this.waveState.currentWave,
-        prepDuration: this.waveState.prepTimer,
+        prepDuration: -1,
       };
       for (const p of this.players.values()) send(p.client, waveStart);
     }
@@ -1334,7 +1360,7 @@ export class GameSession {
         const dinp = this.world.getComponent<PlayerInputComponent>(player.entityId!, C.PlayerInput);
         let dvx = dinp?.dx ?? 0;
         let dvy = dinp?.dy ?? 0;
-        const len = Math.sqrt(dvx * dvx + dvy * dvy);
+        const len = distance(dvx, dvy);
         if (len > 0) { dvx /= len; dvy /= len; }
         else {
           const facing = this.world.getComponent<FacingComponent>(player.entityId!, C.Facing);
@@ -1567,7 +1593,7 @@ export class GameSession {
       }
     }
 
-    const meleeOverrides: import('./systems/CombatSystem').MeleeOverrides = {
+    const meleeOverrides: import('../systems/CombatSystem').MeleeOverrides = {
       damage: Math.round(classDmg * dmgMult * lastStandMult * coopMult),
       critChance: pBuffs?.critChance ?? 0,
       critMultiplier: pBuffs?.critMultiplier ?? 0,
@@ -1729,7 +1755,7 @@ export class GameSession {
   private applyOnHitEffects(
     clientId: string,
     attackerEntityId: number,
-    hits: import('./systems/CombatSystem').HitResult[],
+    hits: import('../systems/CombatSystem').HitResult[],
   ): void {
     if (hits.length === 0) return;
     const buffs = this.skills.getSkillBuffs(clientId);
@@ -1739,7 +1765,7 @@ export class GameSession {
     const cardLifesteal = cardBuffs?.abilities.includes('lifesteal') ? 0.10 : 0;
 
     for (const hit of hits) {
-      // Skip resource nodes and buildings — only apply effects to enemies
+      // Skip resource nodes and buildings - only apply effects to enemies
       const tgtFaction = this.world.getComponent<FactionComponent>(hit.targetId, C.Faction);
       if (!tgtFaction || tgtFaction.type !== 'enemy') continue;
 
@@ -1890,6 +1916,9 @@ export class GameSession {
 
   /** Called by WaveController when a wave is cleared. */
   private onWaveCleared(wave: number, send: SendFn): void {
+    // Notify day/night controller → begins dawn transition → then day
+    this.dayNight.onWaveCleared(send);
+
     // Grant 1 skill point to every alive player
     for (const p of this.players.values()) {
       if (p.entityId != null) this.skills.grantSkillPoint(p.client.id, send);
@@ -1955,6 +1984,9 @@ export class GameSession {
     }
     // Save session-wide card debuffs
     data.cardDebuffs = { ...this.cards.debuffs };
+    // Save day/night state
+    data.dayTimeRemaining = this.dayNightState.dayTimer;
+    data.permanentNight = this.dayNightState.permanentNight;
     // Save civilians
     data.civilians = this.civilians.serialize();
     return data;
@@ -1964,7 +1996,7 @@ export class GameSession {
   loadSave(save: import('@shared/SaveFormat').SaveData, _send: SendFn): boolean {
     const loaded = this.saveManager.load(save);
     if (!loaded) {
-      console.warn('[GameSession] Invalid save data — starting fresh');
+      console.warn('[GameSession] Invalid save data - starting fresh');
       return false;
     }
     console.log(`[GameSession] Loading save: wave ${save.currentWave}, ${save.buildings.length} buildings, ${save.players.length} players`);
@@ -2016,6 +2048,21 @@ export class GameSession {
     this.waves.debugPause(send);
   }
 
+  debugSkipNight(send: (client: ConnectedClient, msg: object) => void): void {
+    if (this.phase !== 'playing') return;
+    this.dayNight.debugSkipToNight(send);
+  }
+
+  debugSkipDay(send: (client: ConnectedClient, msg: object) => void): void {
+    if (this.phase !== 'playing') return;
+    this.dayNight.debugSkipToDay(send);
+  }
+
+  debugSetTime(seconds: number, send: (client: ConnectedClient, msg: object) => void): void {
+    if (this.phase !== 'playing') return;
+    this.dayNight.debugSetTime(seconds, send);
+  }
+
   debugGiveResources(clientId: string, send: (client: ConnectedClient, msg: object) => void): void {
     if (this.phase !== 'playing') return;
     const player = this.players.get(clientId);
@@ -2043,7 +2090,7 @@ export class GameSession {
 
     // Apply ECS side-effects (speed, maxHp, resources, etc.)
     const buffs = this.cards.getBuffs(clientId);
-    const applyEcs = (e: import('@shared/CardDefinitions').CardEffect) => {
+    const applyEcs = (e: import('@shared/definitions/CardDefinitions').CardEffect) => {
       if (e.type === 'stat_buff' && e.stat === 'speed') {
         const spd = this.world.getComponent<import('@shared/components').SpeedComponent>(player.entityId!, C.Speed);
         if (spd) spd.multiplier = buffs.speedMultiplier;
@@ -2090,6 +2137,19 @@ export class GameSession {
     console.log(`[Debug] Gave ${n} skill point(s) to ${player.displayName}`);
   }
 
+
+  // ── Sleep voting (day/night) ─────────────────────────────────────────────
+
+  /**
+   * Called when a client sends SLEEP_VOTE.
+   * Delegates to DayNightController which handles the voting logic.
+   */
+  handleSleepVote(clientId: string, vote: boolean, send: SendFn): void {
+    if (this.phase !== 'playing') return;
+    const player = this.players.get(clientId);
+    if (!player) return;
+    this.dayNight.voteSleep(player.slot, vote, send);
+  }
 
   // ── Pause voting ──────────────────────────────────────────────────────────
 
@@ -2368,6 +2428,9 @@ export class GameSession {
     // ── Potion system (cooldowns, buff expiry) ──────────────────────────────
     if (!this.gameOver) this.potions.tick(dt, send);
 
+    // ── Day/Night cycle ──────────────────────────────────────────────────────
+    if (!this.gameOver) this.dayNight.tick(dt, send);
+
     // ── Wave state machine ────────────────────────────────────────────────────
     const _t8 = performance.now();
     if (!this.gameOver) this.waves.tick(dt, send);
@@ -2516,11 +2579,13 @@ export class GameSession {
         snap.productionResource = prod.resourceType;
       }
 
-      // Enemy variant + ghost/radius/faction info
+      // Faction color info (portals + enemies)
+      if (factionComp?.enemyFaction) snap.enemyFaction = factionComp.enemyFaction;
+
+      // Enemy variant + ghost/radius info
       const ev = this.world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant);
       if (ev) {
         snap.enemyVariant = ev.variant;
-        if (factionComp?.enemyFaction) snap.enemyFaction = factionComp.enemyFaction;
         // Ghost visibility
         const ghost = this.world.getComponent<import('@shared/components').GhostStateComponent>(id, C.GhostState);
         if (ghost) snap.ghostHidden = ghost.hidden;

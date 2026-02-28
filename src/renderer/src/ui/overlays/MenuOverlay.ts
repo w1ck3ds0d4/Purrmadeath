@@ -1,5 +1,5 @@
 import type { SaveSlotInfo } from '@shared/SaveFormat';
-import { CARD_POOL, CATEGORY_COLORS, RARITY_BORDER_COLORS, type CardDefinition } from '@shared/CardDefinitions';
+import { CARD_POOL, CATEGORY_COLORS, RARITY_BORDER_COLORS, type CardDefinition } from '@shared/definitions/CardDefinitions';
 
 /**
  * Manages the HTML overlay panels for the main menu, save slot picker, and pause screen.

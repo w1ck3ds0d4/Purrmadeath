@@ -1,5 +1,5 @@
-import type { RunStats } from '@shared/MetaStats';
-import type { SessionPlayer } from '../GameSession';
+import type { RunStats } from '@shared/definitions/MetaStats';
+import type { SessionPlayer } from '../core/GameSession';
 import type { WaveState } from './WaveController';
 
 // ── Dependencies ────────────────────────────────────────────────────────────

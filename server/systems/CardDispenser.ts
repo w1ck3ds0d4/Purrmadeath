@@ -7,10 +7,10 @@ import type { SpeedComponent, DefenseComponent, StaminaComponent, KnockbackRecei
 import { PLAYER_MAX_HEALTH } from '@shared/constants';
 import { MessageType } from '@shared/protocol';
 import type { CardOfferMessage, CardAppliedMessage, CardPickMessage } from '@shared/protocol';
-import type { CardDefinition, CardEffect } from '@shared/CardDefinitions';
+import type { CardDefinition, CardEffect } from '@shared/definitions/CardDefinitions';
 import type { ConnectedClient } from '../net/ServerSocket';
-import type { SessionPlayer, SendFn } from '../GameSession';
-import type { CardSystem } from '../CardSystem';
+import type { SessionPlayer, SendFn } from '../core/GameSession';
+import type { CardSystem } from './CardSystem';
 
 // ── Mutable state shared with GameSession ───────────────────────────────────
 

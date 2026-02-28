@@ -1,5 +1,5 @@
-import { CARD_POOL, RARITY_WEIGHTS } from '@shared/CardDefinitions';
-import type { CardDefinition, CardEffect } from '@shared/CardDefinitions';
+import { CARD_POOL, RARITY_WEIGHTS } from '@shared/definitions/CardDefinitions';
+import type { CardDefinition, CardEffect } from '@shared/definitions/CardDefinitions';
 
 /** Per-player buff state accumulated from card picks. */
 export interface PlayerBuffs {

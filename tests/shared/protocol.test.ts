@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { MessageType } from './protocol';
+import { MessageType } from '../../shared/protocol';
 
 describe('Protocol MessageType', () => {
   it('has unique values for all message types', () => {

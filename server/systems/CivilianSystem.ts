@@ -1,4 +1,5 @@
 import { World } from '@shared/ecs/World';
+import { distance } from '@shared/math/utils';
 import {
   C,
   PositionComponent,
@@ -25,7 +26,7 @@ import { MessageType } from '@shared/protocol';
 import type { CivilianPanelEntry, WorkableBuildingEntry, CivilianPanelStateMessage } from '@shared/protocol';
 import type { BuildingComponent } from '@shared/components';
 import type { SavedCivilian } from '@shared/SaveFormat';
-import type { SessionPlayer, SendFn } from '../GameSession';
+import type { SessionPlayer, SendFn } from '../core/GameSession';
 
 // ── Dependencies ────────────────────────────────────────────────────────────
 
@@ -35,6 +36,7 @@ export interface CivilianSystemDeps {
   warehouseIds: Set<number>;
   players: Map<string, SessionPlayer>;
   getCampfirePosition: () => { x: number; y: number } | null;
+  broadcastWarehouseUpdate: (send: SendFn) => void;
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
@@ -44,6 +46,13 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
 
   const usedNames = new Set<string>();
   const civilianIds = new Set<number>();
+
+  // Stuck detection: track last known positions and stuck timers per civilian
+  const lastPos = new Map<number, { x: number; y: number }>();
+  const stuckTimer = new Map<number, number>();
+  const stuckNudgeAngle = new Map<number, number>();
+  const STUCK_THRESHOLD = 1.5; // seconds with no progress before nudging
+  const STUCK_PROGRESS_MIN = 3; // min pixels moved to count as progress
 
   // ── Name picker ─────────────────────────────────────────────────────────
 
@@ -115,7 +124,7 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
       const epos = world.getComponent<PositionComponent>(eid, C.Position)!;
       const dx = epos.x - x;
       const dy = epos.y - y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
+      const dist = distance(dx, dy);
       if (dist < range && (!best || dist < best.dist)) {
         best = { x: epos.x, y: epos.y, dist };
       }
@@ -143,9 +152,58 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
     return best;
   }
 
+  // ── Steering with stuck detection ──────────────────────────────────────
+
+  function steerToward(
+    id: number, pos: PositionComponent, input: PlayerInputComponent,
+    dx: number, dy: number, dist: number, dt: number,
+  ): void {
+    // Check if civilian has made progress since last check
+    const lp = lastPos.get(id);
+    if (lp) {
+      const movedX = pos.x - lp.x;
+      const movedY = pos.y - lp.y;
+      const movedDist = Math.sqrt(movedX * movedX + movedY * movedY);
+      if (movedDist < STUCK_PROGRESS_MIN * dt * 30) {
+        // Not making progress - increment stuck timer
+        const t = (stuckTimer.get(id) ?? 0) + dt;
+        stuckTimer.set(id, t);
+        if (t > STUCK_THRESHOLD) {
+          // Nudge perpendicular to target direction to go around obstacle
+          if (!stuckNudgeAngle.has(id)) {
+            // Pick a random perpendicular direction (left or right)
+            stuckNudgeAngle.set(id, Math.random() < 0.5 ? 1 : -1);
+          }
+          const side = stuckNudgeAngle.get(id)!;
+          const nx = dx / dist;
+          const ny = dy / dist;
+          // Blend: mostly perpendicular, slightly toward target
+          input.dx = -ny * side * 0.8 + nx * 0.2;
+          input.dy = nx * side * 0.8 + ny * 0.2;
+          // Reset after a full nudge cycle
+          if (t > STUCK_THRESHOLD + 1.0) {
+            stuckTimer.set(id, 0);
+            stuckNudgeAngle.delete(id);
+          }
+          lastPos.set(id, { x: pos.x, y: pos.y });
+          return;
+        }
+      } else {
+        // Making progress - reset stuck state
+        stuckTimer.set(id, 0);
+        stuckNudgeAngle.delete(id);
+      }
+    }
+    lastPos.set(id, { x: pos.x, y: pos.y });
+
+    // Normal steering: straight toward target
+    input.dx = dx / dist;
+    input.dy = dy / dist;
+  }
+
   // ── AI tick ─────────────────────────────────────────────────────────────
 
-  function tickAI(dt: number): void {
+  function tickAI(dt: number, send: SendFn): void {
     const campPos = deps.getCampfirePosition();
 
     for (const id of civilianIds) {
@@ -166,7 +224,7 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
         if (campPos) {
           const dx = campPos.x - pos.x;
           const dy = campPos.y - pos.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
+          const dist = distance(dx, dy);
           if (dist > 10) {
             input.dx = dx / dist;
             input.dy = dy / dist;
@@ -175,10 +233,10 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
             input.dy = 0;
           }
         } else {
-          // No campfire — run away from enemy
+          // No campfire - run away from enemy
           const dx = pos.x - nearestEnemy.x;
           const dy = pos.y - nearestEnemy.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
+          const dist = distance(dx, dy);
           if (dist > 0) {
             input.dx = dx / dist;
             input.dy = dy / dist;
@@ -187,7 +245,7 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
         continue;
       }
 
-      // Not fleeing — restore normal speed
+      // Not fleeing - restore normal speed
       speed.base = CIVILIAN_SPEED;
 
       // Resume delivery if still carrying resources after fleeing
@@ -199,37 +257,36 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
         // Carrying resources to the nearest warehouse
         const whPos = findNearestWarehouse(pos.x, pos.y);
         if (!whPos || civ.carryAmount <= 0) {
-          // No warehouse or nothing to carry — go back to working
           civ.state = civ.assignedBuildingId !== null ? 'working' : 'idle';
           civ.carryResource = null;
           civ.carryAmount = 0;
           input.dx = 0;
           input.dy = 0;
+          stuckTimer.delete(id);
           continue;
         }
 
         const dx = whPos.x - pos.x;
         const dy = whPos.y - pos.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
+        const dist = distance(dx, dy);
 
-        // Use a range that accounts for the warehouse's collision boundary
-        // (buildingHalfExtent + civilian radius + margin) so the civilian
-        // can deposit while stopped at the collision edge.
         const deliveryRange = buildingHalfExtent('warehouse') + CIVILIAN_RADIUS + 16;
         if (dist <= deliveryRange) {
           // Deposit into warehouse pool
           const res = civ.carryResource!;
           if (res in warehousePool) {
             warehousePool[res] = (warehousePool[res] ?? 0) + civ.carryAmount;
+            deps.broadcastWarehouseUpdate(send);
           }
           civ.carryResource = null;
           civ.carryAmount = 0;
           civ.state = civ.assignedBuildingId !== null ? 'working' : 'idle';
           input.dx = 0;
           input.dy = 0;
+          stuckTimer.delete(id);
         } else {
-          input.dx = dx / dist;
-          input.dy = dy / dist;
+          // Steer toward warehouse with obstacle avoidance
+          steerToward(id, pos, input, dx, dy, dist, dt);
         }
         continue;
       }
@@ -243,6 +300,7 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
           civ.carryAmount = 0;
           input.dx = 0;
           input.dy = 0;
+          stuckTimer.delete(id);
           continue;
         }
 
@@ -251,17 +309,17 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
         if (bpos) {
           const dx = bpos.x - pos.x;
           const dy = bpos.y - pos.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
+          const dist = distance(dx, dy);
 
           if (dist <= CIVILIAN_WORK_RANGE) {
             civ.state = 'working';
             input.dx = 0;
             input.dy = 0;
+            stuckTimer.delete(id);
 
             // Check if building has stored resources to deliver
             const prod = world.getComponent<ProductionComponent>(civ.assignedBuildingId, C.Production);
             if (prod && prod.stored > 0 && deps.warehouseIds.size > 0) {
-              // Pick up all stored resources
               civ.carryResource = prod.resourceType;
               civ.carryAmount = prod.stored;
               prod.stored = 0;
@@ -269,12 +327,12 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
             }
           } else {
             civ.state = 'working';
-            input.dx = dx / dist;
-            input.dy = dy / dist;
+            // Steer toward building with obstacle avoidance
+            steerToward(id, pos, input, dx, dy, dist, dt);
           }
         }
       } else {
-        // No assignment — wander near campfire
+        // No assignment - wander near campfire
         if (campPos && Math.random() < dt * 0.5) {
           const angle = Math.random() * Math.PI * 2;
           const wanderDist = 30 + Math.random() * 50;
@@ -282,7 +340,7 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
           const ty = campPos.y + Math.sin(angle) * wanderDist;
           const dx = tx - pos.x;
           const dy = ty - pos.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
+          const dist = distance(dx, dy);
           if (dist > 10) {
             input.dx = dx / dist;
             input.dy = dy / dist;
@@ -426,6 +484,9 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
 
     if (civ) usedNames.delete(civ.name);
     civilianIds.delete(entityId);
+    lastPos.delete(entityId);
+    stuckTimer.delete(entityId);
+    stuckNudgeAngle.delete(entityId);
 
     for (const p of players.values()) {
       send(p.client, { type: MessageType.CIVILIAN_DIED, entityId, name: civ?.name ?? 'Unknown' });
@@ -454,7 +515,7 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
       if (world.hasEntity(id)) world.destroyEntity(id);
     }
 
-    tickAI(dt);
+    tickAI(dt, send);
     tickHunger(dt, send);
     tickSpeech(dt);
     tickSpeechTriggers(dt, send);

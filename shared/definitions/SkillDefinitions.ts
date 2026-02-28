@@ -3,13 +3,13 @@ import type { PlayerClass } from './ClassDefinitions';
 // ─── Branch & Node IDs ─────────────────────────────────────────────────────────
 
 export type SkillBranchId =
-  | 'berserker' | 'guardian' | 'warlord'       // Warrior
-  | 'sharpshooter' | 'trapper' | 'scout'       // Ranger
-  | 'pyromancer' | 'frost_mage' | 'arcanist'   // Mage
-  | 'blade_dancer' | 'shadow' | 'venom'        // Assassin
-  | 'holy_knight' | 'bulwark' | 'crusader'     // Paladin
-  | 'death_mage' | 'cursed' | 'blood_magic'    // Necromancer
-  | 'feral' | 'packleader' | 'survivalist';    // Beastmaster
+  | 'berserker' | 'guardian' | 'warlord' | 'ironclad' | 'juggernaut'          // Warrior
+  | 'sharpshooter' | 'trapper' | 'scout' | 'hawkeye' | 'poisoner'            // Ranger
+  | 'pyromancer' | 'frost_mage' | 'arcanist' | 'stormcaller' | 'rift_walker' // Mage
+  | 'blade_dancer' | 'shadow' | 'venom' | 'cutthroat' | 'ghost_blade'        // Assassin
+  | 'holy_knight' | 'bulwark' | 'crusader' | 'inquisitor' | 'penitent'       // Paladin
+  | 'death_mage' | 'cursed' | 'blood_magic' | 'grave_robber' | 'lich'        // Necromancer
+  | 'feral' | 'packleader' | 'survivalist' | 'predator' | 'warden';          // Beastmaster
 
 /** Node IDs follow the pattern: branchId_tN (e.g. 'berserker_t1'). */
 export type SkillNodeId = string;
@@ -133,6 +133,41 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
     ],
   },
 
+  ironclad: {
+    id: 'ironclad', name: 'Ironclad', description: 'Thorns and regeneration',
+    playerClass: 'warrior', color: 0x6688aa,
+    nodes: [
+      { id: 'ironclad_t1', tier: 1, branch: 'ironclad', name: 'Tough Skin', description: '+1 flat defense',
+        passive: [{ stat: 'defense', value: 1, mode: 'add' }] },
+      { id: 'ironclad_t2', tier: 2, branch: 'ironclad', name: 'Regeneration', description: '+1 HP/s regen',
+        passive: [{ stat: 'hpRegen', value: 1, mode: 'add' }] },
+      { id: 'ironclad_t3', tier: 3, branch: 'ironclad', name: 'Barbed Armor', description: 'Reflect 6 damage to attackers',
+        special: [{ type: 'thorns', value: 6 }] },
+      { id: 'ironclad_t4', tier: 4, branch: 'ironclad', name: 'Second Wind', description: '+2 HP/s regen',
+        passive: [{ stat: 'hpRegen', value: 2, mode: 'add' }] },
+      { id: 'ironclad_t5', tier: 5, branch: 'ironclad', name: 'Shield Wall', description: '50% damage reduction for 6s',
+        active: { abilityId: 'shield_wall', name: 'Shield Wall', description: '50% DR for 6s', cooldown: 14,
+          params: { type: 'shield_wall', damageReduction: 0.50, duration: 6 } } },
+    ],
+  },
+  juggernaut: {
+    id: 'juggernaut', name: 'Juggernaut', description: 'Speed and brute force',
+    playerClass: 'warrior', color: 0xdd7722,
+    nodes: [
+      { id: 'juggernaut_t1', tier: 1, branch: 'juggernaut', name: 'Momentum', description: '+8% movement speed',
+        passive: [{ stat: 'speed', value: 0.08, mode: 'multiply' }] },
+      { id: 'juggernaut_t2', tier: 2, branch: 'juggernaut', name: 'Heavy Blows', description: '+15% damage',
+        passive: [{ stat: 'damage', value: 0.15, mode: 'multiply' }] },
+      { id: 'juggernaut_t3', tier: 3, branch: 'juggernaut', name: 'Unstoppable', description: '+15 max HP',
+        passive: [{ stat: 'maxHp', value: 15, mode: 'add' }] },
+      { id: 'juggernaut_t4', tier: 4, branch: 'juggernaut', name: 'Rampage', description: '+15% attack speed',
+        passive: [{ stat: 'attackSpeed', value: 0.15, mode: 'multiply' }] },
+      { id: 'juggernaut_t5', tier: 5, branch: 'juggernaut', name: 'Whirlwind', description: 'Crushing spin dealing 3× damage',
+        active: { abilityId: 'whirlwind', name: 'Whirlwind', description: '360° spin, 3× damage', cooldown: 8,
+          params: { type: 'whirlwind', damage: 3, radius: 65 } } },
+    ],
+  },
+
   // ── Ranger ─────────────────────────────────────────────────────────────────
   sharpshooter: {
     id: 'sharpshooter', name: 'Sharpshooter', description: 'Ranged damage and crits',
@@ -183,6 +218,41 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
       { id: 'scout_t5', tier: 5, branch: 'scout', name: 'Shadow Step', description: 'Teleport 150px forward',
         active: { abilityId: 'shadow_step', name: 'Shadow Step', description: 'Teleport 150px forward', cooldown: 6,
           params: { type: 'shadow_step', distance: 150 } } },
+    ],
+  },
+
+  hawkeye: {
+    id: 'hawkeye', name: 'Hawkeye', description: 'Crit stacking and burst',
+    playerClass: 'ranger', color: 0xddaa33,
+    nodes: [
+      { id: 'hawkeye_t1', tier: 1, branch: 'hawkeye', name: 'Keen Sight', description: '+5% crit chance',
+        passive: [{ stat: 'critChance', value: 0.05, mode: 'add' }] },
+      { id: 'hawkeye_t2', tier: 2, branch: 'hawkeye', name: 'Piercing Shot', description: '+10% damage',
+        passive: [{ stat: 'damage', value: 0.10, mode: 'multiply' }] },
+      { id: 'hawkeye_t3', tier: 3, branch: 'hawkeye', name: 'Deadly Aim', description: '+5% crit chance',
+        passive: [{ stat: 'critChance', value: 0.05, mode: 'add' }] },
+      { id: 'hawkeye_t4', tier: 4, branch: 'hawkeye', name: 'Headhunter', description: '+15% damage',
+        passive: [{ stat: 'damage', value: 0.15, mode: 'multiply' }] },
+      { id: 'hawkeye_t5', tier: 5, branch: 'hawkeye', name: 'Rain of Arrows', description: '12 arrows in target area',
+        active: { abilityId: 'rain_of_arrows', name: 'Rain of Arrows', description: '12 arrows in target area', cooldown: 10,
+          params: { type: 'rain_of_arrows', arrowCount: 12, radius: 90, damage: 18 } } },
+    ],
+  },
+  poisoner: {
+    id: 'poisoner', name: 'Poisoner', description: 'DoT and slow attrition',
+    playerClass: 'ranger', color: 0x66aa33,
+    nodes: [
+      { id: 'poisoner_t1', tier: 1, branch: 'poisoner', name: 'Poison Tips', description: 'Burn enemies for 2 dps',
+        special: [{ type: 'burn_dot', value: 2 }] },
+      { id: 'poisoner_t2', tier: 2, branch: 'poisoner', name: 'Weakening Venom', description: 'Slow enemies 15% on hit',
+        special: [{ type: 'slow_on_hit', value: 0.15 }] },
+      { id: 'poisoner_t3', tier: 3, branch: 'poisoner', name: 'Virulent Strain', description: 'Burn enemies for 4 dps',
+        special: [{ type: 'burn_dot', value: 4 }] },
+      { id: 'poisoner_t4', tier: 4, branch: 'poisoner', name: 'Debilitating Toxin', description: 'Slow enemies 25% on hit',
+        special: [{ type: 'slow_on_hit', value: 0.25 }] },
+      { id: 'poisoner_t5', tier: 5, branch: 'poisoner', name: 'Explosive Trap', description: 'Place toxic AOE trap',
+        active: { abilityId: 'explosive_trap', name: 'Explosive Trap', description: 'Place AOE trap', cooldown: 8,
+          params: { type: 'explosive_trap', damage: 35, radius: 65, armTime: 0.8 } } },
     ],
   },
 
@@ -239,6 +309,41 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
     ],
   },
 
+  stormcaller: {
+    id: 'stormcaller', name: 'Stormcaller', description: 'Attack speed and damage',
+    playerClass: 'mage', color: 0x33bbee,
+    nodes: [
+      { id: 'stormcaller_t1', tier: 1, branch: 'stormcaller', name: 'Static Charge', description: '+10% attack speed',
+        passive: [{ stat: 'attackSpeed', value: 0.10, mode: 'multiply' }] },
+      { id: 'stormcaller_t2', tier: 2, branch: 'stormcaller', name: 'Lightning Bolt', description: '+10% damage',
+        passive: [{ stat: 'damage', value: 0.10, mode: 'multiply' }] },
+      { id: 'stormcaller_t3', tier: 3, branch: 'stormcaller', name: 'Overcharge', description: '+15% attack speed',
+        passive: [{ stat: 'attackSpeed', value: 0.15, mode: 'multiply' }] },
+      { id: 'stormcaller_t4', tier: 4, branch: 'stormcaller', name: 'Chain Lightning', description: '+15% damage',
+        passive: [{ stat: 'damage', value: 0.15, mode: 'multiply' }] },
+      { id: 'stormcaller_t5', tier: 5, branch: 'stormcaller', name: 'Meteor', description: 'Lightning storm at target area',
+        active: { abilityId: 'meteor', name: 'Meteor', description: 'Massive AOE at target', cooldown: 10,
+          params: { type: 'meteor', damage: 70, radius: 110 } } },
+    ],
+  },
+  rift_walker: {
+    id: 'rift_walker', name: 'Rift Walker', description: 'Mobility and repositioning',
+    playerClass: 'mage', color: 0xbb55dd,
+    nodes: [
+      { id: 'rift_walker_t1', tier: 1, branch: 'rift_walker', name: 'Phase Shift', description: '+8% movement speed',
+        passive: [{ stat: 'speed', value: 0.08, mode: 'multiply' }] },
+      { id: 'rift_walker_t2', tier: 2, branch: 'rift_walker', name: 'Spatial Rend', description: '+10% damage',
+        passive: [{ stat: 'damage', value: 0.10, mode: 'multiply' }] },
+      { id: 'rift_walker_t3', tier: 3, branch: 'rift_walker', name: 'Dimensional Rift', description: '+12% movement speed',
+        passive: [{ stat: 'speed', value: 0.12, mode: 'multiply' }] },
+      { id: 'rift_walker_t4', tier: 4, branch: 'rift_walker', name: 'Void Touch', description: '5% lifesteal on hit',
+        special: [{ type: 'lifesteal', value: 0.05 }] },
+      { id: 'rift_walker_t5', tier: 5, branch: 'rift_walker', name: 'Teleport', description: 'Rift-step to cursor (250px max)',
+        active: { abilityId: 'teleport', name: 'Teleport', description: 'Blink to cursor, 250px max', cooldown: 7,
+          params: { type: 'teleport', maxDistance: 250 } } },
+    ],
+  },
+
   // ── Assassin ──────────────────────────────────────────────────────────────
   blade_dancer: {
     id: 'blade_dancer', name: 'Blade Dancer', description: 'Speed and damage',
@@ -289,6 +394,41 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
       { id: 'venom_t5', tier: 5, branch: 'venom', name: 'Explosive Trap', description: 'Place poison AOE trap',
         active: { abilityId: 'explosive_trap', name: 'Explosive Trap', description: 'Place AOE trap', cooldown: 8,
           params: { type: 'explosive_trap', damage: 35, radius: 70, armTime: 0.5 } } },
+    ],
+  },
+
+  cutthroat: {
+    id: 'cutthroat', name: 'Cutthroat', description: 'Crit-fishing burst damage',
+    playerClass: 'assassin', color: 0xdd4444,
+    nodes: [
+      { id: 'cutthroat_t1', tier: 1, branch: 'cutthroat', name: 'Cheap Shot', description: '+5% crit chance',
+        passive: [{ stat: 'critChance', value: 0.05, mode: 'add' }] },
+      { id: 'cutthroat_t2', tier: 2, branch: 'cutthroat', name: 'Throat Slash', description: '+15% damage',
+        passive: [{ stat: 'damage', value: 0.15, mode: 'multiply' }] },
+      { id: 'cutthroat_t3', tier: 3, branch: 'cutthroat', name: 'Ruthless', description: '+5% crit chance',
+        passive: [{ stat: 'critChance', value: 0.05, mode: 'add' }] },
+      { id: 'cutthroat_t4', tier: 4, branch: 'cutthroat', name: 'Execute', description: '+20% damage',
+        passive: [{ stat: 'damage', value: 0.20, mode: 'multiply' }] },
+      { id: 'cutthroat_t5', tier: 5, branch: 'cutthroat', name: 'Shadow Step', description: 'Backstab teleport 180px',
+        active: { abilityId: 'shadow_step', name: 'Shadow Step', description: 'Teleport 180px forward', cooldown: 5,
+          params: { type: 'shadow_step', distance: 180 } } },
+    ],
+  },
+  ghost_blade: {
+    id: 'ghost_blade', name: 'Ghost Blade', description: 'Lifesteal predator',
+    playerClass: 'assassin', color: 0x8855aa,
+    nodes: [
+      { id: 'ghost_blade_t1', tier: 1, branch: 'ghost_blade', name: 'Siphon Strike', description: '3% lifesteal on hit',
+        special: [{ type: 'lifesteal', value: 0.03 }] },
+      { id: 'ghost_blade_t2', tier: 2, branch: 'ghost_blade', name: 'Ethereal Blade', description: '+10% damage',
+        passive: [{ stat: 'damage', value: 0.10, mode: 'multiply' }] },
+      { id: 'ghost_blade_t3', tier: 3, branch: 'ghost_blade', name: 'Soul Reaver', description: '8% lifesteal on hit',
+        special: [{ type: 'lifesteal', value: 0.08 }] },
+      { id: 'ghost_blade_t4', tier: 4, branch: 'ghost_blade', name: 'Wraith Form', description: '+10% movement speed',
+        passive: [{ stat: 'speed', value: 0.10, mode: 'multiply' }] },
+      { id: 'ghost_blade_t5', tier: 5, branch: 'ghost_blade', name: 'Whirlwind', description: 'Spectral spin dealing 3× damage',
+        active: { abilityId: 'whirlwind', name: 'Whirlwind', description: '360° spin, 3× damage', cooldown: 7,
+          params: { type: 'whirlwind', damage: 3, radius: 55 } } },
     ],
   },
 
@@ -345,6 +485,41 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
     ],
   },
 
+  inquisitor: {
+    id: 'inquisitor', name: 'Inquisitor', description: 'Aggressive burn damage',
+    playerClass: 'paladin', color: 0xee6633,
+    nodes: [
+      { id: 'inquisitor_t1', tier: 1, branch: 'inquisitor', name: 'Holy Fire', description: 'Burn enemies for 3 dps',
+        special: [{ type: 'burn_dot', value: 3 }] },
+      { id: 'inquisitor_t2', tier: 2, branch: 'inquisitor', name: 'Righteous Fury', description: '+15% damage',
+        passive: [{ stat: 'damage', value: 0.15, mode: 'multiply' }] },
+      { id: 'inquisitor_t3', tier: 3, branch: 'inquisitor', name: 'Purge', description: 'Burn enemies for 5 dps',
+        special: [{ type: 'burn_dot', value: 5 }] },
+      { id: 'inquisitor_t4', tier: 4, branch: 'inquisitor', name: 'Zealot\'s Wrath', description: '+10% attack speed',
+        passive: [{ stat: 'attackSpeed', value: 0.10, mode: 'multiply' }] },
+      { id: 'inquisitor_t5', tier: 5, branch: 'inquisitor', name: 'Meteor', description: 'Holy inferno at target area',
+        active: { abilityId: 'meteor', name: 'Meteor', description: 'Massive AOE at target', cooldown: 11,
+          params: { type: 'meteor', damage: 75, radius: 110 } } },
+    ],
+  },
+  penitent: {
+    id: 'penitent', name: 'Penitent', description: 'Thorns and suffering',
+    playerClass: 'paladin', color: 0x7788aa,
+    nodes: [
+      { id: 'penitent_t1', tier: 1, branch: 'penitent', name: 'Martyrdom', description: 'Reflect 4 damage to attackers',
+        special: [{ type: 'thorns', value: 4 }] },
+      { id: 'penitent_t2', tier: 2, branch: 'penitent', name: 'Penance', description: '+15 max HP',
+        passive: [{ stat: 'maxHp', value: 15, mode: 'add' }] },
+      { id: 'penitent_t3', tier: 3, branch: 'penitent', name: 'Iron Will', description: '+2 flat defense',
+        passive: [{ stat: 'defense', value: 2, mode: 'add' }] },
+      { id: 'penitent_t4', tier: 4, branch: 'penitent', name: 'Retribution', description: 'Reflect 8 damage to attackers',
+        special: [{ type: 'thorns', value: 8 }] },
+      { id: 'penitent_t5', tier: 5, branch: 'penitent', name: 'Shield Wall', description: '60% damage reduction for 5s',
+        active: { abilityId: 'shield_wall', name: 'Shield Wall', description: '60% DR for 5s', cooldown: 13,
+          params: { type: 'shield_wall', damageReduction: 0.60, duration: 5 } } },
+    ],
+  },
+
   // ── Necromancer ────────────────────────────────────────────────────────────
   death_mage: {
     id: 'death_mage', name: 'Death Mage', description: 'Damage over time',
@@ -395,6 +570,41 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
       { id: 'blood_magic_t5', tier: 5, branch: 'blood_magic', name: 'Teleport', description: 'Blood warp to cursor (200px max)',
         active: { abilityId: 'teleport', name: 'Teleport', description: 'Blink to cursor, 200px max', cooldown: 8,
           params: { type: 'teleport', maxDistance: 200 } } },
+    ],
+  },
+
+  grave_robber: {
+    id: 'grave_robber', name: 'Grave Robber', description: 'Speed and lifesteal',
+    playerClass: 'necromancer', color: 0x55aa88,
+    nodes: [
+      { id: 'grave_robber_t1', tier: 1, branch: 'grave_robber', name: 'Grave Haste', description: '+8% movement speed',
+        passive: [{ stat: 'speed', value: 0.08, mode: 'multiply' }] },
+      { id: 'grave_robber_t2', tier: 2, branch: 'grave_robber', name: 'Corpse Drain', description: '5% lifesteal on hit',
+        special: [{ type: 'lifesteal', value: 0.05 }] },
+      { id: 'grave_robber_t3', tier: 3, branch: 'grave_robber', name: 'Bone Shards', description: '+15% damage',
+        passive: [{ stat: 'damage', value: 0.15, mode: 'multiply' }] },
+      { id: 'grave_robber_t4', tier: 4, branch: 'grave_robber', name: 'Ghoul Speed', description: '+12% movement speed',
+        passive: [{ stat: 'speed', value: 0.12, mode: 'multiply' }] },
+      { id: 'grave_robber_t5', tier: 5, branch: 'grave_robber', name: 'Shadow Step', description: 'Grave-shift 160px forward',
+        active: { abilityId: 'shadow_step', name: 'Shadow Step', description: 'Teleport 160px forward', cooldown: 6,
+          params: { type: 'shadow_step', distance: 160 } } },
+    ],
+  },
+  lich: {
+    id: 'lich', name: 'Lich', description: 'Raw power and defense',
+    playerClass: 'necromancer', color: 0x4466aa,
+    nodes: [
+      { id: 'lich_t1', tier: 1, branch: 'lich', name: 'Dark Power', description: '+15% damage',
+        passive: [{ stat: 'damage', value: 0.15, mode: 'multiply' }] },
+      { id: 'lich_t2', tier: 2, branch: 'lich', name: 'Bone Armor', description: '+2 flat defense',
+        passive: [{ stat: 'defense', value: 2, mode: 'add' }] },
+      { id: 'lich_t3', tier: 3, branch: 'lich', name: 'Undying Will', description: '+20 max HP',
+        passive: [{ stat: 'maxHp', value: 20, mode: 'add' }] },
+      { id: 'lich_t4', tier: 4, branch: 'lich', name: 'Death Aura', description: 'Burn enemies for 4 dps',
+        special: [{ type: 'burn_dot', value: 4 }] },
+      { id: 'lich_t5', tier: 5, branch: 'lich', name: 'Blizzard', description: 'Necrotic storm that slows all enemies',
+        active: { abilityId: 'blizzard', name: 'Blizzard', description: 'AOE slow zone for 7s', cooldown: 14,
+          params: { type: 'blizzard', slowFactor: 0.45, duration: 7, radius: 120 } } },
     ],
   },
 
@@ -450,17 +660,51 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
           params: { type: 'shadow_step', distance: 150 } } },
     ],
   },
+  predator: {
+    id: 'predator', name: 'Predator', description: 'Pursuit and slow',
+    playerClass: 'beastmaster', color: 0xaa4433,
+    nodes: [
+      { id: 'predator_t1', tier: 1, branch: 'predator', name: 'Hunt', description: '+8% movement speed',
+        passive: [{ stat: 'speed', value: 0.08, mode: 'multiply' }] },
+      { id: 'predator_t2', tier: 2, branch: 'predator', name: 'Hamstring', description: 'Slow enemies 20% on hit',
+        special: [{ type: 'slow_on_hit', value: 0.20 }] },
+      { id: 'predator_t3', tier: 3, branch: 'predator', name: 'Savage Bite', description: '+15% damage',
+        passive: [{ stat: 'damage', value: 0.15, mode: 'multiply' }] },
+      { id: 'predator_t4', tier: 4, branch: 'predator', name: 'Pack Tactics', description: '+5% crit chance',
+        passive: [{ stat: 'critChance', value: 0.05, mode: 'add' }] },
+      { id: 'predator_t5', tier: 5, branch: 'predator', name: 'Explosive Trap', description: 'Place beast trap at target',
+        active: { abilityId: 'explosive_trap', name: 'Explosive Trap', description: 'Place AOE trap', cooldown: 8,
+          params: { type: 'explosive_trap', damage: 30, radius: 65, armTime: 0.8 } } },
+    ],
+  },
+  warden: {
+    id: 'warden', name: 'Warden', description: 'Defense and regeneration',
+    playerClass: 'beastmaster', color: 0x448866,
+    nodes: [
+      { id: 'warden_t1', tier: 1, branch: 'warden', name: 'Bark Skin', description: '+1 flat defense',
+        passive: [{ stat: 'defense', value: 1, mode: 'add' }] },
+      { id: 'warden_t2', tier: 2, branch: 'warden', name: 'Nature\'s Gift', description: '+1 HP/s regen',
+        passive: [{ stat: 'hpRegen', value: 1, mode: 'add' }] },
+      { id: 'warden_t3', tier: 3, branch: 'warden', name: 'Wild Growth', description: '+20 max HP',
+        passive: [{ stat: 'maxHp', value: 20, mode: 'add' }] },
+      { id: 'warden_t4', tier: 4, branch: 'warden', name: 'Regrowth', description: '+2 HP/s regen',
+        passive: [{ stat: 'hpRegen', value: 2, mode: 'add' }] },
+      { id: 'warden_t5', tier: 5, branch: 'warden', name: 'War Cry', description: 'Nature\'s rally +20% damage for 8s',
+        active: { abilityId: 'war_cry', name: 'War Cry', description: '+20% team damage for 8s', cooldown: 15,
+          params: { type: 'war_cry', damageBonus: 0.20, duration: 8, radius: 200 } } },
+    ],
+  },
 };
 
 /** Which branches belong to each class (display order: left, center, right). */
 export const CLASS_BRANCHES: Record<PlayerClass, SkillBranchId[]> = {
-  warrior: ['berserker', 'guardian', 'warlord'],
-  ranger: ['sharpshooter', 'trapper', 'scout'],
-  mage: ['pyromancer', 'frost_mage', 'arcanist'],
-  assassin: ['blade_dancer', 'shadow', 'venom'],
-  paladin: ['holy_knight', 'bulwark', 'crusader'],
-  necromancer: ['death_mage', 'cursed', 'blood_magic'],
-  beastmaster: ['feral', 'packleader', 'survivalist'],
+  warrior: ['berserker', 'guardian', 'warlord', 'ironclad', 'juggernaut'],
+  ranger: ['sharpshooter', 'trapper', 'scout', 'hawkeye', 'poisoner'],
+  mage: ['pyromancer', 'frost_mage', 'arcanist', 'stormcaller', 'rift_walker'],
+  assassin: ['blade_dancer', 'shadow', 'venom', 'cutthroat', 'ghost_blade'],
+  paladin: ['holy_knight', 'bulwark', 'crusader', 'inquisitor', 'penitent'],
+  necromancer: ['death_mage', 'cursed', 'blood_magic', 'grave_robber', 'lich'],
+  beastmaster: ['feral', 'packleader', 'survivalist', 'predator', 'warden'],
 };
 
 // ─── Lookup helpers ────────────────────────────────────────────────────────────

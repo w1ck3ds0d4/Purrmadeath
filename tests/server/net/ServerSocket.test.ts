@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { WebSocket } from 'ws';
-import { ServerSocket } from './ServerSocket';
+import { ServerSocket } from '../../../server/net/ServerSocket';
 import { MessageType } from '@shared/protocol';
 
 /** Pick a random high port to avoid collisions. */

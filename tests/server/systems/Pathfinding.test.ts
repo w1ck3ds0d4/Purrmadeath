@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { tileKey, findPath } from './Pathfinding';
+import { tileKey, findPath } from '../../../server/systems/Pathfinding';
 import { TILE_SIZE } from '@shared/constants';
 import { mockGenerator } from './__testutil';
 
@@ -44,7 +44,7 @@ describe('findPath', () => {
   });
 
   it('routes around blocked tiles', () => {
-    // Block tile (3, 0) — path must go around it
+    // Block tile (3, 0) - path must go around it
     const blocked = new Set([tileKey(3, 0)]);
     const result = findPath(allGrass, 16, 16, 6 * TILE_SIZE + 16, 16, blocked);
     expect(result).not.toBeNull();

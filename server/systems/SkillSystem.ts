@@ -23,16 +23,16 @@ import {
   getActiveAbilities,
   getNode,
   SKILL_BRANCHES,
-} from '@shared/SkillDefinitions';
-import type { PlayerClass } from '@shared/ClassDefinitions';
-import { CLASS_STATS } from '@shared/ClassDefinitions';
+} from '@shared/definitions/SkillDefinitions';
+import type { PlayerClass } from '@shared/definitions/ClassDefinitions';
+import { CLASS_STATS } from '@shared/definitions/ClassDefinitions';
 import { MessageType } from '@shared/protocol';
 import type { SkillStateMessage, AbilityUseMessage, AbilityEffectMessage } from '@shared/protocol';
-import type { ConnectedClient } from './net/ServerSocket';
-import type { SessionPlayer } from './GameSession';
+import type { ConnectedClient } from '../net/ServerSocket';
+import type { SessionPlayer } from '../core/GameSession';
 import type { WorldGenerator } from '@shared/world/WorldGenerator';
-import { executeAbility } from './abilities/AbilityExecutor';
-import type { HitResult } from './systems/CombatSystem';
+import { executeAbility } from '../abilities/AbilityExecutor';
+import type { HitResult } from './CombatSystem';
 
 type SendFn = (client: ConnectedClient, msg: object) => void;
 

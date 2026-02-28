@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { WebSocket } from 'ws';
-import { ServerSocket } from './net/ServerSocket';
-import { SessionManager } from './SessionManager';
+import { ServerSocket } from '../../../server/net/ServerSocket';
+import { SessionManager } from '../../../server/core/SessionManager';
 import { MessageType } from '@shared/protocol';
 import { GAME_VERSION } from '@shared/constants';
 

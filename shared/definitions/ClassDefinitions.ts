@@ -1,5 +1,5 @@
 /**
- * Player class definitions — base stats, weapon info, and display data.
+ * Player class definitions - base stats, weapon info, and display data.
  * Used by both server (spawning, attack routing) and client (UI, hotbar).
  */
 

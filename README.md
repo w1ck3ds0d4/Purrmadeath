@@ -86,9 +86,9 @@ Test files live alongside their source in `server/systems/` (e.g. `Pathfinding.t
 
 ### Debug Tools
 
-- **F4** — Debug console with views: `/core`, `/net`, `/server`, `/all`, `/logs`, `/help`
-- **F12** / **Ctrl+Shift+I** — Electron DevTools (dev mode only)
-- **Debug commands** — `/spawn [n]`, `/skipwave`, `/pausewave` (type in debug console)
+- **F4** - Debug console with views: `/core`, `/net`, `/server`, `/all`, `/logs`, `/help`
+- **F12** / **Ctrl+Shift+I** - Electron DevTools (dev mode only)
+- **Debug commands** - `/spawn [n]`, `/skipwave`, `/pausewave` (type in debug console)
 
 ---
 

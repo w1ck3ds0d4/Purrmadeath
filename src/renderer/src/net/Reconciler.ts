@@ -1,4 +1,5 @@
 import { World } from '@shared/ecs/World';
+import { distance } from '@shared/math/utils';
 import { C, PositionComponent, VelocityComponent, PlayerInputComponent, HealthComponent } from '@shared/components';
 import type { EntitySnapshot, DeltaMessage } from '@shared/protocol';
 
@@ -84,7 +85,7 @@ export class Reconciler {
 
     const errX = pos.x - serverSnap.x;
     const errY = pos.y - serverSnap.y;
-    const err = Math.sqrt(errX * errX + errY * errY);
+    const err = distance(errX, errY);
 
     if (err < Reconciler.CORRECTION_THRESHOLD) return; // no correction needed
 

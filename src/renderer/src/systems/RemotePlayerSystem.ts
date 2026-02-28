@@ -16,6 +16,11 @@ import {
   CivilianComponent,
 } from '@shared/components';
 import type { SnapshotMessage, DeltaMessage, EntitySnapshot } from '@shared/protocol';
+import {
+  REMOTE_PLAYER_INTERP_SPEED,
+  REMOTE_PLAYER_SNAP_DIST,
+  REMOTE_PLAYER_MAX_EXTRAP,
+} from '@shared/constants';
 
 /**
  * Manages remote player entities on the client.
@@ -29,14 +34,6 @@ import type { SnapshotMessage, DeltaMessage, EntitySnapshot } from '@shared/prot
  * The local player entity is skipped here - Reconciler handles it.
  */
 
-/** Speed of the lerp toward the extrapolated target. Higher = snappier, lower = smoother. */
-const INTERP_SPEED = 25;
-
-/** Hard-snap if entity is farther than this from its target (teleport / first spawn). */
-const SNAP_DIST = 200;
-
-/** Max seconds of velocity extrapolation - caps prediction to avoid overshooting on lag spikes. */
-const MAX_EXTRAP = 0.15;
 
 export class RemotePlayerSystem {
   /** Server-reported target positions + velocities keyed by entity ID. */
@@ -75,7 +72,7 @@ export class RemotePlayerSystem {
    */
   interpolate(world: World, dt: number): void {
     const localId = this.localEntityId();
-    const t = Math.min(INTERP_SPEED * dt, 1);
+    const t = Math.min(REMOTE_PLAYER_INTERP_SPEED * dt, 1);
 
     for (const [id, target] of this.targets) {
       if (id === localId) continue; // local player uses prediction, not interpolation
@@ -86,7 +83,7 @@ export class RemotePlayerSystem {
       target.age += dt;
 
       // Extrapolated position: predict where entity IS right now using velocity
-      const extrapTime = Math.min(target.age, MAX_EXTRAP);
+      const extrapTime = Math.min(target.age, REMOTE_PLAYER_MAX_EXTRAP);
       const extX = target.x + target.vx * extrapTime;
       const extY = target.y + target.vy * extrapTime;
 
@@ -97,7 +94,7 @@ export class RemotePlayerSystem {
       if (dist < 0.25) {
         pos.x = extX;
         pos.y = extY;
-      } else if (dist > SNAP_DIST * SNAP_DIST) {
+      } else if (dist > REMOTE_PLAYER_SNAP_DIST * REMOTE_PLAYER_SNAP_DIST) {
         pos.x = extX;
         pos.y = extY;
       } else {

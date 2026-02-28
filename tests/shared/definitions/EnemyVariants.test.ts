@@ -4,7 +4,7 @@ import {
   getSpawnWeightsForFaction,
   pickEnemyVariantForFaction,
   ENEMY_FACTIONS,
-} from './EnemyVariants';
+} from '../../../shared/definitions/EnemyVariants';
 
 describe('pickWaveFactions', () => {
   it('returns only bandits for waves 1-4', () => {

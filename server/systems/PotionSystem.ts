@@ -8,12 +8,12 @@ import {
   ActiveBuffsComponent,
   SpeedComponent,
 } from '@shared/components';
-import type { PotionType } from '@shared/PotionDefinitions';
+import type { PotionType } from '@shared/definitions/PotionDefinitions';
 import {
   POTION_POOL,
   POTION_CHARGES_BY_LEVEL,
   POTION_SHOP_INTERACT_RANGE,
-} from '@shared/PotionDefinitions';
+} from '@shared/definitions/PotionDefinitions';
 import { buildingHalfExtent, BUILDING_COSTS } from '@shared/constants';
 import { MessageType } from '@shared/protocol';
 import type {
@@ -25,7 +25,7 @@ import type {
   ResourceUpdateMessage,
 } from '@shared/protocol';
 import type { ConnectedClient } from '../net/ServerSocket';
-import type { CardSystem } from '../CardSystem';
+import type { CardSystem } from './CardSystem';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 

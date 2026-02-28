@@ -1,6 +1,6 @@
 import type { LobbySlot } from '@shared/protocol';
-import { CLASS_DISPLAY_NAMES, BASE_CLASSES } from '@shared/ClassDefinitions';
-import type { PlayerClass } from '@shared/ClassDefinitions';
+import { CLASS_DISPLAY_NAMES, BASE_CLASSES } from '@shared/definitions/ClassDefinitions';
+import type { PlayerClass } from '@shared/definitions/ClassDefinitions';
 
 const CLASS_BADGE_COLORS: Record<string, string> = {
   warrior:     '#cc9966',

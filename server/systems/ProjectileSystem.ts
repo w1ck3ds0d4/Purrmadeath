@@ -1,4 +1,5 @@
 import { World } from '@shared/ecs/World';
+import { distance } from '@shared/math/utils';
 import {
   C,
   PositionComponent,
@@ -208,13 +209,13 @@ export class ProjectileSystem {
       const projFaction = world.getComponent<FactionComponent>(projId, C.Faction);
       const isPlayerProj = projFaction?.type === 'player';
 
-      // Wall collision — player projectiles pass through walls, enemy projectiles don't
+      // Wall collision - player projectiles pass through walls, enemy projectiles don't
       if (!isPlayerProj && this.isSolidTile(pos.x, pos.y)) {
         destroyed.push(projId);
         continue;
       }
 
-      // Building collision — enemy projectiles are blocked by buildings (player/turret projectiles pass through)
+      // Building collision - enemy projectiles are blocked by buildings (player/turret projectiles pass through)
       if (!isPlayerProj && this.hitsBuilding(world, oldX, oldY, pos.x, pos.y, proj.ownerId)) {
         destroyed.push(projId);
         continue;
@@ -304,7 +305,7 @@ export class ProjectileSystem {
           if (tgtFaction?.type === 'building') damage = Math.round(damage * this.buildingDamageMult);
         }
 
-        // Critical hit (player/guard projectiles only) — card buffs on projectile
+        // Critical hit (player/guard projectiles only) - card buffs on projectile
         let crit = false;
         if (projFaction?.type === 'player') {
           const totalCritChance = CRIT_CHANCE + (proj.critChance ?? 0);
@@ -322,7 +323,7 @@ export class ProjectileSystem {
         let knockbackVy = 0;
         const dx = tgtPos.x - pos.x;
         const dy = tgtPos.y - pos.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
+        const dist = distance(dx, dy);
         const tgtVariant = world.getComponent<EnemyVariantComponent>(targetId, C.EnemyVariant);
         if (RANGED_KNOCKBACK > 0 && dist > 0 && tgtVariant?.variant !== 'giant' && tgtVariant?.variant !== 'titan') {
           const kbMult = proj.knockbackMult ?? 1;

@@ -275,7 +275,7 @@ export class CivilianPanelOverlay {
     // Update hint
     if (this.selectedCivilianId !== null) {
       const civ = this.civilians.find(c => c.entityId === this.selectedCivilianId);
-      this.hintEl.textContent = civ ? `Selected: ${civ.name} — click a building to assign` : '';
+      this.hintEl.textContent = civ ? `Selected: ${civ.name} - click a building to assign` : '';
       this.hintEl.style.color = '#f5c06a';
     } else {
       this.hintEl.textContent = 'Click a civilian, then a building to assign. Press C or ESC to close.';

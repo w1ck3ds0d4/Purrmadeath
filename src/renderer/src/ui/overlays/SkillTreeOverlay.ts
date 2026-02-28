@@ -1,4 +1,4 @@
-import type { PlayerClass } from '@shared/ClassDefinitions';
+import type { PlayerClass } from '@shared/definitions/ClassDefinitions';
 import {
   SKILL_BRANCHES,
   type SkillBranch,
@@ -7,16 +7,19 @@ import {
   type SkillBranchId,
   canAllocate,
   getActiveAbilities,
-} from '@shared/SkillDefinitions';
-import { CARD_POOL, RARITY_BORDER_COLORS, CATEGORY_COLORS } from '@shared/CardDefinitions';
+} from '@shared/definitions/SkillDefinitions';
+import { CARD_POOL, RARITY_BORDER_COLORS, CATEGORY_COLORS } from '@shared/definitions/CardDefinitions';
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 
-const NODE_W = 160;
+const NODE_W = 148;
 const NODE_H = 56;
-const TIER_GAP_Y = 16;
-const BRANCH_GAP_X = 24;
-const HEADER_H = 50;
+const CAPSTONE_H = 68;
+const TIER_GAP_Y = 10;
+const BRANCH_GAP_X = 12;
+const HEADER_H = 36;
+const SIDE_PANEL_W = 280;
+const BRANCH_COUNT = 5;
 
 // ── Colors ────────────────────────────────────────────────────────────────────
 
@@ -41,6 +44,7 @@ export class SkillTreeOverlay {
   private buffsContainer: HTMLElement;
   private nodeEls = new Map<SkillNodeId, HTMLElement>();
   private onAllocate: ((nodeId: string) => void) | null = null;
+  private onHide: (() => void) | null = null;
 
   private allocated = new Set<string>();
   private skillPoints = 0;
@@ -52,27 +56,47 @@ export class SkillTreeOverlay {
     this.screen = document.createElement('div');
     this.screen.className = 'screen';
     this.screen.id = 'skill-tree-screen';
-    this.screen.style.cssText = `
-      display: none;
-      flex-direction: column;
-      align-items: center;
-      justify-content: flex-start;
-      padding: 24px;
-      background: ${BG};
-      overflow-y: auto;
-      z-index: 100;
-    `;
+    this.screen.style.display = 'none';
 
-    // Header
+    // ── Full-height 3-column layout ──
+    const layout = document.createElement('div');
+    layout.style.cssText = 'display:flex;flex:1;min-height:0;width:100%;';
+
+    // Left sidebar: Collected cards
+    this.cardsContainer = document.createElement('div');
+    this.cardsContainer.style.cssText = [
+      `width:${SIDE_PANEL_W}px`,
+      'flex-shrink:0',
+      'display:flex',
+      'flex-direction:column',
+      'gap:6px',
+      'padding:24px 20px',
+      'border-right:1px solid rgba(255,255,255,0.06)',
+      'overflow-y:auto',
+    ].join(';');
+
+    // Center column: header + skill tree
+    const center = document.createElement('div');
+    center.style.cssText = [
+      'flex:1',
+      'display:flex',
+      'flex-direction:column',
+      'align-items:center',
+      'padding:16px 12px',
+      'overflow-y:auto',
+      'min-width:0',
+    ].join(';');
+
+    // Header row
     const header = document.createElement('div');
     header.style.cssText = `
       display: flex; align-items: center; justify-content: space-between;
-      width: 100%; max-width: ${3 * NODE_W + 2 * BRANCH_GAP_X + 40}px;
-      margin-bottom: 16px;
+      width: 100%; max-width: ${BRANCH_COUNT * NODE_W + (BRANCH_COUNT - 1) * BRANCH_GAP_X}px;
+      margin-bottom: 20px; flex-shrink: 0;
     `;
 
     this.titleEl = document.createElement('h2');
-    this.titleEl.style.cssText = "font-family:'Segoe UI',sans-serif;font-size:22px;font-weight:700;color:#ccd8ea;letter-spacing:3px;margin:0;user-select:none;";
+    this.titleEl.style.cssText = "font-family:'Segoe UI',sans-serif;font-size:22px;font-weight:700;color:#e8eef5;letter-spacing:3px;margin:0;user-select:none;";
     this.titleEl.textContent = 'SKILL TREE';
 
     this.pointsEl = document.createElement('div');
@@ -90,49 +114,46 @@ export class SkillTreeOverlay {
     header.appendChild(this.titleEl);
     header.appendChild(this.pointsEl);
     header.appendChild(closeBtn);
-    this.screen.appendChild(header);
+    center.appendChild(header);
 
-    // Branch columns container
+    // Branch columns
     const branchRow = document.createElement('div');
     branchRow.style.cssText = `
       display: flex; gap: ${BRANCH_GAP_X}px; justify-content: center;
-      width: 100%;
     `;
-    this.screen.appendChild(branchRow);
+    center.appendChild(branchRow);
 
-    // Create 3 branch columns (populated on show)
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < BRANCH_COUNT; i++) {
       const col = document.createElement('div');
       col.style.cssText = `
-        display: flex; flex-direction: column; align-items: center; gap: ${TIER_GAP_Y}px;
+        display: flex; flex-direction: column; align-items: center;
         width: ${NODE_W}px;
       `;
       branchRow.appendChild(col);
       this.branchContainers.push(col);
     }
 
-    // Picked cards section
-    this.cardsContainer = document.createElement('div');
-    this.cardsContainer.style.cssText = `
-      width: 100%; max-width: ${3 * NODE_W + 2 * BRANCH_GAP_X + 40}px;
-      margin-top: 20px;
-    `;
-    this.screen.appendChild(this.cardsContainer);
-
-    // Permanent buffs section
-    this.buffsContainer = document.createElement('div');
-    this.buffsContainer.style.cssText = `
-      width: 100%; max-width: ${3 * NODE_W + 2 * BRANCH_GAP_X + 40}px;
-      margin-top: 20px;
-    `;
-    this.screen.appendChild(this.buffsContainer);
-
-    // Key hint
+    // Key hint at bottom of center
     const hint = document.createElement('div');
-    hint.style.cssText = 'font-family:monospace;font-size:11px;color:#4a5a6a;margin-top:16px;user-select:none;';
+    hint.style.cssText = 'font-family:monospace;font-size:11px;color:#4a5a6a;margin-top:auto;padding-top:16px;user-select:none;flex-shrink:0;';
     hint.textContent = 'Press K or ESC to close';
-    this.screen.appendChild(hint);
+    center.appendChild(hint);
 
+    // Right sidebar: Permanent buffs
+    this.buffsContainer = document.createElement('div');
+    this.buffsContainer.style.cssText = [
+      `width:${SIDE_PANEL_W}px`,
+      'flex-shrink:0',
+      'display:flex',
+      'flex-direction:column',
+      'gap:6px',
+      'padding:24px 20px',
+      'border-left:1px solid rgba(255,255,255,0.06)',
+      'overflow-y:auto',
+    ].join(';');
+
+    layout.append(this.cardsContainer, center, this.buffsContainer);
+    this.screen.appendChild(layout);
     document.getElementById('overlay')!.appendChild(this.screen);
   }
 
@@ -140,11 +161,12 @@ export class SkillTreeOverlay {
     return this.screen.style.display !== 'none';
   }
 
-  show(playerClass: PlayerClass, allocated: Set<string>, skillPoints: number, onAllocate: (nodeId: string) => void, pickedCardIds?: string[], completedBuffs?: { displayName: string; reward: string; medalColor: string }[]): void {
+  show(playerClass: PlayerClass, allocated: Set<string>, skillPoints: number, onAllocate: (nodeId: string) => void, pickedCardIds?: string[], completedBuffs?: { displayName: string; reward: string; medalColor: string }[], onHide?: () => void): void {
     this.playerClass = playerClass;
     this.allocated = allocated;
     this.skillPoints = skillPoints;
     this.onAllocate = onAllocate;
+    this.onHide = onHide ?? null;
     if (pickedCardIds) this.pickedCardIds = pickedCardIds;
     if (completedBuffs) this.completedBuffs = completedBuffs;
     this.screen.style.display = 'flex';
@@ -154,6 +176,8 @@ export class SkillTreeOverlay {
   hide(): void {
     this.screen.style.display = 'none';
     this.onAllocate = null;
+    this.onHide?.();
+    this.onHide = null;
   }
 
   /** Update state from server without full rebuild. */
@@ -164,7 +188,6 @@ export class SkillTreeOverlay {
   }
 
   private rebuild(): void {
-    // Get the 3 branches for this class
     const branches = Object.values(SKILL_BRANCHES).filter(
       (b) => b.playerClass === this.playerClass,
     ) as SkillBranch[];
@@ -174,7 +197,7 @@ export class SkillTreeOverlay {
 
     const alloc = { allocated: this.allocated, skillPoints: this.skillPoints };
 
-    for (let bi = 0; bi < 3; bi++) {
+    for (let bi = 0; bi < BRANCH_COUNT; bi++) {
       const col = this.branchContainers[bi];
       col.innerHTML = '';
 
@@ -187,17 +210,19 @@ export class SkillTreeOverlay {
         font-family: 'Segoe UI', sans-serif; font-size: 14px; font-weight: 700;
         color: ${hexColor(branch.color)}; text-align: center;
         user-select: none; letter-spacing: 1px; height: ${HEADER_H}px;
-        display: flex; flex-direction: column; justify-content: center;
+        display: flex; align-items: center; justify-content: center;
       `;
-      branchHeader.innerHTML = `<span>${branch.name.toUpperCase()}</span><span style="font-size:11px;font-weight:400;color:#6a7a8a;margin-top:2px;">${branch.description}</span>`;
+      branchHeader.textContent = branch.name.toUpperCase();
       col.appendChild(branchHeader);
 
-      // Nodes (5 tiers)
-      for (const node of branch.nodes) {
+      // Nodes (5 tiers) with connector lines
+      for (let ni = 0; ni < branch.nodes.length; ni++) {
+        const node = branch.nodes[ni];
         const isAllocated = this.allocated.has(node.id);
         const isAvailable = !isAllocated && canAllocate(alloc, node.id, this.playerClass);
 
         const el = document.createElement('div');
+        el.className = 'skill-node';
         el.style.cssText = this.nodeStyle(node, branch, isAllocated, isAvailable);
         el.innerHTML = this.nodeContent(node, isAllocated, isAvailable);
 
@@ -212,6 +237,15 @@ export class SkillTreeOverlay {
 
         col.appendChild(el);
         this.nodeEls.set(node.id, el);
+
+        // Connector line between nodes (except after capstone)
+        if (ni < branch.nodes.length - 1) {
+          const nextAllocated = this.allocated.has(branch.nodes[ni + 1].id);
+          const lineAlpha = (isAllocated && nextAllocated) ? 0.7 : (isAllocated || nextAllocated) ? 0.4 : 0.15;
+          const line = document.createElement('div');
+          line.style.cssText = `width:2px;height:${TIER_GAP_Y}px;background:${hexColor(branch.color)};opacity:${lineAlpha};flex-shrink:0;`;
+          col.appendChild(line);
+        }
       }
     }
 
@@ -220,72 +254,82 @@ export class SkillTreeOverlay {
   }
 
   private rebuildCards(): void {
-    this.cardsContainer.innerHTML = '';
+    // Keep the container element, just clear its dynamic children
+    const container = this.cardsContainer;
+    // Remove all children except the container itself stays
+    while (container.firstChild) container.removeChild(container.firstChild);
+
     const cards = this.pickedCardIds
       .map(id => CARD_POOL.find(c => c.id === id))
       .filter((c): c is NonNullable<typeof c> => c != null);
-    if (cards.length === 0) return;
+    if (cards.length === 0) {
+      const empty = document.createElement('div');
+      empty.style.cssText = "font-family:monospace;font-size:14px;color:#7a7a8a;user-select:none;padding-top:4px;";
+      empty.textContent = 'No cards collected yet';
+      container.appendChild(empty);
+      return;
+    }
 
     // Section header
     const header = document.createElement('div');
     header.style.cssText = `
-      font-family:'Segoe UI',sans-serif;font-size:14px;font-weight:700;
-      color:#e8c96a;letter-spacing:2px;margin-bottom:10px;user-select:none;
+      font-family:'Segoe UI',sans-serif;font-size:15px;font-weight:700;
+      color:#e8c96a;letter-spacing:2px;margin-bottom:6px;user-select:none;
     `;
-    header.textContent = `COLLECTED CARDS (${cards.length})`;
-    this.cardsContainer.appendChild(header);
+    header.textContent = `CARDS (${cards.length})`;
+    container.appendChild(header);
 
-    // Card grid
-    const grid = document.createElement('div');
-    grid.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;';
+    // Vertical card list
     for (const card of cards) {
       const catHex = '#' + CATEGORY_COLORS[card.category].toString(16).padStart(6, '0');
       const el = document.createElement('div');
       el.style.cssText = `
-        width:140px;padding:8px 10px;border-radius:6px;
+        padding:8px 10px;border-radius:6px;
         background:${catHex}18;border:1px solid ${RARITY_BORDER_COLORS[card.rarity]};
         user-select:none;
       `;
       el.innerHTML = `
-        <div style="font-family:'Segoe UI',sans-serif;font-size:12px;font-weight:600;color:#d8e2ef;">${card.name}</div>
-        <div style="font-family:monospace;font-size:10px;color:#8a9ab0;margin-top:2px;">${card.description}</div>
-        <div style="font-family:monospace;font-size:9px;color:${catHex};margin-top:4px;text-transform:uppercase;">${card.category} &middot; ${card.rarity}</div>
+        <div style="font-family:'Segoe UI',sans-serif;font-size:14px;font-weight:600;color:#e8eef5;">${card.name}</div>
+        <div style="font-family:monospace;font-size:12px;color:#a0b0c0;margin-top:2px;">${card.description}</div>
+        <div style="font-family:monospace;font-size:10px;color:${catHex};margin-top:3px;text-transform:uppercase;">${card.category} &middot; ${card.rarity}</div>
       `;
-      grid.appendChild(el);
+      container.appendChild(el);
     }
-    this.cardsContainer.appendChild(grid);
   }
 
   private rebuildBuffs(): void {
-    this.buffsContainer.innerHTML = '';
-    if (this.completedBuffs.length === 0) return;
+    const container = this.buffsContainer;
+    while (container.firstChild) container.removeChild(container.firstChild);
+
+    if (this.completedBuffs.length === 0) {
+      const empty = document.createElement('div');
+      empty.style.cssText = "font-family:monospace;font-size:14px;color:#7a7a8a;user-select:none;padding-top:4px;";
+      empty.textContent = 'No buffs earned yet';
+      container.appendChild(empty);
+      return;
+    }
 
     const header = document.createElement('div');
     header.style.cssText = `
-      font-family:'Segoe UI',sans-serif;font-size:14px;font-weight:700;
-      color:#55cc77;letter-spacing:2px;margin-bottom:10px;user-select:none;
+      font-family:'Segoe UI',sans-serif;font-size:15px;font-weight:700;
+      color:#55cc77;letter-spacing:2px;margin-bottom:6px;user-select:none;
     `;
-    header.textContent = `PERMANENT BUFFS (${this.completedBuffs.length})`;
-    this.buffsContainer.appendChild(header);
-
-    const grid = document.createElement('div');
-    grid.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;';
+    header.textContent = `BUFFS (${this.completedBuffs.length})`;
+    container.appendChild(header);
 
     for (const buff of this.completedBuffs) {
       const el = document.createElement('div');
       el.style.cssText = `
-        width:140px;padding:8px 10px;border-radius:6px;
+        padding:8px 10px;border-radius:6px;
         background:${buff.medalColor}18;border:1px solid ${buff.medalColor};
         user-select:none;
       `;
       el.innerHTML = `
-        <div style="font-family:'Segoe UI',sans-serif;font-size:12px;font-weight:600;color:#d8e2ef;">${buff.displayName}</div>
-        <div style="font-family:monospace;font-size:10px;color:${buff.medalColor};margin-top:4px;">${buff.reward}</div>
+        <div style="font-family:'Segoe UI',sans-serif;font-size:14px;font-weight:600;color:#e8eef5;">${buff.displayName}</div>
+        <div style="font-family:monospace;font-size:12px;color:${buff.medalColor};margin-top:4px;">${buff.reward}</div>
       `;
-      grid.appendChild(el);
+      container.appendChild(el);
     }
-
-    this.buffsContainer.appendChild(grid);
   }
 
   private nodeStyle(node: SkillNode, branch: SkillBranch, allocated: boolean, available: boolean): string {
@@ -295,20 +339,21 @@ export class SkillTreeOverlay {
     let shadow = 'none';
 
     if (allocated) {
-      bg = color + '33'; // 20% alpha
+      bg = color + '33';
       border = color;
       shadow = `0 0 8px ${color}66`;
     } else if (available) {
       bg = '#1a1a2e';
-      border = AVAILABLE_GLOW;
-      shadow = `0 0 12px ${AVAILABLE_GLOW}`;
+      border = node.tier === 5 ? '#e8c96a' : AVAILABLE_GLOW;
+      shadow = node.tier === 5 ? '0 0 14px rgba(232, 201, 106, 0.5)' : `0 0 12px ${AVAILABLE_GLOW}`;
     }
 
     const isCapstone = node.tier === 5;
     const borderWidth = isCapstone ? '2px' : '1px';
+    const h = isCapstone ? CAPSTONE_H : NODE_H;
 
     return `
-      width: ${NODE_W}px; height: ${NODE_H}px;
+      width: ${NODE_W}px; height: ${h}px;
       background: ${bg}; border: ${borderWidth} solid ${border};
       border-radius: ${isCapstone ? '8px' : '4px'};
       box-shadow: ${shadow};
@@ -320,20 +365,19 @@ export class SkillTreeOverlay {
   }
 
   private nodeContent(node: SkillNode, allocated: boolean, available: boolean): string {
-    const nameColor = allocated ? ALLOCATED_TEXT : (available ? '#b0c0d0' : '#5a5a6a');
-    const descColor = allocated ? '#a0b0c0' : (available ? '#7a8a9a' : '#3a3a4a');
-    const tierLabel = node.tier === 5 ? 'T5 CAPSTONE' : `Tier ${node.tier}`;
-    const tierColor = allocated ? '#8a9ab0' : (available ? '#6a7a8a' : '#2a2a3a');
+    const nameColor = allocated ? ALLOCATED_TEXT : (available ? '#dde4ef' : '#9a9aaa');
+    const tierLabel = node.tier === 5 ? 'CAPSTONE' : `Tier ${node.tier}`;
+    const tierColor = allocated ? '#a0b0c0' : (available ? '#8a9aaa' : '#5a5a6a');
 
-    let nameExtra = '';
-    if (node.active) {
-      nameExtra = ` <span style="font-size:10px;color:#e8c96a;">[${node.active.cooldown}s CD]</span>`;
-    }
+    const cdLine = node.active
+      ? `<div style="font-family:monospace;font-size:11px;color:#e8c96a;margin-top:2px;">${node.active.cooldown}s cooldown</div>`
+      : '';
 
     return `
+      <div class="skill-tooltip">${node.description}</div>
       <div style="font-family:monospace;font-size:10px;color:${tierColor};margin-bottom:2px;">${tierLabel}</div>
-      <div style="font-family:'Segoe UI',sans-serif;font-size:13px;font-weight:600;color:${nameColor};">${node.name}${nameExtra}</div>
-      <div style="font-family:monospace;font-size:10px;color:${descColor};text-align:center;">${node.description}</div>
+      <div style="font-family:'Segoe UI',sans-serif;font-size:15px;font-weight:600;color:${nameColor};">${node.name}</div>
+      ${cdLine}
     `;
   }
 }

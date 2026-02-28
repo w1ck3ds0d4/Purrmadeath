@@ -252,7 +252,7 @@ export interface ProductionComponent {
   resourceType: 'wood' | 'stone' | 'iron' | 'diamond' | 'food';
   /** Seconds between each production tick. */
   interval: number;
-  /** Accumulator — counts up toward `interval`. */
+  /** Accumulator - counts up toward `interval`. */
   timer: number;
   /** Amount produced per tick. */
   amount: number;
@@ -463,7 +463,7 @@ export interface HousingComponent {
   residentIds: number[];
 }
 
-/** Attached to production buildings — tracks assigned worker. */
+/** Attached to production buildings - tracks assigned worker. */
 export interface WorkerSlotComponent {
   /** Entity ID of the assigned civilian worker, or null if unoccupied. */
   workerId: number | null;

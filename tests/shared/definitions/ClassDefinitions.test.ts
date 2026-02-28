@@ -5,15 +5,19 @@ import {
   DEFAULT_CLASS,
   CLASS_DISPLAY_NAMES,
   CLASS_COLORS,
-} from './ClassDefinitions';
-import type { PlayerClass } from './ClassDefinitions';
+} from '../../../shared/definitions/ClassDefinitions';
+import type { PlayerClass } from '../../../shared/definitions/ClassDefinitions';
 
 describe('ClassDefinitions', () => {
-  it('defines exactly 3 classes', () => {
-    expect(PLAYER_CLASSES).toHaveLength(3);
+  it('defines all 7 classes', () => {
+    expect(PLAYER_CLASSES).toHaveLength(7);
     expect(PLAYER_CLASSES).toContain('warrior');
     expect(PLAYER_CLASSES).toContain('ranger');
     expect(PLAYER_CLASSES).toContain('mage');
+    expect(PLAYER_CLASSES).toContain('assassin');
+    expect(PLAYER_CLASSES).toContain('paladin');
+    expect(PLAYER_CLASSES).toContain('necromancer');
+    expect(PLAYER_CLASSES).toContain('beastmaster');
   });
 
   it('DEFAULT_CLASS is a valid class', () => {

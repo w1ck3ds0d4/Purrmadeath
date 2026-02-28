@@ -1,5 +1,5 @@
-import type { CardDefinition } from '@shared/CardDefinitions';
-import { CATEGORY_COLORS, RARITY_BORDER_COLORS } from '@shared/CardDefinitions';
+import type { CardDefinition } from '@shared/definitions/CardDefinitions';
+import { CATEGORY_COLORS, RARITY_BORDER_COLORS } from '@shared/definitions/CardDefinitions';
 
 /** Duration of each phase in seconds. */
 const PRE_REVEAL_DURATION = 5;
@@ -53,7 +53,7 @@ export class CardPickerOverlay {
     this.subtitleEl.style.cssText = 'font-family:monospace;font-size:12px;color:#6a7a8a;margin-bottom:24px;user-select:none;opacity:0;transition:opacity 0.4s ease;';
 
     this.cardRow = document.createElement('div');
-    this.cardRow.style.cssText = 'display:flex;gap:16px;justify-content:center;flex-wrap:wrap;';
+    this.cardRow.style.cssText = 'display:flex;gap:24px;justify-content:center;flex-wrap:wrap;';
 
     // Pick timer bar
     this.timerBarOuter = document.createElement('div');
@@ -84,11 +84,11 @@ export class CardPickerOverlay {
     // Build card backs (hidden initially)
     for (const card of cards) {
       const wrapper = document.createElement('div');
-      wrapper.style.cssText = 'perspective:600px;width:200px;';
+      wrapper.style.cssText = 'perspective:600px;width:240px;';
 
       const flipper = document.createElement('div');
       flipper.style.cssText = `
-        width: 200px;
+        width: 240px;
         position: relative;
         transform-style: preserve-3d;
         transform: rotateY(180deg);
@@ -104,8 +104,8 @@ export class CardPickerOverlay {
       // Back face
       const back = document.createElement('div');
       back.style.cssText = `
-        width: 200px;
-        padding: 20px 16px;
+        width: 240px;
+        padding: 24px 20px;
         box-sizing: border-box;
         background: linear-gradient(135deg, #1a1a2e 0%, #0a0a1a 100%);
         border: 2px solid #2a3a4a;
@@ -241,12 +241,14 @@ export class CardPickerOverlay {
     const borderColor = RARITY_BORDER_COLORS[card.rarity];
     const isTrap = card.category === 'trap';
 
+    const catHex = '#' + catColor.toString(16).padStart(6, '0');
     panel.style.cssText = `
-      width: 200px;
-      padding: 20px 16px;
+      width: 240px;
+      padding: 24px 20px;
       box-sizing: border-box;
       background: rgba(10,10,20,0.92);
       border: 2px solid ${borderColor};
+      border-top: 3px solid ${catHex};
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -257,19 +259,19 @@ export class CardPickerOverlay {
     `;
 
     const catLabel = document.createElement('div');
-    catLabel.style.cssText = `font-family:monospace;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#${catColor.toString(16).padStart(6, '0')};`;
+    catLabel.style.cssText = `font-family:monospace;font-size:11px;letter-spacing:2px;text-transform:uppercase;color:${catHex};`;
     catLabel.textContent = card.category;
 
     const nameEl = document.createElement('div');
-    nameEl.style.cssText = `font-family:'Segoe UI',sans-serif;font-size:18px;font-weight:700;color:${isTrap ? '#cc4444' : '#ccd8ea'};text-align:center;`;
+    nameEl.style.cssText = `font-family:'Segoe UI',sans-serif;font-size:20px;font-weight:700;color:${isTrap ? '#cc4444' : '#ccd8ea'};text-align:center;`;
     nameEl.textContent = card.name;
 
     const descEl = document.createElement('div');
-    descEl.style.cssText = 'font-family:monospace;font-size:12px;color:#8a9ab0;text-align:center;line-height:1.4;';
+    descEl.style.cssText = 'font-family:monospace;font-size:13px;color:#8a9ab0;text-align:center;line-height:1.5;';
     descEl.textContent = card.description;
 
     const rarityEl = document.createElement('div');
-    rarityEl.style.cssText = 'font-family:monospace;font-size:10px;letter-spacing:1px;color:#4a5a6a;margin-top:auto;';
+    rarityEl.style.cssText = `font-family:monospace;font-size:11px;letter-spacing:1px;color:${borderColor};margin-top:auto;`;
     rarityEl.textContent = card.rarity.toUpperCase();
 
     if (isTrap) {

@@ -1,6 +1,6 @@
 import { CHUNK_SIZE, TILE_SIZE, TICK_RATE } from '@shared/constants';
-import { CARD_POOL } from '@shared/CardDefinitions';
-import type { Camera } from '../render/Camera';
+import { CARD_POOL } from '@shared/definitions/CardDefinitions';
+import type { Camera } from '../../render/Camera';
 
 export interface NetStats {
   rtt: number;
@@ -136,11 +136,14 @@ export class DebugOverlay {
 
     document.getElementById('overlay')!.appendChild(this.el);
 
-    // F4 toggles console
+    // F4 toggles console, Tab focuses input when console is open
     document.addEventListener('keydown', (e) => {
       if (e.key === 'F4') {
         e.preventDefault();
         this.toggle();
+      } else if (e.key === 'Tab' && this.visible) {
+        e.preventDefault();
+        this.inputEl.focus();
       }
     });
   }
@@ -278,6 +281,9 @@ export class DebugOverlay {
         '/spawn [n]  Spawn n enemies (default 5)',
         '/skipwave   Skip wave prep timer',
         '/pausewave  Pause/resume wave timer',
+        '/skipnight  Skip to night',
+        '/skipday    Skip to day (end night)',
+        '/settime <s> Set day timer (seconds)',
         '/card <id>  Give a card by ID',
         '/cards [f]  List all card IDs (filter optional)',
         '/sp [n]     Give n skill points (default 1)',
@@ -327,6 +333,9 @@ export class DebugOverlay {
       case '/spawn':
       case '/skipwave':
       case '/pausewave':
+      case '/skipnight':
+      case '/skipday':
+      case '/settime':
       case '/give':
       case '/card':
       case '/sp':
@@ -340,7 +349,7 @@ export class DebugOverlay {
           : CARD_POOL;
         this.log(`── Card IDs (${cards.length}) ──`);
         for (const c of cards) {
-          this.log(`  ${c.id} — ${c.name} [${c.rarity}/${c.category}]`);
+          this.log(`  ${c.id} - ${c.name} [${c.rarity}/${c.category}]`);
         }
         this.activeView = 'logs';
         break;

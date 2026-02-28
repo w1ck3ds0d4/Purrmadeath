@@ -39,6 +39,32 @@
       #card-browser-screen::-webkit-scrollbar-thumb { background: rgba(100, 120, 150, 0.4); border-radius: 4px; }
       #card-browser-screen::-webkit-scrollbar-thumb:hover { background: rgba(120, 140, 170, 0.6); }
 
+      #skill-tree-screen ::-webkit-scrollbar { width: 6px; }
+      #skill-tree-screen ::-webkit-scrollbar-track { background: rgba(10, 10, 20, 0.4); border-radius: 3px; }
+      #skill-tree-screen ::-webkit-scrollbar-thumb { background: rgba(100, 120, 150, 0.3); border-radius: 3px; }
+      #skill-tree-screen ::-webkit-scrollbar-thumb:hover { background: rgba(120, 140, 170, 0.5); }
+
+      .skill-node { position: relative; }
+      .skill-node .skill-tooltip {
+        display: none;
+        position: absolute;
+        bottom: calc(100% + 8px);
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(10, 10, 20, 0.95);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 6px;
+        padding: 8px 12px;
+        font-family: monospace;
+        font-size: 13px;
+        color: #ccd8ea;
+        white-space: nowrap;
+        z-index: 100;
+        pointer-events: none;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+      }
+      .skill-node:hover .skill-tooltip { display: block; }
+
       /* ── Main menu ─────────────────────────────────────────────────────── */
       .game-title {
         font-family: 'Segoe UI', 'Helvetica Neue', sans-serif;

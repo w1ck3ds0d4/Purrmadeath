@@ -1,6 +1,6 @@
 import { Container, Graphics } from 'pixi.js';
 import { snapBuildingPosition, buildingHalfExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RANGE } from '@shared/constants';
-import { POTION_SHOP_INTERACT_RANGE } from '@shared/PotionDefinitions';
+import { POTION_SHOP_INTERACT_RANGE } from '@shared/definitions/PotionDefinitions';
 
 const VALID_COLOR   = 0x44cc66;
 const INVALID_COLOR = 0xcc4444;

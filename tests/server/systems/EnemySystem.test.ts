@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { EnemySystem } from './EnemySystem';
-import { CombatSystem } from './CombatSystem';
+import { EnemySystem } from '../../../server/systems/EnemySystem';
+import { CombatSystem } from '../../../server/systems/CombatSystem';
 import { C } from '@shared/components';
 import { TILE_SIZE } from '@shared/constants';
 import { createTestWorld, spawnTestEntity, mockGenerator } from './__testutil';
@@ -116,7 +116,7 @@ describe('EnemySystem', () => {
     system.update(world, 1 / 30);
 
     const dir = getDir(world, guard);
-    // Guard should NOT chase the player — should be idle (at barracks)
+    // Guard should NOT chase the player - should be idle (at barracks)
     expect(dir.dx).toBe(0);
     expect(dir.dy).toBe(0);
   });
@@ -146,7 +146,7 @@ describe('EnemySystem', () => {
     system.update(world, 1 / 30);
 
     const dir = getDir(world, e1);
-    // No target found — should be idle
+    // No target found - should be idle
     expect(dir.dx).toBe(0);
     expect(dir.dy).toBe(0);
   });
@@ -158,7 +158,7 @@ describe('EnemySystem', () => {
     const bandit = spawnEnemy(world, 0, 0, { variant: 'melee', enemyFaction: 'bandits' });
     spawnEnemy(world, 60, 0, { variant: 'melee', enemyFaction: 'undead' });
 
-    // Campfire far behind — hostile enemy within distract range should override
+    // Campfire far behind - hostile enemy within distract range should override
     spawnCampfire(world, -200, 0);
 
     system.update(world, 1 / 30);

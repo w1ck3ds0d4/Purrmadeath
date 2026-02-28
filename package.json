@@ -16,8 +16,9 @@
     "test:watch": "vitest",
     "lint": "eslint src server shared --ext .ts",
     "typecheck": "tsc --noEmit",
-    "build:win": "electron-vite build && electron-builder --win",
-    "publish": "electron-vite build && electron-builder --win --publish always",
+    "check-version": "node scripts/check-version.cjs",
+    "build:win": "node scripts/check-version.cjs && electron-vite build && electron-builder --win",
+    "publish": "node scripts/check-version.cjs && electron-vite build && electron-builder --win --publish always",
     "aws:start": "node scripts/aws.mjs start",
     "aws:stop": "node scripts/aws.mjs stop",
     "aws:status": "node scripts/aws.mjs status"

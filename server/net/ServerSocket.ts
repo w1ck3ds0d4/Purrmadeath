@@ -68,7 +68,7 @@ export class ServerSocket {
       this.wss.once('listening', resolve);
       this.wss.once('error', (err: NodeJS.ErrnoException) => {
         if (err.code === 'EADDRINUSE') {
-          reject(new Error(`Port ${port} already in use — is another server running?`));
+          reject(new Error(`Port ${port} already in use - is another server running?`));
         } else {
           reject(err);
         }

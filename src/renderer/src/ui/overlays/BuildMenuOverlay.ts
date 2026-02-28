@@ -65,36 +65,37 @@ export class BuildMenuOverlay {
   constructor() {
     this.el = document.createElement('div');
     this.el.id = 'build-menu-overlay';
+    this.el.className = 'screen';
     this.el.style.cssText = [
-      'position: absolute',
-      'top: 50%',
-      'left: 50%',
-      'transform: translate(-50%, -50%)',
-      'z-index: 50',
-      'background: rgba(4, 4, 10, 0.92)',
-      'backdrop-filter: blur(6px)',
-      'border: 1px solid rgba(255, 255, 255, 0.14)',
-      'border-radius: 8px',
-      'padding: 0',
-      "font-family: 'Segoe UI', monospace",
+      "font-family: 'Segoe UI', sans-serif",
       'font-size: 13px',
-      'color: #ccd8ea',
+      'color: #e8eef5',
       'display: none',
-      'min-width: 560px',
-      'max-width: 640px',
       'user-select: none',
       'pointer-events: auto',
+      'justify-content: center',
+      'align-items: center',
+    ].join('; ');
+
+    // Inner panel (centered card within full-screen overlay)
+    const panel = document.createElement('div');
+    panel.style.cssText = [
+      'background: rgba(10, 10, 20, 0.98)',
+      'border: 1px solid rgba(255, 255, 255, 0.12)',
+      'border-radius: 8px',
+      'min-width: 560px',
+      'max-width: 640px',
       'overflow: hidden',
     ].join('; ');
 
     // Title bar
     const titleBar = document.createElement('div');
-    titleBar.style.cssText = 'padding: 14px 20px 10px; border-bottom: 1px solid rgba(255,255,255,0.08);';
+    titleBar.style.cssText = 'padding: 14px 20px 10px; border-bottom: 1px solid rgba(255,255,255,0.06);';
     const title = document.createElement('div');
-    title.style.cssText = 'font-weight: bold; font-size: 16px; color: #e8c96a; text-align: center; letter-spacing: 3px;';
+    title.style.cssText = "font-family:'Segoe UI',sans-serif;font-weight:700;font-size:22px;color:#e8eef5;text-align:center;letter-spacing:3px;";
     title.textContent = 'BUILD MENU';
     titleBar.appendChild(title);
-    this.el.appendChild(titleBar);
+    panel.appendChild(titleBar);
 
     // Body: tabs sidebar + content area
     const body = document.createElement('div');
@@ -107,7 +108,7 @@ export class BuildMenuOverlay {
       'flex-direction: column',
       'width: 120px',
       'min-width: 120px',
-      'border-right: 1px solid rgba(255,255,255,0.08)',
+      'border-right: 1px solid rgba(255,255,255,0.06)',
       'padding: 8px 0',
     ].join('; ');
 
@@ -118,7 +119,7 @@ export class BuildMenuOverlay {
       btn.textContent = cat.name;
       btn.addEventListener('click', () => this.selectTab(i));
       btn.addEventListener('mouseenter', () => {
-        if (i !== this.activeTab) btn.style.background = 'rgba(255,255,255,0.06)';
+        if (i !== this.activeTab) btn.style.background = 'rgba(255,255,255,0.04)';
       });
       btn.addEventListener('mouseleave', () => {
         if (i !== this.activeTab) btn.style.background = 'transparent';
@@ -151,11 +152,11 @@ export class BuildMenuOverlay {
     this.contentEl.style.cssText = 'flex: 1; padding: 12px 16px; overflow-y: auto;';
     body.appendChild(this.contentEl);
 
-    this.el.appendChild(body);
+    panel.appendChild(body);
 
     // Footer: select button + hint
     const footer = document.createElement('div');
-    footer.style.cssText = 'border-top: 1px solid rgba(255,255,255,0.08); padding: 10px 16px 8px;';
+    footer.style.cssText = 'border-top: 1px solid rgba(255,255,255,0.06); padding: 10px 16px 8px;';
 
     const btnRow = document.createElement('div');
     btnRow.style.cssText = 'display: flex; justify-content: center; margin-bottom: 6px;';
@@ -163,30 +164,32 @@ export class BuildMenuOverlay {
     const selectBtn = document.createElement('div');
     selectBtn.style.cssText = [
       'padding: 6px 20px',
-      'font-size: 12px',
+      'font-family: monospace',
+      'font-size: 13px',
       'font-weight: bold',
       'cursor: pointer',
       'border-radius: 4px',
       'border: 1px solid #e8c96a66',
       'color: #e8c96a',
-      'background: rgba(255,255,255,0.04)',
-      'transition: background 0.12s',
+      'background: #2a2a3a',
+      'transition: background 0.15s, box-shadow 0.15s',
       'letter-spacing: 0.5px',
     ].join('; ');
     selectBtn.textContent = 'Select Building';
-    selectBtn.addEventListener('mouseenter', () => { selectBtn.style.background = '#e8c96a22'; });
-    selectBtn.addEventListener('mouseleave', () => { selectBtn.style.background = 'rgba(255,255,255,0.04)'; });
+    selectBtn.addEventListener('mouseenter', () => { selectBtn.style.background = '#1a1a2e'; selectBtn.style.boxShadow = '0 0 10px rgba(232,201,106,0.3)'; });
+    selectBtn.addEventListener('mouseleave', () => { selectBtn.style.background = '#2a2a3a'; selectBtn.style.boxShadow = 'none'; });
     selectBtn.addEventListener('click', () => this.callbacks?.onSelectMode());
     btnRow.appendChild(selectBtn);
     footer.appendChild(btnRow);
 
     const hint = document.createElement('div');
-    hint.style.cssText = 'font-size: 11px; color: #5a6a7a; text-align: center;';
+    hint.style.cssText = 'font-family:monospace;font-size:11px;color:#4a5a6a;text-align:center;';
     hint.textContent = 'V upgrade \u00B7 G repair \u00B7 X demolish \u00B7 B / ESC to close';
     footer.appendChild(hint);
 
-    this.el.appendChild(footer);
+    panel.appendChild(footer);
 
+    this.el.appendChild(panel);
     document.getElementById('overlay')!.appendChild(this.el);
   }
 
@@ -201,7 +204,7 @@ export class BuildMenuOverlay {
   show(available: Record<string, number>): void {
     this.visible = true;
     this.lastAvailable = available;
-    this.el.style.display = 'block';
+    this.el.style.display = 'flex';
     this.renderTabs();
     this.renderContent();
   }
@@ -226,14 +229,14 @@ export class BuildMenuOverlay {
   private tabStyle(active: boolean, accent: string): string {
     return [
       'padding: 10px 14px',
-      'font-size: 12px',
-      'font-weight: bold',
+      'font-size: 13px',
+      'font-weight: 600',
       'letter-spacing: 1px',
       'cursor: pointer',
       'transition: background 0.12s',
       `border-left: 3px solid ${active ? accent : 'transparent'}`,
-      `background: ${active ? 'rgba(255,255,255,0.06)' : 'transparent'}`,
-      `color: ${active ? accent : '#6a7a8a'}`,
+      `background: ${active ? accent + '18' : 'transparent'}`,
+      `color: ${active ? '#e8eef5' : '#8a9aaa'}`,
     ].join('; ');
   }
 
@@ -250,21 +253,26 @@ export class BuildMenuOverlay {
 
       const card = document.createElement('div');
       card.style.cssText = [
-        'background: rgba(255,255,255,0.04)',
-        `border-top: 3px solid ${cat.accent}44`,
+        'background: #2a2a3a',
+        `border: 1px solid #3a3a4a`,
+        `border-top: 3px solid ${cat.accent}66`,
         'border-radius: 4px',
         'padding: 10px 12px',
         'cursor: pointer',
-        'transition: background 0.12s, border-color 0.12s',
+        'transition: background 0.15s, border-color 0.15s, box-shadow 0.15s',
       ].join('; ');
 
       card.addEventListener('mouseenter', () => {
-        card.style.background = 'rgba(255,255,255,0.10)';
+        card.style.background = '#1a1a2e';
+        card.style.borderColor = cat.accent;
         card.style.borderTopColor = cat.accent;
+        card.style.boxShadow = `0 0 10px ${cat.accent}44`;
       });
       card.addEventListener('mouseleave', () => {
-        card.style.background = 'rgba(255,255,255,0.04)';
-        card.style.borderTopColor = `${cat.accent}44`;
+        card.style.background = '#2a2a3a';
+        card.style.borderColor = '#3a3a4a';
+        card.style.borderTopColor = `${cat.accent}66`;
+        card.style.boxShadow = 'none';
       });
       card.addEventListener('click', () => {
         this.callbacks?.onSelect(type);
@@ -272,14 +280,14 @@ export class BuildMenuOverlay {
 
       // Building name
       const nameEl = document.createElement('div');
-      nameEl.style.cssText = 'font-size: 13px; font-weight: bold; color: #e8c96a; margin-bottom: 4px;';
+      nameEl.style.cssText = "font-family:'Segoe UI',sans-serif;font-size:14px;font-weight:600;color:#e8eef5;margin-bottom:4px;";
       nameEl.textContent = titleCase(type);
       card.appendChild(nameEl);
 
       // Cost line
       const costs = BUILDING_COSTS[type] ?? {};
       const costEl = document.createElement('div');
-      costEl.style.cssText = 'font-size: 11px; margin-bottom: 4px;';
+      costEl.style.cssText = 'font-family:monospace;font-size:12px;margin-bottom:4px;';
       costEl.innerHTML = this.formatCost(costs, available);
       card.appendChild(costEl);
 
@@ -287,7 +295,7 @@ export class BuildMenuOverlay {
       const stats = BUILDING_STATS[type];
       if (stats) {
         const statsEl = document.createElement('div');
-        statsEl.style.cssText = 'font-size: 10px; color: #8a9aaa;';
+        statsEl.style.cssText = 'font-family:monospace;font-size:11px;color:#a0b0c0;';
         statsEl.textContent = stats;
         card.appendChild(statsEl);
       }

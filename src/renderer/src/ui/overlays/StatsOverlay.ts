@@ -1,6 +1,6 @@
-import type { MetaStats } from '@shared/MetaStats';
-import { ACHIEVEMENTS, CATEGORY_ORDER, CATEGORY_LABELS } from '@shared/ProgressionDefinitions';
-import type { Achievement, AchievementCategory } from '@shared/ProgressionDefinitions';
+import type { MetaStats } from '@shared/definitions/MetaStats';
+import { ACHIEVEMENTS, CATEGORY_ORDER, CATEGORY_LABELS } from '@shared/definitions/ProgressionDefinitions';
+import type { Achievement, AchievementCategory } from '@shared/definitions/ProgressionDefinitions';
 
 const CATEGORY_COLORS: Record<AchievementCategory, string> = {
   class: '#cc9966',
@@ -10,8 +10,8 @@ const CATEGORY_COLORS: Record<AchievementCategory, string> = {
 
 /**
  * Full-screen Progression overlay matching the lobby layout:
- *   Left sidebar  — lifetime stats (fixed width)
- *   Right area    — medal grid grouped by category with hover tooltips
+ *   Left sidebar  - lifetime stats (fixed width)
+ *   Right area    - medal grid grouped by category with hover tooltips
  */
 export class StatsOverlay {
   private screen: HTMLElement;
@@ -30,7 +30,7 @@ export class StatsOverlay {
     const layout = document.createElement('div');
     layout.style.cssText = 'display:flex;flex:1;min-height:0;width:100%;';
 
-    // Left sidebar — stats
+    // Left sidebar - stats
     this.leftCol = document.createElement('div');
     this.leftCol.style.cssText = [
       'width:300px',
@@ -43,7 +43,7 @@ export class StatsOverlay {
       'overflow-y:auto',
     ].join(';');
 
-    // Right area — medals
+    // Right area - medals
     this.rightCol = document.createElement('div');
     this.rightCol.style.cssText = [
       'flex:1',
@@ -187,7 +187,7 @@ export class StatsOverlay {
       // Category label
       this.addSectionHeader(this.rightCol, CATEGORY_LABELS[cat].toUpperCase(), CATEGORY_COLORS[cat]);
 
-      // Medal row — completed first, then locked
+      // Medal row - completed first, then locked
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;flex-wrap:wrap;gap:24px;';
 

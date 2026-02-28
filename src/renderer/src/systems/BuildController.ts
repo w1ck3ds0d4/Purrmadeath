@@ -14,7 +14,7 @@ import {
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import type { InputManager } from '../input/InputManager';
 import { Action } from '../input/InputManager';
-import type { BuildModeOverlay } from '../ui/BuildModeOverlay';
+import type { BuildModeOverlay } from '../ui/overlays/BuildModeOverlay';
 import type { BuildGhostRenderer } from '../render/BuildGhostRenderer';
 import type { ChunkManager } from '../world/ChunkManager';
 

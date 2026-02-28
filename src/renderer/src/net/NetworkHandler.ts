@@ -54,8 +54,11 @@ import type {
   CivilianDiedMessage,
   CivilianSpawnedMessage,
   CivilianPanelStateMessage,
+  DayNightSyncMessage,
+  SleepUpdateMessage,
   LobbySlot,
 } from '@shared/protocol';
+import type { NightOverlay } from '../render/NightOverlay';
 import type { SaveSlotInfo } from '@shared/SaveFormat';
 import type { NetworkClient } from './NetworkClient';
 import type { Reconciler } from './Reconciler';
@@ -68,25 +71,25 @@ import type { RemotePlayerSystem } from '../systems/RemotePlayerSystem';
 import type { MovementSystem } from '../systems/MovementSystem';
 import type { GameStateManager } from '../state/GameStateManager';
 import { GameState } from '../state/GameStateManager';
-import type { MenuOverlay } from '../ui/MenuOverlay';
-import type { LobbyOverlay } from '../ui/LobbyOverlay';
-import type { PauseBanner } from '../ui/PauseBanner';
-import type { WaveHUD } from '../ui/WaveHUD';
-import type { ResourceHUD } from '../ui/ResourceHUD';
-import type { DeathOverlay } from '../ui/DeathOverlay';
-import type { GameOverOverlay } from '../ui/GameOverOverlay';
-import type { ChatOverlay } from '../ui/ChatOverlay';
-import type { DebugOverlay } from '../ui/DebugOverlay';
-import type { BuildModeOverlay } from '../ui/BuildModeOverlay';
+import type { MenuOverlay } from '../ui/overlays/MenuOverlay';
+import type { LobbyOverlay } from '../ui/overlays/LobbyOverlay';
+import type { PauseBanner } from '../ui/banners/PauseBanner';
+import type { WaveHUD } from '../ui/hud/WaveHUD';
+import type { ResourceHUD } from '../ui/hud/ResourceHUD';
+import type { DeathOverlay } from '../ui/overlays/DeathOverlay';
+import type { GameOverOverlay } from '../ui/overlays/GameOverOverlay';
+import type { ChatOverlay } from '../ui/overlays/ChatOverlay';
+import type { DebugOverlay } from '../ui/debug/DebugOverlay';
+import type { BuildModeOverlay } from '../ui/overlays/BuildModeOverlay';
 import type { BuildGhostRenderer } from '../render/BuildGhostRenderer';
-import type { WarehouseHUD } from '../ui/WarehouseHUD';
-import type { StatsOverlay } from '../ui/StatsOverlay';
-import type { CardPickerOverlay } from '../ui/CardPickerOverlay';
-import type { SkillTreeOverlay } from '../ui/SkillTreeOverlay';
+import type { WarehouseHUD } from '../ui/hud/WarehouseHUD';
+import type { StatsOverlay } from '../ui/overlays/StatsOverlay';
+import type { CardPickerOverlay } from '../ui/overlays/CardPickerOverlay';
+import type { SkillTreeOverlay } from '../ui/overlays/SkillTreeOverlay';
 import type { AbilityVFXSystem } from '../systems/AbilityVFXSystem';
-import type { PotionShopOverlay, PotionShopData } from '../ui/PotionShopOverlay';
-import type { BuildMenuOverlay } from '../ui/BuildMenuOverlay';
-import type { CivilianPanelOverlay } from '../ui/CivilianPanelOverlay';
+import type { PotionShopOverlay, PotionShopData } from '../ui/overlays/PotionShopOverlay';
+import type { BuildMenuOverlay } from '../ui/overlays/BuildMenuOverlay';
+import type { CivilianPanelOverlay } from '../ui/overlays/CivilianPanelOverlay';
 
 // ── Shared mutable state ────────────────────────────────────────────────────
 
@@ -114,7 +117,7 @@ export interface GameplayState {
   localResources: Record<string, number>;
   warehouseResources: { wood: number; stone: number; iron: number; diamond: number; gold: number; food: number };
   warehouseExists: boolean;
-  selectedClass: import('@shared/ClassDefinitions').PlayerClass;
+  selectedClass: import('@shared/definitions/ClassDefinitions').PlayerClass;
   lastServerStats?: {
     wave: number; enemyCount: number; portalCount: number; playerCount: number;
     tickProfile?: { combat: number; enemy: number; movement: number; projectile: number; buildings: number; waves: number; total: number };
@@ -169,6 +172,7 @@ export interface NetworkHandlerDeps {
   potionShopOverlay: PotionShopOverlay;
   buildMenu: BuildMenuOverlay;
   civilianPanel: CivilianPanelOverlay;
+  nightOverlay: NightOverlay;
   combinedResources: () => Record<string, number>;
   electronAPI?: { checkForUpdates?: () => void };
 }
@@ -367,6 +371,26 @@ export function registerMessageHandlers(
     d.waveHUD.onTimerSync(sync.waveNumber, sync.remaining, sync.paused);
   });
 
+  // ── Day/Night ──────────────────────────────────────────────────────────
+
+  net.on(MessageType.DAY_NIGHT_SYNC, (msg) => {
+    const dns = msg as DayNightSyncMessage;
+    d.nightOverlay.setDarkness(dns.darkness);
+    d.nightOverlay.setAmbient(dns.phase, dns.dayTimeRemaining);
+    d.waveHUD.onDayNightSync(dns.phase, dns.dayTimeRemaining, dns.sleepVotes, dns.totalPlayers);
+    s.waveActive = dns.phase === 'night';
+  });
+
+  net.on(MessageType.SLEEP_UPDATE, (msg) => {
+    const su = msg as SleepUpdateMessage;
+    d.waveHUD.onSleepUpdate(su.votes, su.needed, su.voterSlots);
+  });
+
+  // Set up sleep vote callback
+  d.waveHUD.setSleepVoteCallback((vote) => {
+    net.send({ type: MessageType.SLEEP_VOTE, vote });
+  });
+
   net.on(MessageType.ENEMY_INTRO, (msg) => {
     const intro = msg as EnemyIntroMessage;
     d.chatOverlay.addMessage('System', -1, `New threat: ${intro.displayName}!`);
@@ -411,7 +435,7 @@ export function registerMessageHandlers(
     s.skillPoints = ss.skillPoints;
     // Sync ability cooldowns from server
     if (ss.abilityCooldowns) {
-      // abilityCooldowns are keyed by abilityId — caller maps them to slots
+      // abilityCooldowns are keyed by abilityId - caller maps them to slots
     }
     s.onSkillStateUpdate?.();
     d.skillTree.updateState(s.skillAllocated, s.skillPoints);
@@ -471,7 +495,7 @@ export function registerMessageHandlers(
     s.warehouseExists = wu.exists;
     if (s.warehouseExists) {
       d.warehouseHUD.update(s.warehouseResources);
-      d.warehouseHUD.show();
+      if (!d.skillTree.isVisible) d.warehouseHUD.show();
     } else {
       d.warehouseHUD.hide();
     }

@@ -139,10 +139,10 @@ export const ENEMY_RANGER_DAMAGE = 8;
 /** Ranger projectile speed (px/s). */
 export const ENEMY_RANGER_PROJECTILE_SPEED = 300;
 
-/** Ranger base movement speed — slightly slower than melee. */
+/** Ranger base movement speed - slightly slower than melee. */
 export const ENEMY_RANGER_SPEED = 60;
 
-/** Ranger health — slightly less than melee. */
+/** Ranger health - slightly less than melee. */
 export const ENEMY_RANGER_HEALTH = 30;
 
 // ─── Wave difficulty scaling ────────────────────────────────────────────────
@@ -155,6 +155,25 @@ export const ENEMY_DAMAGE_SCALE_PER_WAVE = 0.01;
 
 /** Every N waves, portals spawn +1 enemy per spawn interval. */
 export const PORTAL_EXTRA_SPAWN_EVERY_N_WAVES = 3;
+
+// ─── Enemy AI (Pathfinding & Navigation) ────────────────────────────────────
+
+/** How often (seconds) to recompute an enemy's A* path. */
+export const ENEMY_REPLAN_INTERVAL = 0.5;
+/** If target moved more than this many pixels, force a path replan. */
+export const ENEMY_REPLAN_DIST_THRESHOLD = 64;
+/** Distance (px) at which an A* waypoint is considered reached. */
+export const ENEMY_WAYPOINT_REACH = 16;
+/** Stuck detection: minimum movement distance (px) within ENEMY_STUCK_TIME. */
+export const ENEMY_STUCK_DIST = 8;
+/** Stuck detection: time window (seconds). */
+export const ENEMY_STUCK_TIME = 1;
+/** Local obstacle avoidance: forward scan distance (px). */
+export const ENEMY_AVOIDANCE_LOOK_AHEAD = 48;
+/** Local obstacle avoidance: extra padding beyond collision radii (px). */
+export const ENEMY_AVOIDANCE_MARGIN = 8;
+/** Local obstacle avoidance: perpendicular steering blend multiplier. */
+export const ENEMY_AVOIDANCE_STRENGTH = 1.5;
 
 // ─── Melee combat ─────────────────────────────────────────────────────────────
 
@@ -519,6 +538,16 @@ export const BARRACKS_GUARD_HP      = 80;
 export const BARRACKS_GUARD_DAMAGE  = 12;
 export const BARRACKS_GUARD_SPEED   = 60;
 export const BARRACKS_GUARD_PATROL_RADIUS = 150;
+/** Guard melee attack cooldown (seconds). */
+export const GUARD_ATTACK_COOLDOWN = 1.0;
+/** Guard melee attack range (px). */
+export const GUARD_MELEE_RANGE = 40;
+/** Guard melee knockback impulse (px/s). */
+export const GUARD_MELEE_KNOCKBACK = 150;
+/** Guard collision/render radius (px). */
+export const GUARD_RADIUS = 10;
+/** Guard detection range for hostile enemies (px). */
+export const GUARD_DETECT_RANGE = 150;
 
 /**
  * Returns the resource cost to upgrade a building from its current level to the next,
@@ -607,6 +636,47 @@ export const CIVILIAN_BLEED_TIME = 30;
 export const CAT_HOUSE_CAPACITY = [2, 3, 4];
 /** Housing capacity per upgrade level for dormitory. */
 export const DORMITORY_CAPACITY = [5, 7, 10];
+
+// ─── Remote Player Interpolation ────────────────────────────────────────────
+
+/** Lerp speed toward extrapolated target. Higher = snappier, lower = smoother. */
+export const REMOTE_PLAYER_INTERP_SPEED = 25;
+/** Hard-snap if entity is farther than this from its target (px). */
+export const REMOTE_PLAYER_SNAP_DIST = 200;
+/** Max seconds of velocity extrapolation to cap prediction on lag spikes. */
+export const REMOTE_PLAYER_MAX_EXTRAP = 0.15;
+
+// ─── Day/Night Cycle (Phase 9) ─────────────────────────────────────────────
+
+/** Maximum seconds the day phase lasts before forced night. */
+export const DAY_MAX_DURATION = 300;
+
+/** Duration of dusk/dawn transitions in seconds. */
+export const DUSK_DAWN_DURATION = 5;
+
+/** Night enemy damage multiplier. */
+export const NIGHT_ENEMY_DAMAGE_BUFF = 1.15;
+
+/** Night enemy speed multiplier. */
+export const NIGHT_ENEMY_SPEED_BUFF = 1.10;
+
+/** Maximum overlay opacity at full night (0–1). */
+export const NIGHT_DARKNESS_ALPHA = 0.92;
+
+/** Player torch (light) radius in world pixels during night. */
+export const TORCH_RADIUS = 140;
+
+/** Warm yellow tint for player torch light (0xRRGGBB). */
+export const TORCH_COLOR = 0xffcc55;
+
+/** Portal light radius in world pixels during night. */
+export const PORTAL_LIGHT_RADIUS = 90;
+
+/** Minimap vision multiplier during night (0–1). */
+export const NIGHT_VISION_MULT = 0.6;
+
+/** How often (seconds) the server broadcasts DAY_NIGHT_SYNC. */
+export const DAY_NIGHT_SYNC_INTERVAL = 2;
 
 /** Pool of cat names for civilians. */
 export const CAT_NAMES: string[] = [

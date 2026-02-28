@@ -8,8 +8,9 @@ import {
   ResourceNodeComponent,
   GhostStateComponent,
 } from '@shared/components';
-import { PLAYER_COLORS, TILE_SIZE } from '@shared/constants';
+import { PLAYER_COLORS, TILE_SIZE, NIGHT_VISION_MULT, NIGHT_DARKNESS_ALPHA } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
+import type { LightSource } from '../../render/NightOverlay';
 
 export const MAP_SIZE = 220;
 export const MAP_PADDING = 12;
@@ -62,15 +63,17 @@ export type TileGetter = (tx: number, ty: number) => number;
  */
 export class Minimap {
   private container: Container;
-  /** Static background — never shifts. */
+  /** Static background - never shifts. */
   private bgGfx: Graphics;
-  /** Cached biome terrain layer — redrawn only on significant camera movement. */
+  /** Cached biome terrain layer - redrawn only on significant camera movement. */
   private terrainGfx: Graphics;
-  /** Entity dots + border + crosshair — redrawn every frame. */
+  /** Entity dots + border + crosshair - redrawn every frame. */
   private dotGfx: Graphics;
   private maskGfx: Graphics;
   private visible = true;
   private tileGetter: TileGetter | null = null;
+  /** Current darkness level (0 = day, 1 = full night). */
+  private darkness = 0;
 
   /** Last camera cell used for terrain cache invalidation. */
   private lastCellX = NaN;
@@ -81,6 +84,7 @@ export class Minimap {
 
   constructor(stage: Container) {
     this.container = new Container();
+    this.container.zIndex = 200; // above night overlay
     this.bgGfx = new Graphics();
     this.terrainGfx = new Graphics();
     this.dotGfx = new Graphics();
@@ -107,6 +111,7 @@ export class Minimap {
     centerY: number,
     screenW: number,
     _screenH: number,
+    lightSources?: LightSource[],
   ): void {
     if (!this.visible) return;
 
@@ -145,7 +150,7 @@ export class Minimap {
     this.bgGfx.rect(mapX, mapY, MAP_SIZE, MAP_SIZE);
     this.bgGfx.fill({ color: 0x0a0a14, alpha: 0.55 });
 
-    // ── Entity dots (redrawn every frame — lightweight) ──
+    // ── Entity dots (redrawn every frame - lightweight) ──
     this.dotGfx.clear();
 
     for (const id of world.query(C.Position, C.Faction)) {
@@ -192,6 +197,32 @@ export class Minimap {
     this.dotGfx.moveTo(cx, cy - 4);
     this.dotGfx.lineTo(cx, cy + 4);
     this.dotGfx.stroke({ color: 0xffffff, alpha: 0.5, width: 1 });
+
+    // Night: dark overlay on minimap with light-source cutouts
+    if (this.darkness > 0.01 && lightSources) {
+      this.dotGfx.rect(mapX, mapY, MAP_SIZE, MAP_SIZE);
+      this.dotGfx.fill({ color: 0x0a0a2a, alpha: this.darkness * NIGHT_DARKNESS_ALPHA });
+
+      // Cut a vision circle for each light source
+      for (const src of lightSources) {
+        const relX = src.x - centerX;
+        const relY = src.y - centerY;
+        if (Math.abs(relX) > MAP_RANGE || Math.abs(relY) > MAP_RANGE) continue;
+        const lx = mapX + halfMap + (relX / MAP_RANGE) * halfMap;
+        const ly = mapY + halfMap + (relY / MAP_RANGE) * halfMap;
+        // Scale light radius to minimap pixels
+        const lr = (src.radius / MAP_RANGE) * halfMap;
+        this.dotGfx.circle(lx, ly, lr);
+        this.dotGfx.cut();
+      }
+    } else if (this.darkness > 0.01) {
+      // Fallback: single center circle if no light sources provided
+      const visRadius = halfMap * NIGHT_VISION_MULT;
+      this.dotGfx.rect(mapX, mapY, MAP_SIZE, MAP_SIZE);
+      this.dotGfx.fill({ color: 0x0a0a2a, alpha: this.darkness * NIGHT_DARKNESS_ALPHA });
+      this.dotGfx.circle(cx, cy, visRadius);
+      this.dotGfx.cut();
+    }
   }
 
   private rebuildTerrain(
@@ -237,5 +268,10 @@ export class Minimap {
 
   toggle(): void {
     this.setVisible(!this.visible);
+  }
+
+  /** Update the darkness level for night vision reduction. */
+  setDarkness(value: number): void {
+    this.darkness = Math.max(0, Math.min(1, value));
   }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { LOOT_TABLES } from './LootTables';
+import { LOOT_TABLES } from '../../../shared/data/LootTables';
 
 describe('LootTables', () => {
   it('has a basic_enemy fallback table', () => {

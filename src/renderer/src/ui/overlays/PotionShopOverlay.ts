@@ -1,4 +1,4 @@
-import { POTION_POOL, POTION_TYPES, type PotionType } from '@shared/PotionDefinitions';
+import { POTION_POOL, POTION_TYPES, type PotionType } from '@shared/definitions/PotionDefinitions';
 
 const RES_COLORS: Record<string, string> = {
   wood: '#8a6a3a',
@@ -32,7 +32,7 @@ export interface PotionShopData {
 }
 
 /**
- * HTML overlay for the Potion Shop — shows 4 potions with unlock/equip/restock.
+ * HTML overlay for the Potion Shop - shows 4 potions with unlock/equip/restock.
  */
 export class PotionShopOverlay {
   private el: HTMLElement;

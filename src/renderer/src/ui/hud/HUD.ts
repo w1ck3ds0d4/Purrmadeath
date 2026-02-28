@@ -22,6 +22,7 @@ export class HUD {
 
   constructor(stage: Container) {
     this.container  = new Container();
+    this.container.zIndex = 200; // above night overlay
     this.healthGfx  = new Graphics();
     this.staminaGfx = new Graphics();
 

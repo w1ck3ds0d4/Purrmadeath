@@ -1,7 +1,7 @@
 import { SERVER_PORT, TICK_RATE } from '@shared/constants';
-import { GameLoop } from './GameLoop';
+import { GameLoop } from './core/GameLoop';
 import { ServerSocket } from './net/ServerSocket';
-import { SessionManager } from './SessionManager';
+import { SessionManager } from './core/SessionManager';
 import { DiscoveryBeacon } from './discovery';
 
 // ─── Network ──────────────────────────────────────────────────────────────────

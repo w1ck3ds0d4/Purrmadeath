@@ -1,4 +1,4 @@
-import type { EnemyVariantType } from './components';
+import type { EnemyVariantType } from '../components';
 
 /**
  * Per-variant base stats for enemies.
@@ -214,7 +214,7 @@ export function getSpawnWeightsForFaction(
         ...(hasGiant ? [{ variant: 'giant' as EnemyVariantType, weight: 10 }] : []),
         ...(hasAssassin ? [{ variant: 'assassin' as EnemyVariantType, weight: 35 }] : []),
       ];
-    default: // bandits — standard weights
+    default: // bandits - standard weights
       return getSpawnWeights(wave);
   }
 }

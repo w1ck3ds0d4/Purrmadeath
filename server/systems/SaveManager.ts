@@ -26,7 +26,7 @@ import type {
   SavedPortal, SavedResourceNode, SavedItemDrop, SavedCivilian,
 } from '@shared/SaveFormat';
 import type { WaveState } from './WaveController';
-import type { SessionPlayer } from '../GameSession';
+import type { SessionPlayer } from '../core/GameSession';
 
 // ── Loaded save state returned by loadSave ──────────────────────────────────
 
@@ -41,6 +41,8 @@ export interface LoadedSaveState {
   wavePhase: 'idle' | 'prep' | 'active' | 'cleared';
   prepTimeRemaining: number | null;
   civilians: SavedCivilian[];
+  dayTimeRemaining: number | null;
+  permanentNight: boolean;
 }
 
 // ── Dependencies ────────────────────────────────────────────────────────────
@@ -309,6 +311,8 @@ export function createSaveManager(deps: SaveManagerDeps) {
       wavePhase: save.wavePhase ?? 'prep',
       prepTimeRemaining: save.prepTimeRemaining ?? null,
       civilians: save.civilians ?? [],
+      dayTimeRemaining: save.dayTimeRemaining ?? null,
+      permanentNight: save.permanentNight ?? false,
     };
   }
 

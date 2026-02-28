@@ -133,7 +133,7 @@ export class AbilityVFXSystem {
   }
 
   private drawShieldBubble(fx: VFXEntry, t: number, colors: { fill: number; stroke: number }): void {
-    // Shield wall lasts longer — show a pulsing shield ring
+    // Shield wall lasts longer - show a pulsing shield ring
     const pulse = 0.9 + 0.1 * Math.sin(t * Math.PI * 8);
     const alpha = t < 0.1 ? t / 0.1 : (t > 0.9 ? (1 - t) / 0.1 : 0.4);
     const r = fx.radius * pulse;
@@ -214,7 +214,7 @@ export class AbilityVFXSystem {
   private drawBlizzard(fx: VFXEntry, t: number, colors: { fill: number; stroke: number }): void {
     const cx = fx.targetX ?? fx.x;
     const cy = fx.targetY ?? fx.y;
-    // Blizzard has a longer duration — steady state with fade in/out
+    // Blizzard has a longer duration - steady state with fade in/out
     const alpha = t < 0.1 ? t / 0.1 * 0.4 : (t > 0.85 ? (1 - t) / 0.15 * 0.4 : 0.4);
 
     // Zone circle

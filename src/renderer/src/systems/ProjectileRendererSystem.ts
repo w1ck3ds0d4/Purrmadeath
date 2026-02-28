@@ -146,7 +146,7 @@ export class ProjectileRendererSystem {
         this.gfx.circle(p.x, p.y - arcHeight, bodyRadius);
         this.gfx.fill({ color: 0xff6600, alpha: 0.9 });
       } else if (p.homing) {
-        // Mage: glowing orb with outer glow (white base — will be tinted by element later)
+        // Mage: glowing orb with outer glow (white base - will be tinted by element later)
         this.gfx.circle(p.x, p.y, PROJECTILE_RADIUS * 2.5);
         this.gfx.fill({ color: 0xffffff, alpha: 0.15 });
         this.gfx.circle(p.x, p.y, PROJECTILE_RADIUS * 1.5);

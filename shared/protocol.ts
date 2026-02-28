@@ -112,7 +112,7 @@ export enum MessageType {
   BUILD_CONFIRM = 'BUILD_CONFIRM',
   /** Server → all: a building entity was destroyed. */
   BUILD_DESTROYED = 'BUILD_DESTROYED',
-  /** Server → all: the campfire was destroyed — run ends. */
+  /** Server → all: the campfire was destroyed - run ends. */
   CAMPFIRE_DESTROYED = 'CAMPFIRE_DESTROYED',
   /** Client → Server: player attempts to demolish a building. */
   BUILD_DEMOLISH = 'BUILD_DEMOLISH',
@@ -152,6 +152,12 @@ export enum MessageType {
   DEBUG_GIVE_CARD = 'DEBUG_GIVE_CARD',
   /** Client → Server: give skill points to the sender (dev tool). */
   DEBUG_GIVE_SKILL_POINTS = 'DEBUG_GIVE_SKILL_POINTS',
+  /** Client → Server: skip to night (dev tool). */
+  DEBUG_SKIP_NIGHT = 'DEBUG_SKIP_NIGHT',
+  /** Client → Server: skip to day (dev tool). */
+  DEBUG_SKIP_DAY = 'DEBUG_SKIP_DAY',
+  /** Client → Server: set day timer to specific seconds (dev tool). */
+  DEBUG_SET_TIME = 'DEBUG_SET_TIME',
 
   // ── Phase 6 ────────────────────────────────────────────────────────────────
   /** Server → all: a new enemy type appeared for the first time this run. */
@@ -196,6 +202,14 @@ export enum MessageType {
   POTION_USE = 'POTION_USE',
   /** Server → Client: full potion state sync (after use, equip, restock, save load). */
   POTION_STATE = 'POTION_STATE',
+
+  // ── Phase 9: Day/Night ──────────────────────────────────────────────────
+  /** Server → all: day/night phase sync (periodic + on transitions). */
+  DAY_NIGHT_SYNC = 'DAY_NIGHT_SYNC',
+  /** Client → Server: player votes to sleep (skip day). */
+  SLEEP_VOTE = 'SLEEP_VOTE',
+  /** Server → all: sleep vote tally update. */
+  SLEEP_UPDATE = 'SLEEP_UPDATE',
 
   // ── Phase 8: Civilians ──────────────────────────────────────────────────
   /** Server → all: a civilian said something (speech bubble). */
@@ -257,7 +271,7 @@ export interface SessionCreateMessage extends BaseMessage {
   /** Optional save slot (1-3) to resume from. Omit for new game. */
   saveSlot?: number;
   /** Player's chosen class (defaults to 'warrior' if absent). */
-  playerClass?: import('./ClassDefinitions').PlayerClass;
+  playerClass?: import('./definitions/ClassDefinitions').PlayerClass;
 }
 
 export interface SessionJoinMessage extends BaseMessage {
@@ -265,7 +279,7 @@ export interface SessionJoinMessage extends BaseMessage {
   /** 4-letter invite code (case-insensitive). Empty string = join any active session (dev/LAN). */
   code: string;
   /** Player's chosen class (defaults to 'warrior' if absent). */
-  playerClass?: import('./ClassDefinitions').PlayerClass;
+  playerClass?: import('./definitions/ClassDefinitions').PlayerClass;
 }
 
 export interface SessionLeaveMessage extends BaseMessage {
@@ -300,7 +314,7 @@ export interface LobbySlot {
   slot: number;
   isHost: boolean;
   /** Player's chosen class. Defaults to 'warrior' if absent. */
-  playerClass?: import('./ClassDefinitions').PlayerClass;
+  playerClass?: import('./definitions/ClassDefinitions').PlayerClass;
   /** True if this player's class is locked from a loaded save. */
   classLocked?: boolean;
 }
@@ -612,6 +626,11 @@ export interface DebugGiveSkillPointsMessage extends BaseMessage {
   count?: number;
 }
 
+export interface DebugSetTimeMessage extends BaseMessage {
+  type: typeof MessageType.DEBUG_SET_TIME;
+  seconds: number;
+}
+
 // ─── Death & Respawn (4.11) ──────────────────────────────────────────────────
 
 /** Server → all: a player has been downed (HP reached 0). */
@@ -699,7 +718,7 @@ export interface BuildDestroyedMessage extends BaseMessage {
   entityId: number;
 }
 
-/** Server → all: the campfire was destroyed — run ends. */
+/** Server → all: the campfire was destroyed - run ends. */
 export interface CampfireDestroyedMessage extends BaseMessage {
   type: typeof MessageType.CAMPFIRE_DESTROYED;
 }
@@ -802,14 +821,14 @@ export interface MetaStatsRequestMessage extends BaseMessage {
 /** Server → Client: persistent meta stats response. */
 export interface MetaStatsResponseMessage extends BaseMessage {
   type: typeof MessageType.META_STATS_RESPONSE;
-  stats: import('./MetaStats').MetaStats;
+  stats: import('./definitions/MetaStats').MetaStats;
 }
 
 // ── Cards ───────────────────────────────────────────────────────────────────
 
 export interface CardOfferMessage extends BaseMessage {
   type: typeof MessageType.CARD_OFFER;
-  cards: import('./CardDefinitions').CardDefinition[];
+  cards: import('./definitions/CardDefinitions').CardDefinition[];
 }
 
 export interface CardPickMessage extends BaseMessage {
@@ -822,7 +841,7 @@ export interface CardAppliedMessage extends BaseMessage {
   displayName: string;
   cardId: string;
   cardName: string;
-  category: import('./CardDefinitions').CardCategory;
+  category: import('./definitions/CardDefinitions').CardCategory;
   isTrap: boolean;
   /** Synced abilities list for the receiving player (only present for ability-type cards). */
   abilities?: string[];
@@ -840,7 +859,7 @@ export interface CardSyncMessage extends BaseMessage {
 /** Client → Server: player selects a class in the lobby. */
 export interface ClassSelectMessage extends BaseMessage {
   type: typeof MessageType.CLASS_SELECT;
-  playerClass: import('./ClassDefinitions').PlayerClass;
+  playerClass: import('./definitions/ClassDefinitions').PlayerClass;
 }
 
 /** Client (host) → Server: kick a player by slot index. */
@@ -1002,6 +1021,40 @@ export interface CivilianAssignMessage extends BaseMessage {
   buildingId: number | null;
 }
 
+// ── Phase 9: Day/Night Messages ──────────────────────────────────────────────
+
+export type DayNightPhase = 'day' | 'dusk' | 'night' | 'dawn';
+
+/** Server → all: day/night phase sync. */
+export interface DayNightSyncMessage extends BaseMessage {
+  type: typeof MessageType.DAY_NIGHT_SYNC;
+  phase: DayNightPhase;
+  /** Current darkness level (0 = full day, 1 = full night). */
+  darkness: number;
+  /** Seconds remaining in the day phase (-1 if not day). */
+  dayTimeRemaining: number;
+  /** Number of players who have voted to sleep. */
+  sleepVotes: number;
+  /** Total connected players. */
+  totalPlayers: number;
+}
+
+/** Client → Server: player votes to sleep or cancels. */
+export interface SleepVoteMessage extends BaseMessage {
+  type: typeof MessageType.SLEEP_VOTE;
+  /** True = vote to sleep, false = cancel vote. */
+  vote: boolean;
+}
+
+/** Server → all: sleep vote tally update. */
+export interface SleepUpdateMessage extends BaseMessage {
+  type: typeof MessageType.SLEEP_UPDATE;
+  votes: number;
+  needed: number;
+  /** Slots of players who have voted. */
+  voterSlots: number[];
+}
+
 // ─── Union ────────────────────────────────────────────────────────────────────
 
 export type AnyMessage =
@@ -1082,4 +1135,7 @@ export type AnyMessage =
   | CivilianPanelRequestMessage
   | CivilianPanelStateMessage
   | CivilianAssignMessage
+  | DayNightSyncMessage
+  | SleepVoteMessage
+  | SleepUpdateMessage
   | BaseMessage;

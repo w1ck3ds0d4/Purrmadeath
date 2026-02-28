@@ -1,8 +1,10 @@
+import { distance } from '@shared/math/utils';
 import { Renderer } from './render/Renderer';
 import { Camera } from './render/Camera';
 import { TileRenderer } from './render/TileRenderer';
+import { NightOverlay } from './render/NightOverlay';
 import { ChunkManager } from './world/ChunkManager';
-import { DebugOverlay } from './ui/DebugOverlay';
+import { DebugOverlay } from './ui/debug/DebugOverlay';
 import { NetworkClient } from './net/NetworkClient';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
 import { BIOME_DEFS } from '@shared/world/BiomeRegistry';
@@ -24,6 +26,9 @@ import {
   DODGE_ROLL_STAMINA_COST,
   HOMING_TURN_RATE,
   HOMING_DETECT_RANGE,
+  TORCH_RADIUS,
+  TORCH_COLOR,
+  PORTAL_LIGHT_RADIUS,
 } from '@shared/constants';
 import type { LobbySlot } from '@shared/protocol';
 import type { SaveSlotInfo } from '@shared/SaveFormat';
@@ -32,6 +37,7 @@ import { createBuildController } from './systems/BuildController';
 
 import { World } from '@shared/ecs/World';
 import { C, PositionComponent, FactionComponent, BuildingComponent, DodgeRollComponent, StaminaComponent, PlayerInputComponent, FacingComponent, GhostStateComponent } from '@shared/components';
+import { FACTION_COLORS, type EnemyFaction } from '@shared/definitions/EnemyVariants';
 
 import { InputManager, Action } from './input/InputManager';
 import { GameStateManager, GameState } from './state/GameStateManager';
@@ -41,34 +47,34 @@ import { StaminaSystem } from './systems/StaminaSystem';
 import { PlayerRendererSystem } from './systems/PlayerRendererSystem';
 import { RemotePlayerSystem } from './systems/RemotePlayerSystem';
 import { Reconciler } from './net/Reconciler';
-import { HUD } from './ui/HUD';
-import { MenuOverlay } from './ui/MenuOverlay';
-import { LobbyOverlay } from './ui/LobbyOverlay';
-import { PauseBanner } from './ui/PauseBanner';
-import { WeaponHotbar } from './ui/WeaponHotbar';
+import { HUD } from './ui/hud/HUD';
+import { MenuOverlay } from './ui/overlays/MenuOverlay';
+import { LobbyOverlay } from './ui/overlays/LobbyOverlay';
+import { PauseBanner } from './ui/banners/PauseBanner';
+import { WeaponHotbar } from './ui/hud/WeaponHotbar';
 import { ProjectileRendererSystem } from './systems/ProjectileRendererSystem';
-import { WaveHUD } from './ui/WaveHUD';
-import { ResourceHUD } from './ui/ResourceHUD';
-import { DeathOverlay } from './ui/DeathOverlay';
-import { GameOverOverlay } from './ui/GameOverOverlay';
-import { UpdateBanner } from './ui/UpdateBanner';
-import { ChatOverlay } from './ui/ChatOverlay';
-import { BuildModeOverlay } from './ui/BuildModeOverlay';
-import { BuildMenuOverlay } from './ui/BuildMenuOverlay';
+import { WaveHUD } from './ui/hud/WaveHUD';
+import { ResourceHUD } from './ui/hud/ResourceHUD';
+import { DeathOverlay } from './ui/overlays/DeathOverlay';
+import { GameOverOverlay } from './ui/overlays/GameOverOverlay';
+import { UpdateBanner } from './ui/banners/UpdateBanner';
+import { ChatOverlay } from './ui/overlays/ChatOverlay';
+import { BuildModeOverlay } from './ui/overlays/BuildModeOverlay';
+import { BuildMenuOverlay } from './ui/overlays/BuildMenuOverlay';
 import { BuildGhostRenderer } from './render/BuildGhostRenderer';
-import { WarehouseHUD } from './ui/WarehouseHUD';
+import { WarehouseHUD } from './ui/hud/WarehouseHUD';
 import { DamageNumberSystem } from './systems/DamageNumberSystem';
 import { HitParticleSystem } from './systems/HitParticleSystem';
 import { AbilityVFXSystem } from './systems/AbilityVFXSystem';
-import { Minimap, MAP_SIZE, MAP_PADDING } from './ui/Minimap';
-import { StatsOverlay } from './ui/StatsOverlay';
-import { CardPickerOverlay } from './ui/CardPickerOverlay';
-import { SkillTreeOverlay } from './ui/SkillTreeOverlay';
-import { PotionShopOverlay } from './ui/PotionShopOverlay';
-import { CivilianPanelOverlay } from './ui/CivilianPanelOverlay';
-import { CLASS_STATS, DEFAULT_CLASS } from '@shared/ClassDefinitions';
-import { getActiveAbilities, type SkillActiveAbility, type AbilityParams } from '@shared/SkillDefinitions';
-import type { PlayerClass } from '@shared/ClassDefinitions';
+import { Minimap, MAP_SIZE, MAP_PADDING } from './ui/hud/Minimap';
+import { StatsOverlay } from './ui/overlays/StatsOverlay';
+import { CardPickerOverlay } from './ui/overlays/CardPickerOverlay';
+import { SkillTreeOverlay } from './ui/overlays/SkillTreeOverlay';
+import { PotionShopOverlay } from './ui/overlays/PotionShopOverlay';
+import { CivilianPanelOverlay } from './ui/overlays/CivilianPanelOverlay';
+import { CLASS_STATS, DEFAULT_CLASS } from '@shared/definitions/ClassDefinitions';
+import { getActiveAbilities, type SkillActiveAbility, type AbilityParams } from '@shared/definitions/SkillDefinitions';
+import type { PlayerClass } from '@shared/definitions/ClassDefinitions';
 import { Graphics } from 'pixi.js';
 
 // Slow world pan behind menus (world pixels per millisecond)
@@ -118,6 +124,7 @@ async function main(): Promise<void> {
   const damageNumbers = new DamageNumberSystem(tileRenderer.worldContainer);
   const hitParticles  = new HitParticleSystem(tileRenderer.worldContainer);
   const abilityVFX    = new AbilityVFXSystem(tileRenderer.worldContainer);
+  const nightOverlay  = new NightOverlay(renderer.stage);
   const hud          = new HUD(renderer.stage);
   const weaponHotbar = new WeaponHotbar(renderer.stage);
   const minimap      = new Minimap(renderer.stage);
@@ -204,7 +211,7 @@ async function main(): Promise<void> {
   let skillPoints = 0;
   /** Cached active abilities from skill allocation. */
   let activeAbilities: SkillActiveAbility[] = [];
-  /** Client-side ability cooldowns [Q, E, R] — ticked down locally, synced from server. */
+  /** Client-side ability cooldowns [Q, E, R] - ticked down locally, synced from server. */
   let abilityCooldowns = [0, 0, 0];
   let abilityCooldownMaxes = [0, 0, 0];
 
@@ -379,6 +386,15 @@ async function main(): Promise<void> {
       case '/pausewave':
         net.send({ type: MessageType.DEBUG_WAVE_PAUSE });
         break;
+      case '/skipnight':
+        net.send({ type: MessageType.DEBUG_SKIP_NIGHT });
+        break;
+      case '/skipday':
+        net.send({ type: MessageType.DEBUG_SKIP_DAY });
+        break;
+      case '/settime':
+        net.send({ type: MessageType.DEBUG_SET_TIME, seconds: parseInt(args[0]) || 60 });
+        break;
       case '/give':
         net.send({ type: MessageType.DEBUG_GIVE_RESOURCES });
         break;
@@ -431,6 +447,7 @@ async function main(): Promise<void> {
     gameStartTime = 0;
     serverElapsedTime = 0;
     waveActive = false;
+    nightOverlay.setDarkness(0);
     skillAllocated = new Set();
     skillPoints = 0;
     activeAbilities = [];
@@ -587,7 +604,7 @@ async function main(): Promise<void> {
     },
     stateMgr, menuOverlay, lobbyOverlay, pauseBanner, waveHUD, resourceHUD,
     deathOverlay, gameOverOverlay, chatOverlay, debug, buildOverlay, buildGhost,
-    warehouseHUD, cardPicker, skillTree, statsOverlay, abilityVFX, potionShopOverlay, buildMenu, civilianPanel, combinedResources, electronAPI,
+    warehouseHUD, cardPicker, skillTree, statsOverlay, abilityVFX, potionShopOverlay, buildMenu, civilianPanel, nightOverlay, combinedResources, electronAPI,
   });
 
   // ── Session action helper ─────────────────────────────────────────────────
@@ -716,11 +733,33 @@ async function main(): Promise<void> {
     if (state === GameState.Playing && localEntityId !== null) {
       // K key: toggle skill tree overlay (works even when canAct is false)
       if (input.isJustPressed(Action.SkillTree)) {
-        if (skillTree.isVisible) skillTree.hide();
-        else if (!localDowned && !localDead && !localGameOver && !cardPicker.isVisible) {
+        if (skillTree.isVisible) {
+          skillTree.hide();
+        } else if (!localDowned && !localDead && !localGameOver && !cardPicker.isVisible) {
+          // Close build menu if open
+          if (buildMenu.isVisible || buildCtrl.phase !== 'inactive') {
+            if (buildCtrl.phase === 'placing') { buildOverlay.hide(); buildGhost.hide(); }
+            buildMenu.hide();
+            buildCtrl.exitBuildMode();
+          }
+          // Hide all in-game HUD while skill tree is open
+          hud.setVisible(false);
+          waveHUD.setVisible(false);
+          minimap.setVisible(false);
+          resourceHUD.setVisible(false);
+          warehouseHUD.hide();
+          coordsEl.style.display = 'none';
           skillTree.show(selectedClass, skillAllocated, skillPoints, (nodeId) => {
             net.send({ type: MessageType.SKILL_ALLOCATE, nodeId });
-          }, pickedCardIds, completedBuffs);
+          }, pickedCardIds, completedBuffs, () => {
+            // Restore in-game HUD when skill tree closes (K, ESC, or X button)
+            hud.setVisible(true);
+            waveHUD.setVisible(true);
+            minimap.setVisible(true);
+            resourceHUD.setVisible(true);
+            warehouseHUD.show();
+            coordsEl.style.display = 'block';
+          });
         }
       }
       // C key: toggle civilian management panel
@@ -734,6 +773,11 @@ async function main(): Promise<void> {
       if (input.isJustPressed(Action.Pause)) {
         if (targetingSlot >= 0) cancelTargeting();
         else if (skillTree.isVisible) skillTree.hide();
+        else if (buildMenu.isVisible || buildCtrl.phase !== 'inactive') {
+          if (buildCtrl.phase === 'placing') { buildOverlay.hide(); buildGhost.hide(); }
+          buildMenu.hide();
+          buildCtrl.exitBuildMode();
+        }
         else if (civilianPanel.isVisible) civilianPanel.hide();
       }
 
@@ -798,27 +842,26 @@ async function main(): Promise<void> {
         localFacing = Math.atan2(worldMouseY - pos.y, worldMouseX - pos.x);
       }
 
-      // Weapon slot 1 (number key) — exit build mode when selecting weapon
+      // Weapon slot 1 (number key) - exit build mode when selecting weapon
       if (input.isJustPressed(Action.WeaponSlot1)) {
         if (buildCtrl.phase !== 'inactive') { buildMenu.hide(); buildCtrl.exitBuildMode(); }
       }
 
-      // B key: build mode state machine
-      if (canAct && input.isJustPressed(Action.BuildMode)) {
-        if (targetingSlot >= 0) cancelTargeting();
+      // B key: build mode state machine (closing works even when canAct is false)
+      if (input.isJustPressed(Action.BuildMode)) {
         const phase = buildCtrl.phase;
-        if (phase === 'inactive') {
-          buildCtrl.openPicker();
-          buildMenu.show(combinedResources());
-        } else if (phase === 'placing') {
-          buildOverlay.hide();
-          buildGhost.hide();
-          buildCtrl.reopenPicker();
-          buildMenu.show(combinedResources());
-        } else {
-          // picker open → close everything
+        if (phase !== 'inactive') {
+          // Close build menu / exit build mode
+          if (phase === 'placing') {
+            buildOverlay.hide();
+            buildGhost.hide();
+          }
           buildMenu.hide();
           buildCtrl.exitBuildMode();
+        } else if (canAct) {
+          if (targetingSlot >= 0) cancelTargeting();
+          buildCtrl.openPicker();
+          buildMenu.show(combinedResources());
         }
       }
 
@@ -845,18 +888,18 @@ async function main(): Promise<void> {
         net.send({ type: MessageType.ATTACK, attackType: classAttackType, facing: localFacing, x: pos.x, y: pos.y, t: performance.now() });
         if (classAttackType === 'melee') {
           playerRenderer.notifyAttack(localEntityId!, localFacing);
-          // Client-side melee hit prediction — flash targets in arc immediately
+          // Client-side melee hit prediction - flash targets in arc immediately
           const halfArc = MELEE_ARC / 2;
           for (const targetId of world.query(C.Position, C.Health, C.Faction)) {
             if (targetId === localEntityId) continue;
             const tf = world.getComponent<FactionComponent>(targetId, C.Faction);
-            if (tf?.type === 'player' || tf?.type === 'resource') continue;
+            if (tf?.type === 'player' || tf?.type === 'resource' || tf?.type === 'civilian') continue;
             const gs = world.getComponent<GhostStateComponent>(targetId, C.GhostState);
             if (gs?.hidden) continue;
             const tp = world.getComponent<PositionComponent>(targetId, C.Position)!;
             const tdx = tp.x - pos.x;
             const tdy = tp.y - pos.y;
-            const dist = Math.sqrt(tdx * tdx + tdy * tdy);
+            const dist = distance(tdx, tdy);
             if (dist > MELEE_RANGE || dist === 0) continue;
             let diff = Math.abs(Math.atan2(tdy, tdx) - localFacing);
             if (diff > Math.PI) diff = 2 * Math.PI - diff;
@@ -889,7 +932,7 @@ async function main(): Promise<void> {
           stamina.current -= DODGE_ROLL_STAMINA_COST;
           const dinp = world.getComponent<PlayerInputComponent>(localEntityId, C.PlayerInput);
           let dvx = dinp?.dx ?? 0, dvy = dinp?.dy ?? 0;
-          const len = Math.sqrt(dvx * dvx + dvy * dvy);
+          const len = distance(dvx, dvy);
           if (len > 0) { dvx /= len; dvy /= len; }
           else {
             const facing = world.getComponent<FacingComponent>(localEntityId, C.Facing);
@@ -992,7 +1035,7 @@ async function main(): Promise<void> {
           } else {
             // Direction: line from player to clamped destination
             const dx = worldMouseX - pos.x, dy = worldMouseY - pos.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
+            const dist = distance(dx, dy);
             const maxDist = getAbilityMaxDist(ab.params);
             const clampedDist = Math.min(dist, maxDist);
             const angle = Math.atan2(dy, dx);
@@ -1063,14 +1106,14 @@ async function main(): Promise<void> {
       hitParticles.update(dt);
       abilityVFX.update(dt);
 
-      // Client-side projectile hit prediction — swept collision along path
+      // Client-side projectile hit prediction - swept collision along path
       const projHits: number[] = [];
       for (const [projId, proj] of projectileRenderer.getProjectiles()) {
         const old = projOldPos.get(projId);
         const ox = old?.x ?? proj.x, oy = old?.y ?? proj.y;
         for (const targetId of world.query(C.Position, C.Health, C.Faction)) {
           const tf = world.getComponent<FactionComponent>(targetId, C.Faction);
-          if (!tf || tf.type === 'player' || tf.type === 'item' || tf.type === 'building') continue;
+          if (!tf || tf.type === 'player' || tf.type === 'item' || tf.type === 'building' || tf.type === 'civilian') continue;
           const pgs = world.getComponent<GhostStateComponent>(targetId, C.GhostState);
           if (pgs?.hidden) continue;
           const tp = world.getComponent<PositionComponent>(targetId, C.Position)!;
@@ -1163,8 +1206,39 @@ async function main(): Promise<void> {
         unlockedSlots, abilityNames, abilityCooldowns, abilityCooldownMaxes, targetingSlot,
         potionEquipped, potionCharges, potionMaxCharges, potionCooldown, potionCooldownMax,
       );
-      minimap.update(world, localEntityId, camera.x, camera.y, width, height);
       coordsEl.textContent = `X: ${Math.round(camera.x)}  Y: ${Math.round(camera.y)}`;
+
+      // Night overlay: gather light sources from players + buildings + portals
+      const playerLights: { x: number; y: number; radius: number; color?: number }[] = [];
+      const lightSources: { x: number; y: number; radius: number; color?: number }[] = [];
+      for (const eid of world.query(C.Position, C.Faction)) {
+        const f = world.getComponent<FactionComponent>(eid, C.Faction);
+        if (f?.type === 'player') {
+          const p = world.getComponent<PositionComponent>(eid, C.Position)!;
+          const light = { x: p.x, y: p.y, radius: TORCH_RADIUS, color: TORCH_COLOR };
+          playerLights.push(light);
+          lightSources.push(light);
+        } else if (f?.type === 'portal') {
+          const p = world.getComponent<PositionComponent>(eid, C.Position)!;
+          const portalFaction = f.enemyFaction as EnemyFaction | undefined;
+          const portalColor = portalFaction ? FACTION_COLORS[portalFaction] : undefined;
+          lightSources.push({ x: p.x, y: p.y, radius: PORTAL_LIGHT_RADIUS, color: portalColor });
+        }
+      }
+      for (const eid of world.query(C.Position, C.Building)) {
+        const b = world.getComponent<BuildingComponent>(eid, C.Building);
+        if (!b) continue;
+        if (b.buildingType === 'light_tower') {
+          const p = world.getComponent<PositionComponent>(eid, C.Position)!;
+          lightSources.push({ x: p.x, y: p.y, radius: TORCH_RADIUS * (1 + b.upgradeLevel * 0.5) });
+        } else if (b.buildingType === 'campfire') {
+          const p = world.getComponent<PositionComponent>(eid, C.Position)!;
+          lightSources.push({ x: p.x, y: p.y, radius: TORCH_RADIUS * 1.5 });
+        }
+      }
+      nightOverlay.update(camera.viewX, camera.viewY, camera.zoom, width, height, lightSources);
+      minimap.setDarkness(nightOverlay.getDarkness());
+      minimap.update(world, localEntityId, camera.x, camera.y, width, height, playerLights);
     }
 
     const tileX = Math.floor(camera.x / TILE_SIZE);

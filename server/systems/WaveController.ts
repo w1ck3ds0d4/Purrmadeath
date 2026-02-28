@@ -13,7 +13,7 @@ import {
   pickWaveFactions, pickEnemyVariantForFaction,
   FACTION_INTRO_MESSAGES,
   type EnemyFaction,
-} from '@shared/EnemyVariants';
+} from '@shared/definitions/EnemyVariants';
 import {
   TILE_SIZE,
   PORTAL_BASE_HP,
@@ -26,7 +26,6 @@ import {
   PORTAL_MAX_DIST,
   PORTAL_MIN_SPACING,
   PORTAL_RADIUS,
-  WAVE_PREP_BETWEEN,
   ENEMY_RADIUS,
   ENEMY_HP_SCALE_PER_WAVE,
   ENEMY_DAMAGE_SCALE_PER_WAVE,
@@ -35,14 +34,16 @@ import {
 import { MessageType } from '@shared/protocol';
 import type { WaveStartMessage, WaveEndMessage, WaveTimerSyncMessage } from '@shared/protocol';
 import type { ConnectedClient } from '../net/ServerSocket';
-import type { SessionPlayer, SendFn } from '../GameSession';
+import type { SessionPlayer, SendFn } from '../core/GameSession';
 import type { PortalSystem } from './PortalSystem';
+import type { DayNightController } from './DayNightController';
 
 // ── Mutable state shared with GameSession ───────────────────────────────────
 
 export interface WaveState {
   phase: 'idle' | 'prep' | 'active';
   currentWave: number;
+  /** @deprecated Prep timer is now managed by DayNightController's day phase. */
   prepTimer: number;
   paused: boolean;
   syncTimer: number;
@@ -64,6 +65,8 @@ export interface WaveControllerDeps {
   cards: {
     debuffs: { enemyDamageMult: number; enemySpeedMult: number; enemyKnockbackMult: number; guaranteedTitans: number };
   };
+  /** Night enemy buff multipliers from DayNightController. */
+  getNightBuffs: () => { damageMult: number; speedMult: number };
   maxEnemies: number;
   waveSyncInterval: number;
   isWalkable: (wx: number, wy: number) => boolean;
@@ -93,7 +96,7 @@ export function createWaveController(deps: WaveControllerDeps) {
     world.addComponent(id, C.Position, { x, y });
     world.addComponent(id, C.Velocity, { vx: 0, vy: 0 });
     world.addComponent(id, C.Health, { current: hp, max: hp });
-    world.addComponent(id, C.Faction, { type: 'portal' });
+    world.addComponent(id, C.Faction, { type: 'portal', enemyFaction: undefined });
     world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
     world.addComponent(id, C.Portal, { waveNumber: wave, spawnTimer: interval, spawnInterval: interval });
     return id;
@@ -146,6 +149,9 @@ export function createWaveController(deps: WaveControllerDeps) {
         const faction = factions[i % factions.length];
         const portalId = spawnPortal(bestX, bestY, wave);
         portalFactions.set(portalId, faction);
+        // Tag portal entity with its faction so the client can color it
+        const pFaction = world.getComponent<FactionComponent>(portalId, C.Faction);
+        if (pFaction) pFaction.enemyFaction = faction;
         placed.push({ x: bestX, y: bestY });
       }
     }
@@ -162,14 +168,15 @@ export function createWaveController(deps: WaveControllerDeps) {
     const wave = Math.max(1, s.currentWave);
     const hpMult = Math.pow(1 + ENEMY_HP_SCALE_PER_WAVE, wave - 1);
     const dmgMult = Math.pow(1 + ENEMY_DAMAGE_SCALE_PER_WAVE, wave - 1);
+    const nightBuffs = deps.getNightBuffs();
     const scaledHp = Math.round(base.hp * hpMult);
-    const scaledDmg = Math.round(base.damage * dmgMult * cards.debuffs.enemyDamageMult);
+    const scaledDmg = Math.round(base.damage * dmgMult * cards.debuffs.enemyDamageMult * nightBuffs.damageMult);
 
     const id = world.createEntity();
     world.addComponent(id, C.Position, { x, y });
     world.addComponent(id, C.Velocity, { vx: 0, vy: 0 });
     world.addComponent(id, C.Health, { current: scaledHp, max: scaledHp });
-    world.addComponent(id, C.Speed, { base: base.speed, multiplier: cards.debuffs.enemySpeedMult });
+    world.addComponent(id, C.Speed, { base: base.speed, multiplier: cards.debuffs.enemySpeedMult * nightBuffs.speedMult });
     world.addComponent(id, C.PlayerInput, { dx: 0, dy: 0, sprint: false });
     world.addComponent(id, C.Faction, { type: 'enemy', enemyFaction: faction });
     world.addComponent(id, C.Facing, { angle: 0 });
@@ -284,27 +291,27 @@ export function createWaveController(deps: WaveControllerDeps) {
 
   // ── Tick ──────────────────────────────────────────────────────────────────
 
+  /**
+   * Called by DayNightController when night begins → spawn portals and activate wave.
+   */
+  function activateWave(send: SendFn): void {
+    if (s.phase !== 'prep') return;
+    spawnPortals(s.currentWave);
+    spawnTitans(s.currentWave);
+    s.phase = 'active';
+    const waveActive: WaveStartMessage = {
+      type: MessageType.WAVE_START, waveNumber: s.currentWave, prepDuration: 0,
+    };
+    for (const p of players.values()) send(p.client, waveActive);
+    console.log(`[Wave] Wave ${s.currentWave} active!`);
+  }
+
   function tick(dt: number, send: SendFn): void {
     if (s.paused) return;
 
-    if (s.phase === 'prep') {
-      s.prepTimer -= dt;
-      s.syncTimer += dt;
-      if (s.syncTimer >= deps.waveSyncInterval) {
-        s.syncTimer = 0;
-        broadcastWaveTimerSync(send);
-      }
-
-      if (s.prepTimer <= 0) {
-        spawnPortals(s.currentWave);
-        spawnTitans(s.currentWave);
-        s.phase = 'active';
-        const waveActive: WaveStartMessage = {
-          type: MessageType.WAVE_START, waveNumber: s.currentWave, prepDuration: 0,
-        };
-        for (const p of players.values()) send(p.client, waveActive);
-      }
-    } else if (s.phase === 'active') {
+    // Prep phase is now managed by DayNightController (day timer + sleep voting).
+    // WaveController only ticks the active phase.
+    if (s.phase === 'active') {
       const extraSpawns = Math.floor(s.currentWave / PORTAL_EXTRA_SPAWN_EVERY_N_WAVES);
       const spawnRequests = portal.update(world, dt, extraSpawns);
       for (const req of spawnRequests) {
@@ -329,13 +336,13 @@ export function createWaveController(deps: WaveControllerDeps) {
         s.currentWave++;
         s.wipeCount = 0;
         s.phase = 'prep';
-        s.prepTimer = WAVE_PREP_BETWEEN;
 
+        // Notify WaveHUD of next wave prep (day phase handles the timer)
         const waveStart: WaveStartMessage = {
-          type: MessageType.WAVE_START, waveNumber: s.currentWave, prepDuration: WAVE_PREP_BETWEEN,
+          type: MessageType.WAVE_START, waveNumber: s.currentWave, prepDuration: -1,
         };
         for (const p of players.values()) send(p.client, waveStart);
-        console.log(`[Wave] Wave ${s.currentWave - 1} cleared! Next wave in ${WAVE_PREP_BETWEEN}s`);
+        console.log(`[Wave] Wave ${s.currentWave - 1} cleared! Day phase begins.`);
 
         onWaveCleared(s.currentWave - 1, send);
       }
@@ -346,10 +353,9 @@ export function createWaveController(deps: WaveControllerDeps) {
 
   function debugSkip(send: SendFn): void {
     if (s.phase !== 'prep') return;
-    s.prepTimer = 0;
-    s.paused = false;
-    broadcastWaveTimerSync(send);
-    console.log(`[Debug] Skipping wave ${s.currentWave} prep timer`);
+    // Directly activate the wave (bypasses DayNight controller)
+    activateWave(send);
+    console.log(`[Debug] Skipping to wave ${s.currentWave}`);
   }
 
   function debugPause(send: SendFn): void {
@@ -362,6 +368,7 @@ export function createWaveController(deps: WaveControllerDeps) {
 
   return {
     tick,
+    activateWave,
     spawnEnemy,
     spawnPortal,
     broadcastWaveTimerSync,

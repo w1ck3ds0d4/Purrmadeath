@@ -16,7 +16,7 @@ import {
   DodgeRollComponent,
 } from '@shared/components';
 import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, ENEMY_MELEE_RANGE, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, buildingHalfExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RANGE } from '@shared/constants';
-import { FACTION_COLORS, type EnemyFaction } from '@shared/EnemyVariants';
+import { FACTION_COLORS, type EnemyFaction } from '@shared/definitions/EnemyVariants';
 
 /** Turret type → base range in pixels. */
 const TURRET_RANGES: Record<string, number> = {
@@ -106,6 +106,8 @@ function lerpColor(a: number, b: number, t: number): number {
   const bl = Math.round(ab + (bb - ab) * t);
   return (r << 16) | (g << 8) | bl;
 }
+function darkenColor(c: number, amount: number): number { return lerpColor(c, 0x000000, amount); }
+function lightenColor(c: number, amount: number): number { return lerpColor(c, 0xffffff, amount); }
 
 /**
  * Draws all visible entities (players and enemies) as colored circles
@@ -125,7 +127,7 @@ export class PlayerRendererSystem {
   private reviveProgress = new Map<EntityId, number>(); // entityId → 0..1
   /** Currently selected building entity ID (for highlight rendering). */
   selectedBuildingId: number | null = null;
-  /** Dedicated layer for all health bars — renders above entities/buildings. */
+  /** Dedicated layer for all health bars - renders above entities/buildings. */
   private healthBarGfx: Graphics;
   /** Production building resource tags (Text objects managed per-entity). */
   private productionTags = new Map<EntityId, { bg: Graphics; text: Text }>();
@@ -351,7 +353,7 @@ export class PlayerRendererSystem {
       this.dirty.delete(id);
 
       if (!needsRedraw) {
-        // Just update position — skip expensive geometry rebuild
+        // Just update position - skip expensive geometry rebuild
         if (id === localEntityId) {
           gfx.position.set(pos.x + smoothX, pos.y + smoothY);
         } else {
@@ -363,15 +365,25 @@ export class PlayerRendererSystem {
       gfx.clear();
 
       if (isPortal) {
-        // ── Portal rendering ──────────────────────────────────────────────────
+        // ── Portal rendering (faction-colored) ──────────────────────────────
         const pr = PORTAL_RADIUS;
+        const portalFactionComp = world.getComponent<FactionComponent>(id, C.Faction);
+        const portalFaction = (portalFactionComp?.enemyFaction as EnemyFaction | undefined);
+        const factionColor = portalFaction ? (FACTION_COLORS[portalFaction] ?? PORTAL_OUTER_COLOR) : PORTAL_OUTER_COLOR;
+        const coreColor = darkenColor(factionColor, 0.45);
+        const rimColor = lightenColor(factionColor, 0.3);
+
         // Pulsing glow ring
         const pulse = 0.6 + 0.4 * Math.sin(performance.now() / 400);
-        const glowColor = flashT > 0 ? lerpColor(PORTAL_OUTER_COLOR, 0xffffff, flashT * 0.6) : PORTAL_OUTER_COLOR;
+        const glowColor = flashT > 0 ? lerpColor(factionColor, 0xffffff, flashT * 0.6) : factionColor;
+
+        // Large ambient glow (visible in dark)
+        gfx.circle(0, 0, pr + 20);
+        gfx.fill({ color: factionColor, alpha: 0.08 * pulse });
 
         // Outer glow ring
         gfx.circle(0, 0, pr + 6);
-        gfx.fill({ color: glowColor, alpha: 0.15 * pulse });
+        gfx.fill({ color: glowColor, alpha: 0.18 * pulse });
 
         // Main body
         gfx.circle(0, 0, pr);
@@ -379,11 +391,11 @@ export class PlayerRendererSystem {
 
         // Darker core
         gfx.circle(0, 0, pr * 0.5);
-        gfx.fill({ color: PORTAL_CORE_COLOR, alpha: 0.9 });
+        gfx.fill({ color: coreColor, alpha: 0.9 });
 
         // Outline
         gfx.circle(0, 0, pr);
-        gfx.stroke({ color: 0xcc66ff, alpha: 0.6 * pulse, width: 2 });
+        gfx.stroke({ color: rimColor, alpha: 0.6 * pulse, width: 2 });
 
       } else if (isResource) {
         // ── Resource node rendering ──────────────────────────────────────────
@@ -429,7 +441,7 @@ export class PlayerRendererSystem {
         const borderW = bType === 'wall' ? 2.5 : 4;
 
         if (bType === 'wall') {
-          // Walls: visual upgrade tiers — stone (grey) → iron (white) → reinforced (white + lines)
+          // Walls: visual upgrade tiers - stone (grey) → iron (white) → reinforced (white + lines)
           const wLvl = bldg?.upgradeLevel ?? 1;
           const wallBody = wLvl >= 2 ? 0xcccccc : 0x8a8a8a;
           const wallFill = bFlashT > 0 ? lerpColor(wallBody, 0xffffff, bFlashT * 0.6) : wallBody;

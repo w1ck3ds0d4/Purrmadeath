@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { CombatSystem } from './CombatSystem';
+import { CombatSystem } from '../../../server/systems/CombatSystem';
 import { C } from '@shared/components';
 import { createTestWorld, spawnTestEntity } from './__testutil';
 
@@ -90,7 +90,7 @@ describe('CombatSystem', () => {
     // First attack should hit
     const r1 = combat.processMeleeAttack(world, src, 0);
     expect(r1.hits.length).toBeGreaterThan(0);
-    // Second attack immediately — should be blocked by cooldown
+    // Second attack immediately - should be blocked by cooldown
     const r2 = combat.processMeleeAttack(world, src, 0);
     expect(r2.hits).toHaveLength(0);
   });

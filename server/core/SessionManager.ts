@@ -1,9 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import type { ConnectedClient } from './net/ServerSocket';
-import type { ServerSocket } from './net/ServerSocket';
+import type { ConnectedClient } from '../net/ServerSocket';
+import type { ServerSocket } from '../net/ServerSocket';
 import { GameSession } from './GameSession';
-import type { DiscoveryBeacon } from './discovery';
+import type { DiscoveryBeacon } from '../discovery';
 import { MessageType } from '@shared/protocol';
 import type { HandshakeMessage } from '@shared/protocol';
 import type {
@@ -33,13 +33,13 @@ import type {
   PotionEquipMessage,
   PotionRestockMessage,
 } from '@shared/protocol';
-import { PLAYER_CLASSES, BASE_CLASSES } from '@shared/ClassDefinitions';
-import type { PlayerClass } from '@shared/ClassDefinitions';
+import { PLAYER_CLASSES, BASE_CLASSES } from '@shared/definitions/ClassDefinitions';
+import type { PlayerClass } from '@shared/definitions/ClassDefinitions';
 import { GAME_VERSION, RECONNECT_GRACE_MS } from '@shared/constants';
-import type { MetaStats } from '@shared/MetaStats';
-import { emptyMetaStats, mergeRunStats } from '@shared/MetaStats';
-import { computeUnlockedClasses } from '@shared/MilestoneDefinitions';
-import { computeCompletedBuffs } from '@shared/ProgressionDefinitions';
+import type { MetaStats } from '@shared/definitions/MetaStats';
+import { emptyMetaStats, mergeRunStats } from '@shared/definitions/MetaStats';
+import { computeUnlockedClasses } from '@shared/definitions/MilestoneDefinitions';
+import { computeCompletedBuffs } from '@shared/definitions/ProgressionDefinitions';
 import type { MetaStatsRequestMessage, CardPickMessage } from '@shared/protocol';
 
 /** Minimum interval (ms) between SESSION_CREATE or SESSION_JOIN per client. */
@@ -116,8 +116,12 @@ export class SessionManager {
     socket.on(MessageType.DEBUG_GIVE_RESOURCES, (c) => this.onDebugAction(c, () => this.session?.debugGiveResources(c.id, (cl, msg) => this.socket.send(cl, msg))));
     socket.on(MessageType.DEBUG_GIVE_CARD, (c, m) => this.onDebugAction(c, () => this.session?.debugGiveCard(c.id, (m as import('@shared/protocol').DebugGiveCardMessage).cardId, (cl, msg) => this.socket.send(cl, msg))));
     socket.on(MessageType.DEBUG_GIVE_SKILL_POINTS, (c, m) => this.onDebugAction(c, () => this.session?.debugGiveSkillPoints(c.id, (m as import('@shared/protocol').DebugGiveSkillPointsMessage).count ?? 1, (cl, msg) => this.socket.send(cl, msg))));
+    socket.on(MessageType.DEBUG_SKIP_NIGHT, (c) => this.onDebugAction(c, () => this.session?.debugSkipNight((cl, msg) => this.socket.send(cl, msg))));
+    socket.on(MessageType.DEBUG_SKIP_DAY, (c) => this.onDebugAction(c, () => this.session?.debugSkipDay((cl, msg) => this.socket.send(cl, msg))));
+    socket.on(MessageType.DEBUG_SET_TIME, (c, m) => this.onDebugAction(c, () => this.session?.debugSetTime((m as import('@shared/protocol').DebugSetTimeMessage).seconds, (cl, msg) => this.socket.send(cl, msg))));
     socket.on(MessageType.CHAT,                 (c, m) => this.onChat(c, m as ChatSendMessage));
     socket.on(MessageType.PAUSE_VOTE,            (c) => this.onPauseVote(c));
+    socket.on(MessageType.SLEEP_VOTE,            (c, m) => this.onSleepVote(c, m as import('@shared/protocol').SleepVoteMessage));
     socket.on(MessageType.SAVE_SLOTS_REQUEST,    (c) => this.onSaveSlotsRequest(c));
     socket.on(MessageType.SAVE_DELETE,             (c, m) => this.onSaveDelete(c, m as import('@shared/protocol').SaveDeleteMessage));
     socket.on(MessageType.META_STATS_REQUEST,      (c) => this.onMetaStatsRequest(c));
@@ -329,7 +333,7 @@ export class SessionManager {
       // Load save data if resuming (validation may reject corrupt saves)
       if (loadedSave) {
         this.session.loadSave(loadedSave, (c, m) => this.socket.send(c, m));
-        // loadSave returns false for invalid data — session starts fresh in that case
+        // loadSave returns false for invalid data - session starts fresh in that case
         console.log(`[Save] Loaded slot ${saveSlot} for host ${hostPlayerId} (wave ${loadedSave.currentWave})`);
       }
     }
@@ -608,6 +612,10 @@ export class SessionManager {
 
   private onPauseVote(client: ConnectedClient): void {
     this.session?.handlePauseVote(client.id, (c, m) => this.socket.send(c, m));
+  }
+
+  private onSleepVote(client: ConnectedClient, msg: import('@shared/protocol').SleepVoteMessage): void {
+    this.session?.handleSleepVote(client.id, msg.vote, (c, m) => this.socket.send(c, m));
   }
 
   private onChat(client: ConnectedClient, msg: ChatSendMessage): void {

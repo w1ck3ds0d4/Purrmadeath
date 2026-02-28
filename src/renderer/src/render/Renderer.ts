@@ -24,6 +24,7 @@ export class Renderer {
       autoDensity: true,            // correct hi-DPI scaling
     });
 
+    this.app.stage.sortableChildren = true;
     container.appendChild(this.app.canvas);
   }
 

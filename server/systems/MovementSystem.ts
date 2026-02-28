@@ -204,7 +204,7 @@ export class MovementSystem {
       const faction = world.getComponent<FactionComponent>(id, C.Faction)!;
       // Buildings are handled as solid blocks in overlapsAny - skip here
       if (faction.type === 'building') continue;
-      // Ghosts phase through everything — skip separation
+      // Ghosts phase through everything - skip separation
       const evSep = world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant);
       if (evSep?.variant === 'ghost') continue;
       // Use per-variant radius for enemies/guards (e.g. giants have radius=20)

@@ -28,6 +28,10 @@ export interface SaveData {
     lootMultiplier?: number; goldDropMult?: number; guaranteedTitans?: number;
     dodgeCooldownMult?: number;
   };
+  /** Day/night: remaining day timer (seconds). */
+  dayTimeRemaining?: number;
+  /** Day/night: permanent night flag (W50 milestone). */
+  permanentNight?: boolean;
   hostPlayerId: string;
   timestamp: number;
 }

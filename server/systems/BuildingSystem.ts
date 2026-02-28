@@ -1,4 +1,5 @@
 import { World } from '@shared/ecs/World';
+import { distance } from '@shared/math/utils';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
 import {
   C,
@@ -39,6 +40,7 @@ import {
   UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RATE, UPGRADE_HEAL_RANGE,
   BARRACKS_MAX_GUARDS, BARRACKS_SPAWN_INTERVAL,
   BARRACKS_GUARD_HP, BARRACKS_GUARD_DAMAGE, BARRACKS_GUARD_SPEED, BARRACKS_GUARD_PATROL_RADIUS,
+  GUARD_ATTACK_COOLDOWN, GUARD_MELEE_RANGE, GUARD_MELEE_KNOCKBACK, GUARD_RADIUS,
   CAT_HOUSE_MAX_HEALTH, DORMITORY_MAX_HEALTH, CAT_HOUSE_CAPACITY, DORMITORY_CAPACITY,
   getUpgradeCost, getRepairCost,
 } from '@shared/constants';
@@ -51,7 +53,7 @@ import type {
 } from '@shared/protocol';
 import type { ConnectedClient } from '../net/ServerSocket';
 import type { CombatSystem } from './CombatSystem';
-import type { SessionPlayer, SendFn } from '../GameSession';
+import type { SessionPlayer, SendFn } from '../core/GameSession';
 
 // ── HP map for new buildings ────────────────────────────────────────────────
 
@@ -88,6 +90,7 @@ export interface BuildingSystemDeps {
   isActive: () => boolean; // phase === 'playing' && !paused && !gameOver
   isWalkable: (wx: number, wy: number) => boolean;
   spawnBuilding: (x: number, y: number, type: string, maxHp: number, permanent: boolean) => number;
+  spawnItemDrop: (x: number, y: number, itemType: string, quantity: number, autoPickup: boolean) => number;
   destroyDeadEntities: (deaths: number[], attackerMap: Map<number, number> | undefined, send: SendFn) => void;
 }
 
@@ -101,7 +104,7 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     isActive, isWalkable, spawnBuilding, destroyDeadEntities,
   } = deps;
 
-  // Warehouse pool is a mutable ref — read via closure each time
+  // Warehouse pool is a mutable ref - read via closure each time
   function wPool(): Record<string, number> { return deps.warehousePool; }
 
   // ── Cost helpers ──────────────────────────────────────────────────────────
@@ -368,6 +371,24 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     }
 
     if (isDemolingWarehouse) {
+      // Drop 50% of warehouse contents on the ground before removing
+      const wPos = world.getComponent<PositionComponent>(targetId, C.Position);
+      if (wPos) {
+        const wp = wPool();
+        const MAX_PER_DROP = 50;
+        for (const [res, amount] of Object.entries(wp)) {
+          const dropAmount = Math.floor(amount * 0.5);
+          if (dropAmount <= 0) continue;
+          wp[res] -= dropAmount;
+          let remaining = dropAmount;
+          while (remaining > 0) {
+            const qty = Math.min(remaining, MAX_PER_DROP);
+            deps.spawnItemDrop(wPos.x, wPos.y, res, qty, true);
+            remaining -= qty;
+          }
+        }
+      }
+
       warehouseIds.delete(targetId);
       if (warehouseIds.size === 0) {
         const wp = wPool();
@@ -619,7 +640,7 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
 
       const epos = world.getComponent<PositionComponent>(bestId, C.Position)!;
       const dx = epos.x - tpos.x, dy = epos.y - tpos.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
+      const dist = distance(dx, dy);
       if (dist < 0.01) continue;
       const nx = dx / dist, ny = dy / dist;
 
@@ -739,11 +760,11 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     world.addComponent(id, C.PlayerInput, { dx: 0, dy: 0, sprint: false });
     world.addComponent(id, C.Faction, { type: 'guard' });
     world.addComponent(id, C.Facing, { angle: 0 });
-    world.addComponent(id, C.AttackCooldown, { remaining: 0, max: 1.0 });
+    world.addComponent(id, C.AttackCooldown, { remaining: 0, max: GUARD_ATTACK_COOLDOWN });
     world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
     world.addComponent(id, C.Guard, { barracksId, patrolRadius: BARRACKS_GUARD_PATROL_RADIUS } as GuardComponent);
     world.addComponent(id, C.EnemyStats, {
-      damage: BARRACKS_GUARD_DAMAGE, range: 40, knockback: 150, radius: 10,
+      damage: BARRACKS_GUARD_DAMAGE, range: GUARD_MELEE_RANGE, knockback: GUARD_MELEE_KNOCKBACK, radius: GUARD_RADIUS,
       rangedRange: 0, projectileSpeed: 0, rangedDamage: 0, rangedCooldown: 0,
     });
     return id;
