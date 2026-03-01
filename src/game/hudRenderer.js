@@ -1,12 +1,12 @@
 // HUD rendering helpers keep bootstrap focused on simulation/orchestration.
 export function updatePauseMenuTextForSession(pauseText, multiplayerConnected, restartVotes, restartEligiblePlayers) {
     if (!multiplayerConnected) {
-        pauseText.text = 'Paused\nPress ESC to resume\nPress R to restart run';
+        pauseText.text = 'Paused\nPress ESC to resume\nPress R to restart run\nPress T to Save & Exit | Q to Exit';
         return;
     }
     const votes = Math.max(0, Number(restartVotes) || 0);
     const eligible = Math.max(0, Number(restartEligiblePlayers) || 0);
-    pauseText.text = `Paused\nPress ESC to vote pause/resume\nPress R to vote restart run\nRestart vote: ${votes}/${eligible}`;
+    pauseText.text = `Paused\nPress ESC to vote pause/resume\nPress R to vote restart run\nRestart vote: ${votes}/${eligible}\nPress T to Leave Session | Q to Exit`;
 }
 
 export function formatBuildCost(cost) {

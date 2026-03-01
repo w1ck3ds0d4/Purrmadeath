@@ -56,6 +56,9 @@ import { createCrashLogger } from './crashLogger.js';
 import { createPersistenceController } from './persistenceController.js';
 import { createProjectileRuntime } from './projectileRuntime.js';
 import { createSimulationLoopController } from './simulationLoopController.js';
+import { createPlayerActionOrchestrator } from './playerActionOrchestrator.js';
+import { createSessionStateController } from './sessionStateController.js';
+import { createMultiplayerSnapshotOrchestrator } from './multiplayerSnapshotOrchestrator.js';
 import {
     updateBuildMenuPanel,
     updateClockAndSessionCard,
@@ -133,7 +136,7 @@ export async function startGame(startOptions = {}) {
     let enemySpawnTimer = 0;
     let enemyIdCounter = 0;
     let uiRefreshTimer = 0;
-    let saveTimerFrames = 0;
+    let autosaveTimerMs = 300000;
     let gameTimeSeconds = 0;
     const sharedSessionState = {
         paused: false,
@@ -141,13 +144,23 @@ export async function startGame(startOptions = {}) {
         restartVotes: 0,
         restartEligiblePlayers: 0
     };
-    let lastAppliedRestartVersion = 0;
-    let sessionStateInitialized = false;
-    let multiplayerCheckpointLoadedForSession = null;
-    let multiplayerCheckpointTimerMs = 10000;
+    const snapshotTracking = {
+        lastAppliedMultiplayerSnapshotTick: -1,
+        lastAppliedNonPlayerSnapshotSeq: -1,
+        lastAppliedBuildingsRevision: -1,
+        lastAppliedRestartVersion: 0,
+        sessionStateInitialized: false,
+        multiplayerDefeatHandled: false,
+        multiplayerCheckpointLoadedForSession: null,
+        latestServerAiDirectives: null,
+        pendingSessionTimeSeconds: undefined
+    };
     let nextClientActionId = 1;
     const pendingActionAcks = new Map();
     const debugLogs = [];
+    const sessionStartedAt = Date.now();
+    const perfSnapshots = [];
+    let lastPerfSnapshotAt = 0;
     // Browser-side crash records are persisted in localStorage for post-mortem checks.
     const crashLogs = [];
     let crashLogger = null;
@@ -203,16 +216,12 @@ export async function startGame(startOptions = {}) {
     let projectiles = [];
     let towerProjectiles = [];
     let enemyProjectiles = [];
-    let lastAppliedMultiplayerSnapshotTick = -1;
-    let lastAppliedNonPlayerSnapshotSeq = -1;
-    let lastAppliedBuildingsRevision = -1;
     let outboundEntitySnapshotSeq = 0;
     let outboundEntitySnapshotTimerMs = 0;
     let outboundBuildingSyncTimerMs = 0;
     let outboundBuildingRevision = 0;
     let lastOutboundBuildingStateHash = '';
     let lastKnownRemotePlayerCount = 0;
-    let latestServerAiDirectives = null;
     // Multiplayer sync tuning knobs (host authority side).
     const ENTITY_SNAPSHOT_INTERVAL_MS = 50;
     const BUILDING_SYNC_INTERVAL_MS = 250;
@@ -224,6 +233,9 @@ export async function startGame(startOptions = {}) {
     const remotePlayerSystem = createRemotePlayerSystem({ layer: remotePlayerLayer });
     const urlParams = new URLSearchParams(window.location.search);
     const optionsMode = typeof startOptions.mode === 'string' ? startOptions.mode : '';
+    const selectedSingleplayerSlot = Math.max(1, Math.min(3, Number(startOptions.singleplayer?.saveSlot) || 1));
+    const singleplayerStartFresh = Boolean(startOptions.singleplayer?.startFresh);
+    const selectedMultiplayerSaveSlot = Math.max(1, Math.min(3, Number(startOptions.multiplayer?.saveSlot) || 1));
     const multiplayerQueryEnabled = optionsMode === 'multiplayer'
         || urlParams.get('multiplayer') === '1'
         || urlParams.get('mp') === '1';
@@ -375,6 +387,67 @@ export async function startGame(startOptions = {}) {
     pauseText.visible = false;
     pauseText.position.set(window.innerWidth / 2, window.innerHeight / 2);
     app.stage.addChild(pauseText);
+    const pauseSaveExitText = new PIXI.Text({
+        text: 'Save & Exit',
+        style: {
+            fill: '#a9ffd0',
+            fontFamily: 'monospace',
+            fontSize: 18
+        }
+    });
+    pauseSaveExitText.anchor.set(0.5);
+    pauseSaveExitText.visible = false;
+    pauseSaveExitText.eventMode = 'static';
+    pauseSaveExitText.cursor = 'pointer';
+    app.stage.addChild(pauseSaveExitText);
+    const pauseExitText = new PIXI.Text({
+        text: 'Exit',
+        style: {
+            fill: '#ffd1a9',
+            fontFamily: 'monospace',
+            fontSize: 18
+        }
+    });
+    pauseExitText.anchor.set(0.5);
+    pauseExitText.visible = false;
+    pauseExitText.eventMode = 'static';
+    pauseExitText.cursor = 'pointer';
+    app.stage.addChild(pauseExitText);
+    const shouldRestoreMultiplayerCheckpoint = Boolean(startOptions.multiplayer?.resumeCheckpoint);
+    const multiplayerCheckpointKey = `host_slot_${selectedMultiplayerSaveSlot}`;
+
+    function exitToMainMenu(saveBeforeExit = false) {
+        const multiplayerStats = multiplayerClient.getStats();
+        if (saveBeforeExit) {
+            if (multiplayerStats.connected && multiplayerStats.isAuthority) {
+                persistMultiplayerCheckpoint(multiplayerCheckpointKey);
+            } else if (!multiplayerStats.connected) {
+                persistSaveState();
+            }
+        }
+        multiplayerClient.disconnect();
+        const cleanUrl = `${window.location.origin}${window.location.pathname}`;
+        window.location.assign(cleanUrl);
+    }
+
+    function setPauseOverlayVisible(visible) {
+        pauseText.visible = visible;
+        pauseSaveExitText.visible = visible;
+        pauseExitText.visible = visible;
+    }
+
+    pauseSaveExitText.on('pointertap', () => {
+        if (!isPaused) {
+            return;
+        }
+        exitToMainMenu(true);
+    });
+    pauseExitText.on('pointertap', () => {
+        if (!isPaused) {
+            return;
+        }
+        exitToMainMenu(false);
+    });
 
     function updatePauseMenuText() {
         const multiplayerStats = multiplayerClient.getStats();
@@ -384,6 +457,9 @@ export async function startGame(startOptions = {}) {
             sharedSessionState.restartVotes,
             sharedSessionState.restartEligiblePlayers
         );
+        pauseSaveExitText.text = multiplayerStats.connected ? 'Leave Session' : 'Save & Exit';
+        pauseSaveExitText.position.set(window.innerWidth / 2, window.innerHeight / 2 + 88);
+        pauseExitText.position.set(window.innerWidth / 2, window.innerHeight / 2 + 118);
     }
 
     const debugText = new PIXI.Text({
@@ -535,17 +611,25 @@ export async function startGame(startOptions = {}) {
         }
         if (resolved.action === 'force_reset') {
             const multiplayerStats = multiplayerClient.getStats();
-            if (multiplayerStats.connected && !multiplayerStats.isAuthority) {
-                multiplayerClient.sendPlayerAction({ type: 'force_reset_session' });
-                logDebug('Force reset requested from host authority');
-                return true;
+            if (multiplayerStats.connected) {
+                if (multiplayerStats.isAuthority) {
+                    multiplayerClient.sendPlayerAction({ type: 'force_reset_session' });
+                    logDebug('Force reset sent to server');
+                } else {
+                    logDebug('Force reset is only available to the host');
+                }
+            } else {
+                executeForceReset();
             }
-            executeForceReset();
             return true;
         }
         if (resolved.action === 'export_logs') {
-            downloadDebugSessionLogs();
-            logDebug('Info/warn logs exported');
+            downloadDebugSessionLogs(debugLogs, {
+                mode: optionsMode,
+                startedAt: sessionStartedAt,
+                perfSnapshots,
+            });
+            logDebug('Session report exported');
             return true;
         }
         if (resolved.help) {
@@ -624,9 +708,11 @@ export async function startGame(startOptions = {}) {
         outboundBuildingRevision = 0;
         lastOutboundBuildingStateHash = '';
         lastKnownRemotePlayerCount = 0;
-        lastAppliedBuildingsRevision = -1;
+        snapshotTracking.lastAppliedBuildingsRevision = -1;
+        autosaveTimerMs = 300000;
+        snapshotTracking.multiplayerDefeatHandled = false;
         pendingActionAcks.clear();
-        lastAppliedNonPlayerSnapshotSeq = -1;
+        snapshotTracking.lastAppliedNonPlayerSnapshotSeq = -1;
         const spawned = enemySystem.spawnBurst(200);
         logDebug(`Benchmark started (spawned ${spawned} enemies)`);
     }
@@ -717,30 +803,9 @@ export async function startGame(startOptions = {}) {
         });
     }
 
-    function resetCombatEntities() {
-        enemySystem.resetEnemies();
-        remotePlayerSystem.clear();
-        lastAppliedMultiplayerSnapshotTick = -1;
-        lastAppliedNonPlayerSnapshotSeq = -1;
-        projectileRuntime?.resetAllProjectiles();
-    }
-
-    // Full run reset: player, world, buildings, civilians, enemies, and resources.
-    function resetRunState() {
-        playerState.hp = playerState.maxHp;
-        playerState.invulnFrames = 0;
-        playerState.isDead = false;
-        playerCombat.weapon = 'sword';
-        playerCombat.cooldownFrames = 0;
-        combatStats.enemiesKilled = 0;
-        inventory.wood = 0;
-        inventory.stone = 0;
-        inventory.iron = 0;
-        inventory.gold = 0;
-        sharedSessionState.paused = false;
-        sharedSessionState.restartVersion = 0;
-        sharedSessionState.restartVotes = 0;
-        sharedSessionState.restartEligiblePlayers = 0;
+    // Resets all bootstrap-owned primitive variables. Called by sessionStateController.resetRunState
+    // via the onResetBootstrapState callback — primitives cannot be passed by reference directly.
+    function resetBootstrapState() {
         gameTimeSeconds = 0;
         simFrameIndex = 0;
         systemDeferred.civilianSkippedFrames = 0;
@@ -761,178 +826,37 @@ export async function startGame(startOptions = {}) {
         outboundBuildingRevision = 0;
         lastOutboundBuildingStateHash = '';
         lastKnownRemotePlayerCount = 0;
-        lastAppliedBuildingsRevision = -1;
-
+        snapshotTracking.lastAppliedMultiplayerSnapshotTick = -1;
+        snapshotTracking.lastAppliedNonPlayerSnapshotSeq = -1;
+        snapshotTracking.lastAppliedBuildingsRevision = -1;
         deathText.visible = false;
-        const respawn = findSafeSpawnPosition();
-        playerWorldX = respawn.x;
-        playerWorldY = respawn.y;
-        playerSystem.setWorldPosition(playerWorldX, playerWorldY);
-
-        worldSystem.reset();
-        buildingSystem.reset();
-        civilianSystem.reset();
-        resetCombatEntities();
-        for (const runtime of multiplayerPlayerRuntime.values()) {
-            runtime.hp = runtime.maxHp;
-            runtime.isDead = false;
-            runtime.invulnFrames = 0;
-            runtime.respawnTimer = 0;
-            runtime.kills = 0;
-            runtime.x = respawn.x + TILE_SIZE / 2;
-            runtime.y = respawn.y + TILE_SIZE / 2;
-        }
-
-        for (let i = floatingTexts.length - 1; i >= 0; i--) {
-            releaseFloatingTextEntry(floatingTexts[i]);
-            floatingTexts.splice(i, 1);
-        }
-
         harvestRequested = false;
         placeRequested = false;
         inspectRequested = false;
         deleteBuildingRequested = false;
         keys.attack = false;
-
-        updateVisibleWorld();
-        updateHud();
-        updateHealthHud();
-        clearSavedGameState();
     }
 
-    function executeForceReset() {
-        crashLogs.length = 0;
-        crashLogger?.persist();
-        persistenceController?.clearSavedGameState();
-        persistenceController?.clearMultiplayerCheckpointCache();
-        resetRunState();
-        logDebug('Force reset executed (world regenerated, save/checkpoint cache cleared)');
+    // Forwarding shims — delegates to orchestrators created during init below.
+    // These forward references let inline callbacks (keydown, etc.) call the functions before the
+    // orchestrators exist; the orchestrators are created synchronously during startGame init.
+    let sessionStateController = null;
+    let playerActionOrchestrator = null;
+    let multiplayerSnapshotOrchestrator = null;
+    function resetRunState() { sessionStateController.resetRunState(); }
+    function executeForceReset() { sessionStateController.executeForceReset(); }
+    function runPlayerAction(action, actorCenter, actorPlayerId) {
+        return playerActionOrchestrator.runPlayerAction(action, actorCenter, actorPlayerId);
     }
-
-    function registerEnemyKill(attackerPlayerId = null) {
-        const multiplayerStats = multiplayerClient.getStats();
-        if (multiplayerStats.connected && multiplayerStats.isAuthority) {
-            let creditedPlayerId = Math.floor(Number(attackerPlayerId) || 0);
-            if (creditedPlayerId <= 0) {
-                creditedPlayerId = Math.floor(Number(multiplayerStats.playerId) || 0);
-            }
-            if (creditedPlayerId > 0) {
-                const runtime = ensureRuntimePlayer(creditedPlayerId);
-                runtime.kills = (runtime.kills ?? 0) + 1;
-                if (String(multiplayerStats.playerId) === String(runtime.id)) {
-                    combatStats.enemiesKilled = runtime.kills;
-                }
-            } else {
-                combatStats.enemiesKilled += 1;
-            }
-        } else {
-            combatStats.enemiesKilled += 1;
-        }
-        inventory.gold += GOLD_PER_ENEMY_KILL;
-        updateHud();
+    function performAttack(cx, cy) { playerActionOrchestrator.performAttack(cx, cy); }
+    function performPredictedAttackVisual(cx, cy) {
+        playerActionOrchestrator.performPredictedAttackVisual(cx, cy);
     }
-
-    function applyDamage(target, amount, source, attackerPlayerId = null) {
-        if (!target || target.isDead || amount <= 0) {
-            return false;
-        }
-        if ((target.invulnFrames ?? 0) > 0) {
-            return false;
-        }
-
-        target.hp = Math.max(0, target.hp - amount);
-        target.invulnFrames = target === playerState ? PLAYER_INVULN_FRAMES : INVULN_FRAMES_ON_HIT;
-
-        if (target === playerState) {
-            playerSystem.flashOnHit(8);
-            updateHealthHud();
-        } else if (enemySystem?.isEnemyEntity(target)) {
-            enemySystem.updateEnemyHealthBar(target);
-        }
-
-        if (target.hp <= 0) {
-            target.isDead = true;
-            if (target === playerState) {
-                deathText.visible = true;
-                clearSavedGameState();
-                logDebug(`Player defeated by ${source}`);
-            } else if (enemySystem?.isEnemyEntity(target)) {
-                registerEnemyKill(attackerPlayerId);
-            }
-        }
-
-        return true;
+    function tryReviveNearestPlayer(actorPlayerId, actorCenter) {
+        return playerActionOrchestrator.tryReviveNearestPlayer(actorPlayerId, actorCenter);
     }
-
-    function performSwordAttack(playerCenterX, playerCenterY, dirX, dirY, options = {}) {
-        const cfg = WEAPONS.sword;
-        const cosHalfArc = Math.cos(cfg.arcRadians / 2);
-        if (options.showVisual !== false) {
-            playerSystem.triggerSwordSwing(dirX, dirY);
-        }
-
-        for (const enemy of enemies) {
-            if (enemy.isDead) {
-                continue;
-            }
-            const enemyCenterX = enemy.x + ENEMY_RADIUS;
-            const enemyCenterY = enemy.y + ENEMY_RADIUS;
-            const dx = enemyCenterX - playerCenterX;
-            const dy = enemyCenterY - playerCenterY;
-            const dist = Math.hypot(dx, dy);
-            if (dist > cfg.range + ENEMY_RADIUS || dist <= 0.001) {
-                continue;
-            }
-
-            const nx = dx / dist;
-            const ny = dy / dist;
-            const dot = nx * dirX + ny * dirY;
-            if (dot < cosHalfArc) {
-                continue;
-            }
-
-            const hit = applyDamage(enemy, cfg.damage, 'sword', options.attackerPlayerId ?? null);
-            if (hit) {
-                enemy.knockbackVX += nx * cfg.knockbackSpeed;
-                enemy.knockbackVY += ny * cfg.knockbackSpeed;
-            }
-        }
-    }
-
-    function spawnBullet(playerCenterX, playerCenterY, dirX, dirY, ownerPlayerId = null, damageMultiplier = 1) {
-        projectileRuntime?.spawnPlayerBullet(playerCenterX, playerCenterY, dirX, dirY, ownerPlayerId, damageMultiplier);
-    }
-
-    function performAttack(playerCenterX, playerCenterY) {
-        const mag = Math.hypot(playerCombat.facingX, playerCombat.facingY);
-        const dirX = mag > 0.001 ? playerCombat.facingX / mag : 1;
-        const dirY = mag > 0.001 ? playerCombat.facingY / mag : 0;
-        const localPlayerId = multiplayerClient.getStats().playerId;
-
-        if (playerCombat.weapon === 'sword') {
-            performSwordAttack(playerCenterX, playerCenterY, dirX, dirY, {
-                showVisual: true,
-                attackerPlayerId: localPlayerId
-            });
-            playerCombat.cooldownFrames = WEAPONS.sword.cooldownFrames;
-        } else {
-            spawnBullet(playerCenterX, playerCenterY, dirX, dirY, localPlayerId, 1);
-            playerCombat.cooldownFrames = WEAPONS.pistol.cooldownFrames;
-        }
-    }
-
-    function performPredictedAttackVisual(playerCenterX, playerCenterY) {
-        const mag = Math.hypot(playerCombat.facingX, playerCombat.facingY);
-        const dirX = mag > 0.001 ? playerCombat.facingX / mag : 1;
-        const dirY = mag > 0.001 ? playerCombat.facingY / mag : 0;
-        if (playerCombat.weapon === 'sword') {
-            playerSystem.triggerSwordSwing(dirX, dirY);
-            return;
-        }
-        const muzzleX = playerCenterX + dirX * 18;
-        const muzzleY = playerCenterY + dirY * 18;
-        spawnFloatingFeedback('*', muzzleX, muzzleY, '#ffd166', 16);
-    }
+    // applyDamage is forwarded for external callers (enemySystem contact callback) — assigned after init
+    let applyDamage = null;
 
     function updateProjectiles(deltaMoveScale, civilianTargetsSnapshot = null) {
         projectileRuntime?.updateProjectiles(deltaMoveScale, civilianTargetsSnapshot);
@@ -1015,160 +939,6 @@ export async function startGame(startOptions = {}) {
         };
     }
 
-    function tryReviveNearestPlayer(actorPlayerId, actorCenter) {
-        if (!actorCenter || actorPlayerId === null || actorPlayerId === undefined) {
-            return false;
-        }
-        const reviveRange = TILE_SIZE * 2;
-        const reviveRangeSq = reviveRange * reviveRange;
-        let best = null;
-        let bestDistSq = reviveRangeSq;
-        for (const runtime of multiplayerPlayerRuntime.values()) {
-            if (!runtime.isDead || String(runtime.id) === String(actorPlayerId)) {
-                continue;
-            }
-            const dx = runtime.x - actorCenter.x;
-            const dy = runtime.y - actorCenter.y;
-            const distSq = dx * dx + dy * dy;
-            if (distSq <= bestDistSq) {
-                bestDistSq = distSq;
-                best = runtime;
-            }
-        }
-        if (!best) {
-            return false;
-        }
-        best.isDead = false;
-        best.respawnTimer = 0;
-        best.invulnFrames = 60;
-        best.hp = Math.ceil(best.maxHp * 0.45);
-        return true;
-    }
-
-    function runPlayerAction(action, actorCenter = null, actorPlayerId = null) {
-        if (!action || typeof action.type !== 'string') {
-            return { actionType: 'unknown', accepted: false, reason: 'invalid_action' };
-        }
-        if (action.type === 'attack') {
-            const dirX = Number(action.dirX);
-            const dirY = Number(action.dirY);
-            const originX = Number(action.originX);
-            const originY = Number(action.originY);
-            if (!Number.isFinite(dirX) || !Number.isFinite(dirY)) {
-                return { actionType: 'attack', accepted: false, reason: 'invalid_direction' };
-            }
-            const centerX = Number.isFinite(originX) ? originX : (actorCenter?.x ?? playerSystem.getCenter().x);
-            const centerY = Number.isFinite(originY) ? originY : (actorCenter?.y ?? playerSystem.getCenter().y);
-            const mag = Math.hypot(dirX, dirY) || 1;
-            const nx = dirX / mag;
-            const ny = dirY / mag;
-            if (action.weapon === 'sword') {
-                const localPlayerId = multiplayerClient.getStats().playerId;
-                const showVisual = String(actorPlayerId) === String(localPlayerId);
-                // When server already applied sword damage, authority only replays visual to avoid double hits.
-                if (action.serverDamageApplied) {
-                    if (showVisual) {
-                        playerSystem.triggerSwordSwing(nx, ny);
-                    }
-                } else {
-                    performSwordAttack(centerX, centerY, nx, ny, {
-                        showVisual,
-                        attackerPlayerId: actorPlayerId
-                    });
-                }
-            } else {
-                // Dedicated server can pre-apply follower pistol hit damage; keep host replay visual-only.
-                const damageMultiplier = action.serverDamageApplied ? 0 : 1;
-                spawnBullet(centerX, centerY, nx, ny, actorPlayerId, damageMultiplier);
-            }
-            return { actionType: 'attack', accepted: true, reason: '' };
-        }
-        if (action.type === 'build') {
-            const tileX = Number(action.tileX);
-            const tileY = Number(action.tileY);
-            const buildingType = action.buildingType;
-            if (!Number.isFinite(tileX) || !Number.isFinite(tileY) || typeof buildingType !== 'string') {
-                return { actionType: 'build', accepted: false, reason: 'invalid_payload' };
-            }
-            const placed = buildingSystem.tryPlaceByTypeAtTile(buildingType, Math.floor(tileX), Math.floor(tileY));
-            if (placed) {
-                updateHud();
-                return { actionType: 'build', accepted: true, reason: '' };
-            }
-            return { actionType: 'build', accepted: false, reason: 'rejected' };
-        }
-        if (action.type === 'remove') {
-            const tileX = Number(action.tileX);
-            const tileY = Number(action.tileY);
-            if (!Number.isFinite(tileX) || !Number.isFinite(tileY)) {
-                return { actionType: 'remove', accepted: false, reason: 'invalid_payload' };
-            }
-            const removed = buildingSystem.removeBuildingAtTile(Math.floor(tileX), Math.floor(tileY));
-            if (removed) {
-                updateHud();
-                return { actionType: 'remove', accepted: true, reason: '' };
-            }
-            return { actionType: 'remove', accepted: false, reason: 'rejected' };
-        }
-        if (action.type === 'harvest') {
-            const originX = Number(action.originX);
-            const originY = Number(action.originY);
-            const centerX = Number.isFinite(originX) ? originX : (actorCenter?.x ?? playerSystem.getCenter().x);
-            const centerY = Number.isFinite(originY) ? originY : (actorCenter?.y ?? playerSystem.getCenter().y);
-            const harvest = worldSystem.tryHarvestNearest(centerX, centerY);
-            if (harvest && inventory[harvest.resourceType] !== undefined) {
-                inventory[harvest.resourceType] += 1;
-                updateHud();
-                return { actionType: 'harvest', accepted: true, reason: '' };
-            }
-            const collected = buildingSystem.collectNearestOutput(centerX, centerY, TILE_SIZE * 3);
-            if (collected && inventory[collected.resourceType] !== undefined) {
-                inventory[collected.resourceType] += collected.amount;
-                updateHud();
-                return { actionType: 'harvest', accepted: true, reason: '' };
-            }
-            return { actionType: 'harvest', accepted: false, reason: 'no_resource' };
-        }
-        if (action.type === 'revive') {
-            const originX = Number(action.originX);
-            const originY = Number(action.originY);
-            const centerX = Number.isFinite(originX) ? originX : (actorCenter?.x ?? playerSystem.getCenter().x);
-            const centerY = Number.isFinite(originY) ? originY : (actorCenter?.y ?? playerSystem.getCenter().y);
-            const revived = tryReviveNearestPlayer(actorPlayerId, { x: centerX, y: centerY });
-            if (revived) {
-                updateHud();
-            }
-            return { actionType: 'revive', accepted: revived, reason: revived ? '' : 'no_target' };
-        }
-        if (action.type === 'toggle_pause') {
-            sharedSessionState.paused = !sharedSessionState.paused;
-            isPaused = sharedSessionState.paused;
-            updatePauseMenuText();
-            pauseText.visible = isPaused;
-            return { actionType: 'toggle_pause', accepted: true, reason: '' };
-        }
-        if (action.type === 'restart_session') {
-            sharedSessionState.paused = false;
-            isPaused = false;
-            pauseText.visible = false;
-            resetRunState();
-            return { actionType: 'restart_session', accepted: true, reason: '' };
-        }
-        if (action.type === 'force_reset_session') {
-            executeForceReset();
-            return { actionType: 'force_reset_session', accepted: true, reason: '' };
-        }
-        if (action.type === 'dev_add_resources') {
-            inventory.wood += 100;
-            inventory.stone += 100;
-            inventory.iron += 100;
-            inventory.gold += 100;
-            updateHud();
-            return { actionType: 'dev_add_resources', accepted: true, reason: '' };
-        }
-        return { actionType: action.type, accepted: false, reason: 'unsupported' };
-    }
-
     function getMultiplayerPlayerCenterById(playerId) {
         return getRuntimePlayerCenterById(multiplayerClient.getSnapshotState().players, playerId, TILE_SIZE);
     }
@@ -1224,12 +994,13 @@ export async function startGame(startOptions = {}) {
         sharedSessionState,
         setPausedState: (value) => {
             isPaused = value;
-            pauseText.visible = isPaused;
+            setPauseOverlayVisible(isPaused);
         },
         updateVisibleWorld,
         updateHud,
         updateHealthHud,
-        updateClockHud
+        updateClockHud,
+        singleplayerSaveSlot: selectedSingleplayerSlot
     });
     const persistSaveState = () => persistenceController?.persistSaveState();
     const clearSavedGameState = () => persistenceController?.clearSavedGameState();
@@ -1237,6 +1008,7 @@ export async function startGame(startOptions = {}) {
     const restoreSavedGameState = () => Boolean(persistenceController?.restoreSavedGameState());
     const persistMultiplayerCheckpoint = (sessionId) => persistenceController?.persistMultiplayerCheckpoint(sessionId);
     const tryRestoreMultiplayerCheckpoint = (sessionId) => Boolean(persistenceController?.tryRestoreMultiplayerCheckpoint(sessionId));
+    const clearMultiplayerCheckpoint = (sessionId) => persistenceController?.clearMultiplayerCheckpoint(sessionId);
 
     crashLogger = createCrashLogger(crashLogs);
     const downloadCrashLogs = () => crashLogger?.download();
@@ -1339,6 +1111,58 @@ export async function startGame(startOptions = {}) {
         },
         onLog: (message) => logDebug(message)
     });
+
+    // --- Orchestrator init ---
+    // Order: sessionStateController → playerActionOrchestrator → projectileRuntime → multiplayerSnapshotOrchestrator
+    // All three use lazy getProjectileRuntime so they can be wired before projectileRuntime exists.
+
+    sessionStateController = createSessionStateController({
+        playerState, playerCombat, inventory, combatStats,
+        sharedSessionState, multiplayerPlayerRuntime, floatingTexts,
+        playerSystem, worldSystem, buildingSystem, civilianSystem,
+        enemySystem, remotePlayerSystem,
+        crashLogger, crashLogs, persistenceController,
+        TILE_SIZE, PLAYER_MAX_HP,
+        onFindSafeSpawnPosition: findSafeSpawnPosition,
+        onGetProjectileRuntime: () => projectileRuntime,
+        onReleaseFloatingTextEntry: releaseFloatingTextEntry,
+        onUpdateVisibleWorld: updateVisibleWorld,
+        onUpdateHud: updateHud,
+        onUpdateHealthHud: updateHealthHud,
+        onClearSavedGameState: clearSavedGameState,
+        onResetBootstrapState: resetBootstrapState,
+        onSetPlayerWorldPos: (x, y) => {
+            playerWorldX = x;
+            playerWorldY = y;
+            playerSystem.setWorldPosition(x, y);
+        },
+        onLog: logDebug
+    });
+
+    playerActionOrchestrator = createPlayerActionOrchestrator({
+        playerState, playerCombat, inventory, combatStats,
+        sharedSessionState, multiplayerPlayerRuntime, enemies,
+        playerSystem, enemySystem, buildingSystem, worldSystem, multiplayerClient,
+        getProjectileRuntime: () => projectileRuntime,
+        WEAPONS, TILE_SIZE, ENEMY_RADIUS, PLAYER_MAX_HP,
+        PLAYER_INVULN_FRAMES, INVULN_FRAMES_ON_HIT, GOLD_PER_ENEMY_KILL,
+        onUpdateHud: updateHud,
+        onUpdateHealthHud: updateHealthHud,
+        onSetPauseOverlayVisible: setPauseOverlayVisible,
+        onUpdatePauseMenuText: updatePauseMenuText,
+        onSyncIsPaused: () => { isPaused = sharedSessionState.paused; },
+        onResetRunState: () => sessionStateController.resetRunState(),
+        onExecuteForceReset: () => sessionStateController.executeForceReset(),
+        onPlayerDefeated: (source) => {
+            deathText.visible = true;
+            logDebug(`Player defeated by ${source}`);
+        },
+        onEnsureRuntimePlayer: ensureRuntimePlayer,
+        onSpawnFloatingFeedback: spawnFloatingFeedback,
+        onLog: logDebug
+    });
+    applyDamage = playerActionOrchestrator.applyDamage;
+
     projectileRuntime = createProjectileRuntime({
         PIXI,
         projectileLayer,
@@ -1371,11 +1195,56 @@ export async function startGame(startOptions = {}) {
     towerProjectiles = projectileRuntime.lists.towerProjectiles;
     enemyProjectiles = projectileRuntime.lists.enemyProjectiles;
 
+    multiplayerSnapshotOrchestrator = createMultiplayerSnapshotOrchestrator({
+        playerState, playerCombat, combatStats, inventory,
+        sharedSessionState, multiplayerPlayerRuntime,
+        playerSystem, buildingSystem, civilianSystem,
+        enemySystem, remotePlayerSystem, multiplayerClient,
+        getProjectileRuntime: () => projectileRuntime,
+        snapshotTracking, pendingActionAcks,
+        isTileWalkable,
+        onSyncRuntimePlayers: syncRuntimePlayersFromSnapshot,
+        onEnsureRuntimePlayer: ensureRuntimePlayer,
+        onGetPlayerWorldPos: () => ({ x: playerWorldX, y: playerWorldY }),
+        TILE_SIZE, PLAYER_MAX_HP, PLAYER_RESPAWN_SECONDS,
+        PLAYER_RECONCILE_HARD_SNAP_DISTANCE,
+        PLAYER_RECONCILE_DEADZONE,
+        PLAYER_RECONCILE_BLEND,
+        PLAYER_RECONCILE_MAX_STEP,
+        shouldRestoreMultiplayerCheckpoint,
+        multiplayerCheckpointKey,
+        onTryRestoreMultiplayerCheckpoint: tryRestoreMultiplayerCheckpoint,
+        onRunPlayerAction: runPlayerAction,
+        onGetMultiplayerPlayerCenterById: getMultiplayerPlayerCenterById,
+        onResetRunState: () => sessionStateController.resetRunState(),
+        onSetPlayerWorldPos: (x, y) => {
+            playerWorldX = x;
+            playerWorldY = y;
+            playerSystem.setWorldPosition(x, y);
+        },
+        onSetIsPaused: (v) => { isPaused = v; },
+        onUpdateHealthHud: updateHealthHud,
+        onUpdatePauseMenuText: updatePauseMenuText,
+        onSetPauseOverlayVisible: setPauseOverlayVisible,
+        onUpdateDeathText: (text, visible) => {
+            deathText.text = text;
+            deathText.visible = visible;
+        },
+        onUpdateHud: updateHud,
+        onExitToMainMenu: exitToMainMenu,
+        onLog: logDebug
+    });
+
     updateHud();
     updateHealthHud();
     updateVisibleWorld();
-    if (!multiplayerQueryEnabled && restoreSavedGameState()) {
+    if (optionsMode === 'singleplayer' && singleplayerStartFresh) {
+        clearSavedGameState();
+    } else if (optionsMode === 'singleplayer' && restoreSavedGameState()) {
         logDebug('Saved game restored');
+    }
+    if (optionsMode === 'multiplayer' && !shouldRestoreMultiplayerCheckpoint) {
+        clearMultiplayerCheckpoint(multiplayerCheckpointKey);
     }
     if (multiplayerQueryEnabled) {
         multiplayerClient.connect();
@@ -1434,11 +1303,21 @@ export async function startGame(startOptions = {}) {
             } else {
                 isPaused = !isPaused;
                 updatePauseMenuText();
-                pauseText.visible = isPaused;
+                setPauseOverlayVisible(isPaused);
                 sharedSessionState.paused = isPaused;
                 logDebug(`Game ${isPaused ? 'paused' : 'resumed'}`);
             }
             placeRequested = false;
+            e.preventDefault();
+            return;
+        }
+        if (isPaused && key === 'q') {
+            exitToMainMenu(false);
+            e.preventDefault();
+            return;
+        }
+        if (isPaused && key === 't') {
+            exitToMainMenu(true);
             e.preventDefault();
             return;
         }
@@ -1564,7 +1443,7 @@ export async function startGame(startOptions = {}) {
                 logDebug('Restart vote toggled');
             } else {
                 isPaused = false;
-                pauseText.visible = false;
+                setPauseOverlayVisible(false);
                 resetRunState();
                 logDebug('Player restarted');
             }
@@ -1643,251 +1522,25 @@ export async function startGame(startOptions = {}) {
         const multiplayerSnapshot = multiplayerClient.getSnapshotState();
         const replicatedAuthority = multiplayerStats.connected && multiplayerStats.isAuthority;
         const replicatedFollower = multiplayerStats.connected && !multiplayerStats.isAuthority;
-        if (replicatedAuthority && multiplayerStats.sessionId && multiplayerCheckpointLoadedForSession !== multiplayerStats.sessionId) {
-            const restored = tryRestoreMultiplayerCheckpoint(multiplayerStats.sessionId);
-            multiplayerCheckpointLoadedForSession = multiplayerStats.sessionId;
-            if (restored) {
-                logDebug('Multiplayer checkpoint restored');
-            }
-        }
         if (multiplayerStats.connected) {
-            const timeSnapshot = multiplayerClient.getNonPlayerSnapshotState();
-            if (Number.isFinite(Number(timeSnapshot.sessionTimeSeconds))) {
-                gameTimeSeconds = Math.max(0, Number(timeSnapshot.sessionTimeSeconds));
+            const shouldAbort = multiplayerSnapshotOrchestrator.applySnapshot({
+                replicatedAuthority,
+                replicatedFollower,
+                multiplayerStats,
+                multiplayerSnapshot,
+                clampedFrameMs,
+                deltaFrames,
+                deltaMoveScale
+            });
+            if (snapshotTracking.pendingSessionTimeSeconds !== undefined) {
+                gameTimeSeconds = snapshotTracking.pendingSessionTimeSeconds;
+                snapshotTracking.pendingSessionTimeSeconds = undefined;
             }
-            if (timeSnapshot.sharedResources && typeof timeSnapshot.sharedResources === 'object') {
-                inventory.wood = Number(timeSnapshot.sharedResources.wood) || 0;
-                inventory.stone = Number(timeSnapshot.sharedResources.stone) || 0;
-                inventory.iron = Number(timeSnapshot.sharedResources.iron) || 0;
-                inventory.gold = Number(timeSnapshot.sharedResources.gold) || 0;
-                updateHud();
-            }
-            if (timeSnapshot.sessionState && typeof timeSnapshot.sessionState === 'object') {
-                sharedSessionState.paused = Boolean(timeSnapshot.sessionState.paused);
-                sharedSessionState.restartVersion = Math.max(0, Number(timeSnapshot.sessionState.restartVersion) || 0);
-                sharedSessionState.restartVotes = Math.max(0, Number(timeSnapshot.sessionState.restartVotes) || 0);
-                sharedSessionState.restartEligiblePlayers = Math.max(0, Number(timeSnapshot.sessionState.restartEligiblePlayers) || 0);
-                isPaused = sharedSessionState.paused;
-                updatePauseMenuText();
-                pauseText.visible = isPaused;
-                if (!sessionStateInitialized) {
-                    sessionStateInitialized = true;
-                    lastAppliedRestartVersion = sharedSessionState.restartVersion;
-                } else if (sharedSessionState.restartVersion > lastAppliedRestartVersion) {
-                    lastAppliedRestartVersion = sharedSessionState.restartVersion;
-                    isPaused = false;
-                    pauseText.visible = false;
-                    resetRunState();
-                    logDebug('Session restarted');
-                }
-            }
-            latestServerAiDirectives = timeSnapshot.aiDirectives && typeof timeSnapshot.aiDirectives === 'object'
-                ? timeSnapshot.aiDirectives
-                : null;
-            civilianSystem.setServerAiDirectives?.(latestServerAiDirectives);
-        }
-        if (multiplayerStats.connected && multiplayerStats.playerId !== null) {
-            syncRuntimePlayersFromSnapshot(multiplayerSnapshot);
-            const localRuntime = ensureRuntimePlayer(multiplayerStats.playerId);
-            const localCenter = playerSystem.getCenter();
-            localRuntime.x = localCenter.x;
-            localRuntime.y = localCenter.y;
-            const localServerPlayer = multiplayerSnapshot.players.find(
-                (entry) => String(entry.playerId) === String(multiplayerStats.playerId)
-            );
-            if (replicatedFollower && localServerPlayer) {
-                const localDx = localServerPlayer.x - playerWorldX;
-                const localDy = localServerPlayer.y - playerWorldY;
-                const correctionDistSq = localDx * localDx + localDy * localDy;
-                const hardSnapDistanceSq = PLAYER_RECONCILE_HARD_SNAP_DISTANCE * PLAYER_RECONCILE_HARD_SNAP_DISTANCE;
-                const deadzoneSq = PLAYER_RECONCILE_DEADZONE * PLAYER_RECONCILE_DEADZONE;
-                if (correctionDistSq > deadzoneSq) {
-                    let candidateX = playerWorldX;
-                    let candidateY = playerWorldY;
-                    if (correctionDistSq > hardSnapDistanceSq) {
-                        candidateX = localServerPlayer.x;
-                        candidateY = localServerPlayer.y;
-                    } else {
-                        candidateX += localDx * PLAYER_RECONCILE_BLEND;
-                        candidateY += localDy * PLAYER_RECONCILE_BLEND;
-                        const stepDx = candidateX - playerWorldX;
-                        const stepDy = candidateY - playerWorldY;
-                        const stepDist = Math.hypot(stepDx, stepDy);
-                        const reconcileStepLimit = Math.max(
-                            PLAYER_RECONCILE_MAX_STEP,
-                            Math.max(4, Number(multiplayerStats.snapshotJitterMs) || 0) * 0.35
-                        );
-                        if (stepDist > reconcileStepLimit && stepDist > 0.001) {
-                            const scale = reconcileStepLimit / stepDist;
-                            candidateX = playerWorldX + stepDx * scale;
-                            candidateY = playerWorldY + stepDy * scale;
-                        }
-                    }
-                    const combinedTileX = Math.floor((candidateX + TILE_SIZE / 2) / TILE_SIZE);
-                    const combinedTileY = Math.floor((candidateY + TILE_SIZE / 2) / TILE_SIZE);
-                    if (isTileWalkable(combinedTileX, combinedTileY)) {
-                        playerWorldX = candidateX;
-                        playerWorldY = candidateY;
-                    } else {
-                        const xOnlyTileX = Math.floor((candidateX + TILE_SIZE / 2) / TILE_SIZE);
-                        const xOnlyTileY = Math.floor((playerWorldY + TILE_SIZE / 2) / TILE_SIZE);
-                        if (isTileWalkable(xOnlyTileX, xOnlyTileY)) {
-                            playerWorldX = candidateX;
-                        }
-                        const yOnlyTileX = Math.floor((playerWorldX + TILE_SIZE / 2) / TILE_SIZE);
-                        const yOnlyTileY = Math.floor((candidateY + TILE_SIZE / 2) / TILE_SIZE);
-                        if (isTileWalkable(yOnlyTileX, yOnlyTileY)) {
-                            playerWorldY = candidateY;
-                        }
-                    }
-                    playerSystem.setWorldPosition(playerWorldX, playerWorldY);
-                }
-            }
-            if (multiplayerSnapshot.tick !== lastAppliedMultiplayerSnapshotTick) {
-                lastAppliedMultiplayerSnapshotTick = multiplayerSnapshot.tick;
-                remotePlayerSystem.sync(multiplayerSnapshot.players, multiplayerStats.playerId);
-            }
-            remotePlayerSystem.update(clampedFrameMs);
-            if (replicatedAuthority) {
-                const peerActions = multiplayerClient.drainPeerActions();
-                for (const pending of peerActions) {
-                    const outcome = runPlayerAction(
-                        pending.action,
-                        getMultiplayerPlayerCenterById(pending.actorPlayerId),
-                        pending.actorPlayerId
-                    );
-                    const actionType = pending.action?.type;
-                    if (actionType !== 'build' && actionType !== 'remove') {
-                        multiplayerClient.sendPlayerActionResult(pending.actorPlayerId, {
-                            actionType: outcome?.actionType ?? actionType ?? 'unknown',
-                            clientActionId: Number(pending.action?.clientActionId) || 0,
-                            accepted: Boolean(outcome?.accepted),
-                            reason: outcome?.reason ?? ''
-                        });
-                    }
-                }
-            }
-            if (replicatedFollower || replicatedAuthority) {
-                const nonPlayerSnapshot = multiplayerClient.getNonPlayerSnapshotState();
-                if (nonPlayerSnapshot.seq !== lastAppliedNonPlayerSnapshotSeq) {
-                    lastAppliedNonPlayerSnapshotSeq = nonPlayerSnapshot.seq;
-                    enemySystem.syncReplicatedState(nonPlayerSnapshot.enemies);
-                    projectileRuntime?.syncReplicatedProjectiles(nonPlayerSnapshot.projectiles);
-                    if (Array.isArray(nonPlayerSnapshot.playerStates) && nonPlayerSnapshot.playerStates.length > 0) {
-                        for (const replicatedPlayerState of nonPlayerSnapshot.playerStates) {
-                            const replicatedPlayerId = Number(replicatedPlayerState.playerId);
-                            if (!Number.isFinite(replicatedPlayerId)) {
-                                continue;
-                            }
-                            const runtime = ensureRuntimePlayer(replicatedPlayerId);
-                            runtime.hp = Number(replicatedPlayerState.hp) || 0;
-                            runtime.maxHp = Number(replicatedPlayerState.maxHp) || PLAYER_MAX_HP;
-                            runtime.isDead = Boolean(replicatedPlayerState.isDead);
-                            runtime.respawnTimer = Math.max(0, Number(replicatedPlayerState.respawnTimer) || 0);
-                            runtime.kills = Number(replicatedPlayerState.kills) || 0;
-                        }
-                        const localState = nonPlayerSnapshot.playerStates.find(
-                            (entry) => String(entry.playerId) === String(multiplayerStats.playerId)
-                        );
-                        if (localState) {
-                            playerState.hp = Number(localState.hp) || 0;
-                            playerState.maxHp = Number(localState.maxHp) || PLAYER_MAX_HP;
-                            playerState.isDead = Boolean(localState.isDead);
-                            combatStats.enemiesKilled = Number(localState.kills) || 0;
-                            if (playerState.isDead) {
-                                deathText.text = `You are down\nRespawn in ${Math.ceil(Number(localState.respawnTimer) || 0)}s`;
-                                deathText.visible = true;
-                            } else {
-                                deathText.visible = false;
-                            }
-                            updateHealthHud();
-                        }
-                    }
-                    if (
-                        replicatedFollower &&
-                        nonPlayerSnapshot.buildingsState &&
-                        Number(nonPlayerSnapshot.buildingsRevision || 0) !== lastAppliedBuildingsRevision
-                    ) {
-                        lastAppliedBuildingsRevision = Number(nonPlayerSnapshot.buildingsRevision || 0);
-                        buildingSystem.importReplicationState(nonPlayerSnapshot.buildingsState);
-                        updateHud();
-                    }
-                    if (Array.isArray(nonPlayerSnapshot.civilians)) {
-                        civilianSystem.syncReplicatedState(nonPlayerSnapshot.civilians, nonPlayerSnapshot.houseTimers);
-                        updateHud();
-                    }
-                }
-            }
-            if (replicatedFollower) {
-                const actionResults = multiplayerClient.drainActionResults();
-                for (const result of actionResults) {
-                    const actionId = Math.floor(Number(result?.clientActionId) || 0);
-                    if (actionId > 0) {
-                        pendingActionAcks.delete(actionId);
-                    }
-                    if (!result?.accepted) {
-                        const actionType = typeof result?.actionType === 'string' ? result.actionType : 'action';
-                        const reason = typeof result?.reason === 'string' && result.reason ? result.reason : 'rejected';
-                        logDebug(`${actionType} rejected by authority (${reason})`);
-                    }
-                }
-                const now = performance.now();
-                for (const [actionId, meta] of pendingActionAcks) {
-                    if (now - meta.at <= 1500) {
-                        continue;
-                    }
-                    pendingActionAcks.delete(actionId);
-                    logDebug(`${meta.type} request timed out; waiting for next authoritative sync`);
-                }
-            }
-            if (replicatedAuthority) {
-                let alivePlayers = 0;
-                for (const runtime of multiplayerPlayerRuntime.values()) {
-                    if ((runtime.invulnFrames ?? 0) > 0) {
-                        runtime.invulnFrames = Math.max(0, runtime.invulnFrames - deltaFrames);
-                    }
-                    if (runtime.isDead) {
-                        runtime.respawnTimer = Math.max(0, runtime.respawnTimer - deltaMoveScale);
-                        if (runtime.respawnTimer <= 0) {
-                            runtime.hp = runtime.maxHp;
-                            runtime.isDead = false;
-                            runtime.invulnFrames = 60;
-                        }
-                    }
-                    if (!runtime.isDead) {
-                        alivePlayers += 1;
-                    }
-                }
-                if (alivePlayers === 0 && multiplayerPlayerRuntime.size > 0) {
-                    resetRunState();
-                }
-                playerState.hp = localRuntime.hp;
-                playerState.maxHp = localRuntime.maxHp;
-                playerState.isDead = localRuntime.isDead;
-                playerState.invulnFrames = localRuntime.invulnFrames ?? 0;
-                combatStats.enemiesKilled = Number(localRuntime.kills) || 0;
-                if (playerState.isDead) {
-                    deathText.text = `You are down\nRespawn in ${Math.ceil(localRuntime.respawnTimer)}s`;
-                    deathText.visible = true;
-                } else {
-                    deathText.visible = false;
-                }
-                updateHealthHud();
+            if (shouldAbort) {
+                return;
             }
         } else {
-            remotePlayerSystem.clear();
-            lastAppliedMultiplayerSnapshotTick = -1;
-            lastAppliedNonPlayerSnapshotSeq = -1;
-            lastAppliedBuildingsRevision = -1;
-            lastKnownRemotePlayerCount = 0;
-            multiplayerPlayerRuntime.clear();
-            pendingActionAcks.clear();
-            latestServerAiDirectives = null;
-            civilianSystem.setServerAiDirectives?.(null);
-            sharedSessionState.restartVotes = 0;
-            sharedSessionState.restartEligiblePlayers = 0;
-            lastAppliedRestartVersion = 0;
-            sessionStateInitialized = false;
+            multiplayerSnapshotOrchestrator.resetDisconnectedState();
         }
         enemySystem.beginFramePathBudget();
 
@@ -1937,7 +1590,6 @@ export async function startGame(startOptions = {}) {
 
         if (!multiplayerStats.connected) {
             gameTimeSeconds += (clampedFrameMs / 1000);
-            multiplayerCheckpointLoadedForSession = null;
         }
 
         if (!replicatedFollower) {
@@ -2046,7 +1698,7 @@ export async function startGame(startOptions = {}) {
         const towerStride = Math.max(1, activePerfProfile.towerUpdateStride ?? 1);
         if (!replicatedFollower && simFrameIndex % towerStride === 0) {
             const tTowerStart = performance.now();
-            updateTowerCombat(latestServerAiDirectives);
+            updateTowerCombat(snapshotTracking.latestServerAiDirectives);
             systemPerfMs.towerCombat = performance.now() - tTowerStart;
             if (systemPerfMs.towerCombat > activePerfProfile.budgetsMs.towerCombat) {
                 systemOverBudget.towerCombat += 1;
@@ -2059,7 +1711,7 @@ export async function startGame(startOptions = {}) {
         const enemyRangedStride = Math.max(1, activePerfProfile.enemyRangedUpdateStride ?? 1);
         if (!replicatedFollower && simFrameIndex % enemyRangedStride === 0) {
             const tEnemyRangedStart = performance.now();
-            updateEnemyRangedCombat(deltaFrames, latestServerAiDirectives);
+            updateEnemyRangedCombat(deltaFrames, snapshotTracking.latestServerAiDirectives);
             systemPerfMs.enemyRanged = performance.now() - tEnemyRangedStart;
             if (systemPerfMs.enemyRanged > activePerfProfile.budgetsMs.enemyRanged) {
                 systemOverBudget.enemyRanged += 1;
@@ -2289,14 +1941,32 @@ export async function startGame(startOptions = {}) {
             }
         }
 
-        saveTimerFrames -= deltaFrames;
-        if (saveTimerFrames <= 0) {
-            if (replicatedAuthority && multiplayerStats.sessionId) {
-                persistMultiplayerCheckpoint(multiplayerStats.sessionId);
+        autosaveTimerMs -= clampedFrameMs;
+        if (autosaveTimerMs <= 0) {
+            if (replicatedAuthority) {
+                persistMultiplayerCheckpoint(multiplayerCheckpointKey);
             } else if (!multiplayerStats.connected) {
                 persistSaveState();
             }
-            saveTimerFrames = 120;
+            autosaveTimerMs = 300000;
+        }
+
+        const _nowSnap = Date.now();
+        if (_nowSnap - lastPerfSnapshotAt >= 10_000) {
+            lastPerfSnapshotAt = _nowSnap;
+            const snap = {
+                t: Math.round((_nowSnap - sessionStartedAt) / 1000),
+                fps: Math.round(smoothedFps),
+                enemies: enemySystem.exportReplicatedState().length,
+                civilians: civilianSystem.getStats().civilianCount,
+                buildings: buildingSystem.getStats().buildingCount,
+            };
+            if (optionsMode === 'multiplayer') {
+                snap.players = multiplayerStats.connectedClients ?? null;
+                snap.authority = multiplayerStats.isAuthority ?? null;
+            }
+            perfSnapshots.push(snap);
+            if (perfSnapshots.length > 120) perfSnapshots.shift();
         }
 
         if (!isBackgroundTick) {
@@ -2316,7 +1986,9 @@ export async function startGame(startOptions = {}) {
     simulationLoop.bind();
 
     window.addEventListener('beforeunload', () => {
-        persistSaveState();
+        if (!multiplayerClient.getStats().connected) {
+            persistSaveState();
+        }
         multiplayerClient.disconnect();
     });
 
@@ -2327,6 +1999,7 @@ export async function startGame(startOptions = {}) {
         debugNavText.position.set(window.innerWidth - DEBUG_PANEL_WIDTH + 12 - SIDE_PANEL_MARGIN, SIDE_PANEL_TOP + 10);
         deathText.position.set(window.innerWidth / 2, window.innerHeight / 2);
         pauseText.position.set(window.innerWidth / 2, window.innerHeight / 2);
+        updatePauseMenuText();
         updateVisibleWorld();
         updateHud();
     });

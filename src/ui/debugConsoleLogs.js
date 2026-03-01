@@ -28,9 +28,21 @@ export function appendDebugLog(debugLogs, message, level = null, maxEntries = 30
     }
 }
 
-export function downloadDebugSessionLogs(debugLogs) {
+export function downloadDebugSessionLogs(debugLogs, sessionReport = {}) {
     const payload = {
         exportedAt: new Date().toISOString(),
+        session: {
+            mode: sessionReport.mode || 'unknown',
+            startedAt: sessionReport.startedAt
+                ? new Date(sessionReport.startedAt).toISOString()
+                : null,
+            durationSeconds: sessionReport.startedAt
+                ? Math.round((Date.now() - sessionReport.startedAt) / 1000)
+                : null,
+        },
+        perfSnapshots: Array.isArray(sessionReport.perfSnapshots)
+            ? sessionReport.perfSnapshots
+            : [],
         entries: debugLogs
             .filter((entry) => entry.level === 'info' || entry.level === 'warn')
             .map((entry) => ({
