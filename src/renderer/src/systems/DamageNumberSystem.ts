@@ -18,9 +18,10 @@ export class DamageNumberSystem {
   private numbers: DamageNumber[] = [];
   private container: Container;
 
-  constructor(worldContainer: Container) {
+  constructor(stage: Container) {
     this.container = new Container();
-    worldContainer.addChild(this.container);
+    this.container.zIndex = 101; // above night overlay (100)
+    stage.addChild(this.container);
   }
 
   /** Spawn a floating damage number at world coordinates. */
@@ -40,7 +41,8 @@ export class DamageNumberSystem {
         fontFamily: 'monospace',
         fontWeight: 'bold',
         fill: displayColor,
-        stroke: { color: 0x000000, width: 3 },
+        stroke: { color: 0x000000, width: 4 },
+        dropShadow: { color: displayColor, alpha: 0.6, blur: 4, distance: 0 },
       },
     });
     text.anchor.set(0.5);
@@ -65,7 +67,10 @@ export class DamageNumberSystem {
     });
   }
 
-  update(dt: number): void {
+  update(dt: number, viewX: number, viewY: number, zoom: number, screenW: number, screenH: number): void {
+    const offsetX = screenW / 2 - viewX * zoom;
+    const offsetY = screenH / 2 - viewY * zoom;
+
     for (let i = this.numbers.length - 1; i >= 0; i--) {
       const n = this.numbers[i];
       n.age += dt;
@@ -76,11 +81,14 @@ export class DamageNumberSystem {
       n.text.alpha = Math.max(0, alpha);
 
       // Scale pop effect
-      const scale = n.age < 0.1 ? 1 + (1 - n.age / 0.1) * 0.3 : 1;
-      n.text.scale.set(scale);
+      const baseScale = n.age < 0.1 ? 1 + (1 - n.age / 0.1) * 0.3 : 1;
+      n.text.scale.set(baseScale * zoom);
 
-      // Position is set during render pass (needs camera transform)
-      n.text.position.set(n.worldX, n.worldY);
+      // Transform world coords to screen coords
+      n.text.position.set(
+        n.worldX * zoom + offsetX,
+        n.worldY * zoom + offsetY,
+      );
 
       if (n.age >= n.lifetime) {
         this.container.removeChild(n.text);

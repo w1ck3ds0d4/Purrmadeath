@@ -121,7 +121,7 @@ async function main(): Promise<void> {
   const tileRenderer = new TileRenderer(renderer.stage);
   const playerRenderer = new PlayerRendererSystem(tileRenderer.worldContainer);
   const projectileRenderer = new ProjectileRendererSystem(tileRenderer.worldContainer);
-  const damageNumbers = new DamageNumberSystem(tileRenderer.worldContainer);
+  const damageNumbers = new DamageNumberSystem(renderer.stage);
   const hitParticles  = new HitParticleSystem(tileRenderer.worldContainer);
   const abilityVFX    = new AbilityVFXSystem(tileRenderer.worldContainer);
   const nightOverlay  = new NightOverlay(renderer.stage);
@@ -1107,7 +1107,7 @@ async function main(): Promise<void> {
         }
       }
       projectileRenderer.update(dt);
-      damageNumbers.update(dt);
+      damageNumbers.update(dt, camera.viewX, camera.viewY, camera.zoom, sw, sh);
       hitParticles.update(dt);
       abilityVFX.update(dt);
 
