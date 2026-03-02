@@ -3,7 +3,8 @@ import { distance } from '@shared/math/utils';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
 import { spawnPlayer, findSpawnPoint } from '@shared/world/PlayerSpawner';
 import { CLASS_STATS, DEFAULT_CLASS } from '@shared/definitions/ClassDefinitions';
-import { CARD_POOL } from '@shared/definitions/CardDefinitions';
+import { CARD_POOL, type CardDefinition } from '@shared/definitions/CardDefinitions';
+import { rollCardDrop } from '@shared/definitions/CardDropTables';
 import type { PlayerClass } from '@shared/definitions/ClassDefinitions';
 import {
   C,
@@ -74,6 +75,10 @@ import {
   ENEMY_RANGER_HEALTH,
   DODGE_ROLL_DURATION,
   DODGE_ROLL_COOLDOWN,
+  BOSS_FIRST_WAVE,
+  BOSS_SPAWN_INTERVAL,
+  CARD_DROP_LIFETIME,
+  MILESTONE_CARD_INTERVAL,
 } from '@shared/constants';
 import { RESOURCE_STATS, RESOURCE_SPAWN_TABLE, TILE_SPAWN_CHANCE } from '@shared/data/ResourceSpawnTable';
 import { LOOT_TABLES } from '@shared/data/LootTables';
@@ -116,6 +121,8 @@ import { CardSystem } from '../systems/CardSystem';
 import { createSkillSystem, type SkillSystem } from '../systems/SkillSystem';
 import { createBuildingSystem, type BuildingSystem } from '../systems/BuildingSystem';
 import { createWaveController, type WaveController, type WaveState } from '../systems/WaveController';
+import { createWaveModifierSystem } from '../systems/WaveModifierSystem';
+import { createWorldEventController, type WorldEventController } from '../systems/WorldEventController';
 import { createCardDispenser, type CardDispenser, type CardState } from '../systems/CardDispenser';
 import { createSaveManager, type SaveManager, type LoadedSaveState } from '../systems/SaveManager';
 import { createRespawnManager, type RespawnManager } from '../systems/RespawnManager';
@@ -123,6 +130,7 @@ import { createStatsCollector, type StatsCollector } from '../systems/StatsColle
 import { createPotionSystem, type PotionSystem } from '../systems/PotionSystem';
 import { createCivilianSystem, type CivilianSystem } from '../systems/CivilianSystem';
 import { createDayNightController, createDayNightState, type DayNightController, type DayNightState } from '../systems/DayNightController';
+import { createBossSystem, type BossSystem } from '../systems/BossSystem';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -200,6 +208,9 @@ export class GameSession {
     introducedTypes: new Set(), introducedFactions: new Set(), pendingIntros: [],
   };
   private waves!: WaveController;
+  private waveModifiers = createWaveModifierSystem(this.players);
+  private worldEvents!: WorldEventController;
+  private boss!: BossSystem;
   /** Day/night cycle state - shared with DayNightController. */
   private dayNightState: DayNightState = createDayNightState();
   private dayNight!: DayNightController;
@@ -316,6 +327,7 @@ export class GameSession {
       respawnTimers: this.respawnTimers,
       buildingsByPlayer: this.buildingsByPlayer,
       cards: this.cards,
+      getEventProductionMult: () => this.worldEvents?.getProductionMult() ?? 1.0,
       isActive: () => this.phase === 'playing' && !this.paused && !this.gameOver,
       isWalkable: (wx, wy) => this.isWalkable(wx, wy),
       spawnBuilding: (x, y, type, maxHp, permanent) => this.spawnBuilding(x, y, type as any, maxHp, permanent),
@@ -349,8 +361,21 @@ export class GameSession {
     this.dayNight = createDayNightController({
       state: this.dayNightState,
       players: this.players,
-      onNightStart: (send) => this.waves.activateWave(send),
-      onDayStart: (_send) => { /* day begins - players can build/gather */ },
+      onNightStart: (send) => {
+        this.waveModifiers.rollModifiers(this.waveState.currentWave, send);
+        this.waves.activateWave(send);
+        // Spawn boss on boss waves (every 5 starting at wave 5)
+        const w = this.waveState.currentWave;
+        if (w >= BOSS_FIRST_WAVE && w % BOSS_SPAWN_INTERVAL === 0) {
+          this.boss.spawnBoss(w, send);
+        }
+      },
+      onDayStart: (send) => {
+        // End previous event when a new day starts (events last full day+night cycle)
+        this.worldEvents?.endActiveEvent(send);
+        this.worldEvents?.rollDayEvent(this.waveState.currentWave, send);
+      },
+      getEventOverrides: () => ({ forceNightBuffs: this.worldEvents?.isSolarEclipse() }),
     });
 
     this.waves = createWaveController({
@@ -361,11 +386,44 @@ export class GameSession {
       players: this.players,
       cards: this.cards,
       getNightBuffs: () => this.dayNight.getEnemyBuffs(),
+      getModifierMults: () => this.waveModifiers.getAggregate(),
+      getEventDamageMult: () => this.worldEvents?.getEventBuffs().damageMult ?? 1.0,
       maxEnemies: GameSession.MAX_ENEMIES,
       waveSyncInterval: GameSession.WAVE_SYNC_INTERVAL,
       isWalkable: (wx, wy) => this.isWalkable(wx, wy),
       overlapsBuilding: (wx, wy, r) => this.overlapsBuilding(wx, wy, r),
       onWaveCleared: (wave, send) => this.onWaveCleared(wave, send),
+    });
+
+    this.worldEvents = createWorldEventController({
+      world: this.world,
+      players: this.players,
+      getCurrentWave: () => this.waveState.currentWave,
+      getPlayerCenter: () => this.getPlayerCenter(),
+      spawnExtraPortals: (count, send) => this.waves.spawnExtraPortals(count, send),
+      spawnEnemy: (x, y, faction) => this.waves.spawnEnemy(x, y, faction as any),
+      isWalkable: (wx, wy) => this.isWalkable(wx, wy),
+      overlapsBuilding: (wx, wy, r) => this.overlapsBuilding(wx, wy, r),
+      overlapsResourceNode: (wx, wy, r) => this.overlapsResourceNode(wx, wy, r),
+      destroyDeadEntities: (deaths, attackerMap, send) => this.respawn.destroyDeadEntities(deaths, attackerMap, send),
+      onEventComplete: (eventId, send) => {
+        // 30% chance to drop a card when an event completes naturally
+        if (Math.random() > 0.3) return;
+        const card = rollCardDrop('world_event', this.cards.pickedCardIds as Set<string>);
+        if (!card) return;
+        const center = this.getPlayerCenter();
+        if (center) this.spawnCardDrop(center.x, center.y, card);
+      },
+    });
+
+    this.boss = createBossSystem({
+      world: this.world,
+      players: this.players,
+      isWalkable: (wx, wy) => this.isWalkable(wx, wy),
+      overlapsBuilding: (wx, wy, r) => this.overlapsBuilding(wx, wy, r),
+      spawnEnemy: (x, y) => this.waves.spawnEnemy(x, y),
+      cards: this.cards,
+      incrementEnemyCount: () => { this.waveState.enemyCount++; },
     });
 
     this.cardDispenser = createCardDispenser({
@@ -434,7 +492,8 @@ export class GameSession {
       spawnItemDrop: (x, y, item, qty, auto) => this.spawnItemDrop(x, y, item, qty, auto),
       findSafeSpawnNear: (wx, wy) => this.findSafeSpawnNear(wx, wy),
       trackKill: (eid, variant) => this.stats.trackKill(eid, variant),
-      onTitanKilled: (deadId, send) => this.handleTitanCardDrop(send),
+      onBossKilled: (deadId, send) => this.onBossKilled(deadId, send),
+      isBoss: (entityId) => this.boss.isBoss(entityId),
       fireRunEnd: () => this.fireRunEnd(),
       civilianEntityIds: this.civilians.civilianIds,
       onCivilianDeath: (entityId, send) => this.civilians.handleCivilianDeath(entityId, send),
@@ -1000,6 +1059,17 @@ export class GameSession {
     return TILE_DEFS[tileId]?.walkable ?? false;
   }
 
+  /** Returns true if (wx, wy) overlaps any resource node (with optional radius padding). */
+  private overlapsResourceNode(wx: number, wy: number, radius = 0): boolean {
+    const checkRadius = RESOURCE_NODE_RADIUS + radius;
+    for (const id of this.world.query(C.ResourceNode, C.Position)) {
+      const pos = this.world.getComponent<PositionComponent>(id, C.Position)!;
+      const dx = wx - pos.x, dy = wy - pos.y;
+      if (dx * dx + dy * dy < checkRadius * checkRadius) return true;
+    }
+    return false;
+  }
+
   /** Returns true if (wx, wy) overlaps any building's footprint (with optional radius padding). */
   private overlapsBuilding(wx: number, wy: number, radius = 0): boolean {
     for (const id of this.world.query(C.Building, C.Position)) {
@@ -1230,37 +1300,65 @@ export class GameSession {
     }
   }
 
-  /** Handle card drop chance when a Titan is killed (25% chance for a random non-trap card). */
-  private handleTitanCardDrop(send: SendFn): void {
-    if (Math.random() > 0.25) return; // 25% drop chance
+  /** Spawn a card as a ground pickup at the given position. */
+  private spawnCardDrop(x: number, y: number, card: CardDefinition): void {
+    const angle = Math.random() * Math.PI * 2;
+    const id = this.world.createEntity();
+    this.world.addComponent(id, C.Position, { x, y });
+    this.world.addComponent(id, C.Velocity, {
+      vx: Math.cos(angle) * ITEM_DROP_SCATTER_SPEED,
+      vy: Math.sin(angle) * ITEM_DROP_SCATTER_SPEED,
+    });
+    this.world.addComponent(id, C.Health, { current: 1, max: 1 });
+    this.world.addComponent(id, C.Faction, { type: 'item' });
+    this.world.addComponent(id, C.ItemDrop, {
+      itemType: 'card:' + card.id,
+      quantity: 1,
+      autoPickup: true,
+      lifetime: CARD_DROP_LIFETIME,
+      cardId: card.id,
+      cardRarity: card.rarity,
+    });
+    console.log(`[CardDrop] Spawned "${card.name}" (${card.rarity}) at (${Math.round(x)}, ${Math.round(y)})`);
+  }
 
-    // Pick a random non-trap card from the pool
-    const nonTrapCards = CARD_POOL.filter(c => c.category !== 'trap');
-    if (nonTrapCards.length === 0) return;
-    const card = nonTrapCards[Math.floor(Math.random() * nonTrapCards.length)];
+  /** Spawn a guaranteed card drop when a boss is killed. */
+  private onBossKilled(deadId: number, send: SendFn): void {
+    const pos = this.world.getComponent<import('@shared/components').PositionComponent>(deadId, C.Position);
+    if (!pos) return;
 
-    // Pick a random living player to receive the card
-    const livingPlayers = [...this.players.values()].filter(p => p.entityId !== null);
-    if (livingPlayers.length === 0) return;
-    const recipient = livingPlayers[Math.floor(Math.random() * livingPlayers.length)];
+    const card = rollCardDrop('boss', this.cards.pickedCardIds as Set<string>);
+    if (!card) return;
 
-    // Apply card effect directly (bypass offer system)
+    this.spawnCardDrop(pos.x, pos.y, card);
+    this.boss.onBossDeath(deadId);
+  }
+
+  /** Apply a picked-up card to a player and broadcast to all. */
+  private applyCardPickup(playerEntityId: number, card: CardDefinition, send: SendFn): void {
+    // Find the player who picked it up
+    let recipient: SessionPlayer | undefined;
+    for (const p of this.players.values()) {
+      if (p.entityId === playerEntityId) { recipient = p; break; }
+    }
+    if (!recipient) return;
+
+    // Apply card effect directly
     this.cards.forceApplyCard(recipient.client.id, card);
 
     // Apply ECS side-effects (speed, maxHp, resources)
     if (recipient.entityId) {
       const buffs = this.cards.getBuffs(recipient.client.id);
       const effect = card.effect;
-      // Handle multi effects
       const applyEcs = (e: typeof effect) => {
         if (e.type === 'stat_buff' && e.stat === 'speed') {
-          const spd = this.world.getComponent<import('@shared/components').SpeedComponent>(recipient.entityId!, C.Speed);
+          const spd = this.world.getComponent<import('@shared/components').SpeedComponent>(recipient!.entityId!, C.Speed);
           if (spd) spd.multiplier = buffs.speedMultiplier;
         } else if (e.type === 'stat_buff' && e.stat === 'maxHp') {
-          const hp = this.world.getComponent<import('@shared/components').HealthComponent>(recipient.entityId!, C.Health);
+          const hp = this.world.getComponent<import('@shared/components').HealthComponent>(recipient!.entityId!, C.Health);
           if (hp) { hp.max = PLAYER_MAX_HEALTH + buffs.maxHpBonus; hp.current = Math.min(hp.current + e.value, hp.max); }
         } else if (e.type === 'resource') {
-          this.creditResources(recipient.entityId!, e.resource, e.amount, send);
+          this.creditResources(recipient!.entityId!, e.resource, e.amount, send);
         } else if (e.type === 'multi') {
           for (const sub of e.effects) applyEcs(sub);
         }
@@ -1268,18 +1366,18 @@ export class GameSession {
       applyEcs(effect);
     }
 
-    // Broadcast the card to all players
-    const applied: import('@shared/protocol').CardAppliedMessage = {
-      type: MessageType.CARD_APPLIED,
-      displayName: recipient.displayName,
+    // Broadcast CARD_PICKUP to all players
+    const pickupMsg: import('@shared/protocol').CardPickupMessage = {
+      type: MessageType.CARD_PICKUP,
+      slot: recipient.slot,
       cardId: card.id,
       cardName: card.name,
+      rarity: card.rarity,
       category: card.category,
-      isTrap: false,
-      abilities: [...this.cards.getBuffs(recipient.client.id).abilities],
+      displayName: recipient.displayName,
     };
-    for (const p of this.players.values()) send(p.client, applied);
-    console.log(`[Titan] Dropped card "${card.name}" to ${recipient.displayName}`);
+    for (const p of this.players.values()) send(p.client, pickupMsg);
+    console.log(`[CardDrop] ${recipient.displayName} picked up "${card.name}" (${card.rarity})`);
   }
 
   /**
@@ -2016,18 +2114,39 @@ export class GameSession {
   }
 
   /** Called by WaveController when a wave is cleared. */
+  private getPlayerCenter(): { x: number; y: number } | null {
+    let cx = 0, cy = 0, count = 0;
+    for (const p of this.players.values()) {
+      if (p.entityId === null) continue;
+      const pos = this.world.getComponent<PositionComponent>(p.entityId, C.Position);
+      if (pos) { cx += pos.x; cy += pos.y; count++; }
+    }
+    if (count === 0) return null;
+    return { x: cx / count, y: cy / count };
+  }
+
   private onWaveCleared(wave: number, send: SendFn): void {
-    // Notify day/night controller → begins dawn transition → then day
+    // Clear wave modifiers (events persist until next day starts)
+    this.waveModifiers.clear();
+    // Notify day/night controller - begins dawn transition - then day
     this.dayNight.onWaveCleared(send);
 
     // Grant 1 skill point to every alive player
     for (const p of this.players.values()) {
       if (p.entityId != null) this.skills.grantSkillPoint(p.client.id, send);
     }
-    // Card offers every 3 waves (after wave 3, 6, 9...)
-    if (wave >= 3 && wave % 3 === 0) {
-      this.sendCardOffers(send);
+    // Milestone card drop every N waves (spawns at campfire)
+    if (wave > 0 && wave % MILESTONE_CARD_INTERVAL === 0) {
+      const card = rollCardDrop('milestone', this.cards.pickedCardIds as Set<string>);
+      if (card) {
+        const campPos = this.world.getComponent<import('@shared/components').PositionComponent>(this.campfireEntityId, C.Position);
+        if (campPos) {
+          this.spawnCardDrop(campPos.x, campPos.y, card);
+          console.log(`[CardDrop] Milestone card "${card.name}" spawned at campfire for wave ${wave}`);
+        }
+      }
     }
+
     // Civilian spawn on wave clear
     this.civilians.onWaveCleared(wave, send);
 
@@ -2237,6 +2356,23 @@ export class GameSession {
       this.skills.grantSkillPoint(clientId, send);
     }
     console.log(`[Debug] Gave ${n} skill point(s) to ${player.displayName}`);
+  }
+
+  debugForceModifier(modifierId: string, send: SendFn): void {
+    if (this.phase !== 'playing') return;
+    this.waveModifiers.forceModifier(
+      modifierId as import('@shared/definitions/WaveModifiers').WaveModifierId,
+      this.waveState.currentWave,
+      send,
+    );
+  }
+
+  debugForceEvent(eventId: string, send: SendFn): void {
+    if (this.phase !== 'playing') return;
+    this.worldEvents.forceEvent(
+      eventId as import('@shared/definitions/WorldEvents').WorldEventId,
+      send,
+    );
   }
 
 
@@ -2508,7 +2644,14 @@ export class GameSession {
     }
     const dropResult = this.itemDrop.update(this.world, dt, this.playerEntityIds, pickupMults);
     for (const pickup of dropResult.pickups) {
-      this.creditResources(pickup.playerId, pickup.itemType, pickup.quantity, send);
+      if (pickup.itemType.startsWith('card:')) {
+        // Card pickup - apply card effect instead of crediting resources
+        const cardId = pickup.itemType.slice(5); // strip 'card:' prefix
+        const card = CARD_POOL.find(c => c.id === cardId);
+        if (card) this.applyCardPickup(pickup.playerId, card, send);
+      } else {
+        this.creditResources(pickup.playerId, pickup.itemType, pickup.quantity, send);
+      }
       this.world.destroyEntity(pickup.dropId);
     }
     for (const expiredId of dropResult.expired) {
@@ -2543,6 +2686,10 @@ export class GameSession {
     // ── Wave state machine ────────────────────────────────────────────────────
     const _t8 = performance.now();
     if (!this.gameOver) this.waves.tick(dt, send);
+    // Tick world events (meteor shower, blood moon, etc) - always tick, ends on duration or wave clear
+    if (!this.gameOver) this.worldEvents.tick(dt, send);
+    // Tick boss special abilities
+    if (!this.gameOver) this.boss.tick(dt, send);
     const _t9 = performance.now();
 
     // ── Update tick profiling (exponential moving average) ──────────────────
@@ -2679,6 +2826,7 @@ export class GameSession {
       if (drop) {
         snap.itemType = drop.itemType;
         snap.itemQuantity = drop.quantity;
+        if (drop.cardRarity) snap.cardRarity = drop.cardRarity;
       }
 
       // Building metadata
@@ -2710,6 +2858,10 @@ export class GameSession {
         const eStats = this.world.getComponent<import('@shared/components').EnemyStatsComponent>(id, C.EnemyStats);
         if (eStats && eStats.radius !== 10) snap.enemyRadius = eStats.radius;
       }
+
+      // Boss metadata
+      const bossComp = this.world.getComponent<import('@shared/components').BossComponent>(id, C.Boss);
+      if (bossComp) snap.bossId = bossComp.bossId;
 
       // Dodge roll state
       const dodgeRoll = this.world.getComponent<DodgeRollComponent>(id, C.DodgeRoll);

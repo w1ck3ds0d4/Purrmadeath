@@ -87,6 +87,8 @@ export interface BuildingSystemDeps {
     playerBuffs: Map<string, { abilities: string[] }>;
     debuffs: { turretCooldownMult: number; productionIntervalMult: number; buildingRegenRate: number };
   };
+  /** World event production multiplier (Resource Boom = 3x). */
+  getEventProductionMult?: () => number;
   isActive: () => boolean; // phase === 'playing' && !paused && !gameOver
   isWalkable: (wx: number, wy: number) => boolean;
   spawnBuilding: (x: number, y: number, type: string, maxHp: number, permanent: boolean) => number;
@@ -596,7 +598,8 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
   }
 
   function tickProduction(dt: number): void {
-    const intervalMult = cards.debuffs.productionIntervalMult;
+    const eventMult = deps.getEventProductionMult?.() ?? 1.0;
+    const intervalMult = cards.debuffs.productionIntervalMult / eventMult;
     for (const id of world.query(C.Production, C.Position)) {
       // Worker gating: buildings with WorkerSlot only produce when staffed
       const ws = world.getComponent<WorkerSlotComponent>(id, C.WorkerSlot);

@@ -35,6 +35,7 @@ import { MessageType } from '@shared/protocol';
 import type { WaveStartMessage, WaveEndMessage, WaveTimerSyncMessage } from '@shared/protocol';
 import type { ConnectedClient } from '../net/ServerSocket';
 import type { SessionPlayer, SendFn } from '../core/GameSession';
+import type { ModifierAggregate } from '@shared/definitions/WaveModifiers';
 import type { PortalSystem } from './PortalSystem';
 import type { DayNightController } from './DayNightController';
 
@@ -67,6 +68,10 @@ export interface WaveControllerDeps {
   };
   /** Night enemy buff multipliers from DayNightController. */
   getNightBuffs: () => { damageMult: number; speedMult: number };
+  /** Wave modifier multipliers (defaults all 1.0 when no modifiers). */
+  getModifierMults: () => ModifierAggregate;
+  /** World event damage buff (Blood Moon = 1.25). */
+  getEventDamageMult?: () => number;
   maxEnemies: number;
   waveSyncInterval: number;
   isWalkable: (wx: number, wy: number) => boolean;
@@ -121,7 +126,8 @@ export function createWaveController(deps: WaveControllerDeps) {
       }
     }
 
-    const numPortals = PORTALS_PER_WAVE_BASE + PORTALS_PER_WAVE_GROWTH * (wave - 1);
+    const mods = deps.getModifierMults();
+    const numPortals = Math.ceil((PORTALS_PER_WAVE_BASE + PORTALS_PER_WAVE_GROWTH * (wave - 1)) * mods.enemyCountMult);
     const placed: { x: number; y: number }[] = [];
 
     for (let i = 0; i < numPortals; i++) {
@@ -169,14 +175,16 @@ export function createWaveController(deps: WaveControllerDeps) {
     const hpMult = Math.pow(1 + ENEMY_HP_SCALE_PER_WAVE, wave - 1);
     const dmgMult = Math.pow(1 + ENEMY_DAMAGE_SCALE_PER_WAVE, wave - 1);
     const nightBuffs = deps.getNightBuffs();
-    const scaledHp = Math.round(base.hp * hpMult);
-    const scaledDmg = Math.round(base.damage * dmgMult * cards.debuffs.enemyDamageMult * nightBuffs.damageMult);
+    const mods = deps.getModifierMults();
+    const eventDmg = deps.getEventDamageMult?.() ?? 1.0;
+    const scaledHp = Math.round(base.hp * hpMult * mods.enemyHpMult);
+    const scaledDmg = Math.round(base.damage * dmgMult * cards.debuffs.enemyDamageMult * nightBuffs.damageMult * mods.enemyDamageMult * eventDmg);
 
     const id = world.createEntity();
     world.addComponent(id, C.Position, { x, y });
     world.addComponent(id, C.Velocity, { vx: 0, vy: 0 });
     world.addComponent(id, C.Health, { current: scaledHp, max: scaledHp });
-    world.addComponent(id, C.Speed, { base: base.speed, multiplier: cards.debuffs.enemySpeedMult * nightBuffs.speedMult });
+    world.addComponent(id, C.Speed, { base: base.speed, multiplier: cards.debuffs.enemySpeedMult * nightBuffs.speedMult * mods.enemySpeedMult });
     world.addComponent(id, C.PlayerInput, { dx: 0, dy: 0, sprint: false });
     world.addComponent(id, C.Faction, { type: 'enemy', enemyFaction: faction });
     world.addComponent(id, C.Facing, { angle: 0 });
@@ -366,11 +374,44 @@ export function createWaveController(deps: WaveControllerDeps) {
 
   // ── Public API ────────────────────────────────────────────────────────────
 
+  /** Spawn extra portals mid-wave (Portal Surge event). */
+  function spawnExtraPortals(count: number, _send: SendFn): void {
+    let cx = 0, cy = 0, pc = 0;
+    for (const p of players.values()) {
+      if (p.entityId === null) continue;
+      const pos = world.getComponent<PositionComponent>(p.entityId, C.Position);
+      if (pos) { cx += pos.x; cy += pos.y; pc++; }
+    }
+    if (pc === 0) return;
+    cx /= pc; cy /= pc;
+
+    const factions = pickWaveFactions(s.currentWave);
+    let placed = 0;
+    for (let i = 0; i < count; i++) {
+      for (let attempt = 0; attempt < 80; attempt++) {
+        const angle = Math.random() * Math.PI * 2;
+        const dist = PORTAL_MIN_DIST + Math.random() * (PORTAL_MAX_DIST - PORTAL_MIN_DIST);
+        const px = cx + Math.cos(angle) * dist;
+        const py = cy + Math.sin(angle) * dist;
+        if (!isWalkable(px, py) || overlapsBuilding(px, py, PORTAL_RADIUS)) continue;
+        const portalId = spawnPortal(px, py, s.currentWave);
+        const faction = factions[i % factions.length];
+        portalFactions.set(portalId, faction);
+        const pf = world.getComponent<FactionComponent>(portalId, C.Faction);
+        if (pf) pf.enemyFaction = faction;
+        placed++;
+        break;
+      }
+    }
+    console.log(`[WaveController] Portal Surge: spawned ${placed}/${count} extra portals`);
+  }
+
   return {
     tick,
     activateWave,
     spawnEnemy,
     spawnPortal,
+    spawnExtraPortals,
     broadcastWaveTimerSync,
     debugSkip,
     debugPause,

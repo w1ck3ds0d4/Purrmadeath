@@ -282,6 +282,24 @@ export const ITEM_DROP_SCATTER_SPEED = 120;
 /** Friction decay rate for item drop scatter velocity. */
 export const ITEM_DROP_FRICTION = 6;
 
+// ─── Card Drops ─────────────────────────────────────────────────────────
+
+/** Render radius of a card drop in world pixels (larger than item drops). */
+export const CARD_DROP_RADIUS = 12;
+/** Seconds before an uncollected card drop despawns. */
+export const CARD_DROP_LIFETIME = 120;
+/** Auto-pickup radius for card drops in world pixels. */
+export const CARD_DROP_PICKUP_RADIUS = 32;
+
+// ─── Boss System ────────────────────────────────────────────────────────
+
+/** Boss spawns every N waves. */
+export const BOSS_SPAWN_INTERVAL = 5;
+/** First wave a boss can appear. */
+export const BOSS_FIRST_WAVE = 5;
+/** Card drop spawns at campfire every N waves. */
+export const MILESTONE_CARD_INTERVAL = 10;
+
 // ─── Death & Respawn (4.11) ───────────────────────────────────────────
 
 /** Seconds a downed player has before they fully die (bleed-out timer). */

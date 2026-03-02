@@ -119,6 +119,8 @@ export class SessionManager {
     socket.on(MessageType.DEBUG_SKIP_NIGHT, (c) => this.onDebugAction(c, () => this.session?.debugSkipNight((cl, msg) => this.socket.send(cl, msg))));
     socket.on(MessageType.DEBUG_SKIP_DAY, (c) => this.onDebugAction(c, () => this.session?.debugSkipDay((cl, msg) => this.socket.send(cl, msg))));
     socket.on(MessageType.DEBUG_SET_TIME, (c, m) => this.onDebugAction(c, () => this.session?.debugSetTime((m as import('@shared/protocol').DebugSetTimeMessage).seconds, (cl, msg) => this.socket.send(cl, msg))));
+    socket.on(MessageType.DEBUG_FORCE_MODIFIER, (c, m) => this.onDebugAction(c, () => this.session?.debugForceModifier((m as import('@shared/protocol').DebugForceModifierMessage).modifierId, (cl, msg) => this.socket.send(cl, msg))));
+    socket.on(MessageType.DEBUG_FORCE_EVENT, (c, m) => this.onDebugAction(c, () => this.session?.debugForceEvent((m as import('@shared/protocol').DebugForceEventMessage).eventId, (cl, msg) => this.socket.send(cl, msg))));
     socket.on(MessageType.CHAT,                 (c, m) => this.onChat(c, m as ChatSendMessage));
     socket.on(MessageType.PAUSE_VOTE,            (c) => this.onPauseVote(c));
     socket.on(MessageType.SLEEP_VOTE,            (c, m) => this.onSleepVote(c, m as import('@shared/protocol').SleepVoteMessage));

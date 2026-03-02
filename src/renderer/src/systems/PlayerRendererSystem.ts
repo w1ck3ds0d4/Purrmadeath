@@ -15,8 +15,9 @@ import {
   EnemyStatsComponent,
   DodgeRollComponent,
   StatusEffectsComponent,
+  BossComponent,
 } from '@shared/components';
-import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, ENEMY_MELEE_RANGE, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, buildingHalfExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RANGE, STATUS_BURN, STATUS_POISON, STATUS_SLOW, STATUS_STUN, STATUS_HOLY, STATUS_SHADOW, STATUS_ARCANE, STATUS_NATURE } from '@shared/constants';
+import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, ENEMY_MELEE_RANGE, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, CARD_DROP_RADIUS, buildingHalfExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RANGE, STATUS_BURN, STATUS_POISON, STATUS_SLOW, STATUS_STUN, STATUS_HOLY, STATUS_SHADOW, STATUS_ARCANE, STATUS_NATURE } from '@shared/constants';
 import { FACTION_COLORS, type EnemyFaction } from '@shared/definitions/EnemyVariants';
 
 /** Turret type → base range in pixels. */
@@ -57,6 +58,13 @@ const ITEM_DROP_COLORS: Record<string, number> = {
   iron:    0x8a5a3a,
   diamond: 0x44ccdd,
   gold:    0xe0c030,
+};
+// Card rarity colors
+const CARD_RARITY_COLORS: Record<string, number> = {
+  common:    0xb4b4b4,
+  rare:      0x4a90d9,
+  epic:      0xaa44ff,
+  legendary: 0xe8c96a,
 };
 // Building colors by type
 const BUILDING_COLORS: Record<string, { body: number; border: number }> = {
@@ -126,6 +134,7 @@ export class PlayerRendererSystem {
   private attackArcs  = new Map<EntityId, { facing: number; elapsed: number }>();
   private downedEntities = new Set<EntityId>();
   private reviveProgress = new Map<EntityId, number>(); // entityId → 0..1
+  private bossLabels = new Map<EntityId, Text>();
   /** Currently selected building entity ID (for highlight rendering). */
   selectedBuildingId: number | null = null;
   /** Dedicated layer for all health bars - renders above entities/buildings. */
@@ -266,6 +275,12 @@ export class PlayerRendererSystem {
         this.wasDowned.delete(id);
         this.wasDodging.delete(id);
         this.lastReviveProg.delete(id);
+        const bossLabel = this.bossLabels.get(id);
+        if (bossLabel) {
+          this.worldContainer.removeChild(bossLabel);
+          bossLabel.destroy();
+          this.bossLabels.delete(id);
+        }
       }
     }
 
@@ -635,26 +650,52 @@ export class PlayerRendererSystem {
         // ── Item drop rendering ──────────────────────────────────────────────
         const drop = world.getComponent<ItemDropComponent>(id, C.ItemDrop);
         const dropType = drop?.itemType ?? 'wood';
-        const dropColor = ITEM_DROP_COLORS[dropType] ?? 0xcccccc;
-        const ir = ITEM_DROP_RADIUS;
+        const isCard = dropType.startsWith('card:');
 
         // Gentle vertical bob
         const bob = Math.sin(performance.now() / 600 + id * 1.7) * 2;
-
         // Pulsing glow
         const pulse = 0.4 + 0.3 * Math.sin(performance.now() / 800 + id);
 
-        // Glow ring
-        gfx.circle(0, bob, ir + 3);
-        gfx.fill({ color: dropColor, alpha: 0.12 * pulse });
+        if (isCard) {
+          // Card drop: rounded rectangle with rarity coloring
+          const cardColor = CARD_RARITY_COLORS[drop?.cardRarity ?? 'common'] ?? 0xb4b4b4;
+          const cr = CARD_DROP_RADIUS;
+          const cw = cr * 1.4;  // card width
+          const ch = cr * 1.8;  // card height
 
-        // Diamond shape
-        gfx.poly([0, bob - ir, ir * 0.7, bob, 0, bob + ir, -ir * 0.7, bob]);
-        gfx.fill({ color: dropColor, alpha: 0.9 });
+          // Outer glow
+          gfx.circle(0, bob, cr + 6);
+          gfx.fill({ color: cardColor, alpha: 0.15 * pulse });
 
-        // Outline
-        gfx.poly([0, bob - ir, ir * 0.7, bob, 0, bob + ir, -ir * 0.7, bob]);
-        gfx.stroke({ color: 0xffffff, alpha: 0.3, width: 1 });
+          // Card body (rounded rect)
+          gfx.roundRect(-cw / 2, bob - ch / 2, cw, ch, 3);
+          gfx.fill({ color: cardColor, alpha: 0.9 });
+
+          // Inner highlight
+          gfx.roundRect(-cw / 2 + 2, bob - ch / 2 + 2, cw - 4, ch - 4, 2);
+          gfx.stroke({ color: 0xffffff, alpha: 0.4, width: 1 });
+
+          // Card border
+          gfx.roundRect(-cw / 2, bob - ch / 2, cw, ch, 3);
+          gfx.stroke({ color: 0xffffff, alpha: 0.5, width: 1.5 });
+        } else {
+          // Regular item drop: diamond shape
+          const dropColor = ITEM_DROP_COLORS[dropType] ?? 0xcccccc;
+          const ir = ITEM_DROP_RADIUS;
+
+          // Glow ring
+          gfx.circle(0, bob, ir + 3);
+          gfx.fill({ color: dropColor, alpha: 0.12 * pulse });
+
+          // Diamond shape
+          gfx.poly([0, bob - ir, ir * 0.7, bob, 0, bob + ir, -ir * 0.7, bob]);
+          gfx.fill({ color: dropColor, alpha: 0.9 });
+
+          // Outline
+          gfx.poly([0, bob - ir, ir * 0.7, bob, 0, bob + ir, -ir * 0.7, bob]);
+          gfx.stroke({ color: 0xffffff, alpha: 0.3, width: 1 });
+        }
 
       } else {
         // ── Standard entity rendering (players, enemies, guards) ─────────────
@@ -751,8 +792,22 @@ export class PlayerRendererSystem {
             gfx.fill({ color: 0x44ccff, alpha: 1 });
           }
         } else {
+          // Boss aura (pulsing ring, thicker outline)
+          const bossComp = isEnemy ? world.getComponent<BossComponent>(id, C.Boss) : undefined;
+          if (bossComp) {
+            const bpulse = 0.4 + Math.sin(Date.now() / 300) * 0.2;
+            const bossColor = bossComp.enraged ? 0xff2200 : 0xff8800;
+            // Outer aura glow
+            gfx.circle(0, 0, r + 16);
+            gfx.fill({ color: bossColor, alpha: bpulse * 0.15 });
+            gfx.circle(0, 0, r + 16);
+            gfx.stroke({ color: bossColor, alpha: bpulse * 0.6, width: 3 });
+            // Inner aura
+            gfx.circle(0, 0, r + 8);
+            gfx.stroke({ color: bossColor, alpha: bpulse * 0.4, width: 2 });
+          }
           // Titan rally aura (pulsing ring when below 50% HP)
-          if (ev?.variant === 'titan' && hp && hp.current > 0 && hp.current <= hp.max * 0.5) {
+          else if (ev?.variant === 'titan' && hp && hp.current > 0 && hp.current <= hp.max * 0.5) {
             const pulse = 0.3 + Math.sin(Date.now() / 200) * 0.15;
             gfx.circle(0, 0, r + 12);
             gfx.fill({ color: 0xff4400, alpha: pulse * 0.2 });
@@ -956,8 +1011,13 @@ export class PlayerRendererSystem {
         const gs = world.getComponent<GhostStateComponent>(id, C.GhostState);
         if (gs?.hidden) continue;
         const ev = world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant);
-        if (ev?.variant === 'titan') {
-          // Boss HP bar: wider, taller, positioned higher
+        const boss = world.getComponent<BossComponent>(id, C.Boss);
+        if (boss) {
+          // Boss HP bar: extra wide, tall, positioned higher
+          const bossR = (world.getComponent<EnemyStatsComponent>(id, C.EnemyStats)?.radius ?? 30);
+          barW = 80; barH = 7; barY = -(bossR + 18); alwaysShow = true;
+        } else if (ev?.variant === 'titan') {
+          // Titan HP bar: wider, taller, positioned higher
           barW = 60; barH = 6; barY = -(30 + 14); alwaysShow = true;
         } else {
           barW = BAR_W; barH = BAR_H; barY = BAR_Y; alwaysShow = true;
@@ -981,6 +1041,23 @@ export class PlayerRendererSystem {
       if (ratio > 0) {
         hb.rect(wx - barW / 2, wy + barY, barW * ratio, barH);
         hb.fill({ color: barColor, alpha: 1 });
+      }
+
+      // Boss name label above HP bar
+      if (isEnemy) {
+        const bossC = world.getComponent<BossComponent>(id, C.Boss);
+        if (bossC) {
+          const bossName = this.getBossDisplayName(bossC.bossId);
+          let label = this.bossLabels.get(id);
+          if (!label) {
+            label = new Text({ text: bossName, style: { fontFamily: 'monospace', fontSize: 11, fill: 0xff8800, fontWeight: 'bold', stroke: { color: 0x000000, width: 3 } } });
+            label.anchor.set(0.5, 1);
+            this.worldContainer.addChild(label);
+            this.bossLabels.set(id, label);
+          }
+          label.position.set(wx, wy + barY - 3);
+          label.visible = true;
+        }
       }
     }
 
@@ -1215,5 +1292,19 @@ export class PlayerRendererSystem {
       bubble.text.destroy();
     }
     this.speechBubbles.clear();
+    for (const [, label] of this.bossLabels) {
+      this.worldContainer.removeChild(label);
+      label.destroy();
+    }
+    this.bossLabels.clear();
+  }
+
+  private getBossDisplayName(bossId: string): string {
+    switch (bossId) {
+      case 'ravager': return 'The Ravager';
+      case 'necromancer': return 'The Necromancer';
+      case 'shadow_lord': return 'The Shadow Lord';
+      default: return 'Boss';
+    }
   }
 }

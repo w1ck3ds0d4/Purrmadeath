@@ -14,6 +14,7 @@ import {
   DodgeRollComponent,
   DownedComponent,
   CivilianComponent,
+  BossComponent,
 } from '@shared/components';
 import type { SnapshotMessage, DeltaMessage, EntitySnapshot } from '@shared/protocol';
 import {
@@ -141,6 +142,8 @@ export class RemotePlayerSystem {
           quantity: snap.itemQuantity ?? 1,
           autoPickup: true,
           lifetime: 60,
+          cardId: snap.itemType.startsWith('card:') ? snap.itemType.slice(5) : undefined,
+          cardRarity: snap.cardRarity,
         } as ItemDropComponent);
       }
       // Building metadata (for renderer type/color selection)
@@ -192,6 +195,14 @@ export class RemotePlayerSystem {
           carryResource: null,
           carryAmount: 0,
         } as CivilianComponent);
+      }
+      // Boss metadata (for special boss rendering)
+      if (snap.bossId) {
+        world.addComponent(snap.entityId, C.Boss, {
+          bossId: snap.bossId,
+          enraged: false,
+          specialCooldown: 0,
+        } as BossComponent);
       }
     } else {
       // Update velocity + health immediately; position is interpolated in interpolate()

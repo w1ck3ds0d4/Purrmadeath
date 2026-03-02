@@ -24,10 +24,38 @@ interface ProjectileVisual {
 const TRAIL_LEN = 10; // pixels behind the body
 const EXPLOSION_DURATION = 0.3; // seconds
 
+// Meteor impact constants
+const METEOR_EXPLOSION_DURATION = 0.6; // seconds - longer than cannon
+const CRATER_LIFETIME = 8; // seconds before crater fully fades
+
 interface Explosion {
   x: number;
   y: number;
   radius: number;
+  elapsed: number;
+}
+
+interface MeteorImpact {
+  x: number;
+  y: number;
+  radius: number;
+  elapsed: number;
+}
+
+interface Crater {
+  x: number;
+  y: number;
+  radius: number;
+  age: number;
+}
+
+interface MeteorWarning {
+  x: number;
+  y: number;
+  radius: number;
+  /** Total warning duration. */
+  delay: number;
+  /** Time elapsed since warning started. */
   elapsed: number;
 }
 
@@ -40,10 +68,19 @@ interface Explosion {
  */
 export class ProjectileRendererSystem {
   private gfx: Graphics;
+  private craterGfx: Graphics;
   private projectiles = new Map<number, ProjectileVisual>();
   private explosions: Explosion[] = [];
+  private meteorImpacts: MeteorImpact[] = [];
+  private meteorWarnings: MeteorWarning[] = [];
+  private craters: Crater[] = [];
 
   constructor(parent: Container) {
+    // Crater layer below projectiles
+    this.craterGfx = new Graphics();
+    this.craterGfx.zIndex = 1;
+    parent.addChild(this.craterGfx);
+
     this.gfx = new Graphics();
     this.gfx.zIndex = 10; // render above entities/buildings
     parent.addChild(this.gfx);
@@ -79,6 +116,17 @@ export class ProjectileRendererSystem {
     this.explosions.push({ x, y, radius, elapsed: 0 });
   }
 
+  /** Register a meteor warning (red circle on ground before impact). */
+  addMeteorWarning(x: number, y: number, radius: number, delay: number): void {
+    this.meteorWarnings.push({ x, y, radius, delay, elapsed: 0 });
+  }
+
+  /** Register a meteor impact - bigger explosion + leaves a crater. */
+  addMeteorImpact(x: number, y: number, radius: number): void {
+    this.meteorImpacts.push({ x, y, radius, elapsed: 0 });
+    this.craters.push({ x, y, radius: radius * 0.8, age: 0 });
+  }
+
   /** Advance all projectile positions by dt seconds. */
   update(dt: number): void {
     for (const p of this.projectiles.values()) {
@@ -93,11 +141,32 @@ export class ProjectileRendererSystem {
         p.y += p.vy * dt;
       }
     }
-    // Tick explosions
+    // Tick cannon explosions
     for (let i = this.explosions.length - 1; i >= 0; i--) {
       this.explosions[i].elapsed += dt;
       if (this.explosions[i].elapsed >= EXPLOSION_DURATION) {
         this.explosions.splice(i, 1);
+      }
+    }
+    // Tick meteor impacts
+    for (let i = this.meteorImpacts.length - 1; i >= 0; i--) {
+      this.meteorImpacts[i].elapsed += dt;
+      if (this.meteorImpacts[i].elapsed >= METEOR_EXPLOSION_DURATION) {
+        this.meteorImpacts.splice(i, 1);
+      }
+    }
+    // Tick meteor warnings (remove when expired - impact removes them)
+    for (let i = this.meteorWarnings.length - 1; i >= 0; i--) {
+      this.meteorWarnings[i].elapsed += dt;
+      if (this.meteorWarnings[i].elapsed >= this.meteorWarnings[i].delay + 0.1) {
+        this.meteorWarnings.splice(i, 1);
+      }
+    }
+    // Tick craters
+    for (let i = this.craters.length - 1; i >= 0; i--) {
+      this.craters[i].age += dt;
+      if (this.craters[i].age >= CRATER_LIFETIME) {
+        this.craters.splice(i, 1);
       }
     }
   }
@@ -109,12 +178,31 @@ export class ProjectileRendererSystem {
    */
   render(cameraX: number, cameraY: number, zoom: number, screenW: number, screenH: number): void {
     this.gfx.clear();
+    this.craterGfx.clear();
 
     // Visible world-space bounds for culling
     const halfW = screenW / (2 * zoom);
     const halfH = screenH / (2 * zoom);
     const margin = 50 / zoom;
 
+    // ── Craters (ground layer) ───────────────────────────────────────────
+    for (const c of this.craters) {
+      if (c.x < cameraX - halfW - c.radius || c.x > cameraX + halfW + c.radius ||
+          c.y < cameraY - halfH - c.radius || c.y > cameraY + halfH + c.radius) continue;
+
+      const fade = 1 - c.age / CRATER_LIFETIME;
+      // Scorched ground
+      this.craterGfx.circle(c.x, c.y, c.radius);
+      this.craterGfx.fill({ color: 0x221100, alpha: fade * 0.35 });
+      // Darker inner ring
+      this.craterGfx.circle(c.x, c.y, c.radius * 0.6);
+      this.craterGfx.fill({ color: 0x110800, alpha: fade * 0.25 });
+      // Rim
+      this.craterGfx.circle(c.x, c.y, c.radius);
+      this.craterGfx.stroke({ color: 0x332200, alpha: fade * 0.3, width: 1.5 });
+    }
+
+    // ── Projectiles ──────────────────────────────────────────────────────
     for (const p of this.projectiles.values()) {
       // Cull off-screen projectiles in world space
       if (p.x < cameraX - halfW - margin || p.x > cameraX + halfW + margin ||
@@ -184,9 +272,9 @@ export class ProjectileRendererSystem {
       }
     }
 
-    // Draw AOE explosions
+    // ── Cannon AOE explosions ────────────────────────────────────────────
     for (const exp of this.explosions) {
-      const t = exp.elapsed / EXPLOSION_DURATION; // 0→1
+      const t = exp.elapsed / EXPLOSION_DURATION; // 0->1
       const currentRadius = exp.radius * (0.3 + 0.7 * t);
       const alpha = (1 - t) * 0.5;
       // Outer ring
@@ -198,11 +286,70 @@ export class ProjectileRendererSystem {
       this.gfx.circle(exp.x, exp.y, currentRadius * 0.4);
       this.gfx.fill({ color: 0xffdd66, alpha: alpha * 0.6 });
     }
+
+    // ── Meteor warnings (pulsing red circle on ground) ──────────────────
+    for (const w of this.meteorWarnings) {
+      if (w.x < cameraX - halfW - w.radius || w.x > cameraX + halfW + w.radius ||
+          w.y < cameraY - halfH - w.radius || w.y > cameraY + halfH + w.radius) continue;
+
+      const t = Math.min(w.elapsed / w.delay, 1); // 0 -> 1 as impact approaches
+      const pulse = 0.5 + 0.5 * Math.sin(w.elapsed * 8); // fast pulse
+      const alpha = (0.15 + 0.35 * t) * (0.7 + 0.3 * pulse); // grows more visible near impact
+
+      // Red fill
+      this.gfx.circle(w.x, w.y, w.radius * (0.8 + 0.2 * t));
+      this.gfx.fill({ color: 0xff2200, alpha: alpha * 0.4 });
+      // Red ring
+      this.gfx.circle(w.x, w.y, w.radius * (0.8 + 0.2 * t));
+      this.gfx.stroke({ color: 0xff4400, alpha: alpha, width: 2 });
+      // Inner crosshair
+      this.gfx.circle(w.x, w.y, w.radius * 0.15);
+      this.gfx.fill({ color: 0xff0000, alpha: alpha * 0.6 });
+    }
+
+    // ── Meteor explosions (bigger, more dramatic) ────────────────────────
+    for (const m of this.meteorImpacts) {
+      const t = m.elapsed / METEOR_EXPLOSION_DURATION; // 0->1
+
+      // Phase 1: bright flash expanding (0 -> 0.3)
+      // Phase 2: fire ring expanding + fading (0.3 -> 1.0)
+      const expandRadius = m.radius * (0.4 + 0.6 * t);
+
+      if (t < 0.3) {
+        // Bright white-yellow flash
+        const flashT = t / 0.3;
+        const flashAlpha = (1 - flashT) * 0.7;
+        this.gfx.circle(m.x, m.y, expandRadius * 0.8);
+        this.gfx.fill({ color: 0xffeeaa, alpha: flashAlpha });
+      }
+
+      // Outer fire ring
+      const ringAlpha = (1 - t) * 0.6;
+      this.gfx.circle(m.x, m.y, expandRadius);
+      this.gfx.fill({ color: 0xff4400, alpha: ringAlpha * 0.25 });
+      this.gfx.circle(m.x, m.y, expandRadius);
+      this.gfx.stroke({ color: 0xff6600, alpha: ringAlpha, width: 3 });
+
+      // Mid ring (orange)
+      this.gfx.circle(m.x, m.y, expandRadius * 0.65);
+      this.gfx.fill({ color: 0xff8800, alpha: ringAlpha * 0.3 });
+      this.gfx.circle(m.x, m.y, expandRadius * 0.65);
+      this.gfx.stroke({ color: 0xffaa22, alpha: ringAlpha * 0.7, width: 2 });
+
+      // Inner core (bright yellow)
+      const coreAlpha = (1 - t * t) * 0.5;
+      this.gfx.circle(m.x, m.y, expandRadius * 0.3);
+      this.gfx.fill({ color: 0xffdd44, alpha: coreAlpha });
+    }
   }
 
   destroy(): void {
     this.projectiles.clear();
     this.explosions.length = 0;
+    this.meteorImpacts.length = 0;
+    this.meteorWarnings.length = 0;
+    this.craters.length = 0;
     this.gfx.clear();
+    this.craterGfx.clear();
   }
 }

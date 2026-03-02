@@ -63,6 +63,8 @@ import { BuildModeOverlay } from './ui/overlays/BuildModeOverlay';
 import { BuildMenuOverlay } from './ui/overlays/BuildMenuOverlay';
 import { BuildGhostRenderer } from './render/BuildGhostRenderer';
 import { WarehouseHUD } from './ui/hud/WarehouseHUD';
+import { EventRoulette } from './ui/hud/EventRoulette';
+import { createCardToast } from './ui/hud/CardToast';
 import { DamageNumberSystem } from './systems/DamageNumberSystem';
 import { HitParticleSystem } from './systems/HitParticleSystem';
 import { AbilityVFXSystem } from './systems/AbilityVFXSystem';
@@ -264,6 +266,7 @@ async function main(): Promise<void> {
   let potionCooldown = 0;
   let potionCooldownMax = 0;
   let completedBuffs: { displayName: string; reward: string; medalColor: string }[] = [];
+  let eventVisionMult = 1.0;
 
   // ── Death / respawn state ──────────────────────────────────────────────────
   let localDowned   = false;
@@ -321,6 +324,11 @@ async function main(): Promise<void> {
   const buildGhost   = new BuildGhostRenderer(tileRenderer.worldContainer);
   const buildMenu    = new BuildMenuOverlay();
   const warehouseHUD = new WarehouseHUD();
+  const eventRoulette = new EventRoulette();
+  eventRoulette.onLand = (eventId) => {
+    if (eventId === null) waveHUD.onSafeDay();
+  };
+  const cardToast = createCardToast();
   const potionShopOverlay = new PotionShopOverlay();
 
   const updateBanner = new UpdateBanner();
@@ -405,6 +413,12 @@ async function main(): Promise<void> {
       case '/sp':
         net.send({ type: MessageType.DEBUG_GIVE_SKILL_POINTS, count: parseInt(args[0]) || 1 });
         break;
+      case '/modifier':
+        if (args[0]) net.send({ type: MessageType.DEBUG_FORCE_MODIFIER, modifierId: args[0] });
+        break;
+      case '/event':
+        if (args[0]) net.send({ type: MessageType.DEBUG_FORCE_EVENT, eventId: args[0] });
+        break;
     }
   });
 
@@ -423,11 +437,15 @@ async function main(): Promise<void> {
 
   // ── State: Menu ─────────────────────────────────────────────────────────────
   stateMgr.onEnter(GameState.Menu, () => {
+    // Hide night overlay FIRST - before any cleanup that could throw
+    nightOverlay.hide();
     cancelTargeting();
     menuOverlay.showMenu();
     lobbyOverlay.hide();
     pauseBanner.hide();
     waveHUD.hide();
+    eventRoulette.hide();
+    cardToast.hide();
     hud.setVisible(false);
     weaponHotbar.setVisible(false);
     skillTree.hide();
@@ -448,7 +466,6 @@ async function main(): Promise<void> {
     gameStartTime = 0;
     serverElapsedTime = 0;
     waveActive = false;
-    nightOverlay.setDarkness(0);
     skillAllocated = new Set();
     skillPoints = 0;
     activeAbilities = [null, null, null];
@@ -463,6 +480,10 @@ async function main(): Promise<void> {
     potionMaxCharges = 0;
     potionCooldown = 0;
     potionCooldownMax = 0;
+    eventVisionMult = 1.0;
+    nightOverlay.resetTint();
+    waveHUD.onWorldEventEnd();
+    eventRoulette.hide();
     potionShopOverlay.hide();
     buildMenu.hide();
     waveHUD.setPaused(false);
@@ -594,6 +615,7 @@ async function main(): Promise<void> {
     get potionCooldown() { return potionCooldown; }, set potionCooldown(v) { potionCooldown = v; },
     get potionCooldownMax() { return potionCooldownMax; }, set potionCooldownMax(v) { potionCooldownMax = v; },
     get completedBuffs() { return completedBuffs; }, set completedBuffs(v) { completedBuffs = v; },
+    get eventVisionMult() { return eventVisionMult; }, set eventVisionMult(v) { eventVisionMult = v; },
   };
 
   registerMessageHandlers(net, handlerState, {
@@ -607,7 +629,7 @@ async function main(): Promise<void> {
     },
     stateMgr, menuOverlay, lobbyOverlay, pauseBanner, waveHUD, resourceHUD,
     deathOverlay, gameOverOverlay, chatOverlay, debug, buildOverlay, buildGhost,
-    warehouseHUD, cardPicker, skillTree, statsOverlay, abilityVFX, potionShopOverlay, buildMenu, civilianPanel, nightOverlay, combinedResources, electronAPI,
+    warehouseHUD, cardPicker, skillTree, statsOverlay, abilityVFX, potionShopOverlay, buildMenu, civilianPanel, nightOverlay, eventRoulette, cardToast, combinedResources, electronAPI,
   });
 
   // ── Session action helper ─────────────────────────────────────────────────
@@ -827,6 +849,8 @@ async function main(): Promise<void> {
       staminaSystem.update(world, dt);
       remotePlayerSys.interpolate(world, dt);
       waveHUD.update(dt);
+      eventRoulette.update(dt);
+      cardToast.update(dt);
 
       // Tick local dodge roll timer
       if (localEntityId !== null) {
@@ -1216,11 +1240,12 @@ async function main(): Promise<void> {
       // Night overlay: gather light sources from players + buildings + portals
       const playerLights: { x: number; y: number; radius: number; color?: number }[] = [];
       const lightSources: { x: number; y: number; radius: number; color?: number }[] = [];
+      const vMult = eventVisionMult; // fog modifier or solar eclipse
       for (const eid of world.query(C.Position, C.Faction)) {
         const f = world.getComponent<FactionComponent>(eid, C.Faction);
         if (f?.type === 'player') {
           const p = world.getComponent<PositionComponent>(eid, C.Position)!;
-          const light = { x: p.x, y: p.y, radius: TORCH_RADIUS, color: TORCH_COLOR };
+          const light = { x: p.x, y: p.y, radius: TORCH_RADIUS * vMult, color: TORCH_COLOR };
           playerLights.push(light);
           lightSources.push(light);
         } else if (f?.type === 'portal') {
@@ -1235,15 +1260,18 @@ async function main(): Promise<void> {
         if (!b) continue;
         if (b.buildingType === 'light_tower') {
           const p = world.getComponent<PositionComponent>(eid, C.Position)!;
-          lightSources.push({ x: p.x, y: p.y, radius: TORCH_RADIUS * (1 + b.upgradeLevel * 0.5) });
+          lightSources.push({ x: p.x, y: p.y, radius: TORCH_RADIUS * (1 + b.upgradeLevel * 0.5) * vMult });
         } else if (b.buildingType === 'campfire') {
           const p = world.getComponent<PositionComponent>(eid, C.Position)!;
-          lightSources.push({ x: p.x, y: p.y, radius: TORCH_RADIUS * 1.5 });
+          lightSources.push({ x: p.x, y: p.y, radius: TORCH_RADIUS * 1.5 * vMult });
         }
       }
       nightOverlay.update(camera.viewX, camera.viewY, camera.zoom, width, height, lightSources);
       minimap.setDarkness(nightOverlay.getDarkness());
       minimap.update(world, localEntityId, camera.x, camera.y, width, height, playerLights);
+    } else {
+      // Safety: ensure night overlay never renders outside gameplay
+      nightOverlay.hide();
     }
 
     const tileX = Math.floor(camera.x / TILE_SIZE);

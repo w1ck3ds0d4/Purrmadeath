@@ -37,6 +37,8 @@ export interface DayNightControllerDeps {
   onNightStart: (send: SendFn) => void;
   /** Called when dawn transition completes → day begins. */
   onDayStart: (send: SendFn) => void;
+  /** Optional: world event overrides (solar eclipse forces night buffs during day). */
+  getEventOverrides?: () => { forceNightBuffs?: boolean };
 }
 
 // ── Factory ──────────────────────────────────────────────────────────────────
@@ -58,7 +60,8 @@ export function createDayNightController(deps: DayNightControllerDeps) {
   function updateDarkness(): void {
     switch (s.phase) {
       case 'day':
-        s.darkness = 0;
+        // Solar eclipse forces partial darkness during the day
+        s.darkness = deps.getEventOverrides?.()?.forceNightBuffs ? 0.7 : 0;
         break;
       case 'dusk':
         s.darkness = s.transitionProgress;
@@ -148,6 +151,7 @@ export function createDayNightController(deps: DayNightControllerDeps) {
     switch (s.phase) {
       case 'day': {
         s.dayTimer -= dt;
+        updateDarkness(); // re-evaluate eclipse darkness each tick
 
         // Periodic sync
         s.syncTimer += dt;
@@ -237,6 +241,11 @@ export function createDayNightController(deps: DayNightControllerDeps) {
   }
 
   function getEnemyBuffs(): { damageMult: number; speedMult: number } {
+    // Solar eclipse forces night buffs during day
+    const overrides = deps.getEventOverrides?.();
+    if (overrides?.forceNightBuffs) {
+      return { damageMult: NIGHT_ENEMY_DAMAGE_BUFF, speedMult: NIGHT_ENEMY_SPEED_BUFF };
+    }
     if (s.phase === 'night' || s.permanentNight) {
       return { damageMult: NIGHT_ENEMY_DAMAGE_BUFF, speedMult: NIGHT_ENEMY_SPEED_BUFF };
     }

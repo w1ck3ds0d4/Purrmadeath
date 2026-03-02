@@ -67,7 +67,8 @@ export interface RespawnManagerDeps {
   spawnItemDrop: (x: number, y: number, itemType: string, quantity: number, autoPickup: boolean) => void;
   findSafeSpawnNear: (wx: number, wy: number) => { x: number; y: number };
   trackKill: (attackerEntityId: number, enemyVariant: string) => void;
-  onTitanKilled: (deadId: number, send: SendFn) => void;
+  onBossKilled: (deadId: number, send: SendFn) => void;
+  isBoss: (entityId: number) => boolean;
   fireRunEnd: () => void;
   /** Called when a downed civilian's bleed timer expires. */
   onCivilianDeath?: (entityId: number, send: SendFn) => void;
@@ -357,9 +358,9 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
             deps.trackKill(attackerId, ev?.variant ?? 'melee');
           }
         }
-        // Titan death: chance to drop a random card
-        if (ev?.variant === 'titan' && send) {
-          deps.onTitanKilled(deadId, send);
+        // Boss death: guaranteed card drop
+        if (send && deps.isBoss(deadId)) {
+          deps.onBossKilled(deadId, send);
         }
       }
 

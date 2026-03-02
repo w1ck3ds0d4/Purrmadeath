@@ -126,6 +126,8 @@ export enum MessageType {
   BUILD_REPAIR_CONFIRM = 'BUILD_REPAIR_CONFIRM',
   /** Server → all: cannon turret AOE explosion visual. */
   AOE_EXPLOSION = 'AOE_EXPLOSION',
+  /** Server -> all: incoming meteor warning (red circle on ground before impact). */
+  METEOR_WARNING = 'METEOR_WARNING',
   /** Server → All: warehouse shared resource pool update. */
   WAREHOUSE_UPDATE = 'WAREHOUSE_UPDATE',
 
@@ -158,6 +160,10 @@ export enum MessageType {
   DEBUG_SKIP_DAY = 'DEBUG_SKIP_DAY',
   /** Client → Server: set day timer to specific seconds (dev tool). */
   DEBUG_SET_TIME = 'DEBUG_SET_TIME',
+  /** Client → Server: force a wave modifier (dev tool). */
+  DEBUG_FORCE_MODIFIER = 'DEBUG_FORCE_MODIFIER',
+  /** Client → Server: force a world event (dev tool). */
+  DEBUG_FORCE_EVENT = 'DEBUG_FORCE_EVENT',
 
   // ── Phase 6 ────────────────────────────────────────────────────────────────
   /** Server → all: a new enemy type appeared for the first time this run. */
@@ -212,6 +218,22 @@ export enum MessageType {
   SLEEP_VOTE = 'SLEEP_VOTE',
   /** Server → all: sleep vote tally update. */
   SLEEP_UPDATE = 'SLEEP_UPDATE',
+
+  // ── Phase 9: Wave Modifiers & World Events ─────────────────────────────
+  /** Server → all: wave modifier(s) rolled for the upcoming wave. */
+  WAVE_MODIFIER = 'WAVE_MODIFIER',
+  /** Server → all: day event roulette roll result. */
+  DAY_EVENT_ROLL = 'DAY_EVENT_ROLL',
+  /** Server → all: a world event has started. */
+  WORLD_EVENT_START = 'WORLD_EVENT_START',
+  /** Server → all: a world event has ended. */
+  WORLD_EVENT_END = 'WORLD_EVENT_END',
+
+  // ── Phase 10: Card Drops & Bosses ─────────────────────────────────────
+  /** Server → all: a player picked up a card drop. */
+  CARD_PICKUP = 'CARD_PICKUP',
+  /** Server → all: a boss enemy has spawned. */
+  BOSS_INTRO = 'BOSS_INTRO',
 
   // ── Phase 8: Civilians ──────────────────────────────────────────────────
   /** Server → all: a civilian said something (speech bubble). */
@@ -410,6 +432,10 @@ export interface EntitySnapshot {
   workerAssigned?: boolean;
   /** Bitmask of active status effects (burn, poison, slow, stun, etc). Only present for enemies. */
   statusEffects?: number;
+  /** Card rarity for card drops (common/rare/epic/legendary). Only present for item faction card drops. */
+  cardRarity?: string;
+  /** Boss definition ID. Only present for boss enemies. */
+  bossId?: string;
 }
 
 /** Full world snapshot sent on game start or player rejoin. */
@@ -637,6 +663,16 @@ export interface DebugSetTimeMessage extends BaseMessage {
   seconds: number;
 }
 
+export interface DebugForceModifierMessage extends BaseMessage {
+  type: typeof MessageType.DEBUG_FORCE_MODIFIER;
+  modifierId: string;
+}
+
+export interface DebugForceEventMessage extends BaseMessage {
+  type: typeof MessageType.DEBUG_FORCE_EVENT;
+  eventId: string;
+}
+
 // ─── Death & Respawn (4.11) ──────────────────────────────────────────────────
 
 /** Server → all: a player has been downed (HP reached 0). */
@@ -770,6 +806,18 @@ export interface AoeExplosionMessage extends BaseMessage {
   x: number;
   y: number;
   radius: number;
+  /** If true, render as a large meteor impact with crater. */
+  meteor?: boolean;
+}
+
+/** Server -> all: incoming meteor warning indicator before impact. */
+export interface MeteorWarningMessage extends BaseMessage {
+  type: typeof MessageType.METEOR_WARNING;
+  x: number;
+  y: number;
+  radius: number;
+  /** Time in seconds until impact. */
+  delay: number;
 }
 
 /** Server → All: warehouse shared resource pool update. */
@@ -1069,6 +1117,72 @@ export interface SleepUpdateMessage extends BaseMessage {
   voterSlots: number[];
 }
 
+// ─── Wave Modifiers & World Events ────────────────────────────────────────────
+
+/** Server → all: wave modifier(s) rolled for the upcoming wave. */
+export interface WaveModifierMessage extends BaseMessage {
+  type: typeof MessageType.WAVE_MODIFIER;
+  waveNumber: number;
+  modifiers: { id: string; name: string; description: string; color: number }[];
+}
+
+/** Server → all: day event roulette result (sent at start of each day). */
+export interface DayEventRollMessage extends BaseMessage {
+  type: typeof MessageType.DAY_EVENT_ROLL;
+  /** The event that was rolled, or null for safe day. */
+  eventId: string | null;
+  eventName: string | null;
+}
+
+/** Server → all: a world event has started. */
+export interface WorldEventStartMessage extends BaseMessage {
+  type: typeof MessageType.WORLD_EVENT_START;
+  eventId: string;
+  name: string;
+  /** Short description of what the event does. */
+  description: string;
+  /** Duration in seconds (0 = instant). */
+  duration: number;
+  /** Ambient tint color override (Blood Moon). */
+  tintColor?: number;
+  /** Torch/vision radius multiplier (Solar Eclipse). */
+  visionMult?: number;
+  /** Enemy damage multiplier while event is active. */
+  damageMult?: number;
+  /** Production speed multiplier (Resource Boom). */
+  productionMult?: number;
+  /** Camera shake intensity (Earthquake). */
+  shakeIntensity?: number;
+}
+
+/** Server → all: a world event has ended. */
+export interface WorldEventEndMessage extends BaseMessage {
+  type: typeof MessageType.WORLD_EVENT_END;
+  eventId: string;
+}
+
+// ─── Card Drops & Bosses ─────────────────────────────────────────────────────
+
+/** Server → all: a player picked up a card drop. */
+export interface CardPickupMessage extends BaseMessage {
+  type: typeof MessageType.CARD_PICKUP;
+  /** Slot of the player who picked up the card. */
+  slot: number;
+  cardId: string;
+  cardName: string;
+  rarity: string;
+  category: string;
+  displayName: string;
+}
+
+/** Server → all: a boss enemy has spawned. */
+export interface BossIntroMessage extends BaseMessage {
+  type: typeof MessageType.BOSS_INTRO;
+  bossId: string;
+  bossName: string;
+  entityId: number;
+}
+
 // ─── Union ────────────────────────────────────────────────────────────────────
 
 export type AnyMessage =
@@ -1120,6 +1234,7 @@ export type AnyMessage =
   | BuildRepairMessage
   | BuildRepairConfirmMessage
   | AoeExplosionMessage
+  | MeteorWarningMessage
   | WarehouseUpdateMessage
   | SaveSlotsRequestMessage
   | SaveSlotsResponseMessage
@@ -1153,4 +1268,10 @@ export type AnyMessage =
   | DayNightSyncMessage
   | SleepVoteMessage
   | SleepUpdateMessage
+  | WaveModifierMessage
+  | DayEventRollMessage
+  | WorldEventStartMessage
+  | WorldEventEndMessage
+  | CardPickupMessage
+  | BossIntroMessage
   | BaseMessage;

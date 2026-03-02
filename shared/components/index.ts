@@ -56,6 +56,8 @@ export const C = {
   Civilian:        'Civilian',
   Housing:         'Housing',
   WorkerSlot:      'WorkerSlot',
+  // ── Phase 10 ─────────────────────────────────────────────────────────────
+  Boss:            'Boss',
 } as const;
 
 // ─── Component interfaces ──────────────────────────────────────────────────────
@@ -204,13 +206,17 @@ export interface ResourceNodeComponent {
 
 /** Tags an entity as an item drop sitting in the world. */
 export interface ItemDropComponent {
-  /** Resource type or item ID. */
+  /** Resource type or item ID. For card drops, use 'card:<cardId>'. */
   itemType: string;
   quantity: number;
-  /** True = auto-pickup on overlap (resources). False = requires E-interact (equipment). */
+  /** True = auto-pickup on overlap (resources/cards). False = requires E-interact (equipment). */
   autoPickup: boolean;
   /** Seconds until this drop despawns. */
   lifetime: number;
+  /** If present, this is a card drop. Stores the card definition ID. */
+  cardId?: string;
+  /** Rarity of the card (for client rendering). */
+  cardRarity?: string;
 }
 
 /** Per-player resource counters. Attached to player entities on the server. */
@@ -520,4 +526,15 @@ export interface HousingComponent {
 export interface WorkerSlotComponent {
   /** Entity ID of the assigned civilian worker, or null if unoccupied. */
   workerId: number | null;
+}
+
+// ── Phase 10: Boss System ────────────────────────────────────────────────────
+
+/** Tags an enemy entity as a boss with special mechanics. */
+export interface BossComponent {
+  bossId: string;
+  /** True when HP drops below enrage threshold. */
+  enraged: boolean;
+  /** Cooldown timer for boss special attack (seconds). */
+  specialCooldown: number;
 }

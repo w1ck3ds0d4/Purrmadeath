@@ -258,12 +258,20 @@ export class NightOverlay {
     ctx.globalCompositeOperation = 'destination-out';
     const halfW = cw / 2;
     const halfH = ch / 2;
+    const zs = zoom * s;
 
+    // Pre-compute screen positions and cull off-screen lights
+    const visibleLights: { sx: number; sy: number; sr: number; color?: number }[] = [];
     for (const src of lightSources) {
-      const sx = halfW + (src.x - cameraX) * zoom * s;
-      const sy = halfH + (src.y - cameraY) * zoom * s;
-      const sr = src.radius * zoom * s;
+      const sx = halfW + (src.x - cameraX) * zs;
+      const sy = halfH + (src.y - cameraY) * zs;
+      const sr = src.radius * zs;
+      // Skip lights entirely off-screen (with radius margin)
+      if (sx + sr < 0 || sx - sr > cw || sy + sr < 0 || sy - sr > ch) continue;
+      visibleLights.push({ sx, sy, sr, color: src.color });
+    }
 
+    for (const { sx, sy, sr } of visibleLights) {
       // Soft-edged circle using radial gradient
       const grad = ctx.createRadialGradient(sx, sy, sr * 0.25, sx, sy, sr);
       grad.addColorStop(0, 'rgba(0,0,0,1)');
@@ -277,14 +285,11 @@ export class NightOverlay {
 
     // 3. Add colored glows for light sources that have a tint color
     ctx.globalCompositeOperation = 'source-over';
-    for (const src of lightSources) {
-      if (src.color === undefined) continue;
-      const sx = halfW + (src.x - cameraX) * zoom * s;
-      const sy = halfH + (src.y - cameraY) * zoom * s;
-      const sr = src.radius * zoom * s;
-      const r = (src.color >> 16) & 0xff;
-      const g = (src.color >> 8) & 0xff;
-      const b = src.color & 0xff;
+    for (const { sx, sy, sr, color } of visibleLights) {
+      if (color === undefined) continue;
+      const r = (color >> 16) & 0xff;
+      const g = (color >> 8) & 0xff;
+      const b = color & 0xff;
       const grad = ctx.createRadialGradient(sx, sy, 0, sx, sy, sr);
       grad.addColorStop(0, `rgba(${r},${g},${b},${0.35 * nightAlpha})`);
       grad.addColorStop(0.5, `rgba(${r},${g},${b},${0.15 * nightAlpha})`);
@@ -309,6 +314,23 @@ export class NightOverlay {
 
   getDarkness(): number {
     return this.darkness;
+  }
+
+  /** Immediately hide both overlay layers (call when leaving gameplay). */
+  hide(): void {
+    this.darkness = 0;
+    this.ambientAlpha = 0;
+    this.tintOverride = false;
+    this.tintR = NightOverlay.NIGHT_R;
+    this.tintG = NightOverlay.NIGHT_G;
+    this.tintB = NightOverlay.NIGHT_B;
+    this.sprite.visible = false;
+    this.ambientSprite.visible = false;
+    // Clear canvas so stale darkness can't linger if sprite becomes visible
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    this.ambientCtx.clearRect(0, 0, this.ambientCanvas.width, this.ambientCanvas.height);
+    if (this.tex) (this.tex.source as ImageSource).update();
+    if (this.ambientTex) (this.ambientTex.source as ImageSource).update();
   }
 
   destroy(): void {

@@ -39,6 +39,7 @@ import type {
   BuildUpgradeConfirmMessage,
   BuildRepairConfirmMessage,
   AoeExplosionMessage,
+  MeteorWarningMessage,
   WarehouseUpdateMessage,
   SaveSlotsResponseMessage,
   GameSavedMessage,
@@ -57,6 +58,12 @@ import type {
   CivilianPanelStateMessage,
   DayNightSyncMessage,
   SleepUpdateMessage,
+  WaveModifierMessage,
+  DayEventRollMessage,
+  WorldEventStartMessage,
+  WorldEventEndMessage,
+  CardPickupMessage,
+  BossIntroMessage,
   LobbySlot,
 } from '@shared/protocol';
 import type { NightOverlay } from '../render/NightOverlay';
@@ -91,6 +98,8 @@ import type { AbilityVFXSystem } from '../systems/AbilityVFXSystem';
 import type { PotionShopOverlay, PotionShopData } from '../ui/overlays/PotionShopOverlay';
 import type { BuildMenuOverlay } from '../ui/overlays/BuildMenuOverlay';
 import type { CivilianPanelOverlay } from '../ui/overlays/CivilianPanelOverlay';
+import type { EventRoulette } from '../ui/hud/EventRoulette';
+import type { CardToast } from '../ui/hud/CardToast';
 
 // ── Shared mutable state ────────────────────────────────────────────────────
 
@@ -139,6 +148,8 @@ export interface GameplayState {
   potionCooldown: number;
   potionCooldownMax: number;
   completedBuffs: { displayName: string; reward: string; medalColor: string }[];
+  /** Torch/vision radius multiplier from wave modifiers or world events (1.0 = normal). */
+  eventVisionMult: number;
 }
 
 // ── Dependencies ────────────────────────────────────────────────────────────
@@ -175,6 +186,8 @@ export interface NetworkHandlerDeps {
   buildMenu: BuildMenuOverlay;
   civilianPanel: CivilianPanelOverlay;
   nightOverlay: NightOverlay;
+  eventRoulette: EventRoulette;
+  cardToast: CardToast;
   combinedResources: () => Record<string, number>;
   electronAPI?: { checkForUpdates?: () => void };
 }
@@ -313,7 +326,10 @@ export function registerMessageHandlers(
   net.on(MessageType.HIT, (msg) => {
     const hit = msg as HitMessage;
     const crit = hit.crit === true;
-    d.playerRenderer.notifyHit(hit.targetId);
+    // Skip flash for local player's own attacks - client-side prediction already flashed the target
+    if (hit.sourceId !== s.localEntityId) {
+      d.playerRenderer.notifyHit(hit.targetId);
+    }
 
     const tgtPos = d.world.getComponent<PositionComponent>(hit.targetId, C.Position);
     if (tgtPos) {
@@ -352,7 +368,16 @@ export function registerMessageHandlers(
 
   net.on(MessageType.AOE_EXPLOSION, (msg) => {
     const aoe = msg as AoeExplosionMessage;
-    d.projectileRenderer.addExplosion(aoe.x, aoe.y, aoe.radius);
+    if (aoe.meteor) {
+      d.projectileRenderer.addMeteorImpact(aoe.x, aoe.y, aoe.radius);
+    } else {
+      d.projectileRenderer.addExplosion(aoe.x, aoe.y, aoe.radius);
+    }
+  });
+
+  net.on(MessageType.METEOR_WARNING, (msg) => {
+    const mw = msg as MeteorWarningMessage;
+    d.projectileRenderer.addMeteorWarning(mw.x, mw.y, mw.radius, mw.delay);
   });
 
   // ── Wave ────────────────────────────────────────────────────────────────
@@ -379,6 +404,7 @@ export function registerMessageHandlers(
   // ── Day/Night ──────────────────────────────────────────────────────────
 
   net.on(MessageType.DAY_NIGHT_SYNC, (msg) => {
+    if (d.stateMgr.current !== GameState.Playing) return;
     const dns = msg as DayNightSyncMessage;
     d.nightOverlay.setDarkness(dns.darkness);
     d.nightOverlay.setAmbient(dns.phase, dns.dayTimeRemaining);
@@ -400,6 +426,60 @@ export function registerMessageHandlers(
     const intro = msg as EnemyIntroMessage;
     d.chatOverlay.addMessage('System', -1, `New threat: ${intro.displayName}!`);
     d.debug.log(`New enemy type: ${intro.displayName}`);
+  });
+
+  // ── Wave Modifiers & World Events ─────────────────────────────────────
+
+  net.on(MessageType.WAVE_MODIFIER, (msg) => {
+    const wm = msg as WaveModifierMessage;
+    d.waveHUD.onWaveModifier(wm.modifiers);
+    // Announce modifiers in chat
+    const names = wm.modifiers.map(m => m.name).join(' + ');
+    d.chatOverlay.addMessage('System', -1, `Wave ${wm.waveNumber} modifier: ${names}!`);
+    // Apply fog vision mult
+    const fogMod = wm.modifiers.find(m => m.id === 'fog');
+    s.eventVisionMult = fogMod ? 0.5 : 1.0;
+  });
+
+  net.on(MessageType.DAY_EVENT_ROLL, (msg) => {
+    const roll = msg as DayEventRollMessage;
+    d.eventRoulette.spin(roll.eventId, roll.eventName);
+  });
+
+  net.on(MessageType.WORLD_EVENT_START, (msg) => {
+    const ev = msg as WorldEventStartMessage;
+    d.waveHUD.onWorldEventStart(ev.eventId, ev.name, ev.description, ev.duration);
+    d.chatOverlay.addMessage('System', -1, `EVENT: ${ev.name}!`);
+    if (ev.tintColor !== undefined) d.nightOverlay.setTint(ev.tintColor);
+    if (ev.visionMult !== undefined) s.eventVisionMult = ev.visionMult;
+    if (ev.shakeIntensity !== undefined) d.camera.shake(ev.shakeIntensity, ev.duration);
+  });
+
+  net.on(MessageType.WORLD_EVENT_END, (msg) => {
+    const ev = msg as WorldEventEndMessage;
+    d.waveHUD.onWorldEventEnd();
+    d.nightOverlay.resetTint();
+    s.eventVisionMult = 1.0;
+  });
+
+  // ── Card Drops & Bosses ─────────────────────────────────────────────────
+
+  net.on(MessageType.CARD_PICKUP, (msg) => {
+    const pickup = msg as CardPickupMessage;
+    d.cardToast.show(pickup.displayName, pickup.cardName, pickup.rarity);
+    d.chatOverlay.addMessage('System', -1, `${pickup.displayName} found ${pickup.cardName} (${pickup.rarity})`);
+    // Sync picked card IDs for the local player
+    if (!s.pickedCardIds.includes(pickup.cardId)) s.pickedCardIds.push(pickup.cardId);
+    // Sync abilities if this was the local player
+    if (pickup.slot === s.localSlot && (msg as any).abilities) {
+      s.cardAbilities = (msg as any).abilities;
+    }
+  });
+
+  net.on(MessageType.BOSS_INTRO, (msg) => {
+    const intro = msg as BossIntroMessage;
+    d.chatOverlay.addMessage('System', -1, `BOSS: ${intro.bossName} has appeared!`);
+    d.camera.shake(8, 1.5);
   });
 
   // ── Cards ───────────────────────────────────────────────────────────────

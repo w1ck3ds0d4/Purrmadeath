@@ -287,6 +287,8 @@ export class DebugOverlay {
         '/card <id>  Give a card by ID',
         '/cards [f]  List all card IDs (filter optional)',
         '/sp [n]     Give n skill points (default 1)',
+        '/modifier <id> Force a wave modifier (swarm,ironhide,fog,frenzy)',
+        '/event <id>   Force a world event (meteor_shower,blood_moon,earthquake,resource_boom,portal_surge,solar_eclipse)',
         '/clear      Close stats panel',
         '/help       This help text',
       );
@@ -339,6 +341,8 @@ export class DebugOverlay {
       case '/give':
       case '/card':
       case '/sp':
+      case '/modifier':
+      case '/event':
         this.cheatHandler?.(cmd, args);
         this.log(`Executed: ${raw}`);
         break;

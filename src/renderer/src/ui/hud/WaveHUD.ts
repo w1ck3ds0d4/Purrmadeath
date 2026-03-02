@@ -56,6 +56,16 @@ export class WaveHUD {
   /** Callback to send sleep vote to server. */
   private onSleepVote: ((vote: boolean) => void) | null = null;
 
+  /** Active wave modifiers (Swarm, Fog, etc). */
+  private activeModifiers: { id: string; name: string; description: string; color: number }[] = [];
+  /** Active world event name (or null). */
+  private activeEventName: string | null = null;
+  /** Big center banner element for event announcements. */
+  private bannerEl: HTMLElement;
+  /** Subtitle element below banner for event descriptions. */
+  private bannerDescEl: HTMLElement;
+  private bannerTimer = 0;
+
   /** Dirty flag - only update DOM when needed. */
   private dirty = true;
   /** When true, all display updates are suppressed (e.g. skill tree is open). */
@@ -78,13 +88,11 @@ export class WaveHUD {
     this.waveEl.id = 'wave-hud';
     this.waveEl.style.cssText = BOX_CSS + `; top: ${waveTop}px`;
 
-    // Sleep button - below wave box
-    const sleepTop = waveTop + WaveHUD.WAVE_BOX_HEIGHT + WaveHUD.GAP;
+    // Sleep button - positioned dynamically below wave box in render()
     this.sleepBtn = document.createElement('button');
     this.sleepBtn.id = 'sleep-btn';
     this.sleepBtn.style.cssText = [
       'position: absolute',
-      `top: ${sleepTop}px`,
       'right: 12px',
       `width: ${BOX_WIDTH}px`,
       'display: none',
@@ -109,12 +117,10 @@ export class WaveHUD {
       this.toggleSleepVote();
     });
 
-    // Vote count text - below the sleep button
-    const voteTop = sleepTop + 30 + WaveHUD.GAP;
+    // Vote count text - positioned dynamically below sleep button in render()
     this.voteEl = document.createElement('div');
     this.voteEl.style.cssText = [
       'position: absolute',
-      `top: ${voteTop}px`,
       'right: 12px',
       `width: ${BOX_WIDTH}px`,
       'font-size: 11px',
@@ -125,11 +131,55 @@ export class WaveHUD {
       "font-family: 'Segoe UI', monospace",
     ].join('; ');
 
+    // Event banner (big centered text, hidden by default)
+    this.bannerEl = document.createElement('div');
+    this.bannerEl.style.cssText = [
+      'position: absolute',
+      'top: 35%',
+      'left: 50%',
+      'transform: translate(-50%, -50%)',
+      'z-index: 50',
+      "font-family: 'Segoe UI', Impact, monospace",
+      'font-size: 36px',
+      'font-weight: bold',
+      'letter-spacing: 4px',
+      'color: #ffcc44',
+      'text-shadow: 0 0 20px #ff8800, 0 0 40px #ff4400, 0 2px 4px rgba(0,0,0,0.8)',
+      'pointer-events: none',
+      'opacity: 0',
+      'transition: opacity 0.5s ease-out',
+      'text-align: center',
+      'white-space: nowrap',
+    ].join('; ');
+
+    // Description subtitle below the banner title
+    this.bannerDescEl = document.createElement('div');
+    this.bannerDescEl.style.cssText = [
+      'position: absolute',
+      'top: calc(35% + 36px)',
+      'left: 50%',
+      'transform: translate(-50%, -50%)',
+      'z-index: 50',
+      "font-family: 'Segoe UI', monospace",
+      'font-size: 16px',
+      'font-weight: normal',
+      'letter-spacing: 1px',
+      'color: #ddc88a',
+      'text-shadow: 0 0 10px rgba(0,0,0,0.9), 0 1px 3px rgba(0,0,0,0.8)',
+      'pointer-events: none',
+      'opacity: 0',
+      'transition: opacity 0.5s ease-out',
+      'text-align: center',
+      'white-space: nowrap',
+    ].join('; ');
+
     const overlay = document.getElementById('overlay')!;
     overlay.appendChild(this.timeEl);
     overlay.appendChild(this.waveEl);
     overlay.appendChild(this.sleepBtn);
     overlay.appendChild(this.voteEl);
+    overlay.appendChild(this.bannerEl);
+    overlay.appendChild(this.bannerDescEl);
   }
 
   /** Set the sleep vote callback. */
@@ -163,6 +213,8 @@ export class WaveHUD {
     this.waveNumber = waveNumber;
     this.phase = 'cleared';
     this.clearedTimer = WaveHUD.CLEARED_DURATION;
+    this.activeModifiers = [];
+    this.activeEventName = null;
     this.dirty = true;
   }
 
@@ -214,6 +266,48 @@ export class WaveHUD {
     this.dirty = true;
   }
 
+  /** Called when WAVE_MODIFIER arrives from server. */
+  onWaveModifier(modifiers: { id: string; name: string; description: string; color: number }[]): void {
+    this.activeModifiers = modifiers;
+    this.dirty = true;
+    if (modifiers.length > 0) {
+      this.showBanner(modifiers.map(m => m.name.toUpperCase()).join(' + '));
+    }
+  }
+
+  /** Called when WORLD_EVENT_START arrives. */
+  onWorldEventStart(eventId: string, name: string, description: string, duration: number): void {
+    this.activeEventName = name;
+    this.dirty = true;
+    // Show big center banner with description
+    this.showBanner(name.toUpperCase(), description);
+  }
+
+  /** Show a "Safe Day" banner (called from EventRoulette landing on null). */
+  onSafeDay(): void {
+    this.showBanner('SAFE DAY', 'No events today - prepare your defenses', '#66bb66');
+  }
+
+  /** Called when WORLD_EVENT_END arrives. */
+  onWorldEventEnd(): void {
+    this.activeEventName = null;
+    this.dirty = true;
+  }
+
+  /** Show a dramatic banner in the center of the screen for 3 seconds. */
+  private showBanner(text: string, description?: string, color?: string): void {
+    this.bannerEl.textContent = text;
+    this.bannerEl.style.color = color ?? '#ffcc44';
+    this.bannerEl.style.opacity = '1';
+    if (description) {
+      this.bannerDescEl.textContent = description;
+      this.bannerDescEl.style.opacity = '1';
+    } else {
+      this.bannerDescEl.style.opacity = '0';
+    }
+    this.bannerTimer = 3;
+  }
+
   /** Tick timers - call each frame with frame delta. */
   update(dt: number): void {
     if (this.phase === 'day') {
@@ -227,6 +321,15 @@ export class WaveHUD {
       if (this.clearedTimer <= 0) {
         this.phase = 'day';
         this.dirty = true;
+      }
+    }
+
+    // Banner fade-out
+    if (this.bannerTimer > 0) {
+      this.bannerTimer -= dt;
+      if (this.bannerTimer <= 0) {
+        this.bannerEl.style.opacity = '0';
+        this.bannerDescEl.style.opacity = '0';
       }
     }
 
@@ -302,17 +405,51 @@ export class WaveHUD {
       this.waveEl.innerHTML = `Wave ${this.waveNumber} - <span style="color:#44cc44;font-weight:bold">Cleared!</span>`;
     }
 
+    // ── Modifier tags (append below wave text) ──
+    if (this.activeModifiers.length > 0) {
+      const tags = this.activeModifiers.map(m => {
+        const hex = '#' + m.color.toString(16).padStart(6, '0');
+        return `<span style="color:${hex};font-weight:bold;font-size:12px;letter-spacing:0.5px">${m.name.toUpperCase()}</span>`;
+      }).join(' <span style="color:#555;font-size:10px">|</span> ');
+      this.waveEl.innerHTML += `<br><span style="font-size:11px">${tags}</span>`;
+    }
+
+    // ── Active world event tag ──
+    if (this.activeEventName) {
+      this.waveEl.innerHTML += `<br><span style="color:#ff8844;font-weight:bold;font-size:11px;letter-spacing:0.5px">${this.activeEventName.toUpperCase()}</span>`;
+    }
+
+    // Dynamically position sleep button below wave box (which may have extra lines)
+    const waveBoxBottom = this.waveEl.offsetTop + this.waveEl.offsetHeight;
+    const sleepTop = waveBoxBottom + WaveHUD.GAP;
+
+    // Grey out sleep during active events
+    const eventActive = this.activeEventName !== null;
+
     // Sleep button
     this.sleepBtn.style.display = showSleep ? 'block' : 'none';
     if (showSleep) {
-      this.sleepBtn.textContent = this.hasVotedSleep ? 'Cancel' : 'Sleep';
-      this.sleepBtn.style.background = this.hasVotedSleep ? 'rgba(120, 60, 60, 0.8)' : 'rgba(60, 60, 120, 0.8)';
-      this.sleepBtn.style.borderColor = this.hasVotedSleep ? 'rgba(255, 140, 140, 0.4)' : 'rgba(140, 140, 255, 0.4)';
-      this.sleepBtn.style.color = this.hasVotedSleep ? '#ffaaaa' : '#aabbee';
+      this.sleepBtn.style.top = sleepTop + 'px';
+      if (eventActive) {
+        this.sleepBtn.textContent = 'Sleep';
+        this.sleepBtn.style.background = 'rgba(40, 40, 50, 0.6)';
+        this.sleepBtn.style.borderColor = 'rgba(80, 80, 80, 0.3)';
+        this.sleepBtn.style.color = '#556';
+        this.sleepBtn.style.cursor = 'not-allowed';
+        this.sleepBtn.style.pointerEvents = 'none';
+      } else {
+        this.sleepBtn.textContent = this.hasVotedSleep ? 'Cancel' : 'Sleep';
+        this.sleepBtn.style.background = this.hasVotedSleep ? 'rgba(120, 60, 60, 0.8)' : 'rgba(60, 60, 120, 0.8)';
+        this.sleepBtn.style.borderColor = this.hasVotedSleep ? 'rgba(255, 140, 140, 0.4)' : 'rgba(140, 140, 255, 0.4)';
+        this.sleepBtn.style.color = this.hasVotedSleep ? '#ffaaaa' : '#aabbee';
+        this.sleepBtn.style.cursor = 'pointer';
+        this.sleepBtn.style.pointerEvents = 'auto';
+      }
     }
 
-    // Vote count (only during day with active votes)
-    if (showSleep && this.sleepVotes > 0) {
+    // Vote count - positioned below sleep button
+    if (showSleep && this.sleepVotes > 0 && !eventActive) {
+      this.voteEl.style.top = (sleepTop + 30 + WaveHUD.GAP) + 'px';
       this.voteEl.textContent = `${this.sleepVotes}/${this.totalPlayers} ready to sleep`;
       this.voteEl.style.color = '#8899bb';
       this.voteEl.style.fontSize = '11px';
