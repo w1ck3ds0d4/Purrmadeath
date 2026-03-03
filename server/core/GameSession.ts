@@ -2108,11 +2108,51 @@ export class GameSession {
     }
   }
 
-  /** Fire onRunEnd with per-player RunStats. Called once at game over. */
+  /** Fire onRunEnd with per-player RunStats. Called at game over. */
   private fireRunEnd(): void {
     if (!this.onRunEnd) return;
     this.onRunEnd(this.stats.buildRunStats());
     this.onSaveDelete?.();
+  }
+
+  /**
+   * Merge current run stats for all active players into meta progression.
+   * Uses delta tracking so it is safe to call multiple times without double-counting.
+   * Called on session close, host disconnect, and periodic saves.
+   */
+  flushRunStats(): void {
+    if (!this.onRunEnd) return;
+    const stats = this.stats.buildRunStats();
+    // Only fire if there is something to merge
+    let hasData = false;
+    for (const rs of stats.values()) {
+      if (rs.damageDealt > 0 || rs.enemiesKilled > 0 || rs.wavesSurvived > 0 ||
+          rs.buildingsBuilt > 0 || rs.timePlayed > 0 ||
+          rs.resourcesGathered.wood > 0 || rs.resourcesGathered.stone > 0 ||
+          rs.resourcesGathered.iron > 0 || rs.resourcesGathered.diamond > 0) {
+        hasData = true;
+        break;
+      }
+    }
+    if (hasData) this.onRunEnd(stats);
+  }
+
+  /**
+   * Merge run stats for a single player who is leaving the session.
+   * Uses delta tracking - safe to call even if flushRunStats() was called before.
+   */
+  flushRunStatsForPlayer(playerId: string): void {
+    if (!this.onRunEnd) return;
+    const rs = this.stats.buildRunStatsForPlayer(playerId);
+    if (!rs) return;
+    if (rs.damageDealt > 0 || rs.enemiesKilled > 0 || rs.wavesSurvived > 0 ||
+        rs.buildingsBuilt > 0 || rs.timePlayed > 0 ||
+        rs.resourcesGathered.wood > 0 || rs.resourcesGathered.stone > 0 ||
+        rs.resourcesGathered.iron > 0 || rs.resourcesGathered.diamond > 0) {
+      const map = new Map<string, import('@shared/definitions/MetaStats').RunStats>();
+      map.set(playerId, rs);
+      this.onRunEnd(map);
+    }
   }
 
   // ── Card system ────────────────────────────────────────────────────────────
@@ -2263,6 +2303,9 @@ export class GameSession {
     for (const id of this.world.query(C.ItemDrop)) {
       this.world.destroyEntity(id);
     }
+    // Flush run stats on every save for crash safety (delta-based, no double-counting)
+    this.flushRunStats();
+
     const saveData = this.serializeSave();
     this.onSave(saveData);
     console.log(`[GameSession] Manual save: wave ${saveData.currentWave}, ${saveData.buildings.length} buildings`);

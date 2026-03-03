@@ -761,6 +761,18 @@ export class SessionManager {
       this.session.saveNow((c, m) => this.socket.send(c, m));
     }
 
+    // Flush run stats for meta progression before the player is removed.
+    // Delta-based tracking ensures no double-counting even if fireRunEnd fires later.
+    if (this.session.isPlaying) {
+      if (isHost) {
+        // Host leaving closes the session - flush stats for ALL remaining players
+        this.session.flushRunStats();
+      } else {
+        // Non-host leaving - flush only their stats
+        this.session.flushRunStatsForPlayer(playerId);
+      }
+    }
+
     this.session.removePlayer(clientId);
     console.log(`[Session] ${displayName} left (slot ${slot})`);
 
