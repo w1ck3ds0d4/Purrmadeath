@@ -849,6 +849,13 @@ async function main(): Promise<void> {
       staminaSystem.update(world, dt);
       remotePlayerSys.interpolate(world, dt);
       waveHUD.update(dt);
+      // Update boss HP bar from ECS world
+      const bossEid = waveHUD.getActiveBossEntityId();
+      if (bossEid !== null) {
+        const bossHp = world.getComponent<import('@shared/components').HealthComponent>(bossEid, C.Health);
+        if (bossHp) waveHUD.updateBossHp(bossEid, bossHp.current, bossHp.max);
+        else waveHUD.hideBossBar();
+      }
       eventRoulette.update(dt);
       cardToast.update(dt);
 

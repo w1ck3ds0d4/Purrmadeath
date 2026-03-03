@@ -6,19 +6,19 @@ import {
 import type { SpeedComponent, DefenseComponent, StaminaComponent, KnockbackReceiverComponent } from '@shared/components';
 import { PLAYER_MAX_HEALTH } from '@shared/constants';
 import { MessageType } from '@shared/protocol';
-import type { CardOfferMessage, CardAppliedMessage, CardPickMessage } from '@shared/protocol';
+import type { CardPickupMessage } from '@shared/protocol';
 import type { CardDefinition, CardEffect } from '@shared/definitions/CardDefinitions';
 import type { ConnectedClient } from '../net/ServerSocket';
 import type { SessionPlayer, SendFn } from '../core/GameSession';
 import type { CardSystem } from './CardSystem';
 
-// ── Mutable state shared with GameSession ───────────────────────────────────
+// -- Mutable state shared with GameSession -----------------------------------
 
 export interface CardState {
-  offerTimer: number; // seconds remaining, -1 = no pending offer
+  offerTimer: number; // kept for backwards compat, always -1 now
 }
 
-// ── Dependencies ────────────────────────────────────────────────────────────
+// -- Dependencies ------------------------------------------------------------
 
 export interface CardDispenserDeps {
   world: World;
@@ -30,90 +30,42 @@ export interface CardDispenserDeps {
   creditResources: (entityId: number, resource: string, amount: number, send: SendFn) => void;
 }
 
-// ── Factory ─────────────────────────────────────────────────────────────────
+// -- Factory -----------------------------------------------------------------
 
 export function createCardDispenser(deps: CardDispenserDeps) {
-  const { world, cards, players, setPaused, creditResources } = deps;
-  const s = deps.state;
+  const { world, cards, players, creditResources } = deps;
 
-  function sendOffers(send: SendFn): void {
-    for (const p of players.values()) {
-      const offer = cards.generateOffer();
-      cards.setPendingOffer(p.client.id, offer);
-      const msg: CardOfferMessage = { type: MessageType.CARD_OFFER, cards: offer };
-      send(p.client, msg);
-    }
-    s.offerTimer = deps.offerTimeout;
-    setPaused(true);
-    console.log(`[Cards] Card offers sent to ${players.size} player(s)`);
-  }
+  /**
+   * Auto-grant a card directly to a specific player.
+   * No picker UI, no pause - card is applied immediately and all players are notified via CARD_PICKUP.
+   */
+  function autoGrant(player: SessionPlayer, card: CardDefinition, send: SendFn): void {
+    if (!player.entityId) return;
 
-  function handlePick(clientId: string, msg: CardPickMessage, send: SendFn): void {
-    const player = players.get(clientId);
-    if (!player) return;
-
-    const card = cards.applyPick(clientId, msg.cardId);
-    if (!card) return;
-
+    // Apply card effect
+    cards.forceApplyCard(player.client.id, card);
     applyToEntity(player, card, send);
 
-    const applied: CardAppliedMessage = {
-      type: MessageType.CARD_APPLIED,
-      displayName: player.displayName,
+    // Broadcast CARD_PICKUP to all players (reuse existing toast system)
+    const pickupMsg: CardPickupMessage = {
+      type: MessageType.CARD_PICKUP,
+      slot: player.slot,
       cardId: card.id,
       cardName: card.name,
+      rarity: card.rarity,
       category: card.category,
-      isTrap: card.category === 'trap',
+      displayName: player.displayName,
     };
     for (const p of players.values()) {
-      // Include abilities list only for the picking player
-      if (p.client.id === clientId && hasAbilityEffect(card.effect)) {
-        send(p.client, { ...applied, abilities: [...cards.getBuffs(clientId).abilities] });
+      // Include abilities list for the recipient
+      if (p.client.id === player.client.id && hasAbilityEffect(card.effect)) {
+        send(p.client, { ...pickupMsg, abilities: [...cards.getBuffs(player.client.id).abilities] } as any);
       } else {
-        send(p.client, applied);
+        send(p.client, pickupMsg);
       }
     }
 
-    let anyPending = false;
-    for (const p of players.values()) {
-      if (cards.hasPendingOffer(p.client.id)) { anyPending = true; break; }
-    }
-    if (!anyPending) {
-      s.offerTimer = -1;
-      setPaused(false);
-    }
-  }
-
-  function tickTimer(dt: number, send: SendFn): void {
-    if (s.offerTimer < 0) return;
-    s.offerTimer -= dt;
-    if (s.offerTimer > 0) return;
-
-    s.offerTimer = -1;
-    setPaused(false);
-    for (const p of players.values()) {
-      if (!cards.hasPendingOffer(p.client.id)) continue;
-      const card = cards.autoPickNonTrap(p.client.id);
-      if (!card) continue;
-
-      applyToEntity(p, card, send);
-
-      const applied: CardAppliedMessage = {
-        type: MessageType.CARD_APPLIED,
-        displayName: p.displayName,
-        cardId: card.id,
-        cardName: card.name,
-        category: card.category,
-        isTrap: card.category === 'trap',
-      };
-      for (const pp of players.values()) {
-        if (pp.client.id === p.client.id && hasAbilityEffect(card.effect)) {
-          send(pp.client, { ...applied, abilities: [...cards.getBuffs(p.client.id).abilities] });
-        } else {
-          send(pp.client, applied);
-        }
-      }
-    }
+    console.log(`[Cards] Auto-granted "${card.name}" (${card.rarity} ${card.category}) to ${player.displayName}`);
   }
 
   function applyToEntity(player: SessionPlayer, card: CardDefinition, send: SendFn): void {
@@ -132,8 +84,8 @@ export function createCardDispenser(deps: CardDispenserDeps) {
       } else if (effect.stat === 'maxHp') {
         const hp = world.getComponent<HealthComponent>(eid, C.Health);
         if (hp) {
-          hp.max = PLAYER_MAX_HEALTH + buffs.maxHpBonus;
-          hp.current = Math.min(hp.current + effect.value, hp.max);
+          hp.max = Math.max(1, PLAYER_MAX_HEALTH + buffs.maxHpBonus - cards.debuffs.playerMaxHpPenalty);
+          hp.current = Math.min(hp.current + Math.max(0, effect.value), hp.max);
         }
       } else if (effect.stat === 'defense') {
         const def = world.getComponent<DefenseComponent>(eid, C.Defense);
@@ -141,13 +93,10 @@ export function createCardDispenser(deps: CardDispenserDeps) {
       } else if (effect.stat === 'maxStamina') {
         const stam = world.getComponent<StaminaComponent>(eid, C.Stamina);
         if (stam) { stam.max += effect.value; stam.current = Math.min(stam.current + effect.value, stam.max); }
-      } else if (effect.stat === 'staminaRegenMult') {
-        // Stamina regen is applied per-tick from buffs, no ECS change needed
       } else if (effect.stat === 'knockbackResist') {
         const kb = world.getComponent<KnockbackReceiverComponent>(eid, C.KnockbackReceiver);
         if (kb) kb.resist = buffs.knockbackResist;
       }
-      // critChance, critMultiplier, knockbackMult: read from buffs at attack time, no ECS change
     } else if (effect.type === 'resource') {
       creditResources(eid, effect.resource, effect.amount, send);
     } else if (effect.type === 'trap_player') {
@@ -159,7 +108,6 @@ export function createCardDispenser(deps: CardDispenserDeps) {
           if (spd) spd.multiplier = pBuffs.speedMultiplier;
         }
       } else if (effect.stat === 'maxHp') {
-        // Reduce max HP for all players
         for (const p of players.values()) {
           if (!p.entityId) continue;
           const pBuffs = cards.getBuffs(p.client.id);
@@ -169,10 +117,6 @@ export function createCardDispenser(deps: CardDispenserDeps) {
             hp.current = Math.min(hp.current, hp.max);
           }
         }
-      } else if (effect.stat === 'attackSpeed') {
-        // Attack speed debuff applied per-tick from debuffs, no instant ECS change needed
-      } else if (effect.stat === 'staminaRegen') {
-        // Stamina regen debuff applied per-tick from debuffs, no instant ECS change needed
       }
     } else if (effect.type === 'multi') {
       for (const sub of effect.effects) applyEffectToEntity(player, sub, send);
@@ -199,9 +143,7 @@ export function createCardDispenser(deps: CardDispenserDeps) {
   }
 
   return {
-    sendOffers,
-    handlePick,
-    tickTimer,
+    autoGrant,
     tickHpRegen,
   };
 }

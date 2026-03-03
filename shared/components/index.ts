@@ -58,6 +58,7 @@ export const C = {
   WorkerSlot:      'WorkerSlot',
   // ── Phase 10 ─────────────────────────────────────────────────────────────
   Boss:            'Boss',
+  Ruins:           'Ruins',
 } as const;
 
 // ─── Component interfaces ──────────────────────────────────────────────────────
@@ -528,13 +529,48 @@ export interface WorkerSlotComponent {
   workerId: number | null;
 }
 
+// ── Building Ruins ────────────────────────────────────────────────────────────
+
+/** Tags a destroyed building as ruins that can be repaired. */
+export interface RuinsComponent {
+  /** Original building type before destruction. */
+  originalType: BuildingType;
+  /** Upgrade level the building was at when destroyed. */
+  originalLevel: number;
+  /** Seconds remaining for the burning phase (visual fire). */
+  burnTimer: number;
+  /** Seconds remaining before ruins crumble and disappear. */
+  decayTimer: number;
+}
+
 // ── Phase 10: Boss System ────────────────────────────────────────────────────
 
 /** Tags an enemy entity as a boss with special mechanics. */
 export interface BossComponent {
   bossId: string;
-  /** True when HP drops below enrage threshold. */
+  /** Current phase index (0-based). */
+  phaseIndex: number;
+  /** Per-ability cooldown timers keyed by ability id. */
+  abilityCooldowns: Record<string, number>;
+  /** True when HP drops below enrage threshold (legacy compat + speed boost applied). */
   enraged: boolean;
-  /** Cooldown timer for boss special attack (seconds). */
+  /** Cooldown timer for boss special attack (seconds) - legacy, use abilityCooldowns. */
   specialCooldown: number;
+  /** Bone shield HP remaining (Necromancer). */
+  boneShieldHp?: number;
+  /** Bone shield regen timer (seconds until it regenerates). */
+  boneShieldRegen?: number;
+  /** Whether boss is currently burrowed (Broodmother). */
+  burrowed?: boolean;
+  /** Burrow timer - time remaining underground. */
+  burrowTimer?: number;
+  /** Shatter flag - Ancient Golem phase 3 on-hit shards. */
+  shatterActive?: boolean;
+  /** Fire trail timer - tracks last trail drop position. */
+  lastTrailX?: number;
+  lastTrailY?: number;
+  /** Blizzard channel timer (Frost Warden). */
+  channelTimer?: number;
+  /** Whether currently channeling. */
+  channeling?: boolean;
 }

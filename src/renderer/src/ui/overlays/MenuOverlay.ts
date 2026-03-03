@@ -356,7 +356,7 @@ export class MenuOverlay {
       { key: 'buff', label: 'BUFFS' },
       { key: 'ability', label: 'ABILITIES' },
       { key: 'resource', label: 'RESOURCES' },
-      { key: 'trap', label: 'TRAPS' },
+      { key: 'curse', label: 'CURSES' },
     ];
 
     // Sort key: group by effect stat/ability/resource, then by value ascending

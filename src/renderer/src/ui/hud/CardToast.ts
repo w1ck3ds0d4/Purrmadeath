@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// CardToast - slide-in notification when a card is picked up
+// CardToast - slide-in notification when a card is auto-granted
 // ---------------------------------------------------------------------------
 
 const RARITY_COLORS: Record<string, string> = {
@@ -9,13 +9,28 @@ const RARITY_COLORS: Record<string, string> = {
   legendary: '#e8c96a',
 };
 
-const TOAST_DURATION = 4; // seconds visible
+const CATEGORY_COLORS: Record<string, string> = {
+  buff:     '#4a90d9',
+  ability:  '#aa44ff',
+  resource: '#66aa66',
+  curse:    '#cc6633',
+};
+
+const TOAST_DURATION = 5; // seconds visible (increased for auto-grant)
 const SLIDE_IN = 0.3;     // seconds for slide animation
 const FADE_OUT = 0.5;     // seconds for fade out
 
 interface ToastEntry {
   el: HTMLDivElement;
   timer: number;
+}
+
+/** Create a styled span with textContent (safe from XSS). */
+function makeSpan(text: string, style: string): HTMLSpanElement {
+  const span = document.createElement('span');
+  span.style.cssText = style;
+  span.textContent = text;
+  return span;
 }
 
 export function createCardToast() {
@@ -29,13 +44,15 @@ export function createCardToast() {
 
   const toasts: ToastEntry[] = [];
 
-  function show(displayName: string, cardName: string, rarity: string): void {
+  function show(displayName: string, cardName: string, rarity: string, category?: string, description?: string): void {
     const color = RARITY_COLORS[rarity] ?? '#cccccc';
+    const catColor = CATEGORY_COLORS[category ?? 'buff'] ?? '#cccccc';
+    const isCurse = category === 'curse';
 
     const el = document.createElement('div');
     el.style.cssText = `
       background: rgba(0,0,0,0.85);
-      border-left: 4px solid ${color};
+      border-left: 4px solid ${isCurse ? catColor : color};
       border-radius: 4px;
       padding: 8px 14px;
       font-family: monospace;
@@ -44,13 +61,26 @@ export function createCardToast() {
       transform: translateX(120%);
       transition: transform ${SLIDE_IN}s ease-out, opacity ${FADE_OUT}s ease-in;
       white-space: nowrap;
+      max-width: 350px;
     `;
-    el.innerHTML = `
-      <span style="color:#aaa">${displayName}</span>
-      <span style="color:#888"> found </span>
-      <span style="color:${color}; font-weight:bold">${cardName}</span>
-      <span style="color:${color}; font-size:11px; opacity:0.7"> (${rarity})</span>
-    `;
+
+    // Build content safely using DOM APIs (no innerHTML)
+    el.appendChild(makeSpan(displayName, 'color:#aaa'));
+    el.appendChild(makeSpan(' got ', 'color:#888'));
+    el.appendChild(makeSpan(cardName, `color:${color}; font-weight:bold`));
+    el.appendChild(makeSpan(` (${rarity})`, `color:${color}; font-size:11px; opacity:0.7`));
+
+    // Show category tag for curses
+    if (isCurse) {
+      el.appendChild(document.createElement('br'));
+      el.appendChild(makeSpan('CURSE', `color:${catColor}; font-size:11px; font-weight:bold`));
+    }
+
+    // Show description if provided
+    if (description) {
+      el.appendChild(document.createElement('br'));
+      el.appendChild(makeSpan(description, 'color:#999; font-size:11px; white-space:normal'));
+    }
 
     container.appendChild(el);
     // Trigger slide-in

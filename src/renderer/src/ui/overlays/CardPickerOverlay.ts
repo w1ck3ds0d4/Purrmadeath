@@ -239,7 +239,7 @@ export class CardPickerOverlay {
     const panel = document.createElement('div');
     const catColor = CATEGORY_COLORS[card.category];
     const borderColor = RARITY_BORDER_COLORS[card.rarity];
-    const isTrap = card.category === 'trap';
+    const isTrap = card.category === 'curse';
 
     const catHex = '#' + catColor.toString(16).padStart(6, '0');
     panel.style.cssText = `

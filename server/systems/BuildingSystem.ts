@@ -17,13 +17,13 @@ import {
 import type {
   EnemyStatsComponent, GhostStateComponent, LightRevealComponent,
   HealAuraComponent, BarracksSpawnerComponent, GuardComponent,
-  WorkerSlotComponent, HousingComponent,
+  WorkerSlotComponent, HousingComponent, RuinsComponent,
 } from '@shared/components';
 import {
   TILE_SIZE, PLAYER_RADIUS, ENEMY_RADIUS, RESOURCE_NODE_RADIUS,
   PROJECTILE_RADIUS, RANGED_LIFETIME,
   BUILDING_COSTS, BUILDING_SIZES, buildingHalfExtent, snapBuildingPosition,
-  BUILDING_MAX_LEVEL, DEMOLISH_REFUND_PERCENT,
+  BUILDING_MAX_LEVEL, DEMOLISH_REFUND_PERCENT, RUINS_REPAIR_COST_MULT, RUINS_RESTORE_COST_MULT,
   CAMPFIRE_MAX_HEALTH, WALL_MAX_HEALTH, WAREHOUSE_MAX_HEALTH,
   LUMBERMILL_MAX_HEALTH, QUARRY_MAX_HEALTH, MINE_MAX_HEALTH, FARM_MAX_HEALTH,
   ARROW_TURRET_MAX_HEALTH, CANNON_TURRET_MAX_HEALTH, SPIKE_TRAP_MAX_HEALTH,
@@ -850,13 +850,145 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     if (trapDeaths.length > 0) destroyDeadEntities(trapDeaths, undefined, send);
   }
 
+  // ── Ruins tick ───────────────────────────────────────────────────────────
+
+  function tickRuins(dt: number, send: SendFn): void {
+    for (const id of world.query(C.Ruins, C.Position)) {
+      const ruins = world.getComponent<RuinsComponent>(id, C.Ruins)!;
+
+      // Tick burn timer
+      if (ruins.burnTimer > 0) {
+        ruins.burnTimer = Math.max(0, ruins.burnTimer - dt);
+      }
+
+      // Tick decay timer
+      ruins.decayTimer -= dt;
+      if (ruins.decayTimer <= 0) {
+        // Ruins crumble - fully remove entity
+        const destroyedMsg = {
+          type: MessageType.BUILD_DESTROYED,
+          entityId: id,
+        };
+        for (const p of players.values()) send(p.client, destroyedMsg);
+        world.destroyEntity(id);
+      }
+    }
+  }
+
+  /** Repair a ruin back to a functional building. */
+  function handleRuinRepair(clientId: string, msg: BuildRepairMessage, send: SendFn): void {
+    if (!isActive()) return;
+    const player = players.get(clientId);
+    if (!player || player.entityId === null) return;
+    if (world.hasComponent(player.entityId, C.Downed)) return;
+    if (respawnTimers.has(clientId)) return;
+
+    const targetId = msg.entityId;
+    if (!Number.isFinite(targetId)) return;
+    if (!world.hasEntity(targetId)) {
+      send(player.client, { type: MessageType.BUILD_REPAIR_CONFIRM, success: false, reason: 'no_building' } as BuildRepairConfirmMessage);
+      return;
+    }
+
+    const ruins = world.getComponent<RuinsComponent>(targetId, C.Ruins);
+    if (!ruins) {
+      // Not a ruin - delegate to normal repair
+      handleRepair(clientId, msg, send);
+      return;
+    }
+
+    // Calculate repair cost based on whether player wants level 1 or original level
+    // Default: restore to level 1 at 40% of base cost
+    const baseCost = BUILDING_COSTS[ruins.originalType];
+    if (!baseCost) {
+      send(player.client, { type: MessageType.BUILD_REPAIR_CONFIRM, success: false, reason: 'invalid_type' } as BuildRepairConfirmMessage);
+      return;
+    }
+
+    const repairCost: Record<string, number> = {};
+    for (const [res, amount] of Object.entries(baseCost)) {
+      repairCost[res] = Math.ceil(amount! * RUINS_REPAIR_COST_MULT);
+    }
+
+    if (!deductBuildingCost(ruins.originalType, player, send, repairCost)) {
+      send(player.client, { type: MessageType.BUILD_REPAIR_CONFIRM, success: false, reason: 'insufficient_resources' } as BuildRepairConfirmMessage);
+      return;
+    }
+
+    // Remove Ruins component
+    world.removeComponent(targetId, C.Ruins);
+
+    // Restore building to level 1
+    const bldg = world.getComponent<BuildingComponent>(targetId, C.Building);
+    if (bldg) bldg.upgradeLevel = 1;
+
+    // Restore HP to full (level 1 base HP)
+    const baseHp = HP_MAP[ruins.originalType] ?? 100;
+    const hp = world.getComponent<HealthComponent>(targetId, C.Health);
+    if (hp) { hp.max = baseHp; hp.current = baseHp; }
+
+    // Re-add functional components based on building type
+    restoreBuildingComponents(targetId, ruins.originalType);
+
+    send(player.client, { type: MessageType.BUILD_REPAIR_CONFIRM, success: true, entityId: targetId } as BuildRepairConfirmMessage);
+  }
+
+  /** Re-adds the functional components for a restored ruin. */
+  function restoreBuildingComponents(id: number, buildingType: string): void {
+    switch (buildingType) {
+      case 'lumbermill':
+        world.addComponent(id, C.Production, { timer: 0, interval: LUMBERMILL_PRODUCTION_INTERVAL, amount: PRODUCTION_AMOUNT, maxStored: PRODUCTION_MAX_STORED, stored: 0, resourceType: 'wood' } as ProductionComponent);
+        world.addComponent(id, C.WorkerSlot, { workerId: null } as WorkerSlotComponent);
+        break;
+      case 'quarry':
+        world.addComponent(id, C.Production, { timer: 0, interval: QUARRY_PRODUCTION_INTERVAL, amount: PRODUCTION_AMOUNT, maxStored: PRODUCTION_MAX_STORED, stored: 0, resourceType: 'stone' } as ProductionComponent);
+        world.addComponent(id, C.WorkerSlot, { workerId: null } as WorkerSlotComponent);
+        break;
+      case 'mine':
+        world.addComponent(id, C.Production, { timer: 0, interval: MINE_PRODUCTION_INTERVAL, amount: PRODUCTION_AMOUNT, maxStored: PRODUCTION_MAX_STORED, stored: 0, resourceType: 'iron' } as ProductionComponent);
+        world.addComponent(id, C.WorkerSlot, { workerId: null } as WorkerSlotComponent);
+        break;
+      case 'farm':
+        world.addComponent(id, C.Production, { timer: 0, interval: FARM_PRODUCTION_INTERVAL, amount: PRODUCTION_AMOUNT, maxStored: PRODUCTION_MAX_STORED, stored: 0, resourceType: 'food' } as ProductionComponent);
+        world.addComponent(id, C.WorkerSlot, { workerId: null } as WorkerSlotComponent);
+        break;
+      case 'arrow_turret':
+        world.addComponent(id, C.Turret, { range: ARROW_TURRET_RANGE, cooldown: ARROW_TURRET_COOLDOWN, cooldownTimer: 0, damage: ARROW_TURRET_DAMAGE, projectileSpeed: ARROW_TURRET_PROJ_SPEED, aoeRadius: 0, turretType: 'arrow' } as TurretComponent);
+        break;
+      case 'cannon_turret':
+        world.addComponent(id, C.Turret, { range: CANNON_TURRET_RANGE, cooldown: CANNON_TURRET_COOLDOWN, cooldownTimer: 0, damage: CANNON_TURRET_DAMAGE, projectileSpeed: CANNON_TURRET_PROJ_SPEED, aoeRadius: CANNON_AOE_BASE_RADIUS, turretType: 'cannon' } as TurretComponent);
+        break;
+      case 'spike_trap':
+        world.addComponent(id, C.SpikeTrap, { damage: SPIKE_TRAP_DAMAGE, cooldown: SPIKE_TRAP_COOLDOWN, selfDamage: SPIKE_TRAP_SELF_DAMAGE, enemyCooldowns: new Map() } as SpikeTrapComponent);
+        break;
+      case 'light_tower':
+        world.addComponent(id, C.LightReveal, { range: UPGRADE_LIGHT_RANGE[0] } as LightRevealComponent);
+        break;
+      case 'healing_shrine':
+        world.addComponent(id, C.HealAura, { range: UPGRADE_HEAL_RANGE[0], healPerSecond: UPGRADE_HEAL_RATE[0] } as HealAuraComponent);
+        break;
+      case 'barracks':
+        world.addComponent(id, C.BarracksSpawner, { maxGuards: BARRACKS_MAX_GUARDS[0], spawnInterval: BARRACKS_SPAWN_INTERVAL, spawnTimer: 0, guardIds: [] } as BarracksSpawnerComponent);
+        break;
+      case 'warehouse':
+        warehouseIds.add(id);
+        break;
+      case 'cat_house':
+      case 'dormitory': {
+        const cap = buildingType === 'cat_house' ? CAT_HOUSE_CAPACITY[0] : DORMITORY_CAPACITY[0];
+        world.addComponent(id, C.Housing, { capacity: cap, residentIds: [] } as HousingComponent);
+        break;
+      }
+    }
+  }
+
   // ── Public API ────────────────────────────────────────────────────────────
 
   return {
     handlePlace,
     handleDemolish,
     handleUpgrade,
-    handleRepair,
+    handleRepair: handleRuinRepair,
     broadcastWarehouseUpdate,
     cleanupBridge,
     tick(dt: number, send: SendFn): void {
@@ -868,6 +1000,7 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       tickBarracks(dt);
       tickSpikeTraps(dt, send);
       tickBuildingRegen(dt);
+      tickRuins(dt, send);
     },
   };
 }

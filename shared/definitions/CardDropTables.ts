@@ -5,7 +5,7 @@
 import { CARD_POOL, type CardDefinition, type CardRarity } from './CardDefinitions';
 import type { EnemyVariantType } from '../components';
 
-// ── Drop chance per enemy variant (0-1) ─────────────────────────────────────
+// -- Drop chance per enemy variant (0-1) -------------------------------------
 
 export const CARD_DROP_CHANCES: Record<string, number> = {
   melee:    0.02,
@@ -17,7 +17,7 @@ export const CARD_DROP_CHANCES: Record<string, number> = {
   boss:     1.0,
 };
 
-// ── Rarity weights per drop source ──────────────────────────────────────────
+// -- Rarity weights per drop source ------------------------------------------
 
 export type CardDropSource = 'regular_enemy' | 'boss' | 'milestone' | 'world_event';
 
@@ -28,12 +28,12 @@ const CARD_RARITY_WEIGHTS: Record<CardDropSource, Record<CardRarity, number>> = 
   world_event:   { common: 0,  rare: 60, epic: 30, legendary: 10 },
 };
 
-// ── Card drop roll ──────────────────────────────────────────────────────────
+// -- Card drop roll ----------------------------------------------------------
 
 /**
  * Roll a card drop for the given source.
  * Returns a CardDefinition or null if the pool is empty.
- * Excludes traps for boss/milestone/event sources.
+ * All categories (including curses) can drop from any source.
  * Excludes already-picked cards.
  */
 export function rollCardDrop(
@@ -41,12 +41,10 @@ export function rollCardDrop(
   pickedCardIds: Set<string>,
 ): CardDefinition | null {
   const weights = CARD_RARITY_WEIGHTS[source];
-  const excludeTraps = source !== 'regular_enemy';
 
   // Filter pool
   let pool = CARD_POOL.filter(c => {
     if (pickedCardIds.has(c.id)) return false;
-    if (excludeTraps && c.category === 'trap') return false;
     if (weights[c.rarity] <= 0) return false;
     return true;
   });
@@ -54,7 +52,6 @@ export function rollCardDrop(
   if (pool.length === 0) {
     // Fallback: allow duplicates but still respect rarity weights
     pool = CARD_POOL.filter(c => {
-      if (excludeTraps && c.category === 'trap') return false;
       if (weights[c.rarity] <= 0) return false;
       return true;
     });
@@ -64,6 +61,44 @@ export function rollCardDrop(
 
   // Weighted random by rarity
   const weighted = pool.map(c => ({ card: c, weight: weights[c.rarity] }));
+  const totalWeight = weighted.reduce((sum, w) => sum + w.weight, 0);
+  let roll = Math.random() * totalWeight;
+  for (const w of weighted) {
+    roll -= w.weight;
+    if (roll <= 0) return w.card;
+  }
+  return weighted[weighted.length - 1].card;
+}
+
+/**
+ * Roll a card with a minimum rarity for boss loot.
+ * 'rare+' = rare/epic/legendary, 'epic+' = epic/legendary, 'legendary' = legendary only.
+ */
+export function rollBossLootCard(
+  pool: 'rare+' | 'epic+' | 'legendary',
+  pickedCardIds: Set<string>,
+): CardDefinition | null {
+  const minRarities: Record<string, CardRarity[]> = {
+    'rare+': ['rare', 'epic', 'legendary'],
+    'epic+': ['epic', 'legendary'],
+    'legendary': ['legendary'],
+  };
+  const allowed = new Set(minRarities[pool] ?? ['rare', 'epic', 'legendary']);
+
+  let candidates = CARD_POOL.filter(c => {
+    if (!allowed.has(c.rarity)) return false;
+    if (pickedCardIds.has(c.id)) return false;
+    return true;
+  });
+
+  if (candidates.length === 0) {
+    candidates = CARD_POOL.filter(c => allowed.has(c.rarity));
+  }
+  if (candidates.length === 0) return null;
+
+  // Weight by rarity (higher = rarer = lower weight for balanced distribution)
+  const rarityWeight: Record<string, number> = { rare: 50, epic: 35, legendary: 15 };
+  const weighted = candidates.map(c => ({ card: c, weight: rarityWeight[c.rarity] ?? 20 }));
   const totalWeight = weighted.reduce((sum, w) => sum + w.weight, 0);
   let roll = Math.random() * totalWeight;
   for (const w of weighted) {

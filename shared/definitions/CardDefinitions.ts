@@ -1,5 +1,5 @@
 /** Card categories determine visual styling and effect type. */
-export type CardCategory = 'buff' | 'ability' | 'resource' | 'trap';
+export type CardCategory = 'buff' | 'ability' | 'resource' | 'curse';
 export type CardRarity = 'common' | 'rare' | 'epic' | 'legendary';
 
 export interface CardDefinition {
@@ -268,90 +268,134 @@ export const CARD_POOL: CardDefinition[] = [
     effect: { type: 'resource', resource: 'gold', amount: 25 },
   },
 
-  // ── Traps (negative effects) ──
+  // ── Curses (dual buff + debuff) ──
   {
-    id: 'cursed_claws', name: 'Cursed Claws',
-    description: 'ALL players deal 20% less damage',
-    category: 'trap', rarity: 'common',
-    effect: { type: 'trap_player', stat: 'damage', value: -0.20 },
+    id: 'berserkers_curse', name: "Berserker's Curse",
+    description: '-20 Max HP, but +25% damage',
+    category: 'curse', rarity: 'common',
+    effect: { type: 'multi', effects: [
+      { type: 'stat_buff', stat: 'maxHp', value: -20 },
+      { type: 'stat_buff', stat: 'damage', value: 0.25 },
+    ]},
   },
   {
-    id: 'adrenaline_surge', name: 'Adrenaline Surge',
-    description: 'ALL enemies move 10% faster',
-    category: 'trap', rarity: 'common',
-    effect: { type: 'trap_enemy', stat: 'speed', value: 0.10 },
+    id: 'adrenaline_rush', name: 'Adrenaline Rush',
+    description: 'Enemies +10% speed, but players +15% atk speed',
+    category: 'curse', rarity: 'common',
+    effect: { type: 'multi', effects: [
+      { type: 'trap_enemy', stat: 'speed', value: 0.10 },
+      { type: 'trap_player', stat: 'attackSpeed', value: 0.15 },
+    ]},
   },
   {
-    id: 'heavy_paws', name: 'Heavy Paws',
-    description: 'ALL players lose 25% stamina regen',
-    category: 'trap', rarity: 'common',
-    effect: { type: 'trap_player', stat: 'staminaRegen', value: -0.25 },
+    id: 'iron_weight', name: 'Iron Weight',
+    description: '-25% stamina regen, but +4 defense',
+    category: 'curse', rarity: 'common',
+    effect: { type: 'multi', effects: [
+      { type: 'trap_player', stat: 'staminaRegen', value: -0.25 },
+      { type: 'stat_buff', stat: 'defense', value: 4 },
+    ]},
   },
   {
-    id: 'brittle_bones', name: 'Brittle Bones',
-    description: 'ALL players lose 20 maximum HP',
-    category: 'trap', rarity: 'common',
-    effect: { type: 'trap_player', stat: 'maxHp', value: -20 },
+    id: 'glass_cannon', name: 'Glass Cannon',
+    description: '-30 Max HP, but +10% crit and crits +50%',
+    category: 'curse', rarity: 'common',
+    effect: { type: 'multi', effects: [
+      { type: 'stat_buff', stat: 'maxHp', value: -30 },
+      { type: 'stat_buff', stat: 'critChance', value: 0.10 },
+      { type: 'stat_buff', stat: 'critMultiplier', value: 0.50 },
+    ]},
   },
   {
-    id: 'lead_paws', name: 'Lead Paws',
-    description: 'ALL players move 15% slower',
-    category: 'trap', rarity: 'common',
-    effect: { type: 'trap_player', stat: 'speed', value: -0.15 },
+    id: 'rooted_strength', name: 'Rooted Strength',
+    description: '-15% speed, but +20% damage',
+    category: 'curse', rarity: 'common',
+    effect: { type: 'multi', effects: [
+      { type: 'stat_buff', stat: 'speed', value: -0.15 },
+      { type: 'stat_buff', stat: 'damage', value: 0.20 },
+    ]},
   },
   {
-    id: 'rusty_claws', name: 'Rusty Claws',
-    description: 'ALL players attack 20% slower',
-    category: 'trap', rarity: 'common',
-    effect: { type: 'trap_player', stat: 'attackSpeed', value: -0.20 },
+    id: 'heavy_strikes', name: 'Heavy Strikes',
+    description: '-20% atk speed, but +35% damage per hit',
+    category: 'curse', rarity: 'common',
+    effect: { type: 'multi', effects: [
+      { type: 'trap_player', stat: 'attackSpeed', value: -0.20 },
+      { type: 'stat_buff', stat: 'damage', value: 0.35 },
+    ]},
   },
   {
-    id: 'jammed_gears', name: 'Jammed Gears',
-    description: 'Turrets attack 25% slower',
-    category: 'trap', rarity: 'common',
-    effect: { type: 'ability', ability: 'jammed_gears' },
+    id: 'overcharged_turrets', name: 'Overcharged Turrets',
+    description: '-25% turret rate, but +50% turret damage',
+    category: 'curse', rarity: 'common',
+    effect: { type: 'multi', effects: [
+      { type: 'ability', ability: 'jammed_gears' },
+      { type: 'ability', ability: 'turret_damage_boost' },
+    ]},
   },
   {
-    id: 'resource_drought', name: 'Resource Drought',
-    description: 'Production buildings produce 30% slower',
-    category: 'trap', rarity: 'common',
-    effect: { type: 'ability', ability: 'resource_drought' },
+    id: 'efficient_production', name: 'Efficient Production',
+    description: '-30% prod speed, but +100% prod amount',
+    category: 'curse', rarity: 'rare',
+    effect: { type: 'multi', effects: [
+      { type: 'ability', ability: 'resource_drought' },
+      { type: 'ability', ability: 'production_boost' },
+    ]},
   },
   {
-    id: 'enraged_horde', name: 'Enraged Horde',
-    description: 'ALL enemies deal 15% more damage',
-    category: 'trap', rarity: 'rare',
-    effect: { type: 'trap_enemy', stat: 'damage', value: 0.15 },
+    id: 'worthy_foes', name: 'Worthy Foes',
+    description: 'Enemies +15% damage, but +100% resource drops',
+    category: 'curse', rarity: 'rare',
+    effect: { type: 'multi', effects: [
+      { type: 'trap_enemy', stat: 'damage', value: 0.15 },
+      { type: 'ability', ability: 'worthy_foes_loot' },
+    ]},
   },
   {
-    id: 'shoddy_construction', name: 'Shoddy Construction',
-    description: 'Buildings take 25% more damage',
-    category: 'trap', rarity: 'rare',
-    effect: { type: 'ability', ability: 'shoddy_construction' },
+    id: 'volatile_structures', name: 'Volatile Structures',
+    description: 'Buildings +25% dmg taken, but explode on death (40 dmg)',
+    category: 'curse', rarity: 'rare',
+    effect: { type: 'multi', effects: [
+      { type: 'ability', ability: 'shoddy_construction' },
+      { type: 'ability', ability: 'volatile_buildings' },
+    ]},
   },
   {
-    id: 'titans_march', name: "Titan's March",
-    description: '+1 Titan spawns every wave',
-    category: 'trap', rarity: 'rare',
-    effect: { type: 'ability', ability: 'titans_march' },
+    id: 'titan_hunter', name: 'Titan Hunter',
+    description: '+1 Titan/wave, but Titans drop 2 cards',
+    category: 'curse', rarity: 'rare',
+    effect: { type: 'multi', effects: [
+      { type: 'ability', ability: 'titans_march' },
+      { type: 'ability', ability: 'titan_double_drop' },
+    ]},
   },
   {
-    id: 'tremor', name: 'Tremor',
-    description: 'ALL enemies deal 30% more knockback',
-    category: 'trap', rarity: 'rare',
-    effect: { type: 'trap_enemy', stat: 'knockback', value: 0.30 },
+    id: 'tremor_mastery', name: 'Tremor Mastery',
+    description: 'Enemies +30% knockback, but player knockback immunity',
+    category: 'curse', rarity: 'rare',
+    effect: { type: 'multi', effects: [
+      { type: 'trap_enemy', stat: 'knockback', value: 0.30 },
+      { type: 'stat_buff', stat: 'knockbackResist', value: 1.0 },
+    ]},
   },
   {
-    id: 'slow_reflexes', name: 'Slow Reflexes',
-    description: 'ALL players dodge roll cooldown +30%',
-    category: 'trap', rarity: 'epic',
-    effect: { type: 'ability', ability: 'slow_reflexes' },
+    id: 'hardened_body', name: 'Hardened Body',
+    description: '+30% dodge CD, but +40 Max HP and +2 defense',
+    category: 'curse', rarity: 'epic',
+    effect: { type: 'multi', effects: [
+      { type: 'ability', ability: 'slow_reflexes' },
+      { type: 'stat_buff', stat: 'maxHp', value: 40 },
+      { type: 'stat_buff', stat: 'defense', value: 2 },
+    ]},
   },
   {
-    id: 'soul_link', name: 'Soul Link',
-    description: 'Take 3 damage/s when no ally within 250px',
-    category: 'trap', rarity: 'epic',
-    effect: { type: 'ability', ability: 'soul_link' },
+    id: 'soul_bond', name: 'Soul Bond',
+    description: '3 dps when alone, but 3 HP/s near ally',
+    category: 'curse', rarity: 'epic',
+    effect: { type: 'multi', effects: [
+      { type: 'ability', ability: 'soul_link' },
+      { type: 'ability', ability: 'soul_bond_heal' },
+    ]},
     requiresMultiplayer: true,
   },
 
@@ -436,19 +480,23 @@ export const CARD_POOL: CardDefinition[] = [
     ]},
   },
   {
-    id: 'the_rumbling', name: 'The Rumbling',
-    description: '+2 Titans spawn every wave',
-    category: 'trap', rarity: 'legendary',
-    effect: { type: 'ability', ability: 'the_rumbling' },
+    id: 'cursed_power', name: 'Cursed Power',
+    description: '-20% speed, -20% stamina, but +40% dmg and +15% crit',
+    category: 'curse', rarity: 'legendary',
+    effect: { type: 'multi', effects: [
+      { type: 'stat_buff', stat: 'speed', value: -0.20 },
+      { type: 'trap_player', stat: 'staminaRegen', value: -0.20 },
+      { type: 'stat_buff', stat: 'damage', value: 0.40 },
+      { type: 'stat_buff', stat: 'critChance', value: 0.15 },
+    ]},
   },
   {
-    id: 'curse_of_weakness', name: 'Curse of Weakness',
-    description: 'ALL players -30% damage, -25% speed, -30% stamina regen',
-    category: 'trap', rarity: 'legendary',
+    id: 'titans_bounty', name: "Titan's Bounty",
+    description: '+2 Titans/wave, but all enemies 3x resources',
+    category: 'curse', rarity: 'legendary',
     effect: { type: 'multi', effects: [
-      { type: 'trap_player', stat: 'damage', value: -0.30 },
-      { type: 'trap_player', stat: 'speed', value: -0.25 },
-      { type: 'trap_player', stat: 'staminaRegen', value: -0.30 },
+      { type: 'ability', ability: 'the_rumbling' },
+      { type: 'ability', ability: 'massive_loot' },
     ]},
   },
 ];
@@ -466,7 +514,7 @@ export const CATEGORY_COLORS: Record<CardCategory, number> = {
   buff:     0x4a90d9,
   ability:  0xaa44ff,
   resource: 0x66aa66,
-  trap:     0xcc3333,
+  curse:    0xcc6633,
 };
 
 /** Rarity border colors for UI. */

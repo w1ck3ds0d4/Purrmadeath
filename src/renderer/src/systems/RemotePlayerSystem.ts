@@ -15,6 +15,7 @@ import {
   DownedComponent,
   CivilianComponent,
   BossComponent,
+  RuinsComponent,
 } from '@shared/components';
 import type { SnapshotMessage, DeltaMessage, EntitySnapshot } from '@shared/protocol';
 import {
@@ -204,6 +205,15 @@ export class RemotePlayerSystem {
           specialCooldown: 0,
         } as BossComponent);
       }
+      // Ruins state (for renderer darkening + fire effect)
+      if (snap.isRuins) {
+        world.addComponent(snap.entityId, C.Ruins, {
+          originalType: snap.buildingType ?? 'wall',
+          originalLevel: snap.upgradeLevel ?? 1,
+          burnTimer: snap.ruinsBurning ? 1 : 0,
+          decayTimer: 0,
+        } as RuinsComponent);
+      }
     } else {
       // Update velocity + health immediately; position is interpolated in interpolate()
       const vel = world.getComponent<VelocityComponent>(snap.entityId, C.Velocity);
@@ -259,6 +269,25 @@ export class RemotePlayerSystem {
         }
       } else if (world.hasComponent(snap.entityId, C.DodgeRoll)) {
         world.removeComponent(snap.entityId, C.DodgeRoll);
+      }
+
+      // Ruins state update
+      if (snap.isRuins !== undefined) {
+        if (snap.isRuins) {
+          let ruins = world.getComponent<RuinsComponent>(snap.entityId, C.Ruins);
+          if (!ruins) {
+            world.addComponent(snap.entityId, C.Ruins, {
+              originalType: snap.buildingType ?? 'wall',
+              originalLevel: snap.upgradeLevel ?? 1,
+              burnTimer: snap.ruinsBurning ? 1 : 0,
+              decayTimer: 0,
+            } as RuinsComponent);
+          } else {
+            ruins.burnTimer = snap.ruinsBurning ? 1 : 0;
+          }
+        } else if (world.hasComponent(snap.entityId, C.Ruins)) {
+          world.removeComponent(snap.entityId, C.Ruins);
+        }
       }
 
       // Downed state (synced from snapshot for civilians and late-joining clients)

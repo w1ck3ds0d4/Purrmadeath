@@ -300,6 +300,17 @@ export const BOSS_FIRST_WAVE = 5;
 /** Card drop spawns at campfire every N waves. */
 export const MILESTONE_CARD_INTERVAL = 10;
 
+// ─── Building Ruins ──────────────────────────────────────────────────
+
+/** Seconds the burning visual lasts on ruins before going out. */
+export const RUINS_BURN_DURATION = 30;
+/** Total seconds before ruins crumble and disappear (includes burn time). */
+export const RUINS_DECAY_DURATION = 120;
+/** Cost multiplier for repairing ruins to level 1 (fraction of original build cost). */
+export const RUINS_REPAIR_COST_MULT = 0.4;
+/** Cost multiplier for restoring ruins to their original level (fraction of total invested cost). */
+export const RUINS_RESTORE_COST_MULT = 0.6;
+
 // ─── Death & Respawn (4.11) ───────────────────────────────────────────
 
 /** Seconds a downed player has before they fully die (bleed-out timer). */

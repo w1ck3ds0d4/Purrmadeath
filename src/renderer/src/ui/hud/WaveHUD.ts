@@ -9,6 +9,11 @@
  */
 import type { DayNightPhase } from '@shared/protocol';
 
+/** Escape HTML entities to prevent XSS from server-controlled strings. */
+function esc(str: string): string {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 /** Top offset: below minimap (220px) + padding (12px) + coords row (~20px) + gaps */
 const HUD_TOP = 258;
 const BOX_WIDTH = 220;
@@ -65,6 +70,13 @@ export class WaveHUD {
   /** Subtitle element below banner for event descriptions. */
   private bannerDescEl: HTMLElement;
   private bannerTimer = 0;
+
+  /** Boss HP bar elements (top center). */
+  private bossBarContainer: HTMLElement;
+  private bossBarNameEl: HTMLElement;
+  private bossBarFill: HTMLElement;
+  private bossBarHpText: HTMLElement;
+  private activeBoss: { entityId: number; name: string; maxHp: number } | null = null;
 
   /** Dirty flag - only update DOM when needed. */
   private dirty = true;
@@ -173,6 +185,34 @@ export class WaveHUD {
       'white-space: nowrap',
     ].join('; ');
 
+    // Boss HP bar (top center, hidden by default)
+    this.bossBarContainer = document.createElement('div');
+    this.bossBarContainer.style.cssText = [
+      'position: absolute',
+      'top: 24px',
+      'left: 50%',
+      'transform: translateX(-50%)',
+      'z-index: 30',
+      'display: none',
+      'text-align: center',
+      'pointer-events: none',
+    ].join('; ');
+
+    this.bossBarNameEl = document.createElement('div');
+    this.bossBarNameEl.style.cssText = "font-family:'Segoe UI',sans-serif;font-size:18px;font-weight:700;color:#ffcc44;letter-spacing:3px;margin-bottom:4px;text-shadow:0 1px 4px rgba(0,0,0,0.8);";
+
+    const barOuter = document.createElement('div');
+    barOuter.style.cssText = 'width:400px;height:10px;background:rgba(0,0,0,0.6);border:1px solid rgba(255,255,255,0.15);border-radius:3px;overflow:hidden;';
+
+    this.bossBarFill = document.createElement('div');
+    this.bossBarFill.style.cssText = 'width:100%;height:100%;background:linear-gradient(90deg,#cc2222,#ff4444);border-radius:2px;transition:width 0.2s ease;';
+    barOuter.appendChild(this.bossBarFill);
+
+    this.bossBarHpText = document.createElement('div');
+    this.bossBarHpText.style.cssText = "font-family:monospace;font-size:11px;color:#999;margin-top:2px;";
+
+    this.bossBarContainer.append(this.bossBarNameEl, barOuter, this.bossBarHpText);
+
     const overlay = document.getElementById('overlay')!;
     overlay.appendChild(this.timeEl);
     overlay.appendChild(this.waveEl);
@@ -180,6 +220,7 @@ export class WaveHUD {
     overlay.appendChild(this.voteEl);
     overlay.appendChild(this.bannerEl);
     overlay.appendChild(this.bannerDescEl);
+    overlay.appendChild(this.bossBarContainer);
   }
 
   /** Set the sleep vote callback. */
@@ -286,6 +327,53 @@ export class WaveHUD {
   /** Show a "Safe Day" banner (called from EventRoulette landing on null). */
   onSafeDay(): void {
     this.showBanner('SAFE DAY', 'No events today - prepare your defenses', '#66bb66');
+  }
+
+  /** Called when a boss spawns - show the HP bar. */
+  onBossSpawn(entityId: number, bossName: string, description: string, maxHp: number): void {
+    this.activeBoss = { entityId, name: bossName, maxHp };
+    this.bossBarNameEl.textContent = bossName.toUpperCase();
+    this.bossBarFill.style.width = '100%';
+    this.bossBarHpText.textContent = '';
+    this.bossBarContainer.style.display = 'block';
+    this.showBanner(bossName.toUpperCase(), description, '#ff4444');
+  }
+
+  /** Called when a boss changes phase - flash banner text. */
+  onBossPhase(entityId: number, bannerText: string): void {
+    this.showBanner(bannerText, undefined, '#ff6644');
+  }
+
+  /** Update the boss HP bar from the entity's current HP. Call each frame. */
+  updateBossHp(entityId: number, currentHp: number, maxHp: number): void {
+    if (!this.activeBoss || this.activeBoss.entityId !== entityId) return;
+    const pct = Math.max(0, Math.min(100, (currentHp / maxHp) * 100));
+    this.bossBarFill.style.width = `${pct}%`;
+    if (pct < 25) {
+      this.bossBarFill.style.background = 'linear-gradient(90deg,#881111,#cc2222)';
+    } else if (pct < 50) {
+      this.bossBarFill.style.background = 'linear-gradient(90deg,#cc6622,#ff8844)';
+    } else {
+      this.bossBarFill.style.background = 'linear-gradient(90deg,#cc2222,#ff4444)';
+    }
+    this.bossBarHpText.textContent = `${Math.ceil(currentHp)} / ${maxHp}`;
+
+    // Hide bar if boss is dead
+    if (currentHp <= 0) {
+      this.activeBoss = null;
+      this.bossBarContainer.style.display = 'none';
+    }
+  }
+
+  /** Remove boss HP bar (boss died or wave ended). */
+  hideBossBar(): void {
+    this.activeBoss = null;
+    this.bossBarContainer.style.display = 'none';
+  }
+
+  /** Get the tracked boss entity ID (for HP bar updates from game loop). */
+  getActiveBossEntityId(): number | null {
+    return this.activeBoss?.entityId ?? null;
   }
 
   /** Called when WORLD_EVENT_END arrives. */
@@ -409,14 +497,14 @@ export class WaveHUD {
     if (this.activeModifiers.length > 0) {
       const tags = this.activeModifiers.map(m => {
         const hex = '#' + m.color.toString(16).padStart(6, '0');
-        return `<span style="color:${hex};font-weight:bold;font-size:12px;letter-spacing:0.5px">${m.name.toUpperCase()}</span>`;
+        return `<span style="color:${hex};font-weight:bold;font-size:12px;letter-spacing:0.5px">${esc(m.name.toUpperCase())}</span>`;
       }).join(' <span style="color:#555;font-size:10px">|</span> ');
       this.waveEl.innerHTML += `<br><span style="font-size:11px">${tags}</span>`;
     }
 
     // ── Active world event tag ──
     if (this.activeEventName) {
-      this.waveEl.innerHTML += `<br><span style="color:#ff8844;font-weight:bold;font-size:11px;letter-spacing:0.5px">${this.activeEventName.toUpperCase()}</span>`;
+      this.waveEl.innerHTML += `<br><span style="color:#ff8844;font-weight:bold;font-size:11px;letter-spacing:0.5px">${esc(this.activeEventName.toUpperCase())}</span>`;
     }
 
     // Dynamically position sleep button below wave box (which may have extra lines)

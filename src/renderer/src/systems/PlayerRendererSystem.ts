@@ -16,6 +16,7 @@ import {
   DodgeRollComponent,
   StatusEffectsComponent,
   BossComponent,
+  RuinsComponent,
 } from '@shared/components';
 import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, ENEMY_MELEE_RANGE, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, CARD_DROP_RADIUS, buildingHalfExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RANGE, STATUS_BURN, STATUS_POISON, STATUS_SLOW, STATUS_STUN, STATUS_HOLY, STATUS_SHADOW, STATUS_ARCANE, STATUS_NATURE } from '@shared/constants';
 import { FACTION_COLORS, type EnemyFaction } from '@shared/definitions/EnemyVariants';
@@ -337,7 +338,8 @@ export class PlayerRendererSystem {
       const prevRevProg = this.lastReviveProg.get(id) ?? -1;
 
       // Always-animated entities need per-frame redraw
-      const alwaysAnimated = isPortal || isItem || civilianIds.has(id) || id === localEntityId || this.selectedBuildingId === id;
+      const hasBurningRuins = buildingIds.has(id) && world.getComponent<RuinsComponent>(id, C.Ruins)?.burnTimer! > 0;
+      const alwaysAnimated = isPortal || isItem || civilianIds.has(id) || id === localEntityId || this.selectedBuildingId === id || hasBurningRuins;
 
       let needsRedraw = isNew || alwaysAnimated
         || isFlashing || prevFlashing !== isFlashing
@@ -622,6 +624,38 @@ export class PlayerRendererSystem {
           gfx.stroke({ color: 0xeeddbb, alpha: 0.8, width: 1.5 });
           gfx.moveTo(-3, 8); gfx.lineTo(-3, 2); gfx.lineTo(3, 2); gfx.lineTo(3, 8);
           gfx.stroke({ color: 0xeeddbb, alpha: 0.6, width: 1 });
+        }
+
+        // ── Ruins overlay (darkened tint + fire particles when burning) ──
+        const ruinsComp = world.getComponent<RuinsComponent>(id, C.Ruins);
+        if (ruinsComp) {
+          // Dark charred overlay
+          gfx.rect(-half, -half, half * 2, half * 2);
+          gfx.fill({ color: 0x000000, alpha: 0.55 });
+
+          // Burn marks (diagonal slash lines)
+          for (let i = -1; i <= 1; i++) {
+            const off = i * (half * 0.5);
+            gfx.moveTo(-half * 0.6 + off, -half * 0.6);
+            gfx.lineTo(half * 0.6 + off, half * 0.6);
+          }
+          gfx.stroke({ color: 0x332200, alpha: 0.4, width: 2 });
+
+          if (ruinsComp.burnTimer > 0) {
+            // Animated fire particles (flickering orange/red dots)
+            const t = performance.now() / 200;
+            for (let fi = 0; fi < 4; fi++) {
+              const fx = Math.sin(t + fi * 1.7) * half * 0.5;
+              const fy = -Math.abs(Math.cos(t * 0.8 + fi * 2.3)) * half * 0.6 - 2;
+              const fSize = 2 + Math.sin(t * 1.2 + fi) * 1;
+              const fireColor = fi % 2 === 0 ? 0xff6622 : 0xffaa00;
+              gfx.circle(fx, fy, fSize);
+              gfx.fill({ color: fireColor, alpha: 0.7 + Math.sin(t + fi) * 0.2 });
+            }
+            // Glow halo
+            gfx.circle(0, -half * 0.3, half * 0.7);
+            gfx.fill({ color: 0xff4400, alpha: 0.08 + Math.sin(t * 0.5) * 0.04 });
+          }
         }
 
         // Selection highlight: pulsing yellow border + turret range circle

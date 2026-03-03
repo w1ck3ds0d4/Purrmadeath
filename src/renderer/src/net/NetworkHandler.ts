@@ -64,6 +64,8 @@ import type {
   WorldEventEndMessage,
   CardPickupMessage,
   BossIntroMessage,
+  BossPhaseMessage,
+  BuildRuinedMessage,
   LobbySlot,
 } from '@shared/protocol';
 import type { NightOverlay } from '../render/NightOverlay';
@@ -100,6 +102,7 @@ import type { BuildMenuOverlay } from '../ui/overlays/BuildMenuOverlay';
 import type { CivilianPanelOverlay } from '../ui/overlays/CivilianPanelOverlay';
 import type { EventRoulette } from '../ui/hud/EventRoulette';
 import type { CardToast } from '../ui/hud/CardToast';
+import { CARD_POOL } from '@shared/definitions/CardDefinitions';
 
 // ── Shared mutable state ────────────────────────────────────────────────────
 
@@ -466,8 +469,10 @@ export function registerMessageHandlers(
 
   net.on(MessageType.CARD_PICKUP, (msg) => {
     const pickup = msg as CardPickupMessage;
-    d.cardToast.show(pickup.displayName, pickup.cardName, pickup.rarity);
-    d.chatOverlay.addMessage('System', -1, `${pickup.displayName} found ${pickup.cardName} (${pickup.rarity})`);
+    const cardDef = CARD_POOL.find(c => c.id === pickup.cardId);
+    d.cardToast.show(pickup.displayName, pickup.cardName, pickup.rarity, pickup.category, cardDef?.description);
+    const prefix = pickup.category === 'curse' ? 'CURSE' : 'Card';
+    d.chatOverlay.addMessage('System', -1, `${pickup.displayName} got ${prefix}: ${pickup.cardName} (${pickup.rarity})`);
     // Sync picked card IDs for the local player
     if (!s.pickedCardIds.includes(pickup.cardId)) s.pickedCardIds.push(pickup.cardId);
     // Sync abilities if this was the local player
@@ -479,7 +484,15 @@ export function registerMessageHandlers(
   net.on(MessageType.BOSS_INTRO, (msg) => {
     const intro = msg as BossIntroMessage;
     d.chatOverlay.addMessage('System', -1, `BOSS: ${intro.bossName} has appeared!`);
+    d.waveHUD.onBossSpawn(intro.entityId, intro.bossName, intro.description, intro.maxHp);
     d.camera.shake(8, 1.5);
+  });
+
+  net.on(MessageType.BOSS_PHASE, (msg) => {
+    const phase = msg as BossPhaseMessage;
+    d.chatOverlay.addMessage('System', -1, phase.bannerText);
+    d.waveHUD.onBossPhase(phase.entityId, phase.bannerText);
+    d.camera.shake(6, 0.5);
   });
 
   // ── Cards ───────────────────────────────────────────────────────────────
@@ -494,7 +507,7 @@ export function registerMessageHandlers(
 
   net.on(MessageType.CARD_APPLIED, (msg) => {
     const applied = msg as CardAppliedMessage;
-    const prefix = applied.isTrap ? 'TRAP' : 'Card';
+    const prefix = applied.isTrap ? 'CURSE' : 'Card';
     d.chatOverlay.addMessage('System', -1, `${applied.displayName} picked ${prefix}: ${applied.cardName}`);
     d.cardPicker.hide();
     d.waveHUD.setPaused(false);
@@ -781,6 +794,17 @@ export function registerMessageHandlers(
 
   net.on(MessageType.CAMPFIRE_DESTROYED, () => {
     d.debug.log('Campfire destroyed!');
+  });
+
+  net.on(MessageType.BUILD_RUINED, (msg) => {
+    const br = msg as BuildRuinedMessage;
+    d.debug.log(`Building destroyed - now in ruins (${br.buildingType} L${br.originalLevel})`);
+    d.chatOverlay.addMessage('System', -1, `A ${br.buildingType.replace(/_/g, ' ')} has been destroyed!`);
+    // Deselect if this building was selected
+    if (s.selectedBuildingId === br.entityId) {
+      s.selectedBuildingId = null;
+      d.buildOverlay.hide();
+    }
   });
 
   // ── Civilians ────────────────────────────────────────────────────────────

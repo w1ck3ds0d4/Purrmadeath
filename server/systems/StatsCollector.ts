@@ -58,7 +58,7 @@ export function createStatsCollector(deps: StatsCollectorDeps) {
         resourcesGathered: resourcesByPlayer.get(pid) ?? { wood: 0, stone: 0, iron: 0, diamond: 0 },
         enemiesKilled: Object.values(killsByPlayer.get(pid) ?? {}).reduce((a, b) => a + b, 0),
         killsByType: killsByPlayer.get(pid) ?? {},
-        wavesSurvived: waveState.currentWave,
+        wavesSurvived: Math.max(0, waveState.currentWave - 1),
         timePlayed,
         buildingsBuilt: buildingsByPlayer.get(pid) ?? 0,
       });

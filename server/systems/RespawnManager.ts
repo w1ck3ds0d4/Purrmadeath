@@ -11,7 +11,7 @@ import {
   DownedComponent,
   EnemyVariantComponent,
 } from '@shared/components';
-import type { BarracksSpawnerComponent } from '@shared/components';
+import type { BarracksSpawnerComponent, BuildingComponent, RuinsComponent } from '@shared/components';
 import {
   PLAYER_MAX_HEALTH,
   DOWNED_BLEED_TIME,
@@ -21,6 +21,8 @@ import {
   RESPAWN_DELAY,
   REVIVE_RANGE,
   WIPE_1_RESOURCE_LOSS_PERCENT,
+  RUINS_BURN_DURATION,
+  RUINS_DECAY_DURATION,
 } from '@shared/constants';
 import { MessageType } from '@shared/protocol';
 import type {
@@ -32,6 +34,7 @@ import type {
   PartyWipeMessage,
   GameOverMessage,
   BuildDestroyedMessage,
+  BuildRuinedMessage,
   CampfireDestroyedMessage,
   ResourceUpdateMessage,
 } from '@shared/protocol';
@@ -69,6 +72,8 @@ export interface RespawnManagerDeps {
   trackKill: (attackerEntityId: number, enemyVariant: string) => void;
   onBossKilled: (deadId: number, send: SendFn) => void;
   isBoss: (entityId: number) => boolean;
+  /** Called when a regular enemy is killed - for card auto-grant. */
+  onEnemyKilled?: (deadId: number, attackerEntityId: number | undefined, variant: string, send: SendFn) => void;
   fireRunEnd: () => void;
   /** Called when a downed civilian's bleed timer expires. */
   onCivilianDeath?: (entityId: number, send: SendFn) => void;
@@ -362,6 +367,11 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
         if (send && deps.isBoss(deadId)) {
           deps.onBossKilled(deadId, send);
         }
+        // Regular enemy kill: chance to auto-grant card to killer
+        if (send && !deps.isBoss(deadId) && deps.onEnemyKilled) {
+          const attackerId = attackerMap?.get(deadId);
+          deps.onEnemyKilled(deadId, attackerId, ev?.variant ?? 'melee', send);
+        }
       }
 
       // Civilian → enter downed state (can be revived)
@@ -389,15 +399,51 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
         continue;
       }
 
-      // Building → broadcast destruction, clean up warehouse, check campfire game-over
+      // Building → convert to ruins or handle campfire game-over
       if (faction?.type === 'building' && send) {
-        const destroyedMsg: BuildDestroyedMessage = {
-          type: MessageType.BUILD_DESTROYED,
-          entityId: deadId,
-        };
-        for (const p of players.values()) send(p.client, destroyedMsg);
+        const bldg = world.getComponent<BuildingComponent>(deadId, C.Building);
 
-        // Warehouse destroyed → drop 50% of supplies
+        // Campfire → instant game-over (no ruins)
+        if (deadId === deps.getCampfireEntityId() && !deps.getGameOver()) {
+          const destroyedMsg: BuildDestroyedMessage = {
+            type: MessageType.BUILD_DESTROYED,
+            entityId: deadId,
+          };
+          for (const p of players.values()) send(p.client, destroyedMsg);
+
+          deps.setGameOver(true);
+          const campfireMsg: CampfireDestroyedMessage = {
+            type: MessageType.CAMPFIRE_DESTROYED,
+          };
+          for (const p of players.values()) send(p.client, campfireMsg);
+
+          const timePlayed = Math.floor(deps.getElapsedSeconds());
+          const gameOverMsg: GameOverMessage = {
+            type: MessageType.GAME_OVER,
+            waveReached: waveState.currentWave,
+            reason: 'campfire_destroyed',
+            enemiesKilled: deps.getEnemiesKilled(),
+            timePlayed,
+          };
+          for (const p of players.values()) send(p.client, gameOverMsg);
+          deps.fireRunEnd();
+          world.destroyEntity(deadId);
+          continue;
+        }
+
+        // Bridge → fully destroyed (no ruins for bridges)
+        if (world.hasComponent(deadId, C.Bridge)) {
+          const destroyedMsg: BuildDestroyedMessage = {
+            type: MessageType.BUILD_DESTROYED,
+            entityId: deadId,
+          };
+          for (const p of players.values()) send(p.client, destroyedMsg);
+          deps.getBuildings().cleanupBridge(deadId);
+          world.destroyEntity(deadId);
+          continue;
+        }
+
+        // Warehouse destroyed → drop supplies + clean up (then convert to ruins)
         if (warehouseIds.has(deadId)) {
           const wPos = world.getComponent<PositionComponent>(deadId, C.Position);
           if (wPos) {
@@ -423,9 +469,6 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
           deps.getBuildings().broadcastWarehouseUpdate(send);
         }
 
-        // Bridge destroyed → remove from bridge tiles
-        deps.getBuildings().cleanupBridge(deadId);
-
         // Barracks destroyed → destroy all its guards
         const spawner = world.getComponent<BarracksSpawnerComponent>(deadId, C.BarracksSpawner);
         if (spawner) {
@@ -435,24 +478,43 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
           spawner.guardIds.length = 0;
         }
 
-        if (deadId === deps.getCampfireEntityId() && !deps.getGameOver()) {
-          deps.setGameOver(true);
-          const campfireMsg: CampfireDestroyedMessage = {
-            type: MessageType.CAMPFIRE_DESTROYED,
-          };
-          for (const p of players.values()) send(p.client, campfireMsg);
+        // Convert to ruins - strip functional components, add Ruins component
+        const originalType = bldg?.buildingType ?? 'wall';
+        const originalLevel = bldg?.upgradeLevel ?? 1;
 
-          const timePlayed = Math.floor(deps.getElapsedSeconds());
-          const gameOverMsg: GameOverMessage = {
-            type: MessageType.GAME_OVER,
-            waveReached: waveState.currentWave,
-            reason: 'campfire_destroyed',
-            enemiesKilled: deps.getEnemiesKilled(),
-            timePlayed,
-          };
-          for (const p of players.values()) send(p.client, gameOverMsg);
-          deps.fireRunEnd();
-        }
+        // Remove functional components so building stops working
+        if (world.hasComponent(deadId, C.Production)) world.removeComponent(deadId, C.Production);
+        if (world.hasComponent(deadId, C.Turret)) world.removeComponent(deadId, C.Turret);
+        if (world.hasComponent(deadId, C.SpikeTrap)) world.removeComponent(deadId, C.SpikeTrap);
+        if (world.hasComponent(deadId, C.HealAura)) world.removeComponent(deadId, C.HealAura);
+        if (world.hasComponent(deadId, C.LightReveal)) world.removeComponent(deadId, C.LightReveal);
+        if (world.hasComponent(deadId, C.BarracksSpawner)) world.removeComponent(deadId, C.BarracksSpawner);
+        if (world.hasComponent(deadId, C.WorkerSlot)) world.removeComponent(deadId, C.WorkerSlot);
+        if (world.hasComponent(deadId, C.Housing)) world.removeComponent(deadId, C.Housing);
+
+        // Set HP to 1 so the entity stays alive in the ECS (0 would trigger death again)
+        const hp = world.getComponent<HealthComponent>(deadId, C.Health);
+        if (hp) { hp.current = 1; hp.max = 1; }
+
+        // Add Ruins component
+        world.addComponent(deadId, C.Ruins, {
+          originalType,
+          originalLevel,
+          burnTimer: RUINS_BURN_DURATION,
+          decayTimer: RUINS_DECAY_DURATION,
+        } as RuinsComponent);
+
+        // Broadcast ruins notification
+        const ruinedMsg: BuildRuinedMessage = {
+          type: MessageType.BUILD_RUINED,
+          entityId: deadId,
+          buildingType: originalType,
+          originalLevel,
+        };
+        for (const p of players.values()) send(p.client, ruinedMsg);
+
+        // Don't destroy the entity - it stays as ruins
+        continue;
       }
 
       world.destroyEntity(deadId);

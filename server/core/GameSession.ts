@@ -4,7 +4,8 @@ import { WorldGenerator } from '@shared/world/WorldGenerator';
 import { spawnPlayer, findSpawnPoint } from '@shared/world/PlayerSpawner';
 import { CLASS_STATS, DEFAULT_CLASS } from '@shared/definitions/ClassDefinitions';
 import { CARD_POOL, type CardDefinition } from '@shared/definitions/CardDefinitions';
-import { rollCardDrop } from '@shared/definitions/CardDropTables';
+import { rollCardDrop, rollEnemyCardDrop, rollBossLootCard } from '@shared/definitions/CardDropTables';
+import { BOSS_MAP } from '@shared/definitions/BossDefinitions';
 import type { PlayerClass } from '@shared/definitions/ClassDefinitions';
 import {
   C,
@@ -364,10 +365,10 @@ export class GameSession {
       onNightStart: (send) => {
         this.waveModifiers.rollModifiers(this.waveState.currentWave, send);
         this.waves.activateWave(send);
-        // Spawn boss on boss waves (every 5 starting at wave 5)
+        // Spawn boss(es) on boss waves (every 5 starting at wave 5, double bosses W30+)
         const w = this.waveState.currentWave;
         if (w >= BOSS_FIRST_WAVE && w % BOSS_SPAWN_INTERVAL === 0) {
-          this.boss.spawnBoss(w, send);
+          this.boss.spawnBossesForWave(w, send);
         }
       },
       onDayStart: (send) => {
@@ -407,12 +408,16 @@ export class GameSession {
       overlapsResourceNode: (wx, wy, r) => this.overlapsResourceNode(wx, wy, r),
       destroyDeadEntities: (deaths, attackerMap, send) => this.respawn.destroyDeadEntities(deaths, attackerMap, send),
       onEventComplete: (eventId, send) => {
-        // 30% chance to drop a card when an event completes naturally
+        // 30% chance to auto-grant a card when an event completes naturally
         if (Math.random() > 0.3) return;
         const card = rollCardDrop('world_event', this.cards.pickedCardIds as Set<string>);
         if (!card) return;
-        const center = this.getPlayerCenter();
-        if (center) this.spawnCardDrop(center.x, center.y, card);
+        // Grant to a random alive player
+        const alive = [...this.players.values()].filter(p => p.entityId != null);
+        if (alive.length > 0) {
+          const recipient = alive[Math.floor(Math.random() * alive.length)];
+          this.cardDispenser.autoGrant(recipient, card, send);
+        }
       },
     });
 
@@ -497,6 +502,7 @@ export class GameSession {
       fireRunEnd: () => this.fireRunEnd(),
       civilianEntityIds: this.civilians.civilianIds,
       onCivilianDeath: (entityId, send) => this.civilians.handleCivilianDeath(entityId, send),
+      onEnemyKilled: (deadId, attackerEntityId, variant, send) => this.onEnemyKilled(deadId, attackerEntityId, variant, send),
     });
 
     this.stats = createStatsCollector({
@@ -1322,16 +1328,104 @@ export class GameSession {
     console.log(`[CardDrop] Spawned "${card.name}" (${card.rarity}) at (${Math.round(x)}, ${Math.round(y)})`);
   }
 
-  /** Spawn a guaranteed card drop when a boss is killed. */
+  /** Auto-grant card(s) and bonus resources when a boss is killed. */
   private onBossKilled(deadId: number, send: SendFn): void {
     const pos = this.world.getComponent<import('@shared/components').PositionComponent>(deadId, C.Position);
     if (!pos) return;
 
-    const card = rollCardDrop('boss', this.cards.pickedCardIds as Set<string>);
+    const bossComp = this.world.getComponent<import('@shared/components').BossComponent>(deadId, C.Boss);
+    const bossDef = bossComp ? BOSS_MAP[bossComp.bossId] : null;
+    const loot = bossDef?.loot;
+
+    // Grant cards from boss loot table
+    const cardCount = loot?.cardCount ?? 1;
+    const cardPool = loot?.cardPool ?? 'rare+';
+    for (let i = 0; i < cardCount; i++) {
+      const card = rollBossLootCard(cardPool, this.cards.pickedCardIds as Set<string>);
+      if (card) {
+        const recipient = this.getNearestPlayer(pos.x, pos.y);
+        if (recipient) this.cardDispenser.autoGrant(recipient, card, send);
+      }
+    }
+
+    // Grant bonus resources to all players
+    if (loot?.bonusResources) {
+      for (const p of this.players.values()) {
+        if (!p.entityId) continue;
+        const res = this.world.getComponent<Record<string, number>>(p.entityId, C.Resources);
+        if (res) {
+          for (const [key, amount] of Object.entries(loot.bonusResources)) {
+            res[key] = (res[key] ?? 0) + amount;
+          }
+        }
+      }
+    }
+
+    // 50% chance bonus drop
+    if (loot?.bonusDrop && Math.random() < 0.5) {
+      const recipient = this.getNearestPlayer(pos.x, pos.y);
+      if (recipient?.entityId) {
+        const res = this.world.getComponent<Record<string, number>>(recipient.entityId, C.Resources);
+        if (res) {
+          const bd = loot.bonusDrop;
+          res[bd.resource] = (res[bd.resource] ?? 0) + bd.amount;
+        }
+      }
+    }
+
+    // Special on-kill effects
+    if (loot?.onKillEffect === 'speed_buff') {
+      // All players get 30% speed for 30s
+      for (const p of this.players.values()) {
+        if (!p.entityId) continue;
+        const spd = this.world.getComponent<{ base: number; multiplier: number }>(p.entityId, C.Speed);
+        if (spd) spd.multiplier *= 1.3;
+      }
+    } else if (loot?.onKillEffect === 'cleanse_all') {
+      // Heal all players to full
+      for (const p of this.players.values()) {
+        if (!p.entityId) continue;
+        const hp = this.world.getComponent<import('@shared/components').HealthComponent>(p.entityId, C.Health);
+        if (hp) hp.current = hp.max;
+      }
+    }
+
+    this.boss.onBossDeath(deadId);
+  }
+
+  /** Auto-grant a card when a regular enemy is killed (chance-based). */
+  private onEnemyKilled(deadId: number, attackerEntityId: number | undefined, variant: string, send: SendFn): void {
+    const card = rollEnemyCardDrop(variant as any, this.cards.pickedCardIds as Set<string>);
     if (!card) return;
 
-    this.spawnCardDrop(pos.x, pos.y, card);
-    this.boss.onBossDeath(deadId);
+    // Grant to the player who killed it, or nearest player
+    let recipient: SessionPlayer | undefined;
+    if (attackerEntityId !== undefined) {
+      for (const p of this.players.values()) {
+        if (p.entityId === attackerEntityId) { recipient = p; break; }
+      }
+    }
+    if (!recipient) {
+      const pos = this.world.getComponent<import('@shared/components').PositionComponent>(deadId, C.Position);
+      if (pos) recipient = this.getNearestPlayer(pos.x, pos.y) ?? undefined;
+    }
+    if (recipient) this.cardDispenser.autoGrant(recipient, card, send);
+  }
+
+  /** Find the nearest alive player to a world position. */
+  private getNearestPlayer(x: number, y: number): SessionPlayer | null {
+    let best: SessionPlayer | null = null;
+    let bestDist = Infinity;
+    for (const p of this.players.values()) {
+      if (!p.entityId) continue;
+      const pos = this.world.getComponent<import('@shared/components').PositionComponent>(p.entityId, C.Position);
+      if (!pos) continue;
+      const dx = pos.x - x;
+      const dy = pos.y - y;
+      const dist = dx * dx + dy * dy;
+      if (dist < bestDist) { bestDist = dist; best = p; }
+    }
+    return best;
   }
 
   /** Apply a picked-up card to a player and broadcast to all. */
@@ -2023,13 +2117,9 @@ export class GameSession {
 
   // ── Card system ────────────────────────────────────────────────────────────
 
-  /** Send card offers to all players and start the auto-pick timer. */
-  private sendCardOffers(send: SendFn): void {
-    this.cardDispenser.sendOffers(send);
-  }
-
-  handleCardPick(clientId: string, msg: CardPickMessage, send: SendFn): void {
-    this.cardDispenser.handlePick(clientId, msg, send);
+  /** Card pick handler - no longer used (auto-grant replaces offer/pick flow). */
+  handleCardPick(_clientId: string, _msg: CardPickMessage, _send: SendFn): void {
+    // No-op: cards are now auto-granted, not offered/picked
   }
 
   // ── Skill system ────────────────────────────────────────────────────────────
@@ -2135,14 +2225,15 @@ export class GameSession {
     for (const p of this.players.values()) {
       if (p.entityId != null) this.skills.grantSkillPoint(p.client.id, send);
     }
-    // Milestone card drop every N waves (spawns at campfire)
+    // Milestone card auto-grant every N waves - goes to a random alive player
     if (wave > 0 && wave % MILESTONE_CARD_INTERVAL === 0) {
       const card = rollCardDrop('milestone', this.cards.pickedCardIds as Set<string>);
       if (card) {
-        const campPos = this.world.getComponent<import('@shared/components').PositionComponent>(this.campfireEntityId, C.Position);
-        if (campPos) {
-          this.spawnCardDrop(campPos.x, campPos.y, card);
-          console.log(`[CardDrop] Milestone card "${card.name}" spawned at campfire for wave ${wave}`);
+        const alive = [...this.players.values()].filter(p => p.entityId != null);
+        if (alive.length > 0) {
+          const recipient = alive[Math.floor(Math.random() * alive.length)];
+          this.cardDispenser.autoGrant(recipient, card, send);
+          console.log(`[Cards] Milestone card "${card.name}" auto-granted to ${recipient.displayName} for wave ${wave}`);
         }
       }
     }
@@ -2340,7 +2431,7 @@ export class GameSession {
       cardId: card.id,
       cardName: card.name,
       category: card.category,
-      isTrap: card.category === 'trap',
+      isTrap: card.category === 'curse',
       abilities: [...buffs.abilities],
     };
     for (const p of this.players.values()) send(p.client, applied);
@@ -2504,9 +2595,6 @@ export class GameSession {
    */
   tick_(dt: number, send: (client: ConnectedClient, msg: object) => void): void {
     if (this.phase !== 'playing') return;
-
-    // Card timer must tick even while paused (card selection pauses the game)
-    this.cardDispenser.tickTimer(dt, send);
 
     if (this.paused) return;
     this.tick++;
@@ -2863,6 +2951,19 @@ export class GameSession {
       const bossComp = this.world.getComponent<import('@shared/components').BossComponent>(id, C.Boss);
       if (bossComp) snap.bossId = bossComp.bossId;
 
+      // Ruins metadata
+      const ruinsComp = this.world.getComponent<import('@shared/components').RuinsComponent>(id, C.Ruins);
+      if (ruinsComp) {
+        snap.isRuins = true;
+        snap.ruinsBurning = ruinsComp.burnTimer > 0;
+        // Show 0 HP for ruins (actual HP is 1 to prevent ECS re-death)
+        snap.hp = 0;
+        snap.maxHp = 0;
+      } else if (snap.buildingType) {
+        // Explicitly mark non-ruins so client removes Ruins component after repair
+        snap.isRuins = false;
+      }
+
       // Dodge roll state
       const dodgeRoll = this.world.getComponent<DodgeRollComponent>(id, C.DodgeRoll);
       if (dodgeRoll && dodgeRoll.timer > 0) snap.dodging = true;
@@ -2921,7 +3022,9 @@ export class GameSession {
       prev.civilianState !== curr.civilianState ||
       prev.civilianHunger !== curr.civilianHunger ||
       prev.workerAssigned !== curr.workerAssigned ||
-      prev.statusEffects !== curr.statusEffects
+      prev.statusEffects !== curr.statusEffects ||
+      prev.isRuins !== curr.isRuins ||
+      prev.ruinsBurning !== curr.ruinsBurning
     );
   }
 

@@ -112,6 +112,8 @@ export enum MessageType {
   BUILD_CONFIRM = 'BUILD_CONFIRM',
   /** Server → all: a building entity was destroyed. */
   BUILD_DESTROYED = 'BUILD_DESTROYED',
+  /** Server → all: a building has been converted to ruins (can be repaired). */
+  BUILD_RUINED = 'BUILD_RUINED',
   /** Server → all: the campfire was destroyed - run ends. */
   CAMPFIRE_DESTROYED = 'CAMPFIRE_DESTROYED',
   /** Client → Server: player attempts to demolish a building. */
@@ -234,6 +236,8 @@ export enum MessageType {
   CARD_PICKUP = 'CARD_PICKUP',
   /** Server → all: a boss enemy has spawned. */
   BOSS_INTRO = 'BOSS_INTRO',
+  /** Server → all: a boss changed phase (enrage, etc). */
+  BOSS_PHASE = 'BOSS_PHASE',
 
   // ── Phase 8: Civilians ──────────────────────────────────────────────────
   /** Server → all: a civilian said something (speech bubble). */
@@ -436,6 +440,10 @@ export interface EntitySnapshot {
   cardRarity?: string;
   /** Boss definition ID. Only present for boss enemies. */
   bossId?: string;
+  /** True if this building is in ruins state (destroyed but repairable). */
+  isRuins?: boolean;
+  /** True if the ruins are still burning (visual fire effect). */
+  ruinsBurning?: boolean;
 }
 
 /** Full world snapshot sent on game start or player rejoin. */
@@ -758,6 +766,14 @@ export interface BuildConfirmMessage extends BaseMessage {
 export interface BuildDestroyedMessage extends BaseMessage {
   type: typeof MessageType.BUILD_DESTROYED;
   entityId: number;
+}
+
+/** Server → all: a building has been converted to ruins. */
+export interface BuildRuinedMessage extends BaseMessage {
+  type: typeof MessageType.BUILD_RUINED;
+  entityId: number;
+  buildingType: string;
+  originalLevel: number;
 }
 
 /** Server → all: the campfire was destroyed - run ends. */
@@ -1181,6 +1197,17 @@ export interface BossIntroMessage extends BaseMessage {
   bossId: string;
   bossName: string;
   entityId: number;
+  description: string;
+  maxHp: number;
+}
+
+/** Server → all: a boss changed phase. */
+export interface BossPhaseMessage extends BaseMessage {
+  type: typeof MessageType.BOSS_PHASE;
+  entityId: number;
+  bossId: string;
+  phaseIndex: number;
+  bannerText: string;
 }
 
 // ─── Union ────────────────────────────────────────────────────────────────────
@@ -1227,6 +1254,7 @@ export type AnyMessage =
   | BuildPlaceMessage
   | BuildConfirmMessage
   | BuildDestroyedMessage
+  | BuildRuinedMessage
   | CampfireDestroyedMessage
   | BuildDemolishMessage
   | BuildUpgradeMessage
@@ -1274,4 +1302,5 @@ export type AnyMessage =
   | WorldEventEndMessage
   | CardPickupMessage
   | BossIntroMessage
+  | BossPhaseMessage
   | BaseMessage;

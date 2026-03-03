@@ -21,7 +21,7 @@ export interface PlayerBuffs {
   pickupRadiusMult: number;
 }
 
-/** Session-wide debuffs from trap cards. */
+/** Session-wide debuffs from curse/trap cards. */
 export interface SessionDebuffs {
   playerDamageMult: number;
   enemySpeedMult: number;
@@ -38,6 +38,11 @@ export interface SessionDebuffs {
   goldDropMult: number;
   guaranteedTitans: number;
   dodgeCooldownMult: number;
+  // Curse card bonus fields
+  turretDamageMult?: number;
+  productionAmountMult?: number;
+  buildingDeathExplosion?: boolean;
+  titanDoubleCardDrop?: boolean;
 }
 
 export function emptyBuffs(): PlayerBuffs {
@@ -74,7 +79,7 @@ export class CardSystem {
   /** Pending offers: clientId → card IDs offered. */
   private pendingOffers = new Map<string, string[]>();
 
-  /** Generate an offer of 3 cards for a player. At most 1 trap card. */
+  /** Generate an offer of 3 cards for a player. At most 1 curse card. */
   generateOffer(playerCount: number = 1): CardDefinition[] {
     const available = CARD_POOL.filter(c =>
       !this._pickedCardIds.has(c.id) &&
@@ -106,15 +111,15 @@ export class CardSystem {
     return card;
   }
 
-  /** Auto-pick the first non-trap card from a player's pending offer. */
-  autoPickNonTrap(clientId: string): CardDefinition | null {
+  /** Auto-pick the first non-curse card from a player's pending offer. */
+  autoPickNonCurse(clientId: string): CardDefinition | null {
     const offered = this.pendingOffers.get(clientId);
     if (!offered) return null;
-    const nonTrap = offered.find(id => {
+    const nonCurse = offered.find(id => {
       const c = CARD_POOL.find(p => p.id === id);
-      return c && c.category !== 'trap';
+      return c && c.category !== 'curse';
     });
-    const pickId = nonTrap ?? offered[0];
+    const pickId = nonCurse ?? offered[0];
     return this.applyPick(clientId, pickId);
   }
 
@@ -216,6 +221,14 @@ export class CardSystem {
           case 'master_regen':      this.debuffs.buildingRegenRate += 10; break;
           case 'master_turrets':    this.debuffs.turretCooldownMult *= 0.60; break;
           case 'the_rumbling':      this.debuffs.guaranteedTitans += 2; break;
+          // Curse card buff abilities
+          case 'turret_damage_boost': this.debuffs.turretDamageMult = (this.debuffs.turretDamageMult ?? 1) * 1.50; break;
+          case 'production_boost':    this.debuffs.productionAmountMult = (this.debuffs.productionAmountMult ?? 1) * 2.0; break;
+          case 'worthy_foes_loot':    this.debuffs.lootMultiplier *= 2.0; break;
+          case 'volatile_buildings':  this.debuffs.buildingDeathExplosion = true; break;
+          case 'titan_double_drop':   this.debuffs.titanDoubleCardDrop = true; break;
+          case 'soul_bond_heal':      buffs.abilities.push('soul_bond_heal'); break;
+          case 'massive_loot':        this.debuffs.lootMultiplier *= 3.0; break;
         }
         break;
       case 'resource':
@@ -253,12 +266,12 @@ export class CardSystem {
   private pickWeighted(pool: CardDefinition[], count: number): CardDefinition[] {
     const result: CardDefinition[] = [];
     const remaining = [...pool];
-    let trapCount = 0;
+    let curseCount = 0;
 
     for (let i = 0; i < count && remaining.length > 0; i++) {
-      // Filter out traps if we already have one
-      const eligible = trapCount > 0
-        ? remaining.filter(c => c.category !== 'trap')
+      // Filter out curses if we already have one
+      const eligible = curseCount > 0
+        ? remaining.filter(c => c.category !== 'curse')
         : remaining;
       if (eligible.length === 0) break;
 
@@ -272,7 +285,7 @@ export class CardSystem {
       if (!picked) picked = eligible[eligible.length - 1];
 
       result.push(picked);
-      if (picked.category === 'trap') trapCount++;
+      if (picked.category === 'curse') curseCount++;
       // Remove from remaining to avoid duplicates in same offer
       const idx = remaining.indexOf(picked);
       if (idx >= 0) remaining.splice(idx, 1);
