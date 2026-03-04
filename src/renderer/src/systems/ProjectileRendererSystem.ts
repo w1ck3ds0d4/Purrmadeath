@@ -19,6 +19,8 @@ interface ProjectileVisual {
   pierce?: boolean;
   /** True if projectile homes in on nearest enemy (mage). */
   homing?: boolean;
+  /** True if this is a ballista bolt (bigger arrow visual). */
+  ballista?: boolean;
 }
 
 const TRAIL_LEN = 10; // pixels behind the body
@@ -87,7 +89,7 @@ export class ProjectileRendererSystem {
   }
 
   spawn(id: number, x: number, y: number, vx: number, vy: number, ownerSlot: number,
-        targetX?: number, targetY?: number, totalFlightTime?: number, pierce?: boolean, homing?: boolean): void {
+        targetX?: number, targetY?: number, totalFlightTime?: number, pierce?: boolean, homing?: boolean, ballista?: boolean): void {
     const vis: ProjectileVisual = { x, y, vx, vy, ownerSlot };
     if (targetX != null && targetY != null && totalFlightTime != null) {
       vis.targetX = targetX;
@@ -99,6 +101,7 @@ export class ProjectileRendererSystem {
     }
     if (pierce) vis.pierce = true;
     if (homing) vis.homing = true;
+    if (ballista) vis.ballista = true;
     this.projectiles.set(id, vis);
   }
 
@@ -245,6 +248,33 @@ export class ProjectileRendererSystem {
         this.gfx.moveTo(tailX, tailY);
         this.gfx.lineTo(p.x, p.y);
         this.gfx.stroke({ color: 0xddddff, alpha: 0.5, width: 3 });
+      } else if (p.ballista) {
+        // Ballista: large heavy bolt with thick shaft and metallic head
+        const nx = -dy, ny = dx; // perpendicular
+        // Thick shaft (long trail)
+        const shaftLen = TRAIL_LEN * 3;
+        const tailX = p.x - dx * shaftLen;
+        const tailY = p.y - dy * shaftLen;
+        this.gfx.moveTo(tailX, tailY);
+        this.gfx.lineTo(p.x, p.y);
+        this.gfx.stroke({ color: 0x8b7355, alpha: 0.7, width: 3 }); // wooden shaft
+        // Fletching (tail fins)
+        const finLen = 6;
+        this.gfx.moveTo(tailX + nx * finLen, tailY + ny * finLen);
+        this.gfx.lineTo(tailX + dx * 4, tailY + dy * 4);
+        this.gfx.lineTo(tailX - nx * finLen, tailY - ny * finLen);
+        this.gfx.stroke({ color: 0x666666, alpha: 0.5, width: 1.5 });
+        // Large pointed head (metallic)
+        const headLen = 8;
+        this.gfx.moveTo(p.x + dx * headLen, p.y + dy * headLen);
+        this.gfx.lineTo(p.x + nx * 4, p.y + ny * 4);
+        this.gfx.lineTo(p.x - dx * 2, p.y - dy * 2);
+        this.gfx.lineTo(p.x - nx * 4, p.y - ny * 4);
+        this.gfx.closePath();
+        this.gfx.fill({ color: 0xaabbcc, alpha: 0.95 });
+        // Metallic glint on head
+        this.gfx.circle(p.x + dx * 3, p.y + dy * 3, 1.5);
+        this.gfx.fill({ color: 0xddeeff, alpha: 0.7 });
       } else if (p.pierce) {
         // Ranger: elongated arrow with long trail
         const tailX = p.x - dx * TRAIL_LEN * 2;

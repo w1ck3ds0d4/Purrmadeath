@@ -1,4 +1,5 @@
 import { POTION_POOL, POTION_TYPES, type PotionType } from '@shared/definitions/PotionDefinitions';
+import { THEME, panelStyle } from '../theme';
 
 const RES_COLORS: Record<string, string> = {
   wood: '#8a6a3a',
@@ -53,14 +54,9 @@ export class PotionShopOverlay {
       'left: 50%',
       'transform: translate(-50%, -50%)',
       'z-index: 50',
-      'background: rgba(4, 4, 10, 0.92)',
-      'backdrop-filter: blur(6px)',
-      'border: 1px solid rgba(170, 102, 255, 0.3)',
-      'border-radius: 8px',
+      panelStyle(),
+      'border-color: rgba(170, 102, 255, 0.3)',
       'padding: 20px 24px',
-      "font-family: 'Segoe UI', monospace",
-      'font-size: 13px',
-      'color: #ccd8ea',
       'display: none',
       'min-width: 460px',
       'max-width: 520px',
@@ -80,12 +76,12 @@ export class PotionShopOverlay {
 
     // Restock row
     this.restockRow = document.createElement('div');
-    this.restockRow.style.cssText = 'display: none; align-items: center; justify-content: center; gap: 12px; padding: 8px; background: rgba(255,255,255,0.04); border-radius: 4px; margin-bottom: 10px;';
+    this.restockRow.style.cssText = `display: none; align-items: center; justify-content: center; gap: 12px; padding: 8px; background: ${THEME.surfaceBg}; border-radius: ${THEME.radiusSm}; margin-bottom: 10px;`;
     this.el.appendChild(this.restockRow);
 
     // Close hint
     const hint = document.createElement('div');
-    hint.style.cssText = 'font-size: 11px; color: #5a6a7a; text-align: center;';
+    hint.style.cssText = `font-size: 11px; color: ${THEME.textMuted}; text-align: center;`;
     hint.textContent = 'Press F or ESC to close';
     this.el.appendChild(hint);
 
@@ -147,9 +143,9 @@ export class PotionShopOverlay {
 
       const panel = document.createElement('div');
       panel.style.cssText = [
-        'background: rgba(255,255,255,0.04)',
-        `border: 1px solid ${equipped ? color : 'rgba(255,255,255,0.08)'}`,
-        'border-radius: 6px',
+        `background: ${THEME.surfaceBg}`,
+        `border: 1px solid ${equipped ? color : THEME.borderSubtle}`,
+        `border-radius: ${THEME.radiusMd}`,
         'padding: 10px',
         'display: flex',
         'flex-direction: column',
@@ -164,19 +160,19 @@ export class PotionShopOverlay {
 
       // Description
       const descEl = document.createElement('div');
-      descEl.style.cssText = 'font-size: 11px; color: #8a9aaa;';
+      descEl.style.cssText = `font-size: 11px; color: ${THEME.textSecondary};`;
       descEl.textContent = def.description;
       panel.appendChild(descEl);
 
       // Effect at current level
       const effectEl = document.createElement('div');
-      effectEl.style.cssText = 'font-size: 12px; color: #aabbcc; margin-top: 2px;';
+      effectEl.style.cssText = `font-size: 12px; color: ${THEME.textPrimary}; margin-top: 2px;`;
       effectEl.textContent = this.formatEffect(effect);
       panel.appendChild(effectEl);
 
       // Cooldown
       const cdEl = document.createElement('div');
-      cdEl.style.cssText = 'font-size: 11px; color: #6a7a8a;';
+      cdEl.style.cssText = `font-size: 11px; color: ${THEME.textMuted};`;
       cdEl.textContent = `Cooldown: ${def.cooldown}s`;
       panel.appendChild(cdEl);
 
@@ -192,7 +188,7 @@ export class PotionShopOverlay {
       } else {
         // Unlocked badge
         const badge = document.createElement('span');
-        badge.style.cssText = 'font-size: 11px; color: #6aaa6a; margin-right: 6px; line-height: 24px;';
+        badge.style.cssText = `font-size: 11px; color: #6aaa6a; margin-right: 6px; line-height: 24px;`;
         badge.textContent = 'UNLOCKED';
         btnRow.appendChild(badge);
 
@@ -220,7 +216,7 @@ export class PotionShopOverlay {
       const def = POTION_POOL[equippedPotion as PotionType];
 
       const chargeEl = document.createElement('span');
-      chargeEl.style.cssText = 'font-size: 13px; color: #ccd8ea;';
+      chargeEl.style.cssText = `font-size: 13px; color: ${THEME.textPrimary};`;
       chargeEl.innerHTML = `Charges: <b style="color:${charges >= maxCharges ? '#6aaa6a' : '#e8c96a'}">${charges}/${maxCharges}</b>`;
       this.restockRow.appendChild(chargeEl);
 
@@ -264,19 +260,19 @@ export class PotionShopOverlay {
   private createButton(label: string, costHtml: string, accentColor: string): HTMLElement {
     const btn = document.createElement('button');
     btn.style.cssText = [
-      'background: rgba(255,255,255,0.06)',
+      `background: ${THEME.surfaceBg}`,
       `border: 1px solid ${accentColor}44`,
-      'border-radius: 4px',
+      `border-radius: ${THEME.radiusSm}`,
       'padding: 3px 10px',
       `color: ${accentColor}`,
       'font-size: 12px',
       'cursor: pointer',
-      "font-family: 'Segoe UI', monospace",
-      'transition: background 0.15s',
+      `font-family: ${THEME.fontUI}`,
+      `transition: background ${THEME.transition}`,
     ].join('; ');
     btn.innerHTML = costHtml ? `${label} (${costHtml})` : label;
-    btn.addEventListener('mouseenter', () => { btn.style.background = 'rgba(255,255,255,0.12)'; });
-    btn.addEventListener('mouseleave', () => { btn.style.background = 'rgba(255,255,255,0.06)'; });
+    btn.addEventListener('mouseenter', () => { btn.style.background = THEME.surfaceHover; });
+    btn.addEventListener('mouseleave', () => { btn.style.background = THEME.surfaceBg; });
     return btn;
   }
 }

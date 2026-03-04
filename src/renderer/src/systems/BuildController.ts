@@ -6,10 +6,14 @@ import {
   BUILDING_COSTS,
   BUILDING_SIZES,
   buildingHalfExtent,
+  buildingExtent,
   snapBuildingPosition,
   PLAYER_RADIUS,
   ENEMY_RADIUS,
   RESOURCE_NODE_RADIUS,
+  CAMPFIRE_HOUSING_PER_LEVEL,
+  CAT_HOUSE_CAPACITY,
+  DORMITORY_CAPACITY,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import type { InputManager } from '../input/InputManager';
@@ -44,6 +48,13 @@ export function createBuildController(deps: BuildControllerDeps) {
   let placingType = '';
   let selectedId: number | null = null;
   let selectMode = false;
+  let rotation = 0;
+
+  /** Returns true if the current building type supports rotation (non-square). */
+  function isRotatable(type: string): boolean {
+    const s = BUILDING_SIZES[type];
+    return !!s && s.w !== s.h;
+  }
 
   function openPicker(): void {
     phase = 'picker';
@@ -93,15 +104,40 @@ export function createBuildController(deps: BuildControllerDeps) {
     buildGhost.hide();
   }
 
+  /** Compute total housing capacity and civilian population from the world. */
+  function getHousingInfo(): { population: number; capacity: number } {
+    let capacity = 0;
+    let population = 0;
+    for (const eid of world.query(C.Building, C.Faction)) {
+      const bComp = world.getComponent<BuildingComponent>(eid, C.Building)!;
+      const lvl = Math.max(0, Math.min((bComp.upgradeLevel ?? 1) - 1, 4));
+      switch (bComp.buildingType) {
+        case 'campfire': capacity += CAMPFIRE_HOUSING_PER_LEVEL[lvl] ?? 2; break;
+        case 'cat_house': capacity += CAT_HOUSE_CAPACITY[Math.min(lvl, 2)] ?? 2; break;
+        case 'dormitory': capacity += DORMITORY_CAPACITY[Math.min(lvl, 2)] ?? 5; break;
+      }
+    }
+    for (const eid of world.query(C.Faction)) {
+      const f = world.getComponent<FactionComponent>(eid, C.Faction);
+      if (f?.type === 'civilian') population++;
+    }
+    return { population, capacity };
+  }
+
   /** Find the building entity under the mouse cursor. */
   function findBuildingAt(wx: number, wy: number): number | null {
     for (const eid of world.query(C.Position, C.Building)) {
       const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
       const bComp = world.getComponent<BuildingComponent>(eid, C.Building)!;
-      const bHalf = buildingHalfExtent(bComp.buildingType);
-      if (Math.abs(wx - ep.x) < bHalf && Math.abs(wy - ep.y) < bHalf) return eid;
+      const ext = buildingExtent(bComp.buildingType, bComp.rotation);
+      if (Math.abs(wx - ep.x) < ext.hx && Math.abs(wy - ep.y) < ext.hy) return eid;
     }
     return null;
+  }
+
+  /** Check if a building type has housing stats to show. */
+  function isHousingBuilding(type: string): boolean {
+    return type === 'campfire' || type === 'cat_house' || type === 'dormitory';
   }
 
   function update(): void {
@@ -118,7 +154,8 @@ export function createBuildController(deps: BuildControllerDeps) {
           selectedId = clicked;
           const bComp = world.getComponent<BuildingComponent>(clicked, C.Building)!;
           const hp = world.getComponent<HealthComponent>(clicked, C.Health);
-          buildOverlay.updateSelection(bComp.buildingType, bComp.upgradeLevel, deps.combinedResources(), hp?.current, hp?.max);
+          const hi = isHousingBuilding(bComp.buildingType) ? getHousingInfo() : undefined;
+          buildOverlay.updateSelection(bComp.buildingType, bComp.upgradeLevel, deps.combinedResources(), hp?.current, hp?.max, hi);
         }
       }
 
@@ -156,10 +193,19 @@ export function createBuildController(deps: BuildControllerDeps) {
 
     // ── Normal placing mode ──────────────────────────────────────────────────
 
+    // R: toggle rotation for non-square buildings
+    if (input.isJustPressed(Action.RotateBuilding) && isRotatable(placingType)) {
+      rotation = rotation === 0 ? 1 : 0;
+    }
+    // Reset rotation when building type doesn't support it
+    if (!isRotatable(placingType)) rotation = 0;
+
     // Snap to grid
-    const { x: snapX, y: snapY } = snapBuildingPosition(wmx, wmy, placingType);
-    const newHalf = buildingHalfExtent(placingType);
-    const tiles = BUILDING_SIZES[placingType] ?? 1;
+    const { x: snapX, y: snapY } = snapBuildingPosition(wmx, wmy, placingType, rotation);
+    const ext = buildingExtent(placingType, rotation);
+    const bSize = BUILDING_SIZES[placingType] ?? { w: 1, h: 1 };
+    const tilesW = rotation === 1 ? bSize.h : bSize.w;
+    const tilesH = rotation === 1 ? bSize.w : bSize.h;
 
     // Cost affordability
     const costs = BUILDING_COSTS[placingType] ?? {};
@@ -177,10 +223,10 @@ export function createBuildController(deps: BuildControllerDeps) {
     const chunks = deps.getChunks();
     const isBridge = placingType === 'bridge';
     if (ghostValid && chunks) {
-      const startTX = Math.floor((snapX - newHalf) / TILE_SIZE);
-      const startTY = Math.floor((snapY - newHalf) / TILE_SIZE);
-      for (let ty = 0; ty < tiles && ghostValid; ty++) {
-        for (let tx = 0; tx < tiles && ghostValid; tx++) {
+      const startTX = Math.floor((snapX - ext.hx) / TILE_SIZE);
+      const startTY = Math.floor((snapY - ext.hy) / TILE_SIZE);
+      for (let ty = 0; ty < tilesH && ghostValid; ty++) {
+        for (let tx = 0; tx < tilesW && ghostValid; tx++) {
           const tileId = chunks.getTile(startTX + tx, startTY + ty);
           const walkable = TILE_DEFS[tileId]?.walkable ?? false;
           if (isBridge ? walkable : !walkable) ghostValid = false;
@@ -195,18 +241,18 @@ export function createBuildController(deps: BuildControllerDeps) {
         const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
         if (ef?.type === 'building') {
           const bComp = world.getComponent<BuildingComponent>(eid, C.Building);
-          const existHalf = bComp ? buildingHalfExtent(bComp.buildingType) : 16;
-          if (Math.abs(ep.x - snapX) < newHalf + existHalf && Math.abs(ep.y - snapY) < newHalf + existHalf) { ghostValid = false; break; }
+          const existExt = bComp ? buildingExtent(bComp.buildingType, bComp.rotation) : { hx: 16, hy: 16 };
+          if (Math.abs(ep.x - snapX) < ext.hx + existExt.hx && Math.abs(ep.y - snapY) < ext.hy + existExt.hy) { ghostValid = false; break; }
         } else if (ef?.type === 'resource') {
-          if (Math.abs(ep.x - snapX) < newHalf + RESOURCE_NODE_RADIUS && Math.abs(ep.y - snapY) < newHalf + RESOURCE_NODE_RADIUS) { ghostValid = false; break; }
+          if (Math.abs(ep.x - snapX) < ext.hx + RESOURCE_NODE_RADIUS && Math.abs(ep.y - snapY) < ext.hy + RESOURCE_NODE_RADIUS) { ghostValid = false; break; }
         } else if (ef?.type === 'player' || ef?.type === 'enemy') {
           const r = ef.type === 'player' ? PLAYER_RADIUS : ENEMY_RADIUS;
-          if (Math.abs(ep.x - snapX) < newHalf + r && Math.abs(ep.y - snapY) < newHalf + r) { ghostValid = false; break; }
+          if (Math.abs(ep.x - snapX) < ext.hx + r && Math.abs(ep.y - snapY) < ext.hy + r) { ghostValid = false; break; }
         }
       }
     }
 
-    buildGhost.update(wmx, wmy, ghostValid, placingType);
+    buildGhost.update(wmx, wmy, ghostValid, placingType, rotation);
 
     // Click: select existing building or place new one
     if (input.isJustPressed(Action.Attack)) {
@@ -215,9 +261,10 @@ export function createBuildController(deps: BuildControllerDeps) {
         selectedId = clicked;
         const bComp = world.getComponent<BuildingComponent>(clicked, C.Building)!;
         const hp = world.getComponent<HealthComponent>(clicked, C.Health);
-        buildOverlay.updateSelection(bComp.buildingType, bComp.upgradeLevel, deps.combinedResources(), hp?.current, hp?.max);
+        const hi = isHousingBuilding(bComp.buildingType) ? getHousingInfo() : undefined;
+        buildOverlay.updateSelection(bComp.buildingType, bComp.upgradeLevel, deps.combinedResources(), hp?.current, hp?.max, hi);
       } else if (ghostValid) {
-        deps.send({ type: MessageType.BUILD_PLACE, buildingType: placingType, x: wmx, y: wmy });
+        deps.send({ type: MessageType.BUILD_PLACE, buildingType: placingType, x: wmx, y: wmy, rotation });
         selectedId = null;
       }
     }

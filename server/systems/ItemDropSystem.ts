@@ -72,7 +72,13 @@ export class ItemDropSystem {
         }
       }
 
-      // 3. Auto-pickup check
+      // 3. Pickup delay countdown
+      if (drop.pickupDelay !== undefined && drop.pickupDelay > 0) {
+        drop.pickupDelay -= dt;
+        continue;
+      }
+
+      // 4. Auto-pickup check
       if (drop.autoPickup) {
         for (const pp of playerPositions) {
           const dx = pos.x - pp.x;

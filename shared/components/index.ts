@@ -59,6 +59,9 @@ export const C = {
   // ── Phase 10 ─────────────────────────────────────────────────────────────
   Boss:            'Boss',
   Ruins:           'Ruins',
+  // ── Building expansion ──────────────────────────────────────────────────
+  LaserBeam:       'LaserBeam',
+  TrainingCenter:  'TrainingCenter',
 } as const;
 
 // ─── Component interfaces ──────────────────────────────────────────────────────
@@ -214,6 +217,8 @@ export interface ItemDropComponent {
   autoPickup: boolean;
   /** Seconds until this drop despawns. */
   lifetime: number;
+  /** Grace period before the drop can be picked up (seconds). */
+  pickupDelay?: number;
   /** If present, this is a card drop. Stores the card definition ID. */
   cardId?: string;
   /** Rarity of the card (for client rendering). */
@@ -228,6 +233,7 @@ export interface ResourcesComponent {
   diamond: number;
   gold: number;
   food: number;
+  weapons: number;
 }
 
 // ── Phase 4.11 components ────────────────────────────────────────────────────
@@ -237,7 +243,8 @@ export interface ResourcesComponent {
 export type BuildingType = 'campfire' | 'wall' | 'warehouse' | 'lumbermill' | 'quarry' | 'mine' | 'farm'
   | 'arrow_turret' | 'cannon_turret' | 'spike_trap' | 'bridge'
   | 'light_tower' | 'healing_shrine' | 'barracks' | 'potion_shop'
-  | 'cat_house' | 'dormitory';
+  | 'cat_house' | 'dormitory'
+  | 'gate' | 'ballista' | 'laser_tower' | 'workshop' | 'training_center';
 
 /** Tags an entity as a player-built (or pre-placed) structure. */
 export interface BuildingComponent {
@@ -246,6 +253,8 @@ export interface BuildingComponent {
   permanent: boolean;
   /** Upgrade tier: 1 = base, up to BUILDING_MAX_LEVEL[type]. */
   upgradeLevel: number;
+  /** Rotation: 0 = default orientation, 1 = rotated 90 degrees (swaps width/height). */
+  rotation: number;
 }
 
 /** Marks a player as downed (HP reached 0). Present only while in downed state. */
@@ -263,7 +272,7 @@ export interface DownedComponent {
 /** Passive resource generator attached to lumbermill, mine, or farm. */
 export interface ProductionComponent {
   /** Which resource this building generates. */
-  resourceType: 'wood' | 'stone' | 'iron' | 'diamond' | 'food';
+  resourceType: 'wood' | 'stone' | 'iron' | 'diamond' | 'food' | 'weapons';
   /** Seconds between each production tick. */
   interval: number;
   /** Accumulator - counts up toward `interval`. */
@@ -399,10 +408,30 @@ export interface BarracksSpawnerComponent {
   guardIds: number[];
 }
 
-/** Tags an entity as a barracks guard. */
+/** Tags an entity as a barracks/training center guard. */
 export interface GuardComponent {
   barracksId: number;
   patrolRadius: number;
+  /** Guard role for training center guards. undefined = generic barracks guard. */
+  guardRole?: 'warrior' | 'ranger' | 'mage';
+}
+
+/** Laser tower continuous-beam component. */
+export interface LaserBeamComponent {
+  /** Max targeting range in world pixels. */
+  range: number;
+  /** Damage dealt per second to the locked target. */
+  damagePerSecond: number;
+  /** Entity ID of the current target, or null if idle. */
+  targetId: number | null;
+}
+
+/** Training center component - trains civilians into role-specific guards. */
+export interface TrainingCenterComponent {
+  /** Max trained guards this building supports at current level. */
+  maxGuards: number;
+  /** Entity IDs of guards trained by this building. */
+  guardIds: number[];
 }
 
 // ── Phase 7 ──────────────────────────────────────────────────────────────────

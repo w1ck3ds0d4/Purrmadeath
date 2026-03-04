@@ -1,3 +1,4 @@
+import { THEME, hudStyle } from '../theme';
 import {
   BUILDING_COSTS, BUILDING_MAX_LEVEL, getUpgradeCost, getRepairCost,
   ARROW_TURRET_DAMAGE, ARROW_TURRET_RANGE, ARROW_TURRET_COOLDOWN,
@@ -6,6 +7,10 @@ import {
   UPGRADE_ARROW_DMG, UPGRADE_ARROW_CD,
   UPGRADE_CANNON_DMG, UPGRADE_CANNON_CD,
   UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RATE, UPGRADE_HEAL_RANGE,
+  BALLISTA_DAMAGE, BALLISTA_RANGE, BALLISTA_COOLDOWN,
+  UPGRADE_BALLISTA_DMG, UPGRADE_BALLISTA_CD, UPGRADE_BALLISTA_AOE,
+  CAT_HOUSE_CAPACITY, DORMITORY_CAPACITY,
+  CAMPFIRE_HOUSING_PER_LEVEL,
 } from '@shared/constants';
 import type { BuildingType } from '@shared/components';
 
@@ -38,23 +43,20 @@ export class BuildModeOverlay {
     this.el = document.createElement('div');
     this.el.id = 'build-mode-overlay';
     this.el.style.cssText = [
+      hudStyle(),
       'position: absolute',
       'bottom: 12px',
       'left: calc(50% + 198px)',
       'z-index: 20',
-      'background: rgba(4, 4, 10, 0.80)',
-      'backdrop-filter: blur(4px)',
-      'border: 1px solid rgba(255, 255, 255, 0.14)',
+      `border: 1px solid ${THEME.borderDefault}`,
       'padding: 10px 16px',
-      "font-family: 'Segoe UI', monospace",
       'font-size: 13px',
-      'color: #ccd8ea',
       'pointer-events: none',
       'display: none',
     ].join('; ');
 
     this.titleEl = document.createElement('div');
-    this.titleEl.style.cssText = 'font-weight: bold; font-size: 14px; margin-bottom: 4px; color: #e8c96a;';
+    this.titleEl.style.cssText = `font-weight: bold; font-size: 14px; margin-bottom: 4px; color: ${THEME.accent};`;
     this.el.appendChild(this.titleEl);
 
     // HP bar (hidden when placing new buildings)
@@ -72,7 +74,7 @@ export class BuildModeOverlay {
 
     // Stats info line
     this.infoEl = document.createElement('div');
-    this.infoEl.style.cssText = 'font-size: 12px; color: #8a9aaa; margin-bottom: 4px; display: none;';
+    this.infoEl.style.cssText = `font-size: 12px; color: ${THEME.textSecondary}; margin-bottom: 4px; display: none;`;
     this.el.appendChild(this.infoEl);
 
     this.costEl = document.createElement('div');
@@ -80,7 +82,7 @@ export class BuildModeOverlay {
     this.el.appendChild(this.costEl);
 
     const hint = document.createElement('div');
-    hint.style.cssText = 'font-size: 11px; color: #6a7a8a;';
+    hint.style.cssText = `font-size: 11px; color: ${THEME.textMuted};`;
     hint.textContent = 'B to reopen menu \u00B7 Click to select \u00B7 X demolish \u00B7 V upgrade \u00B7 G repair';
     this.el.appendChild(hint);
 
@@ -108,7 +110,7 @@ export class BuildModeOverlay {
   }
 
   /** Show info for a selected existing building (name + level + upgrade/repair cost + HP + stats). */
-  updateSelection(buildingType: string, level: number, available: Record<string, number>, currentHp?: number, maxHp?: number): void {
+  updateSelection(buildingType: string, level: number, available: Record<string, number>, currentHp?: number, maxHp?: number, housingInfo?: { population: number; capacity: number }): void {
     const name = buildingType.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
     this.titleEl.textContent = `${name}  Lv.${level}`;
 
@@ -116,14 +118,14 @@ export class BuildModeOverlay {
     this.updateHpBar(currentHp, maxHp);
 
     // Stats
-    this.updateStats(buildingType, level);
+    this.updateStats(buildingType, level, housingInfo);
 
     const lines: string[] = [];
 
     // Upgrade cost line
     const maxLevel = BUILDING_MAX_LEVEL[buildingType as BuildingType] ?? 1;
     if (level >= maxLevel) {
-      lines.push('<span style="color: #8a8a9a">Max Level</span>');
+      lines.push(`<span style="color: ${THEME.textSecondary}">Max Level</span>`);
     } else {
       const upgCost = getUpgradeCost(buildingType as BuildingType, level);
       if (upgCost) {
@@ -163,9 +165,10 @@ export class BuildModeOverlay {
     }
   }
 
-  private updateStats(buildingType: string, level: number): void {
+  private updateStats(buildingType: string, level: number, housingInfo?: { population: number; capacity: number }): void {
     const i = Math.max(0, Math.min(level - 1, 2));
     let stats = '';
+    const popStr = housingInfo ? `  |  Population: ${housingInfo.population}/${housingInfo.capacity}` : '';
 
     switch (buildingType) {
       case 'arrow_turret': {
@@ -180,6 +183,13 @@ export class BuildModeOverlay {
         stats = `Dmg: ${dmg}  |  Range: ${CANNON_TURRET_RANGE}  |  Rate: ${cd}s`;
         break;
       }
+      case 'ballista': {
+        const dmg = Math.round(BALLISTA_DAMAGE * UPGRADE_BALLISTA_DMG[i]);
+        const cd = (BALLISTA_COOLDOWN * UPGRADE_BALLISTA_CD[i]).toFixed(1);
+        const aoe = UPGRADE_BALLISTA_AOE[i];
+        stats = `Dmg: ${dmg}  |  Range: ${BALLISTA_RANGE}  |  Rate: ${cd}s  |  AoE: ${aoe}px`;
+        break;
+      }
       case 'spike_trap':
         stats = `Dmg: ${SPIKE_TRAP_DAMAGE}`;
         break;
@@ -192,12 +202,22 @@ export class BuildModeOverlay {
       case 'potion_shop':
         stats = 'Brew and equip potions';
         break;
-      case 'cat_house':
-        stats = 'Houses 2 civilians';
+      case 'campfire': {
+        const campI = Math.max(0, Math.min(level - 1, 4));
+        const cap = CAMPFIRE_HOUSING_PER_LEVEL[campI];
+        stats = `Housing: ${cap} slots${popStr}`;
         break;
-      case 'dormitory':
-        stats = 'Houses 5 civilians';
+      }
+      case 'cat_house': {
+        const cap = CAT_HOUSE_CAPACITY[i];
+        stats = `Housing: ${cap} slots${popStr}`;
         break;
+      }
+      case 'dormitory': {
+        const cap = DORMITORY_CAPACITY[i];
+        stats = `Housing: ${cap} slots${popStr}`;
+        break;
+      }
       default: {
         const prod = PROD_RESOURCE[buildingType];
         if (prod) stats = `Produces: ${prod}`;

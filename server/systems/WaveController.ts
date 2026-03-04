@@ -92,6 +92,9 @@ export function createWaveController(deps: WaveControllerDeps) {
   /** Maps portal entity ID → assigned faction for that portal. */
   const portalFactions = new Map<number, EnemyFaction>();
 
+  /** Grace period after wave activation - prevents instant clear if portals fail to spawn. */
+  let activationGraceTicks = 0;
+
   // ── Portal spawning ──────────────────────────────────────────────────────
 
   function spawnPortal(x: number, y: number, wave: number): number {
@@ -114,7 +117,10 @@ export function createWaveController(deps: WaveControllerDeps) {
       const pos = world.getComponent<PositionComponent>(p.entityId, C.Position);
       if (pos) { cx += pos.x; cy += pos.y; count++; }
     }
-    if (count === 0) return;
+    if (count === 0) {
+      console.warn(`[Wave] No players with positions found - cannot spawn portals for wave ${wave}`);
+      return;
+    }
     cx /= count; cy /= count;
 
     const factions = pickWaveFactions(wave);
@@ -161,7 +167,11 @@ export function createWaveController(deps: WaveControllerDeps) {
         placed.push({ x: bestX, y: bestY });
       }
     }
-    console.log(`[Wave] Spawned ${placed.length}/${numPortals} portals for wave ${wave} (factions: ${factions.join(', ')})`);
+    if (placed.length === 0) {
+      console.warn(`[Wave] Failed to place any portals for wave ${wave} (0/${numPortals}) - all attempts blocked`);
+    } else {
+      console.log(`[Wave] Spawned ${placed.length}/${numPortals} portals for wave ${wave} (factions: ${factions.join(', ')})`);
+    }
   }
 
   // ── Enemy spawning ───────────────────────────────────────────────────────
@@ -307,6 +317,8 @@ export function createWaveController(deps: WaveControllerDeps) {
     spawnPortals(s.currentWave);
     spawnTitans(s.currentWave);
     s.phase = 'active';
+    // Grace period: don't check wave-clear for a few ticks so portals have time to exist
+    activationGraceTicks = 3;
     const waveActive: WaveStartMessage = {
       type: MessageType.WAVE_START, waveNumber: s.currentWave, prepDuration: 0,
     };
@@ -320,6 +332,11 @@ export function createWaveController(deps: WaveControllerDeps) {
     // Prep phase is now managed by DayNightController (day timer + sleep voting).
     // WaveController only ticks the active phase.
     if (s.phase === 'active') {
+      // Tick down activation grace period
+      if (activationGraceTicks > 0) {
+        activationGraceTicks--;
+      }
+
       const extraSpawns = Math.floor(s.currentWave / PORTAL_EXTRA_SPAWN_EVERY_N_WAVES);
       const spawnRequests = portal.update(world, dt, extraSpawns);
       for (const req of spawnRequests) {
@@ -335,7 +352,7 @@ export function createWaveController(deps: WaveControllerDeps) {
         if (hp.current > 0) { anyAlive = true; } else { world.destroyEntity(id); }
       }
 
-      if (!anyAlive) {
+      if (!anyAlive && activationGraceTicks <= 0) {
         const waveEnd: WaveEndMessage = {
           type: MessageType.WAVE_END, waveNumber: s.currentWave, outcome: 'cleared',
         };

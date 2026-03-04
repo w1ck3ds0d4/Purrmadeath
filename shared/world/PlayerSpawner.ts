@@ -59,7 +59,7 @@ export function spawnPlayer(
   world.addComponent(id, C.AttackCooldown,     { remaining: 0, max: MELEE_COOLDOWN });
   world.addComponent(id, C.Faction,             { type: 'player' });
   world.addComponent(id, C.KnockbackReceiver,  { vx: 0, vy: 0 });
-  world.addComponent(id, C.Resources,          { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 });
+  world.addComponent(id, C.Resources,          { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0 });
 
   if (classStats) {
     world.addComponent(id, C.Class, { classType: classStats.classType });

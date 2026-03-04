@@ -1,6 +1,7 @@
 import type { MetaStats } from '@shared/definitions/MetaStats';
 import { ACHIEVEMENTS, CATEGORY_ORDER, CATEGORY_LABELS } from '@shared/definitions/ProgressionDefinitions';
 import type { Achievement, AchievementCategory } from '@shared/definitions/ProgressionDefinitions';
+import { THEME } from '../theme';
 
 const CATEGORY_COLORS: Record<AchievementCategory, string> = {
   class: '#cc9966',
@@ -39,7 +40,7 @@ export class StatsOverlay {
       'flex-direction:column',
       'gap:6px',
       'padding:28px 24px',
-      'border-right:1px solid rgba(255,255,255,0.06)',
+      `border-right:1px solid ${THEME.borderSubtle}`,
       'overflow-y:auto',
     ].join(';');
 
@@ -63,14 +64,14 @@ export class StatsOverlay {
     this.tooltip.style.cssText = [
       'position:absolute',
       'z-index:100',
-      'background:rgba(4,4,10,0.95)',
-      'backdrop-filter:blur(6px)',
-      'border:1px solid rgba(255,255,255,0.15)',
-      'border-radius:6px',
+      `background:${THEME.panelBg}`,
+      `backdrop-filter:${THEME.blurHeavy}`,
+      `border:1px solid ${THEME.borderDefault}`,
+      `border-radius:${THEME.radiusMd}`,
       'padding:10px 14px',
-      "font-family:'Segoe UI',monospace",
+      `font-family:${THEME.fontUI}`,
       'font-size:12px',
-      'color:#ccd8ea',
+      `color:${THEME.textPrimary}`,
       'pointer-events:none',
       'display:none',
       'min-width:180px',
@@ -176,7 +177,7 @@ export class StatsOverlay {
 
     // Title
     const title = document.createElement('div');
-    title.style.cssText = "font-family:'Segoe UI',sans-serif;font-size:26px;font-weight:700;color:#ccd8ea;letter-spacing:4px;margin-bottom:8px;user-select:none;";
+    title.style.cssText = `font-family:${THEME.fontUI};font-size:26px;font-weight:700;color:${THEME.textPrimary};letter-spacing:4px;margin-bottom:8px;user-select:none;`;
     title.textContent = 'PROGRESSION';
     this.rightCol.appendChild(title);
 
@@ -216,7 +217,7 @@ export class StatsOverlay {
         `border:3px solid ${this.lighten(ach.medalColor, 0.3)}`,
         `box-shadow:0 0 14px ${ach.medalColor}60`,
         'display:flex;align-items:center;justify-content:center',
-        'transition:transform 0.15s,box-shadow 0.15s',
+        `transition:transform ${THEME.transition},box-shadow ${THEME.transition}`,
       ].join(';');
       const check = document.createElement('span');
       check.style.cssText = 'font-size:30px;color:rgba(255,255,255,0.9);text-shadow:0 1px 3px rgba(0,0,0,0.4);';
@@ -228,7 +229,7 @@ export class StatsOverlay {
         'background:rgba(255,255,255,0.06)',
         'border:3px solid rgba(255,255,255,0.1)',
         'display:flex;align-items:center;justify-content:center',
-        'transition:transform 0.15s,border-color 0.15s',
+        `transition:transform ${THEME.transition},border-color ${THEME.transition}`,
       ].join(';');
       const qmark = document.createElement('span');
       qmark.style.cssText = 'font-size:28px;color:rgba(255,255,255,0.2);font-weight:bold;';
@@ -238,7 +239,7 @@ export class StatsOverlay {
 
     // Label
     const label = document.createElement('div');
-    label.style.cssText = `font-family:'Segoe UI',sans-serif;font-size:12px;text-align:center;max-width:90px;line-height:1.2;color:${done ? ach.medalColor : '#556677'};`;
+    label.style.cssText = `font-family:${THEME.fontUI};font-size:12px;text-align:center;max-width:90px;line-height:1.2;color:${done ? ach.medalColor : '#556677'};`;
     label.textContent = ach.displayName;
 
     wrapper.append(circle, label);
@@ -274,24 +275,24 @@ export class StatsOverlay {
 
     // Name
     const nameEl = document.createElement('div');
-    nameEl.style.cssText = `font-weight:bold;font-size:13px;color:${done ? ach.medalColor : '#8a9ab0'};margin-bottom:4px;`;
+    nameEl.style.cssText = `font-weight:bold;font-size:13px;color:${done ? ach.medalColor : THEME.textSecondary};margin-bottom:4px;`;
     nameEl.textContent = ach.displayName;
 
     // Description
     const descEl = document.createElement('div');
-    descEl.style.cssText = 'font-size:11px;color:#7a8a9a;margin-bottom:6px;';
+    descEl.style.cssText = `font-size:11px;color:${THEME.textMuted};margin-bottom:6px;`;
     descEl.textContent = ach.description;
 
     // Progress bar
     const barOuter = document.createElement('div');
-    barOuter.style.cssText = 'width:100%;height:5px;background:rgba(255,255,255,0.06);border-radius:3px;overflow:hidden;';
+    barOuter.style.cssText = `width:100%;height:5px;background:${THEME.borderSubtle};border-radius:3px;overflow:hidden;`;
     const barInner = document.createElement('div');
     barInner.style.cssText = `width:${pct}%;height:100%;background:${barColor};border-radius:3px;`;
     barOuter.appendChild(barInner);
 
     // Progress text
     const progEl = document.createElement('div');
-    progEl.style.cssText = `font-size:10px;color:${done ? '#7a9a6a' : '#5a6a7a'};text-align:right;margin-top:2px;`;
+    progEl.style.cssText = `font-size:10px;color:${done ? '#7a9a6a' : THEME.textDim};text-align:right;margin-top:2px;`;
     progEl.textContent = done ? 'Complete' : `${this.formatNumber(current)} / ${this.formatNumber(ach.target)}`;
 
     // Reward
@@ -316,20 +317,20 @@ export class StatsOverlay {
 
   private makeStatRow(label: string, value: string): HTMLElement {
     const row = document.createElement('div');
-    row.style.cssText = 'display:flex;justify-content:space-between;font-family:monospace;font-size:13px;padding:5px 10px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.06);';
+    row.style.cssText = `display:flex;justify-content:space-between;font-family:${THEME.fontMono};font-size:13px;padding:5px 10px;background:${THEME.surfaceBg};border:1px solid ${THEME.borderSubtle};`;
     const lbl = document.createElement('span');
-    lbl.style.color = '#7a8a9a';
+    lbl.style.color = THEME.textMuted;
     lbl.textContent = label;
     const val = document.createElement('span');
-    val.style.color = '#ccd8ea';
+    val.style.color = THEME.textPrimary;
     val.textContent = value;
     row.append(lbl, val);
     return row;
   }
 
-  private addSectionHeader(container: HTMLElement | DocumentFragment, text: string, color = '#5a6a7a'): void {
+  private addSectionHeader(container: HTMLElement | DocumentFragment, text: string, color = THEME.textDim): void {
     const header = document.createElement('div');
-    header.style.cssText = `font-family:'Segoe UI',sans-serif;font-size:12px;font-weight:600;color:${color};letter-spacing:2px;padding:6px 0 2px;user-select:none;`;
+    header.style.cssText = `font-family:${THEME.fontUI};font-size:12px;font-weight:600;color:${color};letter-spacing:2px;padding:6px 0 2px;user-select:none;`;
     header.textContent = text;
     container.appendChild(header);
   }

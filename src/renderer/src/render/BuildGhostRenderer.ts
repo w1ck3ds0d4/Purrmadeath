@@ -1,14 +1,16 @@
 import { Container, Graphics } from 'pixi.js';
-import { snapBuildingPosition, buildingHalfExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RANGE } from '@shared/constants';
+import { snapBuildingPosition, buildingExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, BALLISTA_RANGE, UPGRADE_LASER_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RANGE } from '@shared/constants';
 import { POTION_SHOP_INTERACT_RANGE } from '@shared/definitions/PotionDefinitions';
 
 const VALID_COLOR   = 0x44cc66;
 const INVALID_COLOR = 0xcc4444;
 
-/** Building type → base range in pixels (level 1). */
+/** Building type -> base range in pixels (level 1). */
 const BUILDING_RANGES: Record<string, number> = {
   arrow_turret: ARROW_TURRET_RANGE,
   cannon_turret: CANNON_TURRET_RANGE,
+  ballista: BALLISTA_RANGE,
+  laser_tower: UPGRADE_LASER_RANGE[0],
   light_tower: UPGRADE_LIGHT_RANGE[0],
   healing_shrine: UPGRADE_HEAL_RANGE[0],
   potion_shop: POTION_SHOP_INTERACT_RANGE,
@@ -18,6 +20,8 @@ const BUILDING_RANGES: Record<string, number> = {
 const RANGE_COLORS: Record<string, number> = {
   arrow_turret: 0x44aaff,
   cannon_turret: 0x44aaff,
+  ballista: 0x44aaff,
+  laser_tower: 0xff4444,
   light_tower: 0xffdd44,
   healing_shrine: 0x44ff88,
   potion_shop: 0xaa66ff,
@@ -52,15 +56,15 @@ export class BuildGhostRenderer {
     this.gfx.visible = false;
   }
 
-  update(worldMouseX: number, worldMouseY: number, canPlace: boolean, buildingType: string): void {
+  update(worldMouseX: number, worldMouseY: number, canPlace: boolean, buildingType: string, rotation: number = 0): void {
     if (!this.visible) return;
 
-    const { x, y } = snapBuildingPosition(worldMouseX, worldMouseY, buildingType);
+    const { x, y } = snapBuildingPosition(worldMouseX, worldMouseY, buildingType, rotation);
     this.snapX = x;
     this.snapY = y;
 
     const color = canPlace ? VALID_COLOR : INVALID_COLOR;
-    const half = buildingHalfExtent(buildingType);
+    const ext = buildingExtent(buildingType, rotation);
 
     this.gfx.clear();
 
@@ -75,9 +79,9 @@ export class BuildGhostRenderer {
     }
 
     // Building ghost
-    this.gfx.rect(this.snapX - half, this.snapY - half, half * 2, half * 2);
+    this.gfx.rect(this.snapX - ext.hx, this.snapY - ext.hy, ext.hx * 2, ext.hy * 2);
     this.gfx.fill({ color, alpha: 0.35 });
-    this.gfx.rect(this.snapX - half, this.snapY - half, half * 2, half * 2);
+    this.gfx.rect(this.snapX - ext.hx, this.snapY - ext.hy, ext.hx * 2, ext.hy * 2);
     this.gfx.stroke({ color, alpha: 0.7, width: 2 });
   }
 

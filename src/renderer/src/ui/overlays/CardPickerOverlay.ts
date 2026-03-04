@@ -1,5 +1,6 @@
 import type { CardDefinition } from '@shared/definitions/CardDefinitions';
 import { CATEGORY_COLORS, RARITY_BORDER_COLORS } from '@shared/definitions/CardDefinitions';
+import { THEME } from '../theme';
 
 /** Duration of each phase in seconds. */
 const PRE_REVEAL_DURATION = 5;
@@ -35,10 +36,10 @@ export class CardPickerOverlay {
     // Pre-reveal countdown
     this.countdownEl = document.createElement('div');
     this.countdownEl.style.cssText = `
-      font-family: 'Segoe UI', sans-serif;
+      font-family: ${THEME.fontUI};
       font-size: 72px;
       font-weight: 700;
-      color: #ccd8ea;
+      color: ${THEME.textPrimary};
       text-shadow: 0 0 30px rgba(100,160,255,0.4);
       user-select: none;
       position: absolute;
@@ -46,11 +47,11 @@ export class CardPickerOverlay {
     `;
 
     this.titleEl = document.createElement('h2');
-    this.titleEl.style.cssText = "font-family:'Segoe UI',sans-serif;font-size:26px;font-weight:700;color:#ccd8ea;letter-spacing:4px;margin-bottom:8px;user-select:none;opacity:0;transition:opacity 0.4s ease;";
+    this.titleEl.style.cssText = `font-family:${THEME.fontUI};font-size:26px;font-weight:700;color:${THEME.textPrimary};letter-spacing:4px;margin-bottom:8px;user-select:none;opacity:0;transition:opacity 0.4s ease;`;
     this.titleEl.textContent = 'CHOOSE A CARD';
 
     this.subtitleEl = document.createElement('p');
-    this.subtitleEl.style.cssText = 'font-family:monospace;font-size:12px;color:#6a7a8a;margin-bottom:24px;user-select:none;opacity:0;transition:opacity 0.4s ease;';
+    this.subtitleEl.style.cssText = `font-family:${THEME.fontMono};font-size:12px;color:${THEME.textMuted};margin-bottom:24px;user-select:none;opacity:0;transition:opacity 0.4s ease;`;
 
     this.cardRow = document.createElement('div');
     this.cardRow.style.cssText = 'display:flex;gap:24px;justify-content:center;flex-wrap:wrap;';
@@ -246,37 +247,37 @@ export class CardPickerOverlay {
       width: 240px;
       padding: 24px 20px;
       box-sizing: border-box;
-      background: rgba(10,10,20,0.92);
+      background: ${THEME.panelBg};
       border: 2px solid ${borderColor};
       border-top: 3px solid ${catHex};
       display: flex;
       flex-direction: column;
       align-items: center;
       gap: 10px;
-      transition: transform 0.15s ease, border-color 0.15s ease;
+      transition: transform ${THEME.transition} ease, border-color ${THEME.transition} ease;
       user-select: none;
       pointer-events: none;
     `;
 
     const catLabel = document.createElement('div');
-    catLabel.style.cssText = `font-family:monospace;font-size:11px;letter-spacing:2px;text-transform:uppercase;color:${catHex};`;
+    catLabel.style.cssText = `font-family:${THEME.fontMono};font-size:11px;letter-spacing:2px;text-transform:uppercase;color:${catHex};`;
     catLabel.textContent = card.category;
 
     const nameEl = document.createElement('div');
-    nameEl.style.cssText = `font-family:'Segoe UI',sans-serif;font-size:20px;font-weight:700;color:${isTrap ? '#cc4444' : '#ccd8ea'};text-align:center;`;
+    nameEl.style.cssText = `font-family:${THEME.fontUI};font-size:20px;font-weight:700;color:${isTrap ? '#cc4444' : THEME.textPrimary};text-align:center;`;
     nameEl.textContent = card.name;
 
     const descEl = document.createElement('div');
-    descEl.style.cssText = 'font-family:monospace;font-size:13px;color:#8a9ab0;text-align:center;line-height:1.5;';
+    descEl.style.cssText = `font-family:${THEME.fontMono};font-size:13px;color:${THEME.textSecondary};text-align:center;line-height:1.5;`;
     descEl.textContent = card.description;
 
     const rarityEl = document.createElement('div');
-    rarityEl.style.cssText = `font-family:monospace;font-size:11px;letter-spacing:1px;color:${borderColor};margin-top:auto;`;
+    rarityEl.style.cssText = `font-family:${THEME.fontMono};font-size:11px;letter-spacing:1px;color:${borderColor};margin-top:auto;`;
     rarityEl.textContent = card.rarity.toUpperCase();
 
     if (isTrap) {
       const warn = document.createElement('div');
-      warn.style.cssText = 'font-family:monospace;font-size:10px;color:#cc4444;letter-spacing:1px;';
+      warn.style.cssText = `font-family:${THEME.fontMono};font-size:10px;color:#cc4444;letter-spacing:1px;`;
       warn.textContent = 'AFFECTS ALL PLAYERS';
       panel.append(catLabel, nameEl, descEl, warn, rarityEl);
     } else {

@@ -1,4 +1,5 @@
 import { BUILDING_COSTS, PLACEABLE_BUILDINGS } from '@shared/constants';
+import { THEME } from '../theme';
 
 const RES_COLORS: Record<string, string> = {
   wood: '#8a6a3a',
@@ -11,8 +12,11 @@ const RES_COLORS: Record<string, string> = {
 /** Short stats summary for each building type (shown on cards). */
 const BUILDING_STATS: Record<string, string> = {
   wall: '150 HP block',
+  gate: '250 HP \u00B7 3x1 \u00B7 Auto-opens for allies',
   arrow_turret: '8 Dmg \u00B7 200 Range \u00B7 2.0s',
   cannon_turret: '20 Dmg \u00B7 300 Range \u00B7 4.0s',
+  ballista: '40 Dmg \u00B7 400 Range \u00B7 5.0s \u00B7 Pierce',
+  laser_tower: '15 DPS \u00B7 250 Range \u00B7 Beam',
   spike_trap: '5 Dmg',
   lumbermill: 'Produces: Wood',
   quarry: 'Produces: Stone',
@@ -23,6 +27,10 @@ const BUILDING_STATS: Record<string, string> = {
   light_tower: '200px Reveal',
   healing_shrine: '3 HP/s \u00B7 120px Range',
   potion_shop: 'Brew & equip potions',
+  workshop: 'Produces: Weapons',
+  training_center: 'Train guards (1 weapon + 1 civilian)',
+  cat_house: '+2/3/4 Housing capacity',
+  dormitory: '+5/7/10 Housing capacity',
 };
 
 interface BuildCategory {
@@ -32,8 +40,10 @@ interface BuildCategory {
 }
 
 const BUILD_CATEGORIES: BuildCategory[] = [
-  { name: 'Defense',    accent: '#cc4444', buildings: ['wall', 'arrow_turret', 'cannon_turret', 'spike_trap'] },
-  { name: 'Production', accent: '#44aa44', buildings: ['lumbermill', 'quarry', 'mine', 'farm'] },
+  { name: 'Defense',    accent: '#cc4444', buildings: ['wall', 'gate', 'arrow_turret', 'cannon_turret', 'ballista', 'laser_tower', 'spike_trap'] },
+  { name: 'Production', accent: '#44aa44', buildings: ['lumbermill', 'quarry', 'mine', 'farm', 'workshop'] },
+  { name: 'Military',   accent: '#cc8844', buildings: ['training_center'] },
+  { name: 'Housing',    accent: '#cc88cc', buildings: ['cat_house', 'dormitory'] },
   { name: 'Utility',    accent: '#4488cc', buildings: ['warehouse', 'bridge', 'light_tower', 'healing_shrine'] },
   { name: 'Shops',      accent: '#aa66ff', buildings: ['potion_shop'] },
 ];
@@ -67,9 +77,9 @@ export class BuildMenuOverlay {
     this.el.id = 'build-menu-overlay';
     this.el.className = 'screen';
     this.el.style.cssText = [
-      "font-family: 'Segoe UI', sans-serif",
+      `font-family: ${THEME.fontUI}`,
       'font-size: 13px',
-      'color: #e8eef5',
+      `color: ${THEME.textBright}`,
       'display: none',
       'user-select: none',
       'pointer-events: auto',
@@ -80,9 +90,9 @@ export class BuildMenuOverlay {
     // Inner panel (centered card within full-screen overlay)
     const panel = document.createElement('div');
     panel.style.cssText = [
-      'background: rgba(10, 10, 20, 0.98)',
-      'border: 1px solid rgba(255, 255, 255, 0.12)',
-      'border-radius: 8px',
+      `background: ${THEME.panelBg}`,
+      `border: 1px solid ${THEME.borderDefault}`,
+      `border-radius: ${THEME.radiusLg}`,
       'min-width: 560px',
       'max-width: 640px',
       'overflow: hidden',
@@ -90,9 +100,9 @@ export class BuildMenuOverlay {
 
     // Title bar
     const titleBar = document.createElement('div');
-    titleBar.style.cssText = 'padding: 14px 20px 10px; border-bottom: 1px solid rgba(255,255,255,0.06);';
+    titleBar.style.cssText = `padding: 14px 20px 10px; border-bottom: 1px solid ${THEME.borderSubtle};`;
     const title = document.createElement('div');
-    title.style.cssText = "font-family:'Segoe UI',sans-serif;font-weight:700;font-size:22px;color:#e8eef5;text-align:center;letter-spacing:3px;";
+    title.style.cssText = `font-family:${THEME.fontUI};font-weight:700;font-size:22px;color:${THEME.textBright};text-align:center;letter-spacing:3px;`;
     title.textContent = 'BUILD MENU';
     titleBar.appendChild(title);
     panel.appendChild(titleBar);
@@ -108,7 +118,7 @@ export class BuildMenuOverlay {
       'flex-direction: column',
       'width: 120px',
       'min-width: 120px',
-      'border-right: 1px solid rgba(255,255,255,0.06)',
+      `border-right: 1px solid ${THEME.borderSubtle}`,
       'padding: 8px 0',
     ].join('; ');
 
@@ -119,7 +129,7 @@ export class BuildMenuOverlay {
       btn.textContent = cat.name;
       btn.addEventListener('click', () => this.selectTab(i));
       btn.addEventListener('mouseenter', () => {
-        if (i !== this.activeTab) btn.style.background = 'rgba(255,255,255,0.04)';
+        if (i !== this.activeTab) btn.style.background = THEME.surfaceBg;
       });
       btn.addEventListener('mouseleave', () => {
         if (i !== this.activeTab) btn.style.background = 'transparent';
@@ -138,7 +148,7 @@ export class BuildMenuOverlay {
     addBtn.style.cssText = [
       'padding: 8px 14px',
       'font-size: 18px',
-      'color: #2a2a3a',
+      `color: ${THEME.textDim}`,
       'text-align: center',
       'cursor: default',
     ].join('; ');
@@ -156,7 +166,7 @@ export class BuildMenuOverlay {
 
     // Footer: select button + hint
     const footer = document.createElement('div');
-    footer.style.cssText = 'border-top: 1px solid rgba(255,255,255,0.06); padding: 10px 16px 8px;';
+    footer.style.cssText = `border-top: 1px solid ${THEME.borderSubtle}; padding: 10px 16px 8px;`;
 
     const btnRow = document.createElement('div');
     btnRow.style.cssText = 'display: flex; justify-content: center; margin-bottom: 6px;';
@@ -168,22 +178,22 @@ export class BuildMenuOverlay {
       'font-size: 13px',
       'font-weight: bold',
       'cursor: pointer',
-      'border-radius: 4px',
-      'border: 1px solid #e8c96a66',
-      'color: #e8c96a',
-      'background: #2a2a3a',
-      'transition: background 0.15s, box-shadow 0.15s',
+      `border-radius: ${THEME.radiusSm}`,
+      `border: 1px solid ${THEME.accent}66`,
+      `color: ${THEME.accent}`,
+      `background: ${THEME.surfaceBg}`,
+      `transition: background ${THEME.transition}, box-shadow ${THEME.transition}`,
       'letter-spacing: 0.5px',
     ].join('; ');
     selectBtn.textContent = 'Select Building';
-    selectBtn.addEventListener('mouseenter', () => { selectBtn.style.background = '#1a1a2e'; selectBtn.style.boxShadow = '0 0 10px rgba(232,201,106,0.3)'; });
-    selectBtn.addEventListener('mouseleave', () => { selectBtn.style.background = '#2a2a3a'; selectBtn.style.boxShadow = 'none'; });
+    selectBtn.addEventListener('mouseenter', () => { selectBtn.style.background = THEME.surfaceHover; selectBtn.style.boxShadow = `0 0 10px ${THEME.accentRgba(0.3)}`; });
+    selectBtn.addEventListener('mouseleave', () => { selectBtn.style.background = THEME.surfaceBg; selectBtn.style.boxShadow = 'none'; });
     selectBtn.addEventListener('click', () => this.callbacks?.onSelectMode());
     btnRow.appendChild(selectBtn);
     footer.appendChild(btnRow);
 
     const hint = document.createElement('div');
-    hint.style.cssText = 'font-family:monospace;font-size:11px;color:#4a5a6a;text-align:center;';
+    hint.style.cssText = `font-family:${THEME.fontMono};font-size:11px;color:${THEME.textDim};text-align:center;`;
     hint.textContent = 'V upgrade \u00B7 G repair \u00B7 X demolish \u00B7 B / ESC to close';
     footer.appendChild(hint);
 
@@ -233,10 +243,10 @@ export class BuildMenuOverlay {
       'font-weight: 600',
       'letter-spacing: 1px',
       'cursor: pointer',
-      'transition: background 0.12s',
+      `transition: background ${THEME.transition}`,
       `border-left: 3px solid ${active ? accent : 'transparent'}`,
       `background: ${active ? accent + '18' : 'transparent'}`,
-      `color: ${active ? '#e8eef5' : '#8a9aaa'}`,
+      `color: ${active ? THEME.textBright : THEME.textMuted}`,
     ].join('; ');
   }
 
@@ -253,24 +263,24 @@ export class BuildMenuOverlay {
 
       const card = document.createElement('div');
       card.style.cssText = [
-        'background: #2a2a3a',
-        `border: 1px solid #3a3a4a`,
+        `background: ${THEME.surfaceBg}`,
+        `border: 1px solid ${THEME.borderDefault}`,
         `border-top: 3px solid ${cat.accent}66`,
-        'border-radius: 4px',
+        `border-radius: ${THEME.radiusSm}`,
         'padding: 10px 12px',
         'cursor: pointer',
-        'transition: background 0.15s, border-color 0.15s, box-shadow 0.15s',
+        `transition: background ${THEME.transition}, border-color ${THEME.transition}, box-shadow ${THEME.transition}`,
       ].join('; ');
 
       card.addEventListener('mouseenter', () => {
-        card.style.background = '#1a1a2e';
+        card.style.background = THEME.surfaceHover;
         card.style.borderColor = cat.accent;
         card.style.borderTopColor = cat.accent;
         card.style.boxShadow = `0 0 10px ${cat.accent}44`;
       });
       card.addEventListener('mouseleave', () => {
-        card.style.background = '#2a2a3a';
-        card.style.borderColor = '#3a3a4a';
+        card.style.background = THEME.surfaceBg;
+        card.style.borderColor = THEME.borderDefault;
         card.style.borderTopColor = `${cat.accent}66`;
         card.style.boxShadow = 'none';
       });
@@ -280,14 +290,14 @@ export class BuildMenuOverlay {
 
       // Building name
       const nameEl = document.createElement('div');
-      nameEl.style.cssText = "font-family:'Segoe UI',sans-serif;font-size:14px;font-weight:600;color:#e8eef5;margin-bottom:4px;";
+      nameEl.style.cssText = `font-family:${THEME.fontUI};font-size:14px;font-weight:600;color:${THEME.textBright};margin-bottom:4px;`;
       nameEl.textContent = titleCase(type);
       card.appendChild(nameEl);
 
       // Cost line
       const costs = BUILDING_COSTS[type] ?? {};
       const costEl = document.createElement('div');
-      costEl.style.cssText = 'font-family:monospace;font-size:12px;margin-bottom:4px;';
+      costEl.style.cssText = `font-family:${THEME.fontMono};font-size:12px;margin-bottom:4px;`;
       costEl.innerHTML = this.formatCost(costs, available);
       card.appendChild(costEl);
 
@@ -295,7 +305,7 @@ export class BuildMenuOverlay {
       const stats = BUILDING_STATS[type];
       if (stats) {
         const statsEl = document.createElement('div');
-        statsEl.style.cssText = 'font-family:monospace;font-size:11px;color:#a0b0c0;';
+        statsEl.style.cssText = `font-family:${THEME.fontMono};font-size:11px;color:${THEME.textSecondary};`;
         statsEl.textContent = stats;
         card.appendChild(statsEl);
       }

@@ -1,4 +1,5 @@
 import type { CivilianPanelEntry, WorkableBuildingEntry } from '@shared/protocol';
+import { THEME, panelStyle, titleStyle, hintStyle } from '../theme';
 
 export interface CivilianPanelCallbacks {
   onAssign: (civilianId: number, buildingId: number | null) => void;
@@ -42,19 +43,13 @@ export class CivilianPanelOverlay {
     this.el = document.createElement('div');
     this.el.id = 'civilian-panel-overlay';
     this.el.style.cssText = [
+      panelStyle(),
       'position: absolute',
       'top: 50%',
       'left: 50%',
       'transform: translate(-50%, -50%)',
       'z-index: 50',
-      'background: rgba(4, 4, 10, 0.92)',
-      'backdrop-filter: blur(6px)',
-      'border: 1px solid rgba(245, 192, 106, 0.3)',
-      'border-radius: 8px',
       'padding: 20px 24px',
-      "font-family: 'Segoe UI', monospace",
-      'font-size: 13px',
-      'color: #ccd8ea',
       'display: none',
       'min-width: 500px',
       'max-width: 560px',
@@ -66,13 +61,13 @@ export class CivilianPanelOverlay {
 
     // Title
     this.titleEl = document.createElement('div');
-    this.titleEl.style.cssText = 'font-weight: bold; font-size: 16px; color: #f5c06a; margin-bottom: 4px; text-align: center; letter-spacing: 2px;';
+    this.titleEl.style.cssText = titleStyle(16) + '; margin-bottom: 4px;';
     this.titleEl.textContent = 'CIVILIAN MANAGEMENT';
     this.el.appendChild(this.titleEl);
 
     // Population counter
     this.popEl = document.createElement('div');
-    this.popEl.style.cssText = 'text-align: center; color: #888; font-size: 12px; margin-bottom: 14px;';
+    this.popEl.style.cssText = `text-align: center; color: ${THEME.textSecondary}; font-size: 12px; margin-bottom: 14px;`;
     this.el.appendChild(this.popEl);
 
     // Civilians list
@@ -82,7 +77,7 @@ export class CivilianPanelOverlay {
 
     // Buildings section
     const buildTitle = document.createElement('div');
-    buildTitle.style.cssText = 'font-weight: bold; font-size: 13px; color: #f5c06a; margin-bottom: 6px; border-top: 1px solid rgba(245, 192, 106, 0.2); padding-top: 10px;';
+    buildTitle.style.cssText = `font-weight: bold; font-size: 13px; color: ${THEME.accent}; margin-bottom: 6px; border-top: 1px solid ${THEME.accentRgba(0.2)}; padding-top: 10px; text-transform: uppercase; letter-spacing: 2px;`;
     buildTitle.textContent = 'PRODUCTION BUILDINGS';
     this.el.appendChild(buildTitle);
 
@@ -92,7 +87,7 @@ export class CivilianPanelOverlay {
 
     // Hint
     this.hintEl = document.createElement('div');
-    this.hintEl.style.cssText = 'text-align: center; color: #666; font-size: 11px; margin-top: 6px;';
+    this.hintEl.style.cssText = hintStyle() + '; margin-top: 6px;';
     this.hintEl.textContent = 'Click a civilian, then a building to assign. Press C or ESC to close.';
     this.el.appendChild(this.hintEl);
 
@@ -144,7 +139,7 @@ export class CivilianPanelOverlay {
 
     if (this.civilians.length === 0) {
       const empty = document.createElement('div');
-      empty.style.cssText = 'text-align: center; color: #666; padding: 8px;';
+      empty.style.cssText = `text-align: center; color: ${THEME.textMuted}; padding: 8px;`;
       empty.textContent = 'No civilians yet.';
       this.listEl.appendChild(empty);
     }
@@ -152,14 +147,14 @@ export class CivilianPanelOverlay {
     for (const civ of this.civilians) {
       const row = document.createElement('div');
       const isSelected = this.selectedCivilianId === civ.entityId;
-      const borderColor = isSelected ? 'rgba(245, 192, 106, 0.6)' : 'rgba(255,255,255,0.08)';
-      row.style.cssText = `display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: rgba(255,255,255,0.04); border: 1px solid ${borderColor}; border-radius: 4px; cursor: pointer; transition: border-color 0.15s;`;
-      row.addEventListener('mouseenter', () => { if (!isSelected) row.style.borderColor = 'rgba(245, 192, 106, 0.3)'; });
-      row.addEventListener('mouseleave', () => { if (!isSelected) row.style.borderColor = 'rgba(255,255,255,0.08)'; });
+      const borderColor = isSelected ? THEME.accentRgba(0.6) : THEME.borderSubtle;
+      row.style.cssText = `display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: ${THEME.surfaceBg}; border: 1px solid ${borderColor}; border-radius: ${THEME.radiusSm}; cursor: pointer; transition: border-color ${THEME.transition};`;
+      row.addEventListener('mouseenter', () => { if (!isSelected) row.style.borderColor = THEME.accentRgba(0.3); });
+      row.addEventListener('mouseleave', () => { if (!isSelected) row.style.borderColor = THEME.borderSubtle; });
 
       // Name
       const nameEl = document.createElement('span');
-      nameEl.style.cssText = 'font-weight: bold; color: #f5c06a; min-width: 80px;';
+      nameEl.style.cssText = `font-weight: bold; color: ${THEME.accent}; min-width: 80px;`;
       nameEl.textContent = civ.name;
       row.appendChild(nameEl);
 
@@ -179,20 +174,32 @@ export class CivilianPanelOverlay {
       hpEl.textContent = `${civ.hp}/${civ.maxHp}`;
       row.appendChild(hpEl);
 
-      // Hunger bar
-      const hungerContainer = document.createElement('div');
-      hungerContainer.style.cssText = 'flex: 0 0 50px; height: 8px; background: #222; border-radius: 3px; overflow: hidden; position: relative;';
-      const hungerFill = document.createElement('div');
+      // Hunger bar with label
+      const hungerWrap = document.createElement('div');
+      hungerWrap.style.cssText = 'display: flex; align-items: center; gap: 4px; min-width: 90px;';
+      const hungerLabel = document.createElement('span');
+      hungerLabel.style.cssText = 'font-size: 10px; color: #777; width: 14px;';
       const hungerPct = civ.hunger / 100;
       const hungerColor = hungerPct < 0.5 ? '#44aa44' : hungerPct < 0.8 ? '#ddaa22' : '#cc3333';
+      hungerLabel.textContent = 'H';
+      hungerLabel.title = 'Hunger';
+      hungerWrap.appendChild(hungerLabel);
+      const hungerContainer = document.createElement('div');
+      hungerContainer.style.cssText = 'flex: 1; height: 8px; background: #222; border-radius: 3px; overflow: hidden;';
+      const hungerFill = document.createElement('div');
       hungerFill.style.cssText = `width: ${hungerPct * 100}%; height: 100%; background: ${hungerColor}; border-radius: 3px;`;
       hungerContainer.appendChild(hungerFill);
-      hungerContainer.title = `Hunger: ${civ.hunger}%`;
-      row.appendChild(hungerContainer);
+      hungerWrap.appendChild(hungerContainer);
+      const hungerText = document.createElement('span');
+      hungerText.style.cssText = `font-size: 10px; color: ${hungerColor}; min-width: 28px; text-align: right;`;
+      hungerText.textContent = `${Math.round(civ.hunger)}%`;
+      hungerWrap.appendChild(hungerText);
+      hungerWrap.title = `Hunger: ${Math.round(civ.hunger)}%`;
+      row.appendChild(hungerWrap);
 
       // Assignment
       const assignEl = document.createElement('span');
-      assignEl.style.cssText = 'flex: 1; text-align: right; font-size: 11px; color: #888;';
+      assignEl.style.cssText = `flex: 1; text-align: right; font-size: 11px; color: ${THEME.textSecondary};`;
       if (civ.assignedBuildingType) {
         assignEl.textContent = BUILDING_LABELS[civ.assignedBuildingType] ?? civ.assignedBuildingType;
         assignEl.style.color = '#7ac';
@@ -230,7 +237,7 @@ export class CivilianPanelOverlay {
 
     if (this.buildings.length === 0) {
       const empty = document.createElement('div');
-      empty.style.cssText = 'text-align: center; color: #666; padding: 4px; font-size: 12px;';
+      empty.style.cssText = `text-align: center; color: ${THEME.textMuted}; padding: 4px; font-size: 12px;`;
       empty.textContent = 'No production buildings placed.';
       this.buildingsEl.appendChild(empty);
     }
@@ -238,11 +245,11 @@ export class CivilianPanelOverlay {
     for (const bldg of this.buildings) {
       const row = document.createElement('div');
       const canAssign = this.selectedCivilianId !== null && bldg.workerName === null;
-      row.style.cssText = `display: flex; align-items: center; gap: 8px; padding: 4px 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 3px; font-size: 12px;${canAssign ? ' cursor: pointer;' : ''}`;
+      row.style.cssText = `display: flex; align-items: center; gap: 8px; padding: 4px 10px; background: ${THEME.surfaceBg}; border: 1px solid ${THEME.borderSubtle}; border-radius: ${THEME.radiusSm}; font-size: 12px;${canAssign ? ' cursor: pointer;' : ''}`;
 
       if (canAssign) {
         row.addEventListener('mouseenter', () => { row.style.borderColor = 'rgba(68, 204, 68, 0.4)'; row.style.background = 'rgba(68, 204, 68, 0.08)'; });
-        row.addEventListener('mouseleave', () => { row.style.borderColor = 'rgba(255,255,255,0.06)'; row.style.background = 'rgba(255,255,255,0.03)'; });
+        row.addEventListener('mouseleave', () => { row.style.borderColor = THEME.borderSubtle; row.style.background = THEME.surfaceBg; });
         row.addEventListener('click', () => {
           if (this.selectedCivilianId !== null) {
             this.callbacks?.onAssign(this.selectedCivilianId, bldg.entityId);
@@ -261,10 +268,10 @@ export class CivilianPanelOverlay {
       const workerEl = document.createElement('span');
       workerEl.style.cssText = 'flex: 1; text-align: right;';
       if (bldg.workerName) {
-        workerEl.style.color = '#f5c06a';
+        workerEl.style.color = THEME.accent;
         workerEl.textContent = bldg.workerName;
       } else {
-        workerEl.style.color = '#666';
+        workerEl.style.color = THEME.textMuted;
         workerEl.textContent = canAssign ? 'Click to assign' : 'No worker';
       }
       row.appendChild(workerEl);
@@ -276,10 +283,10 @@ export class CivilianPanelOverlay {
     if (this.selectedCivilianId !== null) {
       const civ = this.civilians.find(c => c.entityId === this.selectedCivilianId);
       this.hintEl.textContent = civ ? `Selected: ${civ.name} - click a building to assign` : '';
-      this.hintEl.style.color = '#f5c06a';
+      this.hintEl.style.color = THEME.accent;
     } else {
       this.hintEl.textContent = 'Click a civilian, then a building to assign. Press C or ESC to close.';
-      this.hintEl.style.color = '#666';
+      this.hintEl.style.color = THEME.textMuted;
     }
   }
 }

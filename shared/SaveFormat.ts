@@ -7,7 +7,7 @@ export interface SaveData {
   currentWave: number;
   wavePhase?: 'idle' | 'prep' | 'active' | 'cleared';
   prepTimeRemaining?: number;
-  warehousePool: { wood: number; stone: number; iron: number; diamond: number; gold: number; food: number };
+  warehousePool: { wood: number; stone: number; iron: number; diamond: number; gold: number; food: number; weapons?: number };
   spawnOrigin: { x: number; y: number };
   processedChunks: string[];
   enemiesKilled: number;
@@ -44,6 +44,8 @@ export interface SavedBuilding {
   upgradeLevel: number;
   currentHp: number;
   maxHp: number;
+  /** Building rotation: 0 = default, 1 = rotated 90 degrees. */
+  rotation?: number;
   production?: {
     resourceType: string;
     interval: number;
@@ -92,7 +94,7 @@ export interface SavedPlayer {
   playerId: string;
   displayName: string;
   slot: number;
-  resources: { wood: number; stone: number; iron: number; diamond: number; gold: number; food: number };
+  resources: { wood: number; stone: number; iron: number; diamond: number; gold: number; food: number; weapons?: number };
   hp: number;
   maxHp: number;
   x: number;

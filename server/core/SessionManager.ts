@@ -139,6 +139,7 @@ export class SessionManager {
     socket.on(MessageType.POTION_USE,              (c) => this.session?.handlePotionUse(c.id, (cl, msg) => this.socket.send(cl, msg)));
     socket.on(MessageType.CIVILIAN_PANEL_REQUEST,  (c) => this.session?.handleCivilianPanelRequest(c.id, (cl, msg) => this.socket.send(cl, msg)));
     socket.on(MessageType.CIVILIAN_ASSIGN,         (c, m) => this.session?.handleCivilianAssign(c.id, m as import('@shared/protocol').CivilianAssignMessage, (cl, msg) => this.socket.send(cl, msg)));
+    socket.on(MessageType.TRAIN_GUARD,             (c, m) => this.session?.handleTrainGuard(c.id, m as import('@shared/protocol').TrainGuardMessage, (cl, msg) => this.socket.send(cl, msg)));
     socket.onDisconnect((c) => this.onDisconnect(c));
 
     // Load persisted saves and meta stats from disk

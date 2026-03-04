@@ -21,7 +21,7 @@ import {
   RESOURCE_NODE_RADIUS,
   ENTITY_SEPARATION_ITERATIONS,
   CIVILIAN_RADIUS,
-  buildingHalfExtent,
+  buildingExtent,
   DODGE_ROLL_SPEED,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
@@ -48,15 +48,15 @@ function isSquareEntity(factionType: string): boolean {
 }
 
 /**
- * Circle-vs-AABB overlap resolution.
+ * Circle-vs-rect overlap resolution with separate half-extents.
  * Returns the push vector to move the circle OUT of the box, or null if no overlap.
  */
-function circleAABBPush(
+function circleRectPush(
   cx: number, cy: number, cr: number,        // circle center + radius
-  bx: number, by: number, bHalf: number,     // box center + half-extent
+  bx: number, by: number, bhx: number, bhy: number, // box center + half-extents
 ): { px: number; py: number } | null {
-  const closestX = Math.max(bx - bHalf, Math.min(cx, bx + bHalf));
-  const closestY = Math.max(by - bHalf, Math.min(cy, by + bHalf));
+  const closestX = Math.max(bx - bhx, Math.min(cx, bx + bhx));
+  const closestY = Math.max(by - bhy, Math.min(cy, by + bhy));
 
   const dx = cx - closestX;
   const dy = cy - closestY;
@@ -66,10 +66,10 @@ function circleAABBPush(
 
   if (distSq < 0.0001) {
     // Circle center is inside the box - push along shortest axis
-    const overlapL = (cx - (bx - bHalf)) + cr;
-    const overlapR = ((bx + bHalf) - cx) + cr;
-    const overlapT = (cy - (by - bHalf)) + cr;
-    const overlapB = ((by + bHalf) - cy) + cr;
+    const overlapL = (cx - (bx - bhx)) + cr;
+    const overlapR = ((bx + bhx) - cx) + cr;
+    const overlapT = (cy - (by - bhy)) + cr;
+    const overlapB = ((by + bhy) - cy) + cr;
     const min = Math.min(overlapL, overlapR, overlapT, overlapB);
     if (min === overlapL) return { px: -min, py: 0 };
     if (min === overlapR) return { px: min, py: 0 };
@@ -80,6 +80,14 @@ function circleAABBPush(
   const dist = Math.sqrt(distSq);
   const overlap = cr - dist;
   return { px: (dx / dist) * overlap, py: (dy / dist) * overlap };
+}
+
+/** Backward-compat wrapper for square buildings. */
+function circleAABBPush(
+  cx: number, cy: number, cr: number,
+  bx: number, by: number, bHalf: number,
+): { px: number; py: number } | null {
+  return circleRectPush(cx, cy, cr, bx, by, bHalf, bHalf);
 }
 
 /**
@@ -95,7 +103,7 @@ export class MovementSystem {
   /** Cached portal positions - refreshed each update for solid-circle collision. */
   private portalCache: PositionComponent[] = [];
   /** Cached building positions - refreshed each update for solid-block collision. */
-  private buildingCache: { x: number; y: number; halfExtent: number }[] = [];
+  private buildingCache: { x: number; y: number; hx: number; hy: number; isGate: boolean }[] = [];
   /** Bridge tile keys ("tileX,tileY") that override unwalkable terrain. Populated by GameSession. */
   bridgeTiles = new Set<string>();
 
@@ -156,14 +164,15 @@ export class MovementSystem {
 
       const ev = world.getComponent<EnemyVariantComponent>(id, C.EnemyVariant);
       const isGhost = ev?.variant === 'ghost';
+      const fType = faction?.type ?? 'player';
 
-      if (isGhost || !this.overlapsAny(nx, ny, entityRadius)) {
+      if (isGhost || !this.overlapsAny(nx, ny, entityRadius, fType)) {
         pos.x = nx;
         pos.y = ny;
-      } else if (!this.overlapsAny(nx, pos.y, entityRadius)) {
+      } else if (!this.overlapsAny(nx, pos.y, entityRadius, fType)) {
         pos.x = nx;
         vel.vy = 0;
-      } else if (!this.overlapsAny(pos.x, ny, entityRadius)) {
+      } else if (!this.overlapsAny(pos.x, ny, entityRadius, fType)) {
         pos.y = ny;
         vel.vx = 0;
       } else {
@@ -176,11 +185,11 @@ export class MovementSystem {
       if (kb && (kb.vx !== 0 || kb.vy !== 0)) {
         const kx = pos.x + kb.vx * dt;
         const ky = pos.y + kb.vy * dt;
-        if (!this.overlapsAny(kx, ky, entityRadius)) {
+        if (!this.overlapsAny(kx, ky, entityRadius, fType)) {
           pos.x = kx; pos.y = ky;
-        } else if (!this.overlapsAny(kx, pos.y, entityRadius)) {
+        } else if (!this.overlapsAny(kx, pos.y, entityRadius, fType)) {
           pos.x = kx;
-        } else if (!this.overlapsAny(pos.x, ky, entityRadius)) {
+        } else if (!this.overlapsAny(pos.x, ky, entityRadius, fType)) {
           pos.y = ky;
         }
         const decay = Math.max(0, 1 - 8 * dt);
@@ -313,12 +322,13 @@ export class MovementSystem {
         // Bridges and spike traps are not solid collision obstacles
         if (type === 'bridge' || type === 'spike_trap') continue;
         const pos = world.getComponent<PositionComponent>(id, C.Position)!;
-        this.buildingCache.push({ x: pos.x, y: pos.y, halfExtent: buildingHalfExtent(type) });
+        const ext = buildingExtent(type, bldg?.rotation ?? 0);
+        this.buildingCache.push({ x: pos.x, y: pos.y, hx: ext.hx, hy: ext.hy, isGate: type === 'gate' });
       }
     }
   }
 
-  private overlapsAny(px: number, py: number, entityRadius: number = PLAYER_RADIUS): boolean {
+  private overlapsAny(px: number, py: number, entityRadius: number = PLAYER_RADIUS, factionType: string = 'player'): boolean {
     const r = entityRadius - 1;
     if (
       this.tileBlocksMovement(px - r, py - r) ||
@@ -339,9 +349,12 @@ export class MovementSystem {
       const minDist = entityRadius + PORTAL_RADIUS;
       if (dx * dx + dy * dy < minDist * minDist) return true;
     }
-    // Buildings act as solid blocks (circle-vs-AABB)
+    // Buildings act as solid blocks (circle-vs-rect)
+    const isFriendly = factionType === 'player' || factionType === 'civilian' || factionType === 'guard';
     for (const bldg of this.buildingCache) {
-      if (circleAABBPush(px, py, entityRadius, bldg.x, bldg.y, bldg.halfExtent)) {
+      // Gates auto-open for friendlies (players, civilians, guards)
+      if (bldg.isGate && isFriendly) continue;
+      if (circleRectPush(px, py, entityRadius, bldg.x, bldg.y, bldg.hx, bldg.hy)) {
         return true;
       }
     }

@@ -9,11 +9,11 @@ const SLOT_GAP  = 6;
 const PAD       = 40;   // room below for health + stamina bars
 const SLOT_COUNT = 6;
 
-const SELECTED_BORDER = 0xe8c96a;  // gold accent (matches game title)
+const SELECTED_BORDER = 0xaa2233;  // crimson accent (matches game theme)
 const UNSELECTED_BORDER = 0xffffff;
-const SLOT_BG = 0x1a1a2a;
-const SLOT_BG_SELECTED = 0x2a2a3a;
-const LOCKED_BG = 0x111118;
+const SLOT_BG = 0x1a0a0e;
+const SLOT_BG_SELECTED = 0x2a1418;
+const LOCKED_BG = 0x110608;
 const COOLDOWN_OVERLAY = 0x000000;
 
 // Slot 0: class weapon, 1-3: skill abilities (Q/E/R), 4: potion, 5: build hammer
@@ -56,7 +56,7 @@ export class WeaponHotbar {
       // Small charge counter (used for potion slot)
       const chargeText = new Text({
         text: '',
-        style: { fontSize: 10, fill: 0xe8c96a, fontFamily: 'monospace' },
+        style: { fontSize: 10, fill: 0xaa2233, fontFamily: 'monospace' },
       });
       chargeText.visible = false;
       this.keyTexts.push(keyText);
@@ -200,7 +200,7 @@ export class WeaponHotbar {
         ct.visible = true;
         ct.text = `${potionCharges}/${potionMaxCharges}`;
         ct.position.set(x + (SLOT_SIZE - ct.width) / 2, y + SLOT_SIZE - 14);
-        ct.style.fill = potionCharges > 0 ? 0xe8c96a : 0x5a5a6a;
+        ct.style.fill = potionCharges > 0 ? 0xaa2233 : 0x5a5a6a;
       } else {
         ct.visible = false;
       }

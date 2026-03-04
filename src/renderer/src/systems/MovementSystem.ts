@@ -18,7 +18,7 @@ import {
   PORTAL_RADIUS,
   RESOURCE_NODE_RADIUS,
   ENTITY_SEPARATION_ITERATIONS,
-  buildingHalfExtent,
+  buildingExtent,
   DODGE_ROLL_SPEED,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
@@ -43,22 +43,22 @@ function isSquareEntity(factionType: string): boolean {
   return factionType === 'resource';
 }
 
-/** Circle-vs-AABB push: returns vector to push circle OUT of box, or null. */
-function circleAABBPush(
+/** Circle-vs-rect push: returns vector to push circle OUT of box, or null. */
+function circleRectPush(
   cx: number, cy: number, cr: number,
-  bx: number, by: number, bHalf: number,
+  bx: number, by: number, bhx: number, bhy: number,
 ): { px: number; py: number } | null {
-  const closestX = Math.max(bx - bHalf, Math.min(cx, bx + bHalf));
-  const closestY = Math.max(by - bHalf, Math.min(cy, by + bHalf));
+  const closestX = Math.max(bx - bhx, Math.min(cx, bx + bhx));
+  const closestY = Math.max(by - bhy, Math.min(cy, by + bhy));
   const dx = cx - closestX;
   const dy = cy - closestY;
   const distSq = dx * dx + dy * dy;
   if (distSq >= cr * cr) return null;
   if (distSq < 0.0001) {
-    const overlapL = (cx - (bx - bHalf)) + cr;
-    const overlapR = ((bx + bHalf) - cx) + cr;
-    const overlapT = (cy - (by - bHalf)) + cr;
-    const overlapB = ((by + bHalf) - cy) + cr;
+    const overlapL = (cx - (bx - bhx)) + cr;
+    const overlapR = ((bx + bhx) - cx) + cr;
+    const overlapT = (cy - (by - bhy)) + cr;
+    const overlapB = ((by + bhy) - cy) + cr;
     const min = Math.min(overlapL, overlapR, overlapT, overlapB);
     if (min === overlapL) return { px: -min, py: 0 };
     if (min === overlapR) return { px: min, py: 0 };
@@ -68,6 +68,14 @@ function circleAABBPush(
   const dist = Math.sqrt(distSq);
   const overlap = cr - dist;
   return { px: (dx / dist) * overlap, py: (dy / dist) * overlap };
+}
+
+/** Backward-compat wrapper for square buildings. */
+function circleAABBPush(
+  cx: number, cy: number, cr: number,
+  bx: number, by: number, bHalf: number,
+): { px: number; py: number } | null {
+  return circleRectPush(cx, cy, cr, bx, by, bHalf, bHalf);
 }
 
 /**
@@ -84,7 +92,7 @@ export class MovementSystem {
   /** Cached resource node positions - refreshed each update for solid-block collision. */
   private resourceCache: PositionComponent[] = [];
   /** Cached building positions - refreshed each update for solid-block collision. */
-  private buildingCache: { x: number; y: number; halfExtent: number }[] = [];
+  private buildingCache: { x: number; y: number; hx: number; hy: number }[] = [];
   /** Bridge tile keys ("tileX,tileY") that override unwalkable terrain. Populated by game.ts. */
   bridgeTiles = new Set<string>();
 
@@ -241,10 +249,11 @@ export class MovementSystem {
       if (f.type === 'building') {
         const bldg = world.getComponent<BuildingComponent>(id, C.Building);
         const type = bldg?.buildingType ?? 'wall';
-        // Bridges and spike traps are not solid collision obstacles
-        if (type === 'bridge' || type === 'spike_trap') continue;
+        // Bridges, spike traps, and gates (client is always the local player = friendly) are not solid
+        if (type === 'bridge' || type === 'spike_trap' || type === 'gate') continue;
         const pos = world.getComponent<PositionComponent>(id, C.Position)!;
-        this.buildingCache.push({ x: pos.x, y: pos.y, halfExtent: buildingHalfExtent(type) });
+        const ext = buildingExtent(type, bldg?.rotation ?? 0);
+        this.buildingCache.push({ x: pos.x, y: pos.y, hx: ext.hx, hy: ext.hy });
       }
     }
   }
@@ -268,9 +277,9 @@ export class MovementSystem {
         return true;
       }
     }
-    // Buildings act as solid blocks (circle-vs-AABB)
+    // Buildings act as solid blocks (circle-vs-rect)
     for (const bldg of this.buildingCache) {
-      if (circleAABBPush(px, py, PLAYER_RADIUS, bldg.x, bldg.y, bldg.halfExtent)) {
+      if (circleRectPush(px, py, PLAYER_RADIUS, bldg.x, bldg.y, bldg.hx, bldg.hy)) {
         return true;
       }
     }

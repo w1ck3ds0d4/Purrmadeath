@@ -1,3 +1,4 @@
+import { THEME } from '../theme';
 import type { PlayerClass } from '@shared/definitions/ClassDefinitions';
 import { CLASS_STATS, CLASS_DISPLAY_NAMES } from '@shared/definitions/ClassDefinitions';
 import {
@@ -22,7 +23,7 @@ const BRANCH_COUNT = 5;
 
 // -- Colors --------------------------------------------------------------------
 
-const BG = 'rgba(10, 10, 20, 0.95)';
+const BG = THEME.panelBg;
 const LOCKED_COLOR = '#2a2a3a';
 const LOCKED_BORDER = '#3a3a4a';
 const AVAILABLE_GLOW = 'rgba(200, 220, 255, 0.6)';
@@ -89,6 +90,7 @@ function computeStats(
   const flatAdd: Record<string, number> = {};
   const multAdd: Record<string, number> = {};
   const cardFlat: Record<string, number> = {};
+  const cardMult: Record<string, number> = {};
   const buffFlat: Record<string, number> = {};
   const buffMult: Record<string, number> = {};
 
@@ -108,10 +110,15 @@ function computeStats(
     }
   }
 
-  // Cards
+  // Cards - some stats are multiplicative on the server (damage, speed, staminaRegenMult, knockbackMult)
+  const MULT_STATS = new Set(['damage', 'speed', 'staminaRegenMult', 'knockbackMult']);
   const collectStatBuffs = (effect: CardEffect) => {
     if (effect.type === 'stat_buff') {
-      add(cardFlat, effect.stat, effect.value);
+      if (MULT_STATS.has(effect.stat)) {
+        add(cardMult, effect.stat, effect.value);
+      } else {
+        add(cardFlat, effect.stat, effect.value);
+      }
     } else if (effect.type === 'multi') {
       for (const sub of effect.effects) collectStatBuffs(sub);
     }
@@ -142,36 +149,42 @@ function computeStats(
   ): StatBreakdown {
     const skillFlat = g(flatAdd, stat);
     const skillMult = g(multAdd, stat);
-    const cardVal = g(cardFlat, stat);
+    const cFlat = g(cardFlat, stat);
+    const cMult = g(cardMult, stat);
     const bFlat = g(buffFlat, stat);
     const bMult = g(buffMult, stat);
 
-    // For percentage stats (crit, attack speed), base is 0
-    // Skills contribute: flat + (base * mult)
-    // Cards contribute: card flat values
-    // Buffs contribute: buff flat + (base * buffMult)
-
-    const skillBonus = skillFlat + (base * skillMult);
-    const cardBonus = base * cardVal + (opts?.isPercent ? cardVal : 0);
-    const buffBonus = bFlat + (base * bMult);
-
     let total: number;
+    let skillBonus: number;
+    let cardBonus: number;
+    let buffBonus: number;
+
     if (opts?.isPercent) {
       // Percent stats: just sum everything
-      total = base + skillFlat + skillMult + cardVal + bFlat + bMult;
+      skillBonus = skillFlat + skillMult;
+      cardBonus = cFlat + cMult;
+      buffBonus = bFlat + bMult;
+      total = base + skillBonus + cardBonus + buffBonus;
     } else {
       // Normal stats: (base + flatAdds) * (1 + multAdds)
-      const flatTotal = base + skillFlat + cardVal + bFlat;
-      const multTotal = 1 + skillMult + bMult;
+      // Flat: skillFlat, cardFlat, buffFlat are added to base
+      // Mult: skillMult, cardMult, buffMult compound on the total
+      const flatTotal = base + skillFlat + cFlat + bFlat;
+      const multTotal = 1 + skillMult + cMult + bMult;
       total = flatTotal * multTotal;
+
+      // For display breakdown, show approximate contribution of each source
+      skillBonus = skillFlat + (base * skillMult);
+      cardBonus = cFlat + (base * cMult);
+      buffBonus = bFlat + (base * bMult);
     }
 
     return {
       label,
       base,
-      skills: opts?.isPercent ? skillFlat + skillMult : skillBonus,
-      cards: opts?.isPercent ? cardVal : cardVal,
-      buffs: opts?.isPercent ? bFlat + bMult : buffBonus,
+      skills: skillBonus,
+      cards: cardBonus,
+      buffs: buffBonus,
       total: Math.round(total * 100) / 100,
       isPercent: opts?.isPercent,
       unit: opts?.unit,
@@ -221,7 +234,7 @@ export class SkillTreeOverlay {
     header.style.cssText = `
       display:flex;align-items:center;justify-content:space-between;
       padding:12px 24px;flex-shrink:0;
-      border-bottom:1px solid rgba(255,255,255,0.08);
+      border-bottom:1px solid ${THEME.borderSubtle};
     `;
 
     // Tab bar
@@ -238,9 +251,9 @@ export class SkillTreeOverlay {
     this.closeBtn = document.createElement('button');
     this.closeBtn.textContent = 'X';
     this.closeBtn.style.cssText = `
-      background:none;border:1px solid #4a4a5a;color:#8a9ab0;
-      font-family:monospace;font-size:16px;cursor:pointer;
-      padding:4px 10px;border-radius:4px;
+      background:none;border:1px solid #4a4a5a;color:${THEME.textSecondary};
+      font-family:${THEME.fontMono};font-size:16px;cursor:pointer;
+      padding:4px 10px;border-radius:${THEME.radiusSm};
     `;
     this.closeBtn.addEventListener('click', () => this.hide());
     header.appendChild(this.closeBtn);
@@ -312,14 +325,14 @@ export class SkillTreeOverlay {
       const el = document.createElement('button');
       const active = this.activeTab === tab.id;
       el.style.cssText = `
-        background:${active ? 'rgba(255,255,255,0.08)' : 'none'};
+        background:${active ? THEME.surfaceBg : 'none'};
         border:1px solid ${active ? 'rgba(255,255,255,0.15)' : 'transparent'};
-        border-bottom:${active ? '2px solid #e8c96a' : '2px solid transparent'};
-        color:${active ? '#e8eef5' : '#6a7a8a'};
-        font-family:'Segoe UI',sans-serif;font-size:13px;font-weight:600;
+        border-bottom:${active ? `2px solid ${THEME.accent}` : '2px solid transparent'};
+        color:${active ? THEME.textBright : THEME.textMuted};
+        font-family:${THEME.fontUI};font-size:13px;font-weight:600;
         letter-spacing:2px;cursor:pointer;
-        padding:8px 20px;border-radius:4px 4px 0 0;
-        transition:all 0.15s;
+        padding:8px 20px;border-radius:${THEME.radiusSm} ${THEME.radiusSm} 0 0;
+        transition:all ${THEME.transition};
       `;
 
       el.textContent = tab.label;
@@ -339,7 +352,7 @@ export class SkillTreeOverlay {
         this.rebuild();
       });
       el.addEventListener('mouseenter', () => { if (!active) el.style.color = '#b0c0d0'; });
-      el.addEventListener('mouseleave', () => { if (!active) el.style.color = '#6a7a8a'; });
+      el.addEventListener('mouseleave', () => { if (!active) el.style.color = THEME.textMuted; });
 
       this.tabBar.appendChild(el);
     }
@@ -372,8 +385,8 @@ export class SkillTreeOverlay {
 
     const statsHeader = document.createElement('div');
     statsHeader.style.cssText = `
-      font-family:'Segoe UI',sans-serif;font-size:18px;font-weight:700;
-      color:#e8eef5;letter-spacing:2px;margin-bottom:16px;
+      font-family:${THEME.fontUI};font-size:18px;font-weight:700;
+      color:${THEME.textBright};letter-spacing:2px;margin-bottom:16px;
     `;
     statsHeader.textContent = `${CLASS_DISPLAY_NAMES[this.playerClass]} - Stats`;
     statsPanel.appendChild(statsHeader);
@@ -387,13 +400,13 @@ export class SkillTreeOverlay {
     const headerRow = document.createElement('div');
     headerRow.style.cssText = `
       display:grid;grid-template-columns:140px 70px 70px 70px 70px 80px;
-      padding:6px 10px;border-bottom:1px solid rgba(255,255,255,0.1);
+      padding:6px 10px;border-bottom:1px solid ${THEME.borderSubtle};
     `;
     for (const h of ['Stat', 'Base', 'Skills', 'Cards', 'Buffs', 'Total']) {
       const cell = document.createElement('div');
       cell.style.cssText = `
-        font-family:monospace;font-size:11px;font-weight:600;
-        color:#6a7a8a;text-transform:uppercase;letter-spacing:1px;
+        font-family:${THEME.fontMono};font-size:11px;font-weight:600;
+        color:${THEME.textMuted};text-transform:uppercase;letter-spacing:1px;
         text-align:${h === 'Stat' ? 'left' : 'right'};
       `;
       cell.textContent = h;
@@ -406,8 +419,8 @@ export class SkillTreeOverlay {
       const row = document.createElement('div');
       row.style.cssText = `
         display:grid;grid-template-columns:140px 70px 70px 70px 70px 80px;
-        padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.03);
-        transition:background 0.1s;
+        padding:8px 10px;border-bottom:1px solid ${THEME.borderSubtle};
+        transition:background ${THEME.transition};
       `;
       row.addEventListener('mouseenter', () => { row.style.background = 'rgba(255,255,255,0.03)'; });
       row.addEventListener('mouseleave', () => { row.style.background = 'none'; });
@@ -424,18 +437,18 @@ export class SkillTreeOverlay {
       };
 
       const values = [
-        { text: stat.label, color: '#c0d0e0', align: 'left', bold: true },
-        { text: fmt(stat.base), color: '#8a9aaa', align: 'right', bold: false },
+        { text: stat.label, color: THEME.textPrimary, align: 'left', bold: true },
+        { text: fmt(stat.base), color: THEME.textSecondary, align: 'right', bold: false },
         { text: fmt(stat.skills), color: stat.skills !== 0 ? '#5599cc' : '#4a4a5a', align: 'right', bold: false },
         { text: fmt(stat.cards), color: stat.cards !== 0 ? '#aa66dd' : '#4a4a5a', align: 'right', bold: false },
         { text: fmt(stat.buffs), color: stat.buffs !== 0 ? '#55cc77' : '#4a4a5a', align: 'right', bold: false },
-        { text: fmt(stat.total, true), color: '#e8c96a', align: 'right', bold: true },
+        { text: fmt(stat.total, true), color: THEME.accent, align: 'right', bold: true },
       ];
 
       for (const v of values) {
         const cell = document.createElement('div');
         cell.style.cssText = `
-          font-family:monospace;font-size:13px;
+          font-family:${THEME.fontMono};font-size:13px;
           color:${v.color};text-align:${v.align};
           ${v.bold ? 'font-weight:600;' : ''}
         `;
@@ -453,7 +466,7 @@ export class SkillTreeOverlay {
     if (specials.length > 0) {
       const specialHeader = document.createElement('div');
       specialHeader.style.cssText = `
-        font-family:'Segoe UI',sans-serif;font-size:14px;font-weight:600;
+        font-family:${THEME.fontUI};font-size:14px;font-weight:600;
         color:#aa88cc;letter-spacing:1px;margin-top:24px;margin-bottom:8px;
       `;
       specialHeader.textContent = 'SPECIAL EFFECTS';
@@ -462,7 +475,7 @@ export class SkillTreeOverlay {
       for (const s of specials) {
         const el = document.createElement('div');
         el.style.cssText = `
-          font-family:monospace;font-size:12px;color:#b0a0c0;
+          font-family:${THEME.fontMono};font-size:12px;color:#b0a0c0;
           padding:4px 10px;border-left:2px solid #aa88cc33;margin-bottom:2px;
         `;
         el.textContent = s;
@@ -475,7 +488,7 @@ export class SkillTreeOverlay {
     if (abilities.length > 0) {
       const abilityHeader = document.createElement('div');
       abilityHeader.style.cssText = `
-        font-family:'Segoe UI',sans-serif;font-size:14px;font-weight:600;
+        font-family:${THEME.fontUI};font-size:14px;font-weight:600;
         color:#aa66dd;letter-spacing:1px;margin-top:24px;margin-bottom:8px;
       `;
       abilityHeader.textContent = 'CARD ABILITIES';
@@ -484,7 +497,7 @@ export class SkillTreeOverlay {
       for (const a of abilities) {
         const el = document.createElement('div');
         el.style.cssText = `
-          font-family:monospace;font-size:12px;color:#b0a0d0;
+          font-family:${THEME.fontMono};font-size:12px;color:#b0a0d0;
           padding:4px 10px;border-left:2px solid #aa66dd33;margin-bottom:2px;
         `;
         el.textContent = `${a.name} - ${a.description}`;
@@ -497,13 +510,13 @@ export class SkillTreeOverlay {
     // Right: Permanent buffs
     const buffsPanel = document.createElement('div');
     buffsPanel.style.cssText = `
-      width:260px;flex-shrink:0;border-left:1px solid rgba(255,255,255,0.06);
+      width:260px;flex-shrink:0;border-left:1px solid ${THEME.borderSubtle};
       padding-left:24px;
     `;
 
     const buffsHeader = document.createElement('div');
     buffsHeader.style.cssText = `
-      font-family:'Segoe UI',sans-serif;font-size:15px;font-weight:700;
+      font-family:${THEME.fontUI};font-size:15px;font-weight:700;
       color:#55cc77;letter-spacing:2px;margin-bottom:12px;
     `;
     buffsHeader.textContent = `PERMANENT BUFFS (${this.completedBuffs.length})`;
@@ -511,7 +524,7 @@ export class SkillTreeOverlay {
 
     if (this.completedBuffs.length === 0) {
       const empty = document.createElement('div');
-      empty.style.cssText = 'font-family:monospace;font-size:13px;color:#5a5a6a;';
+      empty.style.cssText = `font-family:${THEME.fontMono};font-size:13px;color:${THEME.textDim};`;
       empty.textContent = 'No buffs earned yet';
       buffsPanel.appendChild(empty);
     } else {
@@ -524,12 +537,12 @@ export class SkillTreeOverlay {
         `;
 
         const name = document.createElement('div');
-        name.style.cssText = "font-family:'Segoe UI',sans-serif;font-size:13px;font-weight:600;color:#e8eef5;";
+        name.style.cssText = `font-family:${THEME.fontUI};font-size:13px;font-weight:600;color:${THEME.textBright};`;
         name.textContent = buff.displayName;
         el.appendChild(name);
 
         const reward = document.createElement('div');
-        reward.style.cssText = `font-family:monospace;font-size:11px;color:${buff.medalColor};margin-top:3px;`;
+        reward.style.cssText = `font-family:${THEME.fontMono};font-size:11px;color:${buff.medalColor};margin-top:3px;`;
         reward.textContent = buff.reward;
         el.appendChild(reward);
 
@@ -541,7 +554,7 @@ export class SkillTreeOverlay {
 
     // Hint
     const hint = document.createElement('div');
-    hint.style.cssText = 'font-family:monospace;font-size:11px;color:#4a5a6a;padding:8px 32px;flex-shrink:0;user-select:none;';
+    hint.style.cssText = `font-family:${THEME.fontMono};font-size:11px;color:${THEME.textDim};padding:8px 32px;flex-shrink:0;user-select:none;`;
     hint.textContent = 'Press K or ESC to close';
 
     this.tabContent.appendChild(container);
@@ -618,11 +631,11 @@ export class SkillTreeOverlay {
     `;
 
     const title = document.createElement('h2');
-    title.style.cssText = "font-family:'Segoe UI',sans-serif;font-size:22px;font-weight:700;color:#e8eef5;letter-spacing:3px;margin:0;user-select:none;";
+    title.style.cssText = `font-family:${THEME.fontUI};font-size:22px;font-weight:700;color:${THEME.textBright};letter-spacing:3px;margin:0;user-select:none;`;
     title.textContent = 'SKILL TREE';
 
     const pointsEl = document.createElement('div');
-    pointsEl.style.cssText = 'font-family:monospace;font-size:14px;color:#e8c96a;user-select:none;';
+    pointsEl.style.cssText = `font-family:${THEME.fontMono};font-size:14px;color:${THEME.accent};user-select:none;`;
     pointsEl.textContent = `Skill Points: ${this.skillPoints}`;
 
     header.appendChild(title);
@@ -651,7 +664,7 @@ export class SkillTreeOverlay {
       // Branch header
       const branchHeader = document.createElement('div');
       branchHeader.style.cssText = `
-        font-family:'Segoe UI',sans-serif;font-size:15px;font-weight:700;
+        font-family:${THEME.fontUI};font-size:15px;font-weight:700;
         color:${hexColor(branch.color)};text-align:center;
         user-select:none;letter-spacing:1px;height:${HEADER_H}px;
         display:flex;align-items:center;justify-content:center;
@@ -712,7 +725,7 @@ export class SkillTreeOverlay {
     abilityBar.style.cssText = `
       display:flex;gap:16px;justify-content:center;align-items:center;
       margin-top:20px;padding:12px 0;flex-shrink:0;
-      border-top:1px solid rgba(255,255,255,0.06);
+      border-top:1px solid ${THEME.borderSubtle};
       width:100%;max-width:${BRANCH_COUNT * NODE_W + (BRANCH_COUNT - 1) * BRANCH_GAP_X}px;
     `;
     this.buildAbilityBar(abilityBar);
@@ -720,7 +733,7 @@ export class SkillTreeOverlay {
 
     // Hint
     const hint = document.createElement('div');
-    hint.style.cssText = 'font-family:monospace;font-size:11px;color:#4a5a6a;margin-top:auto;padding-top:16px;user-select:none;flex-shrink:0;';
+    hint.style.cssText = `font-family:${THEME.fontMono};font-size:11px;color:${THEME.textDim};margin-top:auto;padding-top:16px;user-select:none;flex-shrink:0;`;
     hint.textContent = 'Drag capstone abilities to slots below - Press K or ESC to close';
     container.appendChild(hint);
 
@@ -733,7 +746,7 @@ export class SkillTreeOverlay {
     const slotKeys = ['Q', 'E', 'R'];
 
     const label = document.createElement('div');
-    label.style.cssText = "font-family:'Segoe UI',sans-serif;font-size:13px;font-weight:600;color:#8a9aaa;user-select:none;margin-right:8px;";
+    label.style.cssText = `font-family:${THEME.fontUI};font-size:13px;font-weight:600;color:${THEME.textSecondary};user-select:none;margin-right:8px;`;
     label.textContent = 'ABILITY SLOTS:';
     bar.appendChild(label);
 
@@ -745,35 +758,35 @@ export class SkillTreeOverlay {
       const hasAbility = ability != null;
       slot.style.cssText = [
         'width:140px', 'height:48px', 'border-radius:6px',
-        `border:2px dashed ${hasAbility ? '#e8c96a66' : '#3a3a4a'}`,
+        `border:2px dashed ${hasAbility ? THEME.accent + '66' : '#3a3a4a'}`,
         `background:${hasAbility ? '#2a2a3a' : '#1a1a2a'}`,
         'display:flex', 'flex-direction:column', 'align-items:center',
         'justify-content:center', 'user-select:none',
-        'transition:border-color 0.15s,background 0.15s', 'position:relative',
+        `transition:border-color ${THEME.transition},background ${THEME.transition}`, 'position:relative',
       ].join(';');
 
       const keyBadge = document.createElement('div');
       keyBadge.style.cssText = `
         position:absolute;top:-8px;left:8px;
         background:#1a1a2a;border:1px solid #3a3a4a;border-radius:3px;
-        padding:0 5px;font-family:monospace;font-size:10px;color:#e8c96a;font-weight:bold;
+        padding:0 5px;font-family:${THEME.fontMono};font-size:10px;color:${THEME.accent};font-weight:bold;
       `;
       keyBadge.textContent = slotKeys[i];
       slot.appendChild(keyBadge);
 
       if (hasAbility) {
         const nameEl = document.createElement('div');
-        nameEl.style.cssText = "font-family:'Segoe UI',sans-serif;font-size:12px;font-weight:600;color:#e8eef5;";
+        nameEl.style.cssText = `font-family:${THEME.fontUI};font-size:12px;font-weight:600;color:${THEME.textBright};`;
         nameEl.textContent = ability!.name;
         slot.appendChild(nameEl);
 
         const cdEl = document.createElement('div');
-        cdEl.style.cssText = 'font-family:monospace;font-size:10px;color:#8a9aaa;';
+        cdEl.style.cssText = `font-family:${THEME.fontMono};font-size:10px;color:${THEME.textSecondary};`;
         cdEl.textContent = `${ability!.cooldown}s CD`;
         slot.appendChild(cdEl);
       } else {
         const emptyEl = document.createElement('div');
-        emptyEl.style.cssText = 'font-family:monospace;font-size:11px;color:#4a5a6a;';
+        emptyEl.style.cssText = `font-family:${THEME.fontMono};font-size:11px;color:${THEME.textDim};`;
         emptyEl.textContent = 'Drop ability';
         slot.appendChild(emptyEl);
       }
@@ -783,11 +796,11 @@ export class SkillTreeOverlay {
       slot.addEventListener('dragover', (e) => {
         e.preventDefault();
         e.dataTransfer!.dropEffect = 'move';
-        slot.style.borderColor = '#e8c96a';
+        slot.style.borderColor = THEME.accent;
         slot.style.background = '#2a2a3a';
       });
       slot.addEventListener('dragleave', () => {
-        slot.style.borderColor = hasAbility ? '#e8c96a66' : '#3a3a4a';
+        slot.style.borderColor = hasAbility ? THEME.accent + '66' : '#3a3a4a';
         slot.style.background = hasAbility ? '#2a2a3a' : '#1a1a2a';
       });
       slot.addEventListener('drop', (e) => {
@@ -796,7 +809,7 @@ export class SkillTreeOverlay {
         if (abilityId && unlocked.some(a => a.abilityId === abilityId)) {
           this.onSlotAssign?.(slotIndex, abilityId);
         }
-        slot.style.borderColor = hasAbility ? '#e8c96a66' : '#3a3a4a';
+        slot.style.borderColor = hasAbility ? THEME.accent + '66' : '#3a3a4a';
         slot.style.background = hasAbility ? '#2a2a3a' : '#1a1a2a';
       });
 
@@ -825,7 +838,7 @@ export class SkillTreeOverlay {
 
     if (cards.length === 0) {
       const empty = document.createElement('div');
-      empty.style.cssText = "font-family:monospace;font-size:14px;color:#7a7a8a;user-select:none;padding-top:4px;";
+      empty.style.cssText = `font-family:${THEME.fontMono};font-size:14px;color:${THEME.textMuted};user-select:none;padding-top:4px;`;
       empty.textContent = 'No cards collected yet';
       container.appendChild(empty);
       this.tabContent.appendChild(container);
@@ -834,8 +847,8 @@ export class SkillTreeOverlay {
 
     const header = document.createElement('div');
     header.style.cssText = `
-      font-family:'Segoe UI',sans-serif;font-size:18px;font-weight:700;
-      color:#e8c96a;letter-spacing:2px;margin-bottom:16px;
+      font-family:${THEME.fontUI};font-size:18px;font-weight:700;
+      color:${THEME.accent};letter-spacing:2px;margin-bottom:16px;
     `;
     header.textContent = `COLLECTED CARDS (${cards.length})`;
     container.appendChild(header);
@@ -854,7 +867,7 @@ export class SkillTreeOverlay {
 
       const catHeader = document.createElement('div');
       catHeader.style.cssText = `
-        font-family:'Segoe UI',sans-serif;font-size:14px;font-weight:600;
+        font-family:${THEME.fontUI};font-size:14px;font-weight:600;
         color:${cat.color};letter-spacing:1px;margin-top:16px;margin-bottom:8px;
       `;
       catHeader.textContent = `${cat.label.toUpperCase()} (${catCards.length})`;
@@ -873,17 +886,17 @@ export class SkillTreeOverlay {
         `;
 
         const nameEl = document.createElement('div');
-        nameEl.style.cssText = "font-family:'Segoe UI',sans-serif;font-size:13px;font-weight:600;color:#e8eef5;";
+        nameEl.style.cssText = `font-family:${THEME.fontUI};font-size:13px;font-weight:600;color:${THEME.textBright};`;
         nameEl.textContent = card.name;
         el.appendChild(nameEl);
 
         const desc = document.createElement('div');
-        desc.style.cssText = 'font-family:monospace;font-size:11px;color:#a0b0c0;margin-top:3px;';
+        desc.style.cssText = `font-family:${THEME.fontMono};font-size:11px;color:${THEME.textPrimary};margin-top:3px;`;
         desc.textContent = card.description;
         el.appendChild(desc);
 
         const meta = document.createElement('div');
-        meta.style.cssText = `font-family:monospace;font-size:10px;color:${catHex};margin-top:4px;text-transform:uppercase;`;
+        meta.style.cssText = `font-family:${THEME.fontMono};font-size:10px;color:${catHex};margin-top:4px;text-transform:uppercase;`;
         meta.textContent = `${card.category} \u00b7 ${card.rarity}`;
         el.appendChild(meta);
 
@@ -895,7 +908,7 @@ export class SkillTreeOverlay {
 
     // Hint
     const hint = document.createElement('div');
-    hint.style.cssText = 'font-family:monospace;font-size:11px;color:#4a5a6a;margin-top:24px;user-select:none;';
+    hint.style.cssText = `font-family:${THEME.fontMono};font-size:11px;color:${THEME.textDim};margin-top:24px;user-select:none;`;
     hint.textContent = 'Press K or ESC to close';
     container.appendChild(hint);
 
@@ -917,10 +930,10 @@ export class SkillTreeOverlay {
       shadow = `0 0 8px ${color}66`;
     } else if (available) {
       bg = '#1a1a2e';
-      border = isCapstone ? '#e8c96a' : AVAILABLE_GLOW;
-      shadow = isCapstone ? '0 0 14px rgba(232, 201, 106, 0.5)' : `0 0 12px ${AVAILABLE_GLOW}`;
+      border = isCapstone ? THEME.accent : AVAILABLE_GLOW;
+      shadow = isCapstone ? `0 0 14px ${THEME.accent}80` : `0 0 12px ${AVAILABLE_GLOW}`;
     } else if (isCapstone) {
-      border = '#e8c96a44';
+      border = THEME.accent + '44';
     }
 
     const borderWidth = isCapstone ? '2px' : '1px';
@@ -933,7 +946,7 @@ export class SkillTreeOverlay {
       box-shadow:${shadow};
       display:flex;flex-direction:column;justify-content:center;align-items:center;
       padding:4px 8px;box-sizing:border-box;
-      transition:transform 0.15s ease,box-shadow 0.15s ease;
+      transition:transform ${THEME.transition} ease,box-shadow ${THEME.transition} ease;
       user-select:none;
     `;
   }
@@ -941,16 +954,16 @@ export class SkillTreeOverlay {
   private nodeContent(node: SkillNode, allocated: boolean, available: boolean): string {
     const nameColor = allocated ? ALLOCATED_TEXT : (available ? '#dde4ef' : '#9a9aaa');
     const tierLabel = node.tier === 5 ? 'CAPSTONE' : `Tier ${node.tier}`;
-    const tierColor = allocated ? '#a0b0c0' : (available ? '#8a9aaa' : '#5a5a6a');
+    const tierColor = allocated ? '#a0b0c0' : (available ? THEME.textSecondary : THEME.textDim);
 
     const cdLine = node.active
-      ? `<div style="font-family:monospace;font-size:11px;color:#e8c96a;margin-top:2px;">${node.active.cooldown}s cooldown</div>`
+      ? `<div style="font-family:${THEME.fontMono};font-size:11px;color:${THEME.accent};margin-top:2px;">${node.active.cooldown}s cooldown</div>`
       : '';
 
     return `
       <div class="skill-tooltip">${node.description}</div>
-      <div style="font-family:monospace;font-size:10px;color:${tierColor};margin-bottom:2px;">${tierLabel}</div>
-      <div style="font-family:'Segoe UI',sans-serif;font-size:14px;font-weight:600;color:${nameColor};">${node.name}</div>
+      <div style="font-family:${THEME.fontMono};font-size:10px;color:${tierColor};margin-bottom:2px;">${tierLabel}</div>
+      <div style="font-family:${THEME.fontUI};font-size:14px;font-weight:600;color:${nameColor};">${node.name}</div>
       ${cdLine}
     `;
   }

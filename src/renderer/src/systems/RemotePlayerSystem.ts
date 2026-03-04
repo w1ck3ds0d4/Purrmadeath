@@ -16,6 +16,8 @@ import {
   CivilianComponent,
   BossComponent,
   RuinsComponent,
+  LaserBeamComponent,
+  GuardComponent,
 } from '@shared/components';
 import type { SnapshotMessage, DeltaMessage, EntitySnapshot } from '@shared/protocol';
 import {
@@ -153,6 +155,7 @@ export class RemotePlayerSystem {
           buildingType: snap.buildingType,
           permanent: snap.buildingType === 'campfire',
           upgradeLevel: snap.upgradeLevel ?? 1,
+          rotation: snap.buildingRotation ?? 0,
         } as BuildingComponent);
       }
       // Enemy variant (for renderer color differentiation)
@@ -204,6 +207,19 @@ export class RemotePlayerSystem {
           enraged: false,
           specialCooldown: 0,
         } as BossComponent);
+      }
+      // Laser tower beam target (for beam rendering)
+      if (snap.laserTargetId !== undefined) {
+        world.addComponent(snap.entityId, C.LaserBeam, {
+          range: 0, damagePerSecond: 0, targetId: snap.laserTargetId,
+        } as LaserBeamComponent);
+      }
+      // Guard role (for renderer color-coding)
+      if (snap.guardRole) {
+        world.addComponent(snap.entityId, C.Guard, {
+          guardRole: snap.guardRole,
+          barracksId: 0, patrolRadius: 0,
+        } as GuardComponent);
       }
       // Ruins state (for renderer darkening + fire effect)
       if (snap.isRuins) {
@@ -288,6 +304,16 @@ export class RemotePlayerSystem {
         } else if (world.hasComponent(snap.entityId, C.Ruins)) {
           world.removeComponent(snap.entityId, C.Ruins);
         }
+      }
+
+      // Laser tower target update
+      if (snap.laserTargetId !== undefined) {
+        const lb = world.getComponent<LaserBeamComponent>(snap.entityId, C.LaserBeam);
+        if (lb) lb.targetId = snap.laserTargetId;
+        else world.addComponent(snap.entityId, C.LaserBeam, { range: 0, damagePerSecond: 0, targetId: snap.laserTargetId } as LaserBeamComponent);
+      } else if (world.hasComponent(snap.entityId, C.LaserBeam)) {
+        const lb = world.getComponent<LaserBeamComponent>(snap.entityId, C.LaserBeam);
+        if (lb) lb.targetId = null;
       }
 
       // Downed state (synced from snapshot for civilians and late-joining clients)

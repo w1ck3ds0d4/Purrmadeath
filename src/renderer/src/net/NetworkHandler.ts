@@ -43,6 +43,7 @@ import type {
   WarehouseUpdateMessage,
   SaveSlotsResponseMessage,
   GameSavedMessage,
+  NotificationMessage,
   EnemyIntroMessage,
   MetaStatsResponseMessage,
   CardOfferMessage,
@@ -98,10 +99,12 @@ import type { CardPickerOverlay } from '../ui/overlays/CardPickerOverlay';
 import type { SkillTreeOverlay } from '../ui/overlays/SkillTreeOverlay';
 import type { AbilityVFXSystem } from '../systems/AbilityVFXSystem';
 import type { PotionShopOverlay, PotionShopData } from '../ui/overlays/PotionShopOverlay';
+import type { TrainingCenterOverlay } from '../ui/overlays/TrainingCenterOverlay';
 import type { BuildMenuOverlay } from '../ui/overlays/BuildMenuOverlay';
 import type { CivilianPanelOverlay } from '../ui/overlays/CivilianPanelOverlay';
 import type { EventRoulette } from '../ui/hud/EventRoulette';
 import type { CardToast } from '../ui/hud/CardToast';
+import type { NotificationToast } from '../ui/hud/NotificationToast';
 import { CARD_POOL } from '@shared/definitions/CardDefinitions';
 
 // ── Shared mutable state ────────────────────────────────────────────────────
@@ -128,7 +131,7 @@ export interface GameplayState {
   placingType: string;
   selectedBuildingId: number | null;
   localResources: Record<string, number>;
-  warehouseResources: { wood: number; stone: number; iron: number; diamond: number; gold: number; food: number };
+  warehouseResources: { wood: number; stone: number; iron: number; diamond: number; gold: number; food: number; weapons: number };
   warehouseExists: boolean;
   selectedClass: import('@shared/definitions/ClassDefinitions').PlayerClass;
   lastServerStats?: {
@@ -186,11 +189,13 @@ export interface NetworkHandlerDeps {
   abilityVFX: AbilityVFXSystem;
   statsOverlay: StatsOverlay;
   potionShopOverlay: PotionShopOverlay;
+  trainingOverlay: TrainingCenterOverlay;
   buildMenu: BuildMenuOverlay;
   civilianPanel: CivilianPanelOverlay;
   nightOverlay: NightOverlay;
   eventRoulette: EventRoulette;
   cardToast: CardToast;
+  notificationToast: NotificationToast;
   combinedResources: () => Record<string, number>;
   electronAPI?: { checkForUpdates?: () => void };
 }
@@ -361,7 +366,7 @@ export function registerMessageHandlers(
   net.on(MessageType.PROJECTILE_SPAWN, (msg) => {
     const ps = msg as ProjectileSpawnMessage;
     d.projectileRenderer.spawn(ps.projectileId, ps.x, ps.y, ps.vx, ps.vy, ps.ownerSlot,
-      ps.targetX, ps.targetY, ps.totalFlightTime, ps.pierce, ps.homing);
+      ps.targetX, ps.targetY, ps.totalFlightTime, ps.pierce, ps.homing, ps.ballista);
   });
 
   net.on(MessageType.PROJECTILE_REMOVE, (msg) => {
@@ -427,7 +432,7 @@ export function registerMessageHandlers(
 
   net.on(MessageType.ENEMY_INTRO, (msg) => {
     const intro = msg as EnemyIntroMessage;
-    d.chatOverlay.addMessage('System', -1, `New threat: ${intro.displayName}!`);
+    d.notificationToast.show(`New threat: ${intro.displayName}!`, 'warning');
     d.debug.log(`New enemy type: ${intro.displayName}`);
   });
 
@@ -438,7 +443,7 @@ export function registerMessageHandlers(
     d.waveHUD.onWaveModifier(wm.modifiers);
     // Announce modifiers in chat
     const names = wm.modifiers.map(m => m.name).join(' + ');
-    d.chatOverlay.addMessage('System', -1, `Wave ${wm.waveNumber} modifier: ${names}!`);
+    d.notificationToast.show(`Wave ${wm.waveNumber} modifier: ${names}!`, 'warning');
     // Apply fog vision mult
     const fogMod = wm.modifiers.find(m => m.id === 'fog');
     s.eventVisionMult = fogMod ? 0.5 : 1.0;
@@ -452,7 +457,7 @@ export function registerMessageHandlers(
   net.on(MessageType.WORLD_EVENT_START, (msg) => {
     const ev = msg as WorldEventStartMessage;
     d.waveHUD.onWorldEventStart(ev.eventId, ev.name, ev.description, ev.duration);
-    d.chatOverlay.addMessage('System', -1, `EVENT: ${ev.name}!`);
+    d.notificationToast.show(`EVENT: ${ev.name}!`, 'warning', ev.description);
     if (ev.tintColor !== undefined) d.nightOverlay.setTint(ev.tintColor);
     if (ev.visionMult !== undefined) s.eventVisionMult = ev.visionMult;
     if (ev.shakeIntensity !== undefined) d.camera.shake(ev.shakeIntensity, ev.duration);
@@ -471,8 +476,7 @@ export function registerMessageHandlers(
     const pickup = msg as CardPickupMessage;
     const cardDef = CARD_POOL.find(c => c.id === pickup.cardId);
     d.cardToast.show(pickup.displayName, pickup.cardName, pickup.rarity, pickup.category, cardDef?.description);
-    const prefix = pickup.category === 'curse' ? 'CURSE' : 'Card';
-    d.chatOverlay.addMessage('System', -1, `${pickup.displayName} got ${prefix}: ${pickup.cardName} (${pickup.rarity})`);
+    // Card toast already handles the visual notification
     // Sync picked card IDs for the local player
     if (!s.pickedCardIds.includes(pickup.cardId)) s.pickedCardIds.push(pickup.cardId);
     // Sync abilities if this was the local player
@@ -483,14 +487,14 @@ export function registerMessageHandlers(
 
   net.on(MessageType.BOSS_INTRO, (msg) => {
     const intro = msg as BossIntroMessage;
-    d.chatOverlay.addMessage('System', -1, `BOSS: ${intro.bossName} has appeared!`);
+    d.notificationToast.show(`BOSS: ${intro.bossName} has appeared!`, 'boss', intro.description);
     d.waveHUD.onBossSpawn(intro.entityId, intro.bossName, intro.description, intro.maxHp);
     d.camera.shake(8, 1.5);
   });
 
   net.on(MessageType.BOSS_PHASE, (msg) => {
     const phase = msg as BossPhaseMessage;
-    d.chatOverlay.addMessage('System', -1, phase.bannerText);
+    d.notificationToast.show(phase.bannerText, 'boss');
     d.waveHUD.onBossPhase(phase.entityId, phase.bannerText);
     d.camera.shake(6, 0.5);
   });
@@ -508,7 +512,7 @@ export function registerMessageHandlers(
   net.on(MessageType.CARD_APPLIED, (msg) => {
     const applied = msg as CardAppliedMessage;
     const prefix = applied.isTrap ? 'CURSE' : 'Card';
-    d.chatOverlay.addMessage('System', -1, `${applied.displayName} picked ${prefix}: ${applied.cardName}`);
+    d.notificationToast.show(`${applied.displayName} picked ${prefix}: ${applied.cardName}`, applied.isTrap ? 'danger' : 'info');
     d.cardPicker.hide();
     d.waveHUD.setPaused(false);
     // Sync card abilities for the local player
@@ -580,8 +584,8 @@ export function registerMessageHandlers(
 
   net.on(MessageType.RESOURCE_UPDATE, (msg) => {
     const ru = msg as ResourceUpdateMessage;
-    d.resourceHUD.setResources(ru.wood, ru.stone, ru.iron, ru.diamond, ru.gold, ru.food);
-    s.localResources = { wood: ru.wood, stone: ru.stone, iron: ru.iron, diamond: ru.diamond, gold: ru.gold, food: ru.food };
+    d.resourceHUD.setResources(ru.wood, ru.stone, ru.iron, ru.diamond, ru.gold, ru.food, ru.weapons);
+    s.localResources = { wood: ru.wood, stone: ru.stone, iron: ru.iron, diamond: ru.diamond, gold: ru.gold, food: ru.food, weapons: ru.weapons };
     if (s.buildModeActive && s.placingType) {
       d.buildOverlay.update(s.placingType, d.combinedResources());
     }
@@ -590,7 +594,7 @@ export function registerMessageHandlers(
 
   net.on(MessageType.WAREHOUSE_UPDATE, (msg) => {
     const wu = msg as WarehouseUpdateMessage;
-    s.warehouseResources = { wood: wu.wood, stone: wu.stone, iron: wu.iron, diamond: wu.diamond, gold: wu.gold, food: wu.food };
+    s.warehouseResources = { wood: wu.wood, stone: wu.stone, iron: wu.iron, diamond: wu.diamond, gold: wu.gold, food: wu.food, weapons: wu.weapons };
     s.warehouseExists = wu.exists;
     if (s.warehouseExists) {
       d.warehouseHUD.update(s.warehouseResources);
@@ -742,7 +746,12 @@ export function registerMessageHandlers(
   net.on(MessageType.GAME_SAVED, (msg) => {
     const saved = msg as GameSavedMessage;
     d.debug.log(`Game saved (wave ${saved.wave}, slot ${saved.slot})`);
-    d.chatOverlay.addMessage('System', -1, `Game saved \u2014 Wave ${saved.wave}`);
+    d.notificationToast.show(`Game saved - Wave ${saved.wave}`, 'success');
+  });
+
+  net.on(MessageType.NOTIFICATION, (msg) => {
+    const notif = msg as NotificationMessage;
+    d.notificationToast.show(notif.text, notif.level);
   });
 
   net.on(MessageType.SAVE_SLOTS_RESPONSE, (msg) => {
@@ -799,7 +808,7 @@ export function registerMessageHandlers(
   net.on(MessageType.BUILD_RUINED, (msg) => {
     const br = msg as BuildRuinedMessage;
     d.debug.log(`Building destroyed - now in ruins (${br.buildingType} L${br.originalLevel})`);
-    d.chatOverlay.addMessage('System', -1, `A ${br.buildingType.replace(/_/g, ' ')} has been destroyed!`);
+    d.notificationToast.show(`A ${br.buildingType.replace(/_/g, ' ')} has been destroyed!`, 'danger');
     // Deselect if this building was selected
     if (s.selectedBuildingId === br.entityId) {
       s.selectedBuildingId = null;
@@ -839,6 +848,15 @@ export function registerMessageHandlers(
         },
         onClose: () => {},
       });
+    }
+  });
+
+  // ── Training Center ──────────────────────────────────────────────────────
+
+  net.on(MessageType.TRAIN_GUARD_RESULT, (msg) => {
+    const m = msg as unknown as { success: boolean; reason?: string };
+    if (!m.success && m.reason) {
+      d.debug.log(`Training failed: ${m.reason}`);
     }
   });
 

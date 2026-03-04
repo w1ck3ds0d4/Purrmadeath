@@ -65,6 +65,7 @@ import { BuildGhostRenderer } from './render/BuildGhostRenderer';
 import { WarehouseHUD } from './ui/hud/WarehouseHUD';
 import { EventRoulette } from './ui/hud/EventRoulette';
 import { createCardToast } from './ui/hud/CardToast';
+import { createNotificationToast } from './ui/hud/NotificationToast';
 import { DamageNumberSystem } from './systems/DamageNumberSystem';
 import { HitParticleSystem } from './systems/HitParticleSystem';
 import { AbilityVFXSystem } from './systems/AbilityVFXSystem';
@@ -73,6 +74,7 @@ import { StatsOverlay } from './ui/overlays/StatsOverlay';
 import { CardPickerOverlay } from './ui/overlays/CardPickerOverlay';
 import { SkillTreeOverlay } from './ui/overlays/SkillTreeOverlay';
 import { PotionShopOverlay } from './ui/overlays/PotionShopOverlay';
+import { TrainingCenterOverlay } from './ui/overlays/TrainingCenterOverlay';
 import { CivilianPanelOverlay } from './ui/overlays/CivilianPanelOverlay';
 import { CLASS_STATS, DEFAULT_CLASS } from '@shared/definitions/ClassDefinitions';
 import { getActiveAbilities, type SkillActiveAbility, type AbilityParams } from '@shared/definitions/SkillDefinitions';
@@ -277,8 +279,8 @@ async function main(): Promise<void> {
   let lastServerStats: { wave: number; enemyCount: number; portalCount: number; playerCount: number } | undefined;
 
   // ── Build / resource state ──────────────────────────────────────────────
-  let localResources: Record<string, number> = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
-  let warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
+  let localResources: Record<string, number> = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0 };
+  let warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0 };
   let warehouseExists = false;
   let handshakeSent = false;
 
@@ -312,6 +314,26 @@ async function main(): Promise<void> {
   const pauseBanner  = new PauseBanner();
   const waveHUD      = new WaveHUD();
   const resourceHUD  = new ResourceHUD();
+  const warehouseHUD = new WarehouseHUD();
+
+  // Side-by-side flex container for resource accordions
+  const resourceContainer = document.createElement('div');
+  resourceContainer.id = 'resource-container';
+  resourceContainer.style.cssText = [
+    'position: absolute',
+    'top: 16px',
+    'left: 50%',
+    'transform: translateX(-50%)',
+    'z-index: 20',
+    'display: none',
+    'align-items: flex-start',
+    'gap: 8px',
+    'pointer-events: none',
+  ].join('; ');
+  resourceContainer.appendChild(resourceHUD.el);
+  resourceContainer.appendChild(warehouseHUD.el);
+  document.getElementById('overlay')!.appendChild(resourceContainer);
+
   const deathOverlay   = new DeathOverlay();
   const gameOverOverlay = new GameOverOverlay();
   gameOverOverlay.setOnMenu(() => {
@@ -323,12 +345,12 @@ async function main(): Promise<void> {
   const buildOverlay = new BuildModeOverlay();
   const buildGhost   = new BuildGhostRenderer(tileRenderer.worldContainer);
   const buildMenu    = new BuildMenuOverlay();
-  const warehouseHUD = new WarehouseHUD();
   const eventRoulette = new EventRoulette();
   eventRoulette.onLand = (eventId) => {
     if (eventId === null) waveHUD.onSafeDay();
   };
   const cardToast = createCardToast();
+  const notificationToast = createNotificationToast();
   const potionShopOverlay = new PotionShopOverlay();
 
   const updateBanner = new UpdateBanner();
@@ -354,6 +376,18 @@ async function main(): Promise<void> {
     },
   });
 
+  // Wire training center overlay
+  const trainingOverlay = new TrainingCenterOverlay();
+  trainingOverlay.setCallbacks({
+    onTrain: (buildingId, role) => {
+      net.send({ type: MessageType.TRAIN_GUARD, buildingId, role });
+      trainingOverlay.hide();
+    },
+    onClose: () => {
+      trainingOverlay.hide();
+    },
+  });
+
   // Wire build menu overlay
   buildMenu.setCallbacks({
     onSelect: (type) => {
@@ -364,8 +398,7 @@ async function main(): Promise<void> {
       buildGhost.show();
     },
     onClose: () => {
-      buildMenu.hide();
-      buildCtrl.exitBuildMode();
+      exitBuildModeAndCollapse();
     },
     onSelectMode: () => {
       buildMenu.hide();
@@ -446,6 +479,7 @@ async function main(): Promise<void> {
     waveHUD.hide();
     eventRoulette.hide();
     cardToast.hide();
+    notificationToast.hide();
     hud.setVisible(false);
     weaponHotbar.setVisible(false);
     skillTree.hide();
@@ -485,6 +519,7 @@ async function main(): Promise<void> {
     waveHUD.onWorldEventEnd();
     eventRoulette.hide();
     potionShopOverlay.hide();
+    trainingOverlay.hide();
     buildMenu.hide();
     waveHUD.setPaused(false);
     coordsEl.style.display = 'none';
@@ -496,10 +531,11 @@ async function main(): Promise<void> {
     resourceHUD.setResources(0, 0, 0, 0, 0, 0);
     resourceHUD.hide();
     buildCtrl.reset();
-    localResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
-    warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
+    localResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0 };
+    warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0 };
     warehouseExists = false;
     warehouseHUD.hide();
+    resourceContainer.style.display = 'none';
     // Transport stays alive - don't disconnect
     menuOverlay.setButtonsEnabled(transportReady);
     menuOverlay.setConnectionStatus(transportReady ? 'connected' : 'connecting');
@@ -524,6 +560,7 @@ async function main(): Promise<void> {
     weaponHotbar.setVisible(true);
     waveHUD.setVisible(true);
     resourceHUD.setVisible(true);
+    resourceContainer.style.display = 'flex';
     minimap.setVisible(true);
     chatOverlay.setActive(true);
 
@@ -569,6 +606,17 @@ async function main(): Promise<void> {
     send: (msg) => net.send(msg),
   });
 
+  // Wire resource accordion: auto-expand/collapse with build mode
+  function exitBuildModeAndCollapse(): void {
+    buildMenu.hide();
+    buildCtrl.exitBuildMode();
+    if (!resourceHUD.isManuallyToggled) {
+      resourceHUD.collapse();
+      warehouseHUD.collapse();
+    }
+    resourceHUD.resetManualToggle();
+  }
+
   // ── Handler state bridge (maps handler reads/writes to local variables) ────
   const handlerState: GameplayState = {
     get localSlot() { return localSlot; }, set localSlot(v) { localSlot = v; },
@@ -588,7 +636,7 @@ async function main(): Promise<void> {
     get localDead() { return localDead; }, set localDead(v) { localDead = v; },
     get respawnTimer() { return respawnTimer; }, set respawnTimer(v) { respawnTimer = v; },
     get localGameOver() { return localGameOver; }, set localGameOver(v) { localGameOver = v; },
-    get buildModeActive() { return buildCtrl.phase !== 'inactive'; }, set buildModeActive(v) { if (!v) buildCtrl.exitBuildMode(); },
+    get buildModeActive() { return buildCtrl.phase !== 'inactive'; }, set buildModeActive(v) { if (!v) exitBuildModeAndCollapse(); },
     get placingType() { return buildCtrl.placingType; }, set placingType(_v) { /* read-only from handler side */ },
     get selectedBuildingId() { return buildCtrl.selectedId; }, set selectedBuildingId(v) { buildCtrl.selectedId = v; },
     get localResources() { return localResources; }, set localResources(v) { localResources = v; },
@@ -629,7 +677,7 @@ async function main(): Promise<void> {
     },
     stateMgr, menuOverlay, lobbyOverlay, pauseBanner, waveHUD, resourceHUD,
     deathOverlay, gameOverOverlay, chatOverlay, debug, buildOverlay, buildGhost,
-    warehouseHUD, cardPicker, skillTree, statsOverlay, abilityVFX, potionShopOverlay, buildMenu, civilianPanel, nightOverlay, eventRoulette, cardToast, combinedResources, electronAPI,
+    warehouseHUD, cardPicker, skillTree, statsOverlay, abilityVFX, potionShopOverlay, trainingOverlay, buildMenu, civilianPanel, nightOverlay, eventRoulette, cardToast, notificationToast, combinedResources, electronAPI,
   });
 
   // ── Session action helper ─────────────────────────────────────────────────
@@ -734,13 +782,14 @@ async function main(): Promise<void> {
     const dt    = Math.min(ticker.deltaMS / 1000, 0.05); // cap at 50ms to reduce prediction divergence
     const state = stateMgr.current;
 
-    // ESC: close potion shop / build mode first, then check targeting/skill tree (in Playing block), otherwise pause
+    // ESC: close overlays / build mode first, then check targeting/skill tree (in Playing block), otherwise pause
     if (input.isJustPressed(Action.Pause)) {
-      if (potionShopOverlay.isVisible && state === GameState.Playing) {
+      if (trainingOverlay.isVisible && state === GameState.Playing) {
+        trainingOverlay.hide();
+      } else if (potionShopOverlay.isVisible && state === GameState.Playing) {
         potionShopOverlay.hide();
       } else if (buildCtrl.phase !== 'inactive' && state === GameState.Playing) {
-        buildMenu.hide();
-        buildCtrl.exitBuildMode();
+        exitBuildModeAndCollapse();
       } else if (state === GameState.Playing && (targetingSlot >= 0 || skillTree.isVisible || civilianPanel.isVisible)) {
         // Handled in the Playing block below (targeting cancel / skill tree close)
       } else if (!localGameOver && !chatOverlay.isOpen && (state === GameState.Playing || state === GameState.Paused)) {
@@ -764,15 +813,13 @@ async function main(): Promise<void> {
           // Close build menu if open
           if (buildMenu.isVisible || buildCtrl.phase !== 'inactive') {
             if (buildCtrl.phase === 'placing') { buildOverlay.hide(); buildGhost.hide(); }
-            buildMenu.hide();
-            buildCtrl.exitBuildMode();
+            exitBuildModeAndCollapse();
           }
           // Hide all in-game HUD while skill tree is open
           hud.setVisible(false);
           waveHUD.setVisible(false);
           minimap.setVisible(false);
-          resourceHUD.setVisible(false);
-          warehouseHUD.hide();
+          resourceContainer.style.display = 'none';
           coordsEl.style.display = 'none';
           skillTree.show(selectedClass, skillAllocated, skillPoints, (nodeId) => {
             net.send({ type: MessageType.SKILL_ALLOCATE, nodeId });
@@ -781,8 +828,7 @@ async function main(): Promise<void> {
             hud.setVisible(true);
             waveHUD.setVisible(true);
             minimap.setVisible(true);
-            resourceHUD.setVisible(true);
-            if (warehouseExists) warehouseHUD.show();
+            resourceContainer.style.display = 'flex';
             coordsEl.style.display = 'block';
           }, slotAssignments, (slot, abilityId) => {
             net.send({ type: MessageType.ABILITY_SLOT_ASSIGN, slot: slot as 0 | 1 | 2, abilityId });
@@ -802,13 +848,12 @@ async function main(): Promise<void> {
         else if (skillTree.isVisible) skillTree.hide();
         else if (buildMenu.isVisible || buildCtrl.phase !== 'inactive') {
           if (buildCtrl.phase === 'placing') { buildOverlay.hide(); buildGhost.hide(); }
-          buildMenu.hide();
-          buildCtrl.exitBuildMode();
+          exitBuildModeAndCollapse();
         }
         else if (civilianPanel.isVisible) civilianPanel.hide();
       }
 
-      const canAct = !localDowned && !localDead && !localGameOver && !chatOverlay.isOpen && !cardPicker.isPicking && !potionShopOverlay.isVisible && !buildMenu.isVisible && !civilianPanel.isVisible;
+      const canAct = !localDowned && !localDead && !localGameOver && !chatOverlay.isOpen && !cardPicker.isPicking && !potionShopOverlay.isVisible && !trainingOverlay.isVisible && !buildMenu.isVisible && !civilianPanel.isVisible;
 
       // Auto-cancel targeting when player can't act
       if (!canAct && targetingSlot >= 0) cancelTargeting();
@@ -858,6 +903,8 @@ async function main(): Promise<void> {
       }
       eventRoulette.update(dt);
       cardToast.update(dt);
+      notificationToast.update(dt);
+      chatOverlay.update(dt);
 
       // Tick local dodge roll timer
       if (localEntityId !== null) {
@@ -880,7 +927,7 @@ async function main(): Promise<void> {
 
       // Weapon slot 1 (number key) - exit build mode when selecting weapon
       if (input.isJustPressed(Action.WeaponSlot1)) {
-        if (buildCtrl.phase !== 'inactive') { buildMenu.hide(); buildCtrl.exitBuildMode(); }
+        if (buildCtrl.phase !== 'inactive') { exitBuildModeAndCollapse(); }
       }
 
       // B key: build mode state machine (closing works even when canAct is false)
@@ -892,19 +939,19 @@ async function main(): Promise<void> {
             buildOverlay.hide();
             buildGhost.hide();
           }
-          buildMenu.hide();
-          buildCtrl.exitBuildMode();
+          exitBuildModeAndCollapse();
         } else if (canAct) {
           if (targetingSlot >= 0) cancelTargeting();
           buildCtrl.openPicker();
           buildMenu.show(combinedResources());
+          resourceHUD.expand();
+          if (warehouseExists) warehouseHUD.expand();
         }
       }
 
       // Right-click: cancel build placement
       if (buildCtrl.phase === 'placing' && input.isJustPressed(Action.Cancel)) {
-        buildMenu.hide();
-        buildCtrl.exitBuildMode();
+        exitBuildModeAndCollapse();
       }
 
       // Build ghost update + placement + selection + demolish + upgrade + repair
@@ -946,11 +993,28 @@ async function main(): Promise<void> {
 
       // F-interact: pick up nearby non-auto-pickup items (also initiates revive)
       if (input.isJustPressed(Action.Interact) && pos) {
-        // Close potion shop if open, otherwise send interact
-        if (potionShopOverlay.isVisible) {
+        // Close overlays if open, otherwise check for training center / send interact
+        if (trainingOverlay.isVisible) {
+          trainingOverlay.hide();
+        } else if (potionShopOverlay.isVisible) {
           potionShopOverlay.hide();
         } else {
-          net.send({ type: MessageType.INTERACT, x: pos.x, y: pos.y, t: performance.now() });
+          // Check for nearby training center (client-side proximity)
+          let openedTraining = false;
+          for (const bid of world.query(C.Building, C.Position)) {
+            const b = world.getComponent<BuildingComponent>(bid, C.Building);
+            if (b?.buildingType !== 'training_center') continue;
+            const bp = world.getComponent<PositionComponent>(bid, C.Position)!;
+            const dx = bp.x - pos.x, dy = bp.y - pos.y;
+            if (dx * dx + dy * dy <= 80 * 80) {
+              trainingOverlay.show(bid);
+              openedTraining = true;
+              break;
+            }
+          }
+          if (!openedTraining) {
+            net.send({ type: MessageType.INTERACT, x: pos.x, y: pos.y, t: performance.now() });
+          }
         }
       }
 

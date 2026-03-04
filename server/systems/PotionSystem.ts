@@ -114,7 +114,7 @@ export function createPotionSystem(deps: PotionSystemDeps) {
     send(player.client, {
       type: MessageType.RESOURCE_UPDATE,
       wood: res.wood, stone: res.stone, iron: res.iron,
-      diamond: res.diamond, gold: res.gold, food: res.food,
+      diamond: res.diamond, gold: res.gold, food: res.food, weapons: res.weapons,
     } as ResourceUpdateMessage);
   }
 

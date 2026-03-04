@@ -17,20 +17,25 @@ import {
   StatusEffectsComponent,
   BossComponent,
   RuinsComponent,
+  GuardComponent,
 } from '@shared/components';
-import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, ENEMY_MELEE_RANGE, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, CARD_DROP_RADIUS, buildingHalfExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RANGE, STATUS_BURN, STATUS_POISON, STATUS_SLOW, STATUS_STUN, STATUS_HOLY, STATUS_SHADOW, STATUS_ARCANE, STATUS_NATURE } from '@shared/constants';
+import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, ENEMY_MELEE_RANGE, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, CARD_DROP_RADIUS, buildingHalfExtent, buildingExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, BALLISTA_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_LASER_RANGE, UPGRADE_HEAL_RANGE, STATUS_BURN, STATUS_POISON, STATUS_SLOW, STATUS_STUN, STATUS_HOLY, STATUS_SHADOW, STATUS_ARCANE, STATUS_NATURE } from '@shared/constants';
 import { FACTION_COLORS, type EnemyFaction } from '@shared/definitions/EnemyVariants';
 
 /** Turret type → base range in pixels. */
 const TURRET_RANGES: Record<string, number> = {
   arrow_turret: ARROW_TURRET_RANGE,
   cannon_turret: CANNON_TURRET_RANGE,
+  ballista: BALLISTA_RANGE,
+  laser_tower: UPGRADE_LASER_RANGE[0],
 };
 
 /** Building type → range color for the selection indicator. */
 const RANGE_COLORS: Record<string, number> = {
   arrow_turret: 0x44aaff,
   cannon_turret: 0x44aaff,
+  ballista: 0x44aaff,
+  laser_tower: 0xff4444,
   light_tower: 0xffdd44,
   healing_shrine: 0x44ff88,
 };
@@ -86,6 +91,11 @@ const BUILDING_COLORS: Record<string, { body: number; border: number }> = {
   potion_shop:    { body: 0x9944aa, border: 0x772288 },
   cat_house:      { body: 0xc49a4a, border: 0xa07a30 },
   dormitory:      { body: 0xb08040, border: 0x906020 },
+  ballista:       { body: 0x6a5a4a, border: 0x9a8a6a },
+  laser_tower:    { body: 0xcc3333, border: 0xee5555 },
+  gate:           { body: 0x8a7a5a, border: 0xaa9a7a },
+  workshop:       { body: 0x7a6a4a, border: 0xaa9a6a },
+  training_center:{ body: 0x5a6a8a, border: 0x7a8aaa },
 };
 // Production resource tag colors
 const PRODUCTION_TAG_COLORS: Record<string, number> = {
@@ -94,6 +104,7 @@ const PRODUCTION_TAG_COLORS: Record<string, number> = {
   iron:  0x8a5a3a,
   diamond: 0x44ccdd,
   food:  0x44aa44,
+  weapons: 0xaa6644,
 };
 // Duration of the white hit-flash in seconds
 const HIT_FLASH_DURATION = 0.15;
@@ -447,7 +458,8 @@ export class PlayerRendererSystem {
         const bldg = world.getComponent<BuildingComponent>(id, C.Building);
         const bType = bldg?.buildingType ?? 'wall';
         const bColors = BUILDING_COLORS[bType] ?? BUILDING_COLORS.wall;
-        const half = buildingHalfExtent(bType);
+        const bRot = bldg?.rotation ?? 0;
+        const { hx: bHx, hy: bHy } = buildingExtent(bType, bRot);
 
         const bFlash = this.hitTimers.get(id) ?? 0;
         if (bFlash > 0) this.hitTimers.set(id, Math.max(0, bFlash - dt));
@@ -458,30 +470,30 @@ export class PlayerRendererSystem {
         // Thick border width scales with building size
         const borderW = bType === 'wall' ? 2.5 : 4;
 
-        if (bType === 'wall') {
-          // Walls: visual upgrade tiers - stone (grey) → iron (white) → reinforced (white + lines)
+        if (bType === 'wall' || bType === 'gate') {
+          // Walls/gates: visual upgrade tiers
           const wLvl = bldg?.upgradeLevel ?? 1;
-          const wallBody = wLvl >= 2 ? 0xcccccc : 0x8a8a8a;
+          const wallBody = bType === 'gate' ? 0x997755 : (wLvl >= 2 ? 0xcccccc : 0x8a8a8a);
           const wallFill = bFlashT > 0 ? lerpColor(wallBody, 0xffffff, bFlashT * 0.6) : wallBody;
-          gfx.rect(-half, -half, half * 2, half * 2);
+          gfx.rect(-bHx, -bHy, bHx * 2, bHy * 2);
           gfx.fill({ color: wallFill, alpha: 0.95 });
-          if (wLvl >= 3) {
+          if (bType === 'wall' && wLvl >= 3) {
             // Reinforced iron: grey diagonal lines
             for (let i = -1; i <= 1; i++) {
               const off = i * 8;
-              gfx.moveTo(-half + Math.max(0, off), -half + Math.max(0, -off));
-              gfx.lineTo(half + Math.min(0, off), half + Math.min(0, -off));
+              gfx.moveTo(-bHx + Math.max(0, off), -bHy + Math.max(0, -off));
+              gfx.lineTo(bHx + Math.min(0, off), bHy + Math.min(0, -off));
             }
             gfx.stroke({ color: 0x888888, alpha: 0.5, width: 1 });
           }
-          gfx.rect(-half, -half, half * 2, half * 2);
+          gfx.rect(-bHx, -bHy, bHx * 2, bHy * 2);
           gfx.stroke({ color: 0x000000, alpha: 0.75, width: 1.5 });
         } else {
           // All other buildings: inset padding + black border
           const pad = 3;
-          gfx.rect(-half + pad, -half + pad, (half - pad) * 2, (half - pad) * 2);
+          gfx.rect(-bHx + pad, -bHy + pad, (bHx - pad) * 2, (bHy - pad) * 2);
           gfx.fill({ color: bodyColor, alpha: 0.95 });
-          gfx.rect(-half + pad, -half + pad, (half - pad) * 2, (half - pad) * 2);
+          gfx.rect(-bHx + pad, -bHy + pad, (bHx - pad) * 2, (bHy - pad) * 2);
           gfx.stroke({ color: 0x000000, alpha: 0.75, width: 1.5 });
         }
 
@@ -543,6 +555,19 @@ export class PlayerRendererSystem {
           gfx.stroke({ color: 0xddddef, alpha: 0.6, width: 1.5 });
         }
 
+        // Ballista: horizontal bolt icon
+        if (bType === 'ballista') {
+          // Bolt shaft
+          gfx.moveTo(-8, 0); gfx.lineTo(8, 0);
+          gfx.stroke({ color: 0xddccaa, alpha: 0.9, width: 2 });
+          // Bolt head (arrowhead)
+          gfx.poly([8, 0, 4, -3, 4, 3]);
+          gfx.fill({ color: 0xddccaa, alpha: 0.9 });
+          // Crossbow arms
+          gfx.moveTo(-4, -6); gfx.lineTo(-2, 0); gfx.lineTo(-4, 6);
+          gfx.stroke({ color: 0xbbaa88, alpha: 0.7, width: 1.5 });
+        }
+
         // Cannon turret: circle + filled dot
         if (bType === 'cannon_turret') {
           const ih = 8;
@@ -572,14 +597,14 @@ export class PlayerRendererSystem {
 
         // Bridge: filled plank rectangle above water tiles
         if (bType === 'bridge') {
-          gfx.rect(-half, -half, half * 2, half * 2);
+          gfx.rect(-bHx, -bHy, bHx * 2, bHy * 2);
           gfx.fill({ color: 0x8a6a3a, alpha: 0.9 });
           // Plank lines across the bridge
-          for (let ly = -half + 4; ly < half; ly += 6) {
-            gfx.moveTo(-half + 2, ly); gfx.lineTo(half - 2, ly);
+          for (let ly = -bHy + 4; ly < bHy; ly += 6) {
+            gfx.moveTo(-bHx + 2, ly); gfx.lineTo(bHx - 2, ly);
           }
           gfx.stroke({ color: 0xddcc99, alpha: 0.6, width: 1.5 });
-          gfx.rect(-half, -half, half * 2, half * 2);
+          gfx.rect(-bHx, -bHy, bHx * 2, bHy * 2);
           gfx.stroke({ color: 0x6a4a2a, alpha: 0.8, width: 1 });
           gfx.zIndex = -9; // above tiles (-10), below buildings (-5)
         }
@@ -596,6 +621,16 @@ export class PlayerRendererSystem {
           gfx.stroke({ color: 0xffee88, alpha: 0.8, width: 1.5 });
           gfx.circle(0, 0, 3);
           gfx.fill({ color: 0xffee88, alpha: 0.9 });
+        }
+
+        // Laser tower: concentric rings icon
+        if (bType === 'laser_tower') {
+          gfx.circle(0, 0, 7);
+          gfx.stroke({ color: 0xff6666, alpha: 0.8, width: 1.5 });
+          gfx.circle(0, 0, 4);
+          gfx.stroke({ color: 0xff4444, alpha: 0.7, width: 1 });
+          gfx.circle(0, 0, 2);
+          gfx.fill({ color: 0xff2222, alpha: 0.9 });
         }
 
         // Healing shrine: cross/plus symbol
@@ -625,19 +660,57 @@ export class PlayerRendererSystem {
           gfx.moveTo(-3, 8); gfx.lineTo(-3, 2); gfx.lineTo(3, 2); gfx.lineTo(3, 8);
           gfx.stroke({ color: 0xeeddbb, alpha: 0.6, width: 1 });
         }
+        // Workshop: anvil icon
+        if (bType === 'workshop') {
+          // Anvil shape
+          gfx.poly([-6, 3, -4, -3, 4, -3, 6, 3]);
+          gfx.fill({ color: 0xddccaa, alpha: 0.8 });
+          gfx.rect(-8, 3, 16, 3);
+          gfx.fill({ color: 0xbbaa88, alpha: 0.8 });
+        }
+        // Training center: sword + shield
+        if (bType === 'training_center') {
+          // Sword
+          gfx.moveTo(0, -9); gfx.lineTo(0, 5);
+          gfx.stroke({ color: 0xddddee, alpha: 0.9, width: 2 });
+          gfx.moveTo(-4, -3); gfx.lineTo(4, -3);
+          gfx.stroke({ color: 0xddddee, alpha: 0.8, width: 1.5 });
+          // Shield outline (right side)
+          gfx.poly([4, -6, 9, -4, 9, 2, 6, 5, 4, 2]);
+          gfx.stroke({ color: 0xaabbcc, alpha: 0.7, width: 1.5 });
+        }
+        // Gate: vertical bars pattern
+        if (bType === 'gate') {
+          const barCount = 5;
+          const spacing = (Math.min(bHx, bHy) * 2) / (barCount + 1);
+          const isHorizontal = bHx > bHy;
+          for (let i = 1; i <= barCount; i++) {
+            if (isHorizontal) {
+              const bx = -bHx + i * (bHx * 2 / (barCount + 1));
+              gfx.moveTo(bx, -bHy * 0.7);
+              gfx.lineTo(bx, bHy * 0.7);
+            } else {
+              const by = -bHy + i * (bHy * 2 / (barCount + 1));
+              gfx.moveTo(-bHx * 0.7, by);
+              gfx.lineTo(bHx * 0.7, by);
+            }
+          }
+          gfx.stroke({ color: 0xccbb99, alpha: 0.8, width: 2 });
+        }
 
         // ── Ruins overlay (darkened tint + fire particles when burning) ──
         const ruinsComp = world.getComponent<RuinsComponent>(id, C.Ruins);
         if (ruinsComp) {
           // Dark charred overlay
-          gfx.rect(-half, -half, half * 2, half * 2);
+          gfx.rect(-bHx, -bHy, bHx * 2, bHy * 2);
           gfx.fill({ color: 0x000000, alpha: 0.55 });
 
           // Burn marks (diagonal slash lines)
+          const ruinHalf = Math.min(bHx, bHy);
           for (let i = -1; i <= 1; i++) {
-            const off = i * (half * 0.5);
-            gfx.moveTo(-half * 0.6 + off, -half * 0.6);
-            gfx.lineTo(half * 0.6 + off, half * 0.6);
+            const off = i * (ruinHalf * 0.5);
+            gfx.moveTo(-ruinHalf * 0.6 + off, -ruinHalf * 0.6);
+            gfx.lineTo(ruinHalf * 0.6 + off, ruinHalf * 0.6);
           }
           gfx.stroke({ color: 0x332200, alpha: 0.4, width: 2 });
 
@@ -645,15 +718,15 @@ export class PlayerRendererSystem {
             // Animated fire particles (flickering orange/red dots)
             const t = performance.now() / 200;
             for (let fi = 0; fi < 4; fi++) {
-              const fx = Math.sin(t + fi * 1.7) * half * 0.5;
-              const fy = -Math.abs(Math.cos(t * 0.8 + fi * 2.3)) * half * 0.6 - 2;
+              const fx = Math.sin(t + fi * 1.7) * bHx * 0.5;
+              const fy = -Math.abs(Math.cos(t * 0.8 + fi * 2.3)) * bHy * 0.6 - 2;
               const fSize = 2 + Math.sin(t * 1.2 + fi) * 1;
               const fireColor = fi % 2 === 0 ? 0xff6622 : 0xffaa00;
               gfx.circle(fx, fy, fSize);
               gfx.fill({ color: fireColor, alpha: 0.7 + Math.sin(t + fi) * 0.2 });
             }
             // Glow halo
-            gfx.circle(0, -half * 0.3, half * 0.7);
+            gfx.circle(0, -bHy * 0.3, ruinHalf * 0.7);
             gfx.fill({ color: 0xff4400, alpha: 0.08 + Math.sin(t * 0.5) * 0.04 });
           }
         }
@@ -661,12 +734,13 @@ export class PlayerRendererSystem {
         // Selection highlight: pulsing yellow border + turret range circle
         if (this.selectedBuildingId === id) {
           const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 300);
-          gfx.rect(-half - 2, -half - 2, (half + 2) * 2, (half + 2) * 2);
+          gfx.rect(-bHx - 2, -bHy - 2, (bHx + 2) * 2, (bHy + 2) * 2);
           gfx.stroke({ color: 0xffdd44, alpha: 0.5 + 0.4 * pulse, width: 2.5 });
 
           // Range circle (turrets, light tower, healing shrine)
           const bType = bldg?.buildingType ?? '';
           let range = TURRET_RANGES[bType];
+          if (bType === 'laser_tower') range = UPGRADE_LASER_RANGE[(bldg?.upgradeLevel ?? 1) - 1] ?? UPGRADE_LASER_RANGE[0];
           if (!range && bType === 'light_tower') range = UPGRADE_LIGHT_RANGE[(bldg?.upgradeLevel ?? 1) - 1] ?? UPGRADE_LIGHT_RANGE[0];
           if (!range && bType === 'healing_shrine') range = UPGRADE_HEAL_RANGE[(bldg?.upgradeLevel ?? 1) - 1] ?? UPGRADE_HEAL_RANGE[0];
           if (range) {
@@ -753,7 +827,9 @@ export class PlayerRendererSystem {
         if (isCivilian) {
           baseColor = 0xf5c06a; // warm orange for cat civilians
         } else if (isGuard) {
-          baseColor = 0x4488cc; // friendly blue for guards
+          const gComp = world.getComponent<GuardComponent>(id, C.Guard);
+          const gRole = gComp?.guardRole;
+          baseColor = gRole === 'warrior' ? 0xcc4444 : gRole === 'ranger' ? 0x44cc44 : gRole === 'mage' ? 0x6644ff : 0x4488cc;
         } else if (!isEnemy) {
           baseColor = PLAYER_COLORS[pIdx?.index ?? 0] ?? PLAYER_COLORS[0];
         } else {
@@ -1008,6 +1084,29 @@ export class PlayerRendererSystem {
     const hb = this.healthBarGfx;
     hb.clear();
 
+    // ── Laser beam pass (drawn in world space on health bar layer) ──────
+    for (const lid of world.query(C.LaserBeam, C.Position)) {
+      const lb = world.getComponent<import('@shared/components').LaserBeamComponent>(lid, C.LaserBeam);
+      if (!lb || lb.targetId === null) continue;
+      const lpos = world.getComponent<PositionComponent>(lid, C.Position);
+      const tgtPos = world.getComponent<PositionComponent>(lb.targetId, C.Position);
+      if (!lpos || !tgtPos) continue;
+
+      const pulse = 0.6 + 0.4 * Math.sin(performance.now() / 100);
+      // Outer glow
+      hb.moveTo(lpos.x, lpos.y);
+      hb.lineTo(tgtPos.x, tgtPos.y);
+      hb.stroke({ color: 0xff2222, alpha: 0.15 * pulse, width: 6 });
+      // Core beam
+      hb.moveTo(lpos.x, lpos.y);
+      hb.lineTo(tgtPos.x, tgtPos.y);
+      hb.stroke({ color: 0xff4444, alpha: 0.7 * pulse, width: 2 });
+      // Bright center
+      hb.moveTo(lpos.x, lpos.y);
+      hb.lineTo(tgtPos.x, tgtPos.y);
+      hb.stroke({ color: 0xffaaaa, alpha: 0.9 * pulse, width: 1 });
+    }
+
     for (const id of living) {
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
       const hp  = world.getComponent<HealthComponent>(id, C.Health);
@@ -1038,8 +1137,8 @@ export class PlayerRendererSystem {
         barW = rr * 2 + 4; barH = BAR_H; barY = -(rr + 10); alwaysShow = false;
       } else if (isBuilding) {
         const bldg = world.getComponent<BuildingComponent>(id, C.Building);
-        const half = buildingHalfExtent(bldg?.buildingType ?? 'wall');
-        barW = Math.min(half * 2, 36); barH = 3; barY = -(half + 8); alwaysShow = false;
+        const bExt = buildingExtent(bldg?.buildingType ?? 'wall', bldg?.rotation ?? 0);
+        barW = Math.min(bExt.hx * 2, 36); barH = 3; barY = -(bExt.hy + 8); alwaysShow = false;
       } else if (isEnemy) {
         // Skip health bars for hidden ghosts
         const gs = world.getComponent<GhostStateComponent>(id, C.GhostState);
@@ -1104,8 +1203,8 @@ export class PlayerRendererSystem {
       if (level <= 1) continue;
       if (bldg?.buildingType === 'wall') continue;
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
-      const half = buildingHalfExtent(bldg?.buildingType ?? 'wall');
-      const pipY = pos.y + half + 6;
+      const bExtPip = buildingExtent(bldg?.buildingType ?? 'wall', bldg?.rotation ?? 0);
+      const pipY = pos.y + bExtPip.hy + 6;
       const pipSpacing = 8;
       const totalW = (level - 1) * pipSpacing;
       const startX = pos.x - totalW / 2;
@@ -1126,7 +1225,7 @@ export class PlayerRendererSystem {
       activeProductionIds.add(id);
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
       const bldg = world.getComponent<BuildingComponent>(id, C.Building);
-      const half = buildingHalfExtent(bldg?.buildingType ?? 'wall');
+      const bExtTag = buildingExtent(bldg?.buildingType ?? 'wall', bldg?.rotation ?? 0);
       const tagColor = PRODUCTION_TAG_COLORS[prod.resourceType] ?? 0xaaaaaa;
 
       let tag = this.productionTags.get(id);
@@ -1146,7 +1245,7 @@ export class PlayerRendererSystem {
       const label = `${prod.stored}/${prod.maxStored}`;
       tag.text.text = label;
       // Position above the building, above the HP bar
-      const tagY = pos.y - (half + 18);
+      const tagY = pos.y - (bExtTag.hy + 18);
       const tagW = Math.max(24, tag.text.width + 20);
       const tagH = 14;
 

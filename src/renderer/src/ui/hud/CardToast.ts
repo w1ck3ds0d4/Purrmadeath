@@ -2,6 +2,8 @@
 // CardToast - slide-in notification when a card is auto-granted
 // ---------------------------------------------------------------------------
 
+import { THEME } from '../theme';
+
 const RARITY_COLORS: Record<string, string> = {
   common:    '#b4b4b4',
   rare:      '#4a90d9',
@@ -36,8 +38,8 @@ function makeSpan(text: string, style: string): HTMLSpanElement {
 export function createCardToast() {
   const container = document.createElement('div');
   container.style.cssText = `
-    position: fixed; right: 16px; top: 100px; z-index: 200;
-    display: flex; flex-direction: column; gap: 6px;
+    position: fixed; right: 16px; bottom: 16px; z-index: 200;
+    display: flex; flex-direction: column-reverse; gap: 6px;
     pointer-events: none;
   `;
   document.getElementById('overlay')?.appendChild(container);
@@ -51,13 +53,13 @@ export function createCardToast() {
 
     const el = document.createElement('div');
     el.style.cssText = `
-      background: rgba(0,0,0,0.85);
+      background: ${THEME.panelBg};
       border-left: 4px solid ${isCurse ? catColor : color};
-      border-radius: 4px;
+      border-radius: ${THEME.radiusSm};
       padding: 8px 14px;
-      font-family: monospace;
+      font-family: ${THEME.fontMono};
       font-size: 13px;
-      color: #eee;
+      color: ${THEME.textBright};
       transform: translateX(120%);
       transition: transform ${SLIDE_IN}s ease-out, opacity ${FADE_OUT}s ease-in;
       white-space: nowrap;
@@ -65,8 +67,8 @@ export function createCardToast() {
     `;
 
     // Build content safely using DOM APIs (no innerHTML)
-    el.appendChild(makeSpan(displayName, 'color:#aaa'));
-    el.appendChild(makeSpan(' got ', 'color:#888'));
+    el.appendChild(makeSpan(displayName, `color:${THEME.textPrimary}`));
+    el.appendChild(makeSpan(' got ', `color:${THEME.textSecondary}`));
     el.appendChild(makeSpan(cardName, `color:${color}; font-weight:bold`));
     el.appendChild(makeSpan(` (${rarity})`, `color:${color}; font-size:11px; opacity:0.7`));
 
@@ -79,7 +81,7 @@ export function createCardToast() {
     // Show description if provided
     if (description) {
       el.appendChild(document.createElement('br'));
-      el.appendChild(makeSpan(description, 'color:#999; font-size:11px; white-space:normal'));
+      el.appendChild(makeSpan(description, `color:${THEME.textMuted}; font-size:11px; white-space:normal`));
     }
 
     container.appendChild(el);

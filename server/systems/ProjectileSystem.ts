@@ -90,6 +90,38 @@ export class ProjectileSystem {
       // Tick down lifetime
       proj.lifetime -= dt;
       if (proj.lifetime <= 0) {
+        // Piercing projectiles with AoE (ballista) explode on expiry
+        if (proj.pierce && proj.aoeRadius && proj.aoeRadius > 0) {
+          const aoeR = proj.aoeRadius;
+          aoeExplosions.push({ x: pos.x, y: pos.y, radius: aoeR });
+          const aoeR2 = aoeR * aoeR;
+          for (const aoeTarget of targets) {
+            if (aoeTarget === projId) continue;
+            if (world.getComponent(aoeTarget, C.Projectile)) continue;
+            const aoeFaction = world.getComponent<FactionComponent>(aoeTarget, C.Faction);
+            if (aoeFaction?.type !== 'enemy' && aoeFaction?.type !== 'resource' && aoeFaction?.type !== 'portal') continue;
+            if (world.hasComponent(aoeTarget, C.Downed)) continue;
+            const drE = world.getComponent<DodgeRollComponent>(aoeTarget, C.DodgeRoll);
+            if (drE && drE.timer > 0) continue;
+            // Skip entities already hit by the piercing pass
+            if (proj.hitEntities?.includes(aoeTarget)) continue;
+            const aoePos = world.getComponent<PositionComponent>(aoeTarget, C.Position)!;
+            const adx = aoePos.x - pos.x, ady = aoePos.y - pos.y;
+            if (adx * adx + ady * ady > aoeR2) continue;
+            const aoeHp = world.getComponent<HealthComponent>(aoeTarget, C.Health)!;
+            let aoeDmg: number;
+            if (aoeFaction?.type === 'resource') {
+              aoeDmg = GATHERING_DAMAGE;
+            } else {
+              const aoeDef = world.getComponent<DefenseComponent>(aoeTarget, C.Defense);
+              aoeDmg = proj.damage;
+              if (aoeDef) aoeDmg = Math.max(0, Math.round((aoeDmg - aoeDef.flat) * (1 - aoeDef.percent)));
+            }
+            aoeHp.current = Math.max(0, aoeHp.current - aoeDmg);
+            hits.push({ sourceId: proj.ownerId, targetId: aoeTarget, damage: aoeDmg, knockbackVx: 0, knockbackVy: 0 });
+            if (aoeHp.current <= 0) deaths.push(aoeTarget);
+          }
+        }
         destroyed.push(projId);
         continue;
       }

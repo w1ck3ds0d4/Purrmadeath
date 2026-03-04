@@ -39,6 +39,7 @@ import {
   TILE_SIZE,
   PLAYER_RADIUS,
   PLAYER_MAX_HEALTH,
+  PLAYER_CARRY_LIMITS,
   ENEMY_BASE_SPEED,
   ENEMY_MAX_HEALTH,
   ENEMY_MELEE_COOLDOWN,
@@ -110,6 +111,7 @@ import type {
   CardPickMessage,
   SkillAllocateMessage,
   AbilityUseMessage,
+  TrainGuardMessage,
 } from '@shared/protocol';
 import { ItemDropSystem, PickupResult } from '../systems/ItemDropSystem';
 import type { ConnectedClient } from '../net/ServerSocket';
@@ -199,6 +201,8 @@ export class GameSession {
   private players = new Map<string, SessionPlayer>(); // keyed by clientId
   /** Fast lookup: entity IDs that belong to players (updated on spawn/despawn). */
   private playerEntityIds = new Set<number>();
+  /** Throttle "Inventory full!" notifications per player (timestamp of last send). */
+  private inventoryFullNotifTime = new Map<string, number>();
   private phase: SessionPhase = 'lobby';
   private tick = 0;
 
@@ -237,7 +241,7 @@ export class GameSession {
   private campfireEntityId = -1;
 
   private warehouseIds = new Set<number>();
-  private warehousePool = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0 };
+  private warehousePool = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0 };
   /** Bridge tile positions: "tileX,tileY" → entityId. */
   private bridgePositions = new Map<string, number>();
 
@@ -331,7 +335,7 @@ export class GameSession {
       getEventProductionMult: () => this.worldEvents?.getProductionMult() ?? 1.0,
       isActive: () => this.phase === 'playing' && !this.paused && !this.gameOver,
       isWalkable: (wx, wy) => this.isWalkable(wx, wy),
-      spawnBuilding: (x, y, type, maxHp, permanent) => this.spawnBuilding(x, y, type as any, maxHp, permanent),
+      spawnBuilding: (x, y, type, maxHp, permanent, rotation) => this.spawnBuilding(x, y, type as any, maxHp, permanent, rotation),
       spawnItemDrop: (x, y, item, qty, auto) => this.spawnItemDrop(x, y, item, qty, auto),
       destroyDeadEntities: (deaths, attackerMap, send) => this.respawn.destroyDeadEntities(deaths, attackerMap, send),
     });
@@ -345,6 +349,11 @@ export class GameSession {
         if (this.campfireEntityId < 0) return null;
         const p = this.world.getComponent<PositionComponent>(this.campfireEntityId, C.Position);
         return p ? { x: p.x, y: p.y } : null;
+      },
+      getCampfireLevel: () => {
+        if (this.campfireEntityId < 0) return 1;
+        const b = this.world.getComponent<BuildingComponent>(this.campfireEntityId, C.Building);
+        return b?.upgradeLevel ?? 1;
       },
       broadcastWarehouseUpdate: (send) => this.buildings.broadcastWarehouseUpdate(send),
     });
@@ -746,7 +755,7 @@ export class GameSession {
           }
           continue;
         }
-        const eid = this.spawnBuilding(sb.x, sb.y, sb.buildingType as BuildingType, sb.maxHp, sb.permanent);
+        const eid = this.spawnBuilding(sb.x, sb.y, sb.buildingType as BuildingType, sb.maxHp, sb.permanent, sb.rotation ?? 0);
         // Track warehouse entities
         if (sb.buildingType === 'warehouse') this.warehouseIds.add(eid);
         const hp = this.world.getComponent<HealthComponent>(eid, C.Health);
@@ -997,7 +1006,7 @@ export class GameSession {
         send(p.client, {
           type: MessageType.RESOURCE_UPDATE,
           wood: res.wood, stone: res.stone, iron: res.iron,
-          diamond: res.diamond, gold: res.gold, food: res.food,
+          diamond: res.diamond, gold: res.gold, food: res.food, weapons: res.weapons,
         });
       }
     }
@@ -1135,13 +1144,14 @@ export class GameSession {
     buildingType: BuildingType,
     maxHp: number,
     permanent: boolean,
+    rotation: number = 0,
   ): number {
     const id = this.world.createEntity();
     this.world.addComponent(id, C.Position,  { x, y });
     this.world.addComponent(id, C.Velocity,  { vx: 0, vy: 0 });
     this.world.addComponent(id, C.Health,    { current: maxHp, max: maxHp });
     this.world.addComponent(id, C.Faction,   { type: 'building' });
-    this.world.addComponent(id, C.Building,  { buildingType, permanent, upgradeLevel: 1 } as BuildingComponent);
+    this.world.addComponent(id, C.Building,  { buildingType, permanent, upgradeLevel: 1, rotation } as BuildingComponent);
     return id;
   }
 
@@ -1254,6 +1264,7 @@ export class GameSession {
   private spawnItemDrop(
     x: number, y: number,
     itemType: string, quantity: number, autoPickup: boolean,
+    pickupDelay?: number,
   ): number {
     const angle = Math.random() * Math.PI * 2;
     const id = this.world.createEntity();
@@ -1267,6 +1278,7 @@ export class GameSession {
     this.world.addComponent(id, C.ItemDrop, {
       itemType, quantity, autoPickup,
       lifetime: ITEM_DROP_LIFETIME,
+      pickupDelay,
     });
     return id;
   }
@@ -1355,7 +1367,8 @@ export class GameSession {
         const res = this.world.getComponent<Record<string, number>>(p.entityId, C.Resources);
         if (res) {
           for (const [key, amount] of Object.entries(loot.bonusResources)) {
-            res[key] = (res[key] ?? 0) + amount;
+            const cap = PLAYER_CARRY_LIMITS[key] ?? Infinity;
+            res[key] = Math.min((res[key] ?? 0) + amount, cap);
           }
         }
       }
@@ -1368,7 +1381,8 @@ export class GameSession {
         const res = this.world.getComponent<Record<string, number>>(recipient.entityId, C.Resources);
         if (res) {
           const bd = loot.bonusDrop;
-          res[bd.resource] = (res[bd.resource] ?? 0) + bd.amount;
+          const bdCap = PLAYER_CARRY_LIMITS[bd.resource] ?? Infinity;
+          res[bd.resource] = Math.min((res[bd.resource] ?? 0) + bd.amount, bdCap);
         }
       }
     }
@@ -1393,23 +1407,9 @@ export class GameSession {
     this.boss.onBossDeath(deadId);
   }
 
-  /** Auto-grant a card when a regular enemy is killed (chance-based). */
-  private onEnemyKilled(deadId: number, attackerEntityId: number | undefined, variant: string, send: SendFn): void {
-    const card = rollEnemyCardDrop(variant as any, this.cards.pickedCardIds as Set<string>);
-    if (!card) return;
-
-    // Grant to the player who killed it, or nearest player
-    let recipient: SessionPlayer | undefined;
-    if (attackerEntityId !== undefined) {
-      for (const p of this.players.values()) {
-        if (p.entityId === attackerEntityId) { recipient = p; break; }
-      }
-    }
-    if (!recipient) {
-      const pos = this.world.getComponent<import('@shared/components').PositionComponent>(deadId, C.Position);
-      if (pos) recipient = this.getNearestPlayer(pos.x, pos.y) ?? undefined;
-    }
-    if (recipient) this.cardDispenser.autoGrant(recipient, card, send);
+  /** Auto-grant a card when a regular enemy is killed (only titans drop cards). */
+  private onEnemyKilled(_deadId: number, _attackerEntityId: number | undefined, _variant: string, _send: SendFn): void {
+    // Normal enemies no longer drop cards. Cards come from bosses, milestones, and world events only.
   }
 
   /** Find the nearest alive player to a world position. */
@@ -1493,16 +1493,44 @@ export class GameSession {
     const res = this.world.getComponent<ResourcesComponent>(playerEntityId, C.Resources);
     if (!res) return;
 
-    // Credit the resource
-    if (itemType === 'wood') res.wood += quantity;
-    else if (itemType === 'stone') res.stone += quantity;
-    else if (itemType === 'iron') res.iron += quantity;
-    else if (itemType === 'diamond') res.diamond += quantity;
-    else if (itemType === 'gold') res.gold += quantity;
-    else if (itemType === 'food') res.food += quantity;
+    // Food and weapons are warehouse-only resources - send to warehouse instead
+    if (itemType === 'food' || itemType === 'weapons') {
+      this.warehousePool[itemType as 'food' | 'weapons'] += quantity;
+      this.buildings.broadcastWarehouseUpdate(send);
+      this.stats.trackResources(target.playerId, itemType, quantity);
+      return;
+    }
 
-    // Track for meta stats
-    this.stats.trackResources(target.playerId, itemType, quantity);
+    // Credit the resource (with carry cap)
+    const cap = PLAYER_CARRY_LIMITS[itemType] ?? Infinity;
+    const current = (res as any)[itemType] as number ?? 0;
+    const capped = Math.min(current + quantity, cap);
+    const overflow = (current + quantity) - capped;
+
+    if (itemType === 'wood') res.wood = capped;
+    else if (itemType === 'stone') res.stone = capped;
+    else if (itemType === 'iron') res.iron = capped;
+    else if (itemType === 'diamond') res.diamond = capped;
+    else if (itemType === 'gold') res.gold = capped;
+
+    // Drop excess on the ground and notify the player
+    if (overflow > 0) {
+      const pos = this.world.getComponent<PositionComponent>(playerEntityId, C.Position);
+      if (pos) this.spawnItemDrop(pos.x, pos.y, itemType, overflow, true, 1);
+      const now = Date.now();
+      const lastNotif = this.inventoryFullNotifTime.get(target.client.id) ?? 0;
+      if (now - lastNotif > 3000) {
+        this.inventoryFullNotifTime.set(target.client.id, now);
+        send(target.client, {
+          type: MessageType.NOTIFICATION,
+          text: 'Inventory full!',
+          level: 'warning',
+        });
+      }
+    }
+
+    // Track only the actually gathered amount for meta stats
+    this.stats.trackResources(target.playerId, itemType, quantity - overflow);
 
     const update: ResourceUpdateMessage = {
       type: MessageType.RESOURCE_UPDATE,
@@ -1512,6 +1540,7 @@ export class GameSession {
       diamond: res.diamond,
       gold: res.gold,
       food: res.food,
+      weapons: res.weapons,
     };
     send(target.client, update);
   }
@@ -1635,6 +1664,63 @@ export class GameSession {
 
   handleBuildRepair(clientId: string, msg: BuildRepairMessage, send: SendFn): void {
     this.buildings.handleRepair(clientId, msg, send);
+  }
+
+  handleTrainGuard(clientId: string, msg: TrainGuardMessage, send: SendFn): void {
+    if (this.phase !== 'playing' || this.paused) return;
+    const player = this.players.get(clientId);
+    if (!player || player.entityId === null) return;
+
+    const fail = (reason: string) => {
+      send(player.client, { type: MessageType.TRAIN_GUARD_RESULT, success: false, reason });
+    };
+
+    // Validate building exists and is a training center
+    const bldg = this.world.getComponent<BuildingComponent>(msg.buildingId, C.Building);
+    if (!bldg || bldg.buildingType !== 'training_center') return fail('Not a training center');
+
+    const tc = this.world.getComponent<import('@shared/components').TrainingCenterComponent>(msg.buildingId, C.TrainingCenter);
+    if (!tc) return fail('Not a training center');
+
+    // Check guard capacity
+    // Clean up dead guard IDs first
+    tc.guardIds = tc.guardIds.filter(id => this.world.hasEntity(id));
+    if (tc.guardIds.length >= tc.maxGuards) return fail('Guard capacity full');
+
+    // Check warehouse has weapons
+    if (this.warehousePool.weapons < 1) return fail('No weapons available');
+
+    // Validate role
+    if (msg.role !== 'warrior' && msg.role !== 'ranger' && msg.role !== 'mage') return fail('Invalid role');
+
+    // Find an idle civilian
+    let idleCivId: number | null = null;
+    for (const civId of this.civilians.civilianIds) {
+      const civ = this.world.getComponent<import('@shared/components').CivilianComponent>(civId, C.Civilian);
+      if (civ && civ.state === 'idle') { idleCivId = civId; break; }
+    }
+    if (idleCivId === null) return fail('No idle civilians');
+
+    // Consume 1 weapon
+    this.warehousePool.weapons -= 1;
+
+    // Remove the civilian
+    this.civilians.civilianIds.delete(idleCivId);
+    this.world.destroyEntity(idleCivId);
+
+    // Spawn the guard at the training center position
+    const tcPos = this.world.getComponent<PositionComponent>(msg.buildingId, C.Position);
+    if (!tcPos) return fail('Building has no position');
+
+    const guardId = this.buildings.spawnTrainedGuard(tcPos.x, tcPos.y, msg.buildingId, msg.role);
+    if (guardId === null) return fail('Failed to spawn guard');
+
+    tc.guardIds.push(guardId);
+
+    // Broadcast updated warehouse (weapons consumed)
+    this.buildings.broadcastWarehouseUpdate(send);
+
+    send(player.client, { type: MessageType.TRAIN_GUARD_RESULT, success: true });
   }
 
 
@@ -2965,6 +3051,7 @@ export class GameSession {
       if (bldg) {
         snap.buildingType = bldg.buildingType;
         snap.upgradeLevel = bldg.upgradeLevel;
+        if (bldg.rotation) snap.buildingRotation = bldg.rotation;
       }
 
       // Production building stored resources
@@ -2993,6 +3080,14 @@ export class GameSession {
       // Boss metadata
       const bossComp = this.world.getComponent<import('@shared/components').BossComponent>(id, C.Boss);
       if (bossComp) snap.bossId = bossComp.bossId;
+
+      // Laser tower target (for client beam rendering)
+      const laserComp = this.world.getComponent<import('@shared/components').LaserBeamComponent>(id, C.LaserBeam);
+      if (laserComp && laserComp.targetId !== null) snap.laserTargetId = laserComp.targetId;
+
+      // Guard role (for client to color-code guards)
+      const guardComp = this.world.getComponent<import('@shared/components').GuardComponent>(id, C.Guard);
+      if (guardComp) snap.guardRole = guardComp.guardRole;
 
       // Ruins metadata
       const ruinsComp = this.world.getComponent<import('@shared/components').RuinsComponent>(id, C.Ruins);

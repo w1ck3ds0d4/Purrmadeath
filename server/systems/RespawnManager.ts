@@ -205,26 +205,7 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
     waveState.wipeCount++;
     console.log(`[Wipe] Party wipe #${waveState.wipeCount} on wave ${waveState.currentWave}`);
 
-    if (waveState.wipeCount >= 2) {
-      deps.setGameOver(true);
-      respawnTimers.clear();
-      for (const sp of players.values()) {
-        if (sp.entityId !== null) world.removeComponent(sp.entityId, C.Downed);
-      }
-
-      const msg: GameOverMessage = {
-        type: MessageType.GAME_OVER,
-        waveReached: waveState.currentWave,
-        reason: '2nd party wipe - run over',
-        enemiesKilled: deps.getEnemiesKilled(),
-        timePlayed: Math.round(deps.getElapsedSeconds()),
-      };
-      for (const p of players.values()) send(p.client, msg);
-      deps.fireRunEnd();
-      return;
-    }
-
-    // 1st wipe: resource penalty + scatter drops + respawn all
+    // Resource penalty + scatter drops + respawn all
     const wipeMsg: PartyWipeMessage = {
       type: MessageType.PARTY_WIPE,
       wipeCount: waveState.wipeCount,
@@ -254,7 +235,7 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
       const update: ResourceUpdateMessage = {
         type: MessageType.RESOURCE_UPDATE,
         wood: res.wood, stone: res.stone, iron: res.iron,
-        diamond: res.diamond, gold: res.gold, food: res.food,
+        diamond: res.diamond, gold: res.gold, food: res.food, weapons: res.weapons,
       };
       send(sp.client, update);
     }
@@ -289,15 +270,6 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
     }
 
     const isSolo = players.size <= 1;
-
-    if (isSolo && waveState.wipeCount >= 1) {
-      world.addComponent(entityId, C.Downed, {
-        bleedTimer: 0, reviveProgress: 0, reviverId: -1,
-      });
-      handlePartyWipe(send);
-      return;
-    }
-
     const bleedTime = isSolo ? 15 : DOWNED_BLEED_TIME;
 
     world.addComponent(entityId, C.Downed, {

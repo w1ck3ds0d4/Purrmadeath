@@ -17,12 +17,12 @@ import {
 import type {
   EnemyStatsComponent, GhostStateComponent, LightRevealComponent,
   HealAuraComponent, BarracksSpawnerComponent, GuardComponent,
-  WorkerSlotComponent, HousingComponent, RuinsComponent,
+  WorkerSlotComponent, HousingComponent, RuinsComponent, LaserBeamComponent,
 } from '@shared/components';
 import {
   TILE_SIZE, PLAYER_RADIUS, ENEMY_RADIUS, RESOURCE_NODE_RADIUS,
   PROJECTILE_RADIUS, RANGED_LIFETIME,
-  BUILDING_COSTS, BUILDING_SIZES, buildingHalfExtent, snapBuildingPosition,
+  BUILDING_COSTS, BUILDING_SIZES, buildingHalfExtent, buildingExtent, snapBuildingPosition,
   BUILDING_MAX_LEVEL, DEMOLISH_REFUND_PERCENT, RUINS_REPAIR_COST_MULT, RUINS_RESTORE_COST_MULT,
   CAMPFIRE_MAX_HEALTH, WALL_MAX_HEALTH, WAREHOUSE_MAX_HEALTH,
   LUMBERMILL_MAX_HEALTH, QUARRY_MAX_HEALTH, MINE_MAX_HEALTH, FARM_MAX_HEALTH,
@@ -42,6 +42,15 @@ import {
   BARRACKS_GUARD_HP, BARRACKS_GUARD_DAMAGE, BARRACKS_GUARD_SPEED, BARRACKS_GUARD_PATROL_RADIUS,
   GUARD_ATTACK_COOLDOWN, GUARD_MELEE_RANGE, GUARD_MELEE_KNOCKBACK, GUARD_RADIUS,
   CAT_HOUSE_MAX_HEALTH, DORMITORY_MAX_HEALTH, CAT_HOUSE_CAPACITY, DORMITORY_CAPACITY,
+  GATE_MAX_HEALTH, BALLISTA_MAX_HEALTH, LASER_TOWER_MAX_HEALTH, WORKSHOP_MAX_HEALTH, TRAINING_CENTER_MAX_HEALTH,
+  BALLISTA_RANGE, BALLISTA_COOLDOWN, BALLISTA_DAMAGE, BALLISTA_PROJ_SPEED,
+  UPGRADE_BALLISTA_AOE, UPGRADE_BALLISTA_CD, UPGRADE_BALLISTA_DMG,
+  UPGRADE_LASER_RANGE, UPGRADE_LASER_DPS,
+  WORKSHOP_PROD_INTERVAL,
+  TRAINING_CENTER_MAX_GUARDS,
+  TC_WARRIOR_HP, TC_WARRIOR_DAMAGE, TC_WARRIOR_SPEED,
+  TC_RANGER_HP, TC_RANGER_DAMAGE, TC_RANGER_RANGE, TC_RANGER_SPEED,
+  TC_MAGE_HP, TC_MAGE_DAMAGE, TC_MAGE_RANGE, TC_MAGE_SPEED,
   getUpgradeCost, getRepairCost,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
@@ -67,6 +76,11 @@ const HP_MAP: Record<string, number> = {
   potion_shop: POTION_SHOP_MAX_HEALTH,
   cat_house: CAT_HOUSE_MAX_HEALTH,
   dormitory: DORMITORY_MAX_HEALTH,
+  gate: GATE_MAX_HEALTH,
+  ballista: BALLISTA_MAX_HEALTH,
+  laser_tower: LASER_TOWER_MAX_HEALTH,
+  workshop: WORKSHOP_MAX_HEALTH,
+  training_center: TRAINING_CENTER_MAX_HEALTH,
 };
 
 // ── Dependencies injected from GameSession ──────────────────────────────────
@@ -91,7 +105,7 @@ export interface BuildingSystemDeps {
   getEventProductionMult?: () => number;
   isActive: () => boolean; // phase === 'playing' && !paused && !gameOver
   isWalkable: (wx: number, wy: number) => boolean;
-  spawnBuilding: (x: number, y: number, type: string, maxHp: number, permanent: boolean) => number;
+  spawnBuilding: (x: number, y: number, type: string, maxHp: number, permanent: boolean, rotation?: number) => number;
   spawnItemDrop: (x: number, y: number, itemType: string, quantity: number, autoPickup: boolean) => number;
   destroyDeadEntities: (deaths: number[], attackerMap: Map<number, number> | undefined, send: SendFn) => void;
 }
@@ -144,7 +158,7 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       send(player.client, {
         type: MessageType.RESOURCE_UPDATE,
         wood: playerRes.wood, stone: playerRes.stone, iron: playerRes.iron,
-        diamond: playerRes.diamond, gold: playerRes.gold, food: playerRes.food,
+        diamond: playerRes.diamond, gold: playerRes.gold, food: playerRes.food, weapons: playerRes.weapons,
       });
     }
     return true;
@@ -161,26 +175,32 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
 
   // ── Footprint collision ───────────────────────────────────────────────────
 
-  function footprintCollides(cx: number, cy: number, buildingType: string): boolean {
-    const newHalf = buildingHalfExtent(buildingType);
+  function footprintCollides(cx: number, cy: number, buildingType: string, rotation: number = 0): boolean {
+    const newExt = buildingExtent(buildingType, rotation);
     for (const id of world.query(C.Position, C.Faction)) {
       const f = world.getComponent<FactionComponent>(id, C.Faction)!;
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
-      let existingHalf: number;
+      let exHx: number;
+      let exHy: number;
       if (f.type === 'building') {
         const b = world.getComponent<BuildingComponent>(id, C.Building);
-        existingHalf = buildingHalfExtent(b?.buildingType ?? 'wall');
+        const bExt = buildingExtent(b?.buildingType ?? 'wall', b?.rotation ?? 0);
+        exHx = bExt.hx;
+        exHy = bExt.hy;
       } else if (f.type === 'resource') {
-        existingHalf = RESOURCE_NODE_RADIUS;
+        exHx = RESOURCE_NODE_RADIUS;
+        exHy = RESOURCE_NODE_RADIUS;
       } else if (f.type === 'player') {
         if (world.hasComponent(id, C.Downed)) continue;
-        existingHalf = PLAYER_RADIUS;
+        exHx = PLAYER_RADIUS;
+        exHy = PLAYER_RADIUS;
       } else if (f.type === 'enemy') {
-        existingHalf = ENEMY_RADIUS;
+        exHx = ENEMY_RADIUS;
+        exHy = ENEMY_RADIUS;
       } else {
         continue;
       }
-      if (Math.abs(pos.x - cx) < newHalf + existingHalf && Math.abs(pos.y - cy) < newHalf + existingHalf) return true;
+      if (Math.abs(pos.x - cx) < newExt.hx + exHx && Math.abs(pos.y - cy) < newExt.hy + exHy) return true;
     }
     return false;
   }
@@ -209,14 +229,17 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       return;
     }
 
-    const { x: snapX, y: snapY } = snapBuildingPosition(msg.x, msg.y, msg.buildingType);
-    const tileCount = BUILDING_SIZES[msg.buildingType] ?? 1;
-    const half = buildingHalfExtent(msg.buildingType);
-    const startTX = Math.floor((snapX - half) / TILE_SIZE);
-    const startTY = Math.floor((snapY - half) / TILE_SIZE);
+    const rotation = msg.rotation ?? 0;
+    const { x: snapX, y: snapY } = snapBuildingPosition(msg.x, msg.y, msg.buildingType, rotation);
+    const bSize = BUILDING_SIZES[msg.buildingType] ?? { w: 1, h: 1 };
+    const tilesW = rotation === 1 ? bSize.h : bSize.w;
+    const tilesH = rotation === 1 ? bSize.w : bSize.h;
+    const ext = buildingExtent(msg.buildingType, rotation);
+    const startTX = Math.floor((snapX - ext.hx) / TILE_SIZE);
+    const startTY = Math.floor((snapY - ext.hy) / TILE_SIZE);
     const isBridge = msg.buildingType === 'bridge';
-    for (let dy = 0; dy < tileCount; dy++) {
-      for (let dx = 0; dx < tileCount; dx++) {
+    for (let dy = 0; dy < tilesH; dy++) {
+      for (let dx = 0; dx < tilesW; dx++) {
         const tx = startTX + dx;
         const ty = startTY + dy;
         const tileId = generator.getTile(tx, ty);
@@ -233,7 +256,7 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       }
     }
 
-    if (footprintCollides(snapX, snapY, msg.buildingType)) {
+    if (footprintCollides(snapX, snapY, msg.buildingType, rotation)) {
       send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'blocked' } as BuildConfirmMessage);
       return;
     }
@@ -244,7 +267,7 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     }
 
     const maxHp = HP_MAP[msg.buildingType] ?? WALL_MAX_HEALTH;
-    const id = spawnBuilding(snapX, snapY, msg.buildingType, maxHp, false);
+    const id = spawnBuilding(snapX, snapY, msg.buildingType, maxHp, false, rotation);
 
     if (msg.buildingType === 'warehouse') {
       warehouseIds.add(id);
@@ -294,15 +317,33 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       world.addComponent(id, C.Bridge, { tileX, tileY } as BridgeComponent);
       bridgePositions.set(`${tileX},${tileY}`, id);
       movementBridgeTiles.add(`${tileX},${tileY}`);
+    } else if (msg.buildingType === 'laser_tower') {
+      world.addComponent(id, C.LaserBeam, {
+        range: UPGRADE_LASER_RANGE[0], damagePerSecond: UPGRADE_LASER_DPS[0], targetId: null,
+      } as LaserBeamComponent);
     } else if (msg.buildingType === 'light_tower') {
       world.addComponent(id, C.LightReveal, { range: UPGRADE_LIGHT_RANGE[0] } as LightRevealComponent);
     } else if (msg.buildingType === 'healing_shrine') {
       world.addComponent(id, C.HealAura, { range: UPGRADE_HEAL_RANGE[0], healPerSecond: UPGRADE_HEAL_RATE[0] } as HealAuraComponent);
+    } else if (msg.buildingType === 'ballista') {
+      world.addComponent(id, C.Turret, {
+        range: BALLISTA_RANGE, cooldown: BALLISTA_COOLDOWN,
+        cooldownTimer: 0, damage: BALLISTA_DAMAGE, projectileSpeed: BALLISTA_PROJ_SPEED,
+      } as TurretComponent);
+    } else if (msg.buildingType === 'workshop') {
+      world.addComponent(id, C.Production, {
+        resourceType: 'weapons', interval: WORKSHOP_PROD_INTERVAL[0],
+        timer: 0, amount: 1, stored: 0, maxStored: PRODUCTION_MAX_STORED,
+      } as ProductionComponent);
     } else if (msg.buildingType === 'barracks') {
       world.addComponent(id, C.BarracksSpawner, {
         maxGuards: BARRACKS_MAX_GUARDS[0], spawnTimer: BARRACKS_SPAWN_INTERVAL,
         spawnInterval: BARRACKS_SPAWN_INTERVAL, guardIds: [],
       } as BarracksSpawnerComponent);
+    } else if (msg.buildingType === 'training_center') {
+      world.addComponent(id, C.TrainingCenter, {
+        maxGuards: TRAINING_CENTER_MAX_GUARDS[0], guardIds: [],
+      } as import('@shared/components').TrainingCenterComponent);
     } else if (msg.buildingType === 'cat_house') {
       world.addComponent(id, C.Housing, { capacity: CAT_HOUSE_CAPACITY[0], residentIds: [] } as HousingComponent);
     } else if (msg.buildingType === 'dormitory') {
@@ -310,7 +351,7 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     }
 
     // Attach WorkerSlot to production buildings so civilians can staff them
-    if (['lumbermill', 'quarry', 'mine', 'farm'].includes(msg.buildingType)) {
+    if (['lumbermill', 'quarry', 'mine', 'farm', 'workshop'].includes(msg.buildingType)) {
       world.addComponent(id, C.WorkerSlot, { workerId: null } as WorkerSlotComponent);
     }
 
@@ -367,7 +408,7 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
         }
         send(player.client, {
           type: MessageType.RESOURCE_UPDATE,
-          wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold, food: res.food,
+          wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold, food: res.food, weapons: res.weapons,
         });
       }
     }
@@ -456,11 +497,16 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
 
     // Scale production
     const prod = world.getComponent<ProductionComponent>(targetId, C.Production);
-    if (prod && lvlIdx < UPGRADE_PROD_INTERVAL.length) {
-      const baseInterval = prod.interval / UPGRADE_PROD_INTERVAL[oldLevel - 1];
-      prod.interval = baseInterval * UPGRADE_PROD_INTERVAL[lvlIdx];
-      const baseMax = prod.maxStored / UPGRADE_PROD_MAX[oldLevel - 1];
-      prod.maxStored = Math.round(baseMax * UPGRADE_PROD_MAX[lvlIdx]);
+    if (prod) {
+      if (bldg.buildingType === 'workshop' && lvlIdx < WORKSHOP_PROD_INTERVAL.length) {
+        // Workshop uses absolute interval values per level
+        prod.interval = WORKSHOP_PROD_INTERVAL[lvlIdx];
+      } else if (lvlIdx < UPGRADE_PROD_INTERVAL.length) {
+        const baseInterval = prod.interval / UPGRADE_PROD_INTERVAL[oldLevel - 1];
+        prod.interval = baseInterval * UPGRADE_PROD_INTERVAL[lvlIdx];
+        const baseMax = prod.maxStored / UPGRADE_PROD_MAX[oldLevel - 1];
+        prod.maxStored = Math.round(baseMax * UPGRADE_PROD_MAX[lvlIdx]);
+      }
     }
 
     // Scale turrets
@@ -472,6 +518,9 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       } else if (bldg.buildingType === 'cannon_turret') {
         turret.cooldown = (turret.cooldown / UPGRADE_CANNON_CD[oldLevel - 1]) * UPGRADE_CANNON_CD[lvlIdx];
         turret.damage = Math.round((turret.damage / UPGRADE_CANNON_DMG[oldLevel - 1]) * UPGRADE_CANNON_DMG[lvlIdx]);
+      } else if (bldg.buildingType === 'ballista') {
+        turret.cooldown = (turret.cooldown / UPGRADE_BALLISTA_CD[oldLevel - 1]) * UPGRADE_BALLISTA_CD[lvlIdx];
+        turret.damage = Math.round((turret.damage / UPGRADE_BALLISTA_DMG[oldLevel - 1]) * UPGRADE_BALLISTA_DMG[lvlIdx]);
       }
       turret.cooldownTimer = 0;
     }
@@ -486,6 +535,13 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     const lr = world.getComponent<LightRevealComponent>(targetId, C.LightReveal);
     if (lr && lvlIdx < UPGRADE_LIGHT_RANGE.length) lr.range = UPGRADE_LIGHT_RANGE[lvlIdx];
 
+    // Scale laser tower
+    const laser = world.getComponent<LaserBeamComponent>(targetId, C.LaserBeam);
+    if (laser) {
+      if (lvlIdx < UPGRADE_LASER_RANGE.length) laser.range = UPGRADE_LASER_RANGE[lvlIdx];
+      if (lvlIdx < UPGRADE_LASER_DPS.length) laser.damagePerSecond = UPGRADE_LASER_DPS[lvlIdx];
+    }
+
     // Scale healing shrine
     const ha = world.getComponent<HealAuraComponent>(targetId, C.HealAura);
     if (ha) {
@@ -496,6 +552,10 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     // Scale barracks
     const barracks = world.getComponent<BarracksSpawnerComponent>(targetId, C.BarracksSpawner);
     if (barracks && lvlIdx < BARRACKS_MAX_GUARDS.length) barracks.maxGuards = BARRACKS_MAX_GUARDS[lvlIdx];
+
+    // Scale training center
+    const tc = world.getComponent<import('@shared/components').TrainingCenterComponent>(targetId, C.TrainingCenter);
+    if (tc && lvlIdx < TRAINING_CENTER_MAX_GUARDS.length) tc.maxGuards = TRAINING_CENTER_MAX_GUARDS[lvlIdx];
 
     // Scale housing
     const housing = world.getComponent<HousingComponent>(targetId, C.Housing);
@@ -590,7 +650,7 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       if (transferred) {
         send(p.client, {
           type: MessageType.RESOURCE_UPDATE,
-          wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold, food: res.food,
+          wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold, food: res.food, weapons: res.weapons,
         });
         broadcastWarehouseUpdate(send);
       }
@@ -655,6 +715,7 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       const projComp: any = { ownerId: id, damage: turret.damage, lifetime: RANGED_LIFETIME };
 
       const isCannon = bldg?.buildingType === 'cannon_turret';
+      const isBallista = bldg?.buildingType === 'ballista';
       if (isCannon) {
         const lvlIdx = (bldg!.upgradeLevel ?? 1) - 1;
         projComp.aoeRadius = UPGRADE_CANNON_AOE[lvlIdx] ?? CANNON_AOE_BASE_RADIUS;
@@ -663,6 +724,11 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
         const flightTime = dist / turret.projectileSpeed;
         projComp.flightTime = flightTime;
         projComp.totalFlightTime = flightTime;
+      } else if (isBallista) {
+        projComp.pierce = true;
+        projComp.hitEntities = [];
+        const lvlIdx = (bldg!.upgradeLevel ?? 1) - 1;
+        projComp.aoeRadius = UPGRADE_BALLISTA_AOE[lvlIdx] ?? UPGRADE_BALLISTA_AOE[0];
       }
       world.addComponent(projId, C.Velocity, { vx: nx * turret.projectileSpeed, vy: ny * turret.projectileSpeed });
       world.addComponent(projId, C.Projectile, projComp);
@@ -674,8 +740,70 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
         vx: nx * turret.projectileSpeed, vy: ny * turret.projectileSpeed,
         ownerSlot: -1,
         ...(isCannon ? { targetX: epos.x, targetY: epos.y, totalFlightTime: dist / turret.projectileSpeed } : {}),
+        ...(isBallista ? { pierce: true, ballista: true } : {}),
       };
       for (const p of players.values()) send(p.client, spawnMsg);
+    }
+  }
+
+  function tickLaserBeams(dt: number, send: SendFn): void {
+    for (const id of world.query(C.LaserBeam, C.Position)) {
+      const laser = world.getComponent<LaserBeamComponent>(id, C.LaserBeam)!;
+      const tpos = world.getComponent<PositionComponent>(id, C.Position)!;
+
+      // Validate current target is still alive and in range
+      if (laser.targetId !== null) {
+        let valid = false;
+        if (world.hasEntity(laser.targetId)) {
+          const tgtPos = world.getComponent<PositionComponent>(laser.targetId, C.Position);
+          const tgtHp = world.getComponent<HealthComponent>(laser.targetId, C.Health);
+          if (tgtPos && tgtHp && tgtHp.current > 0) {
+            const dx = tgtPos.x - tpos.x, dy = tgtPos.y - tpos.y;
+            if (dx * dx + dy * dy <= laser.range * laser.range) valid = true;
+          }
+        }
+        if (!valid) laser.targetId = null;
+      }
+
+      // Acquire new target if idle
+      if (laser.targetId === null) {
+        let bestId = -1;
+        let bestDist = laser.range * laser.range;
+        for (const eid of world.query(C.Position, C.Faction, C.Health)) {
+          const ef = world.getComponent<FactionComponent>(eid, C.Faction)!;
+          if (ef.type !== 'enemy' && ef.type !== 'portal') continue;
+          const ghostSt = world.getComponent<GhostStateComponent>(eid, C.GhostState);
+          if (ghostSt?.hidden) continue;
+          const ehp = world.getComponent<HealthComponent>(eid, C.Health)!;
+          if (ehp.current <= 0) continue;
+          const epos = world.getComponent<PositionComponent>(eid, C.Position)!;
+          const dx = epos.x - tpos.x, dy = epos.y - tpos.y;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < bestDist) { bestDist = d2; bestId = eid; }
+        }
+        if (bestId >= 0) laser.targetId = bestId;
+      }
+
+      // Apply continuous damage
+      if (laser.targetId !== null) {
+        const ehp = world.getComponent<HealthComponent>(laser.targetId, C.Health);
+        if (ehp && ehp.current > 0) {
+          const dmg = laser.damagePerSecond * dt;
+          ehp.current = Math.max(0, ehp.current - dmg);
+
+          // Send periodic hit messages (every ~0.5s worth of damage) for visual feedback
+          const hitMsg: HitMessage = {
+            type: MessageType.HIT,
+            sourceId: id, targetId: laser.targetId,
+            damage: Math.round(dmg), knockbackVx: 0, knockbackVy: 0,
+          };
+          for (const p of players.values()) send(p.client, hitMsg);
+
+          if (ehp.current <= 0) {
+            laser.targetId = null;
+          }
+        }
+      }
     }
   }
 
@@ -769,6 +897,31 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     world.addComponent(id, C.EnemyStats, {
       damage: BARRACKS_GUARD_DAMAGE, range: GUARD_MELEE_RANGE, knockback: GUARD_MELEE_KNOCKBACK, radius: GUARD_RADIUS,
       rangedRange: 0, projectileSpeed: 0, rangedDamage: 0, rangedCooldown: 0,
+    });
+    return id;
+  }
+
+  function spawnTrainedGuard(x: number, y: number, buildingId: number, role: 'warrior' | 'ranger' | 'mage'): number | null {
+    const roleStats = {
+      warrior: { hp: TC_WARRIOR_HP, dmg: TC_WARRIOR_DAMAGE, speed: TC_WARRIOR_SPEED, range: GUARD_MELEE_RANGE, rangedRange: 0, projSpeed: 0, rangedDmg: 0, rangedCd: 0 },
+      ranger:  { hp: TC_RANGER_HP,  dmg: TC_RANGER_DAMAGE,  speed: TC_RANGER_SPEED,  range: GUARD_MELEE_RANGE, rangedRange: TC_RANGER_RANGE, projSpeed: 300, rangedDmg: TC_RANGER_DAMAGE, rangedCd: 1.5 },
+      mage:    { hp: TC_MAGE_HP,    dmg: TC_MAGE_DAMAGE,    speed: TC_MAGE_SPEED,    range: GUARD_MELEE_RANGE, rangedRange: TC_MAGE_RANGE, projSpeed: 250, rangedDmg: TC_MAGE_DAMAGE, rangedCd: 2.0 },
+    };
+    const s = roleStats[role];
+    const id = world.createEntity();
+    world.addComponent(id, C.Position, { x, y });
+    world.addComponent(id, C.Velocity, { vx: 0, vy: 0 });
+    world.addComponent(id, C.Health, { current: s.hp, max: s.hp });
+    world.addComponent(id, C.Speed, { base: s.speed, multiplier: 1 });
+    world.addComponent(id, C.PlayerInput, { dx: 0, dy: 0, sprint: false });
+    world.addComponent(id, C.Faction, { type: 'guard' });
+    world.addComponent(id, C.Facing, { angle: 0 });
+    world.addComponent(id, C.AttackCooldown, { remaining: 0, max: GUARD_ATTACK_COOLDOWN });
+    world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
+    world.addComponent(id, C.Guard, { barracksId: buildingId, patrolRadius: BARRACKS_GUARD_PATROL_RADIUS, guardRole: role } as GuardComponent);
+    world.addComponent(id, C.EnemyStats, {
+      damage: s.dmg, range: s.range, knockback: GUARD_MELEE_KNOCKBACK, radius: GUARD_RADIUS,
+      rangedRange: s.rangedRange, projectileSpeed: s.projSpeed, rangedDamage: s.rangedDmg, rangedCooldown: s.rangedCd,
     });
     return id;
   }
@@ -952,14 +1105,24 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
         world.addComponent(id, C.Production, { timer: 0, interval: FARM_PRODUCTION_INTERVAL, amount: PRODUCTION_AMOUNT, maxStored: PRODUCTION_MAX_STORED, stored: 0, resourceType: 'food' } as ProductionComponent);
         world.addComponent(id, C.WorkerSlot, { workerId: null } as WorkerSlotComponent);
         break;
+      case 'workshop':
+        world.addComponent(id, C.Production, { timer: 0, interval: WORKSHOP_PROD_INTERVAL[0], amount: 1, maxStored: PRODUCTION_MAX_STORED, stored: 0, resourceType: 'weapons' } as ProductionComponent);
+        world.addComponent(id, C.WorkerSlot, { workerId: null } as WorkerSlotComponent);
+        break;
       case 'arrow_turret':
         world.addComponent(id, C.Turret, { range: ARROW_TURRET_RANGE, cooldown: ARROW_TURRET_COOLDOWN, cooldownTimer: 0, damage: ARROW_TURRET_DAMAGE, projectileSpeed: ARROW_TURRET_PROJ_SPEED, aoeRadius: 0, turretType: 'arrow' } as TurretComponent);
         break;
       case 'cannon_turret':
         world.addComponent(id, C.Turret, { range: CANNON_TURRET_RANGE, cooldown: CANNON_TURRET_COOLDOWN, cooldownTimer: 0, damage: CANNON_TURRET_DAMAGE, projectileSpeed: CANNON_TURRET_PROJ_SPEED, aoeRadius: CANNON_AOE_BASE_RADIUS, turretType: 'cannon' } as TurretComponent);
         break;
+      case 'ballista':
+        world.addComponent(id, C.Turret, { range: BALLISTA_RANGE, cooldown: BALLISTA_COOLDOWN, cooldownTimer: 0, damage: BALLISTA_DAMAGE, projectileSpeed: BALLISTA_PROJ_SPEED } as TurretComponent);
+        break;
       case 'spike_trap':
         world.addComponent(id, C.SpikeTrap, { damage: SPIKE_TRAP_DAMAGE, cooldown: SPIKE_TRAP_COOLDOWN, selfDamage: SPIKE_TRAP_SELF_DAMAGE, enemyCooldowns: new Map() } as SpikeTrapComponent);
+        break;
+      case 'laser_tower':
+        world.addComponent(id, C.LaserBeam, { range: UPGRADE_LASER_RANGE[0], damagePerSecond: UPGRADE_LASER_DPS[0], targetId: null } as LaserBeamComponent);
         break;
       case 'light_tower':
         world.addComponent(id, C.LightReveal, { range: UPGRADE_LIGHT_RANGE[0] } as LightRevealComponent);
@@ -969,6 +1132,9 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
         break;
       case 'barracks':
         world.addComponent(id, C.BarracksSpawner, { maxGuards: BARRACKS_MAX_GUARDS[0], spawnInterval: BARRACKS_SPAWN_INTERVAL, spawnTimer: 0, guardIds: [] } as BarracksSpawnerComponent);
+        break;
+      case 'training_center':
+        world.addComponent(id, C.TrainingCenter, { maxGuards: TRAINING_CENTER_MAX_GUARDS[0], guardIds: [] } as import('@shared/components').TrainingCenterComponent);
         break;
       case 'warehouse':
         warehouseIds.add(id);
@@ -991,10 +1157,12 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     handleRepair: handleRuinRepair,
     broadcastWarehouseUpdate,
     cleanupBridge,
+    spawnTrainedGuard,
     tick(dt: number, send: SendFn): void {
       tickWarehouseDeposit(send);
       tickProduction(dt);
       tickTurrets(dt, send);
+      tickLaserBeams(dt, send);
       tickGhostVisibility();
       tickHealAuras(dt);
       tickBarracks(dt);

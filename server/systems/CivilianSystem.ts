@@ -18,7 +18,7 @@ import {
   CIVILIAN_WORK_RANGE, CIVILIAN_HUNGER_INTERVAL, CIVILIAN_HUNGER_PER_TICK,
   CIVILIAN_FOOD_CONSUME, CIVILIAN_STARVATION_DAMAGE,
   CIVILIAN_INITIAL_COUNT, CIVILIAN_SPAWN_WAVE_INTERVAL,
-  CIVILIAN_MAX_POPULATION, CAMPFIRE_HOUSING_CAPACITY,
+  CIVILIAN_MAX_POPULATION, CAMPFIRE_HOUSING_PER_LEVEL, CAMPFIRE_SPAWN_ON_LEVELUP,
   CIVILIAN_SPEECH_DURATION, CAT_NAMES,
   CIVILIAN_RADIUS, buildingHalfExtent,
 } from '@shared/constants';
@@ -36,6 +36,7 @@ export interface CivilianSystemDeps {
   warehouseIds: Set<number>;
   players: Map<string, SessionPlayer>;
   getCampfirePosition: () => { x: number; y: number } | null;
+  getCampfireLevel: () => number;
   broadcastWarehouseUpdate: (send: SendFn) => void;
 }
 
@@ -46,6 +47,7 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
 
   const usedNames = new Set<string>();
   const civilianIds = new Set<number>();
+  let lastKnownCampfireLevel = 1;
 
   // Stuck detection: track last known positions and stuck timers per civilian
   const lastPos = new Map<number, { x: number; y: number }>();
@@ -515,12 +517,8 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
       if (world.hasEntity(id)) world.destroyEntity(id);
     }
 
-    // Periodic reassignment check (every 3s) to catch stale idle civilians
-    reassignAccum += dt;
-    if (reassignAccum >= 3) {
-      reassignAccum = 0;
-      reassignWorkers();
-    }
+    // Note: auto-reassignment removed from periodic tick to avoid overriding manual assignments.
+    // Workers are auto-assigned only on civilian spawn, building placed/destroyed, and restore.
 
     tickAI(dt, send);
     tickHunger(dt, send);
@@ -566,22 +564,36 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
   // ── Wave cleared hook ───────────────────────────────────────────────────
 
   function onWaveCleared(wave: number, send: SendFn): void {
-    if (wave > 0 && wave % CIVILIAN_SPAWN_WAVE_INTERVAL === 0) {
-      const capacity = getHousingCapacity();
-      if (getCivilianCount() < capacity && getCivilianCount() < CIVILIAN_MAX_POPULATION) {
-        const campPos = deps.getCampfirePosition();
-        if (campPos) {
-          const angle = Math.random() * Math.PI * 2;
-          const dist = 40 + Math.random() * 60;
-          spawnCivilian(
-            campPos.x + Math.cos(angle) * dist,
-            campPos.y + Math.sin(angle) * dist,
-            send,
-          );
-          reassignWorkers();
-        }
-      }
+    const campPos = deps.getCampfirePosition();
+    if (!campPos) return;
+
+    // Check for campfire level-up: spawn 2 civilians when campfire is upgraded
+    const currentCfLevel = deps.getCampfireLevel();
+    let spawnCount = 0;
+    if (currentCfLevel > lastKnownCampfireLevel) {
+      spawnCount = CAMPFIRE_SPAWN_ON_LEVELUP;
+      lastKnownCampfireLevel = currentCfLevel;
     }
+
+    // Every wave: spawn 1-3 civilians based on available housing slots
+    const capacity = getHousingCapacity();
+    const currentPop = getCivilianCount();
+    const availableSlots = Math.max(0, Math.min(capacity, CIVILIAN_MAX_POPULATION) - currentPop);
+    if (wave > 0 && availableSlots > 0) {
+      spawnCount += Math.min(1 + Math.floor(Math.random() * 3), availableSlots); // 1-3 capped by slots
+    }
+
+    for (let i = 0; i < spawnCount; i++) {
+      if (getCivilianCount() >= capacity || getCivilianCount() >= CIVILIAN_MAX_POPULATION) break;
+      const angle = Math.random() * Math.PI * 2;
+      const dist = 40 + Math.random() * 60;
+      spawnCivilian(
+        campPos.x + Math.cos(angle) * dist,
+        campPos.y + Math.sin(angle) * dist,
+        send,
+      );
+    }
+    if (spawnCount > 0) reassignWorkers();
   }
 
   // ── Building events ─────────────────────────────────────────────────────
@@ -613,7 +625,8 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
   }
 
   function getHousingCapacity(): number {
-    let capacity = CAMPFIRE_HOUSING_CAPACITY;
+    const cfLevel = deps.getCampfireLevel();
+    let capacity = CAMPFIRE_HOUSING_PER_LEVEL[cfLevel - 1] ?? CAMPFIRE_HOUSING_PER_LEVEL[0];
     for (const id of world.query(C.Housing)) {
       const h = world.getComponent<HousingComponent>(id, C.Housing)!;
       capacity += h.capacity;

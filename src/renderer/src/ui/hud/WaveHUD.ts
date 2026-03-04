@@ -8,6 +8,7 @@
  * Purely DOM-based, appended to #overlay, same pattern as PauseBanner.
  */
 import type { DayNightPhase } from '@shared/protocol';
+import { THEME } from '../theme';
 
 /** Escape HTML entities to prevent XSS from server-controlled strings. */
 function esc(str: string): string {
@@ -21,15 +22,15 @@ const BOX_CSS = [
   'position: absolute',
   'right: 12px',
   'z-index: 20',
-  'background: rgba(4, 4, 10, 0.75)',
-  'backdrop-filter: blur(4px)',
-  'border: 1px solid rgba(255, 255, 255, 0.14)',
+  `background: ${THEME.panelBgLight}`,
+  `backdrop-filter: ${THEME.blurLight}`,
+  `border: 1px solid ${THEME.borderDefault}`,
   `width: ${BOX_WIDTH}px`,
   'box-sizing: border-box',
   'padding: 8px 20px',
-  "font-family: 'Segoe UI', monospace",
+  `font-family: ${THEME.fontUI}`,
   'font-size: 15px',
-  'color: #ccd8ea',
+  `color: ${THEME.textPrimary}`,
   'letter-spacing: 1px',
   'display: none',
   'text-align: center',
@@ -111,11 +112,11 @@ export class WaveHUD {
       'z-index: 20',
       'padding: 5px 16px',
       'background: rgba(60, 60, 120, 0.8)',
-      'backdrop-filter: blur(4px)',
+      `backdrop-filter: ${THEME.blurLight}`,
       'border: 1px solid rgba(140, 140, 255, 0.4)',
-      'border-radius: 4px',
+      `border-radius: ${THEME.radiusSm}`,
       'color: #aabbee',
-      "font-family: 'Segoe UI', monospace",
+      `font-family: ${THEME.fontUI}`,
       'font-size: 13px',
       'cursor: pointer',
       'letter-spacing: 1px',
@@ -140,14 +141,14 @@ export class WaveHUD {
       'display: none',
       'text-align: center',
       'pointer-events: none',
-      "font-family: 'Segoe UI', monospace",
+      `font-family: ${THEME.fontUI}`,
     ].join('; ');
 
     // Event banner (big centered text, hidden by default)
     this.bannerEl = document.createElement('div');
     this.bannerEl.style.cssText = [
       'position: absolute',
-      'top: 35%',
+      'top: 20%',
       'left: 50%',
       'transform: translate(-50%, -50%)',
       'z-index: 50',
@@ -168,7 +169,7 @@ export class WaveHUD {
     this.bannerDescEl = document.createElement('div');
     this.bannerDescEl.style.cssText = [
       'position: absolute',
-      'top: calc(35% + 36px)',
+      'top: calc(20% + 36px)',
       'left: 50%',
       'transform: translate(-50%, -50%)',
       'z-index: 50',
@@ -199,7 +200,7 @@ export class WaveHUD {
     ].join('; ');
 
     this.bossBarNameEl = document.createElement('div');
-    this.bossBarNameEl.style.cssText = "font-family:'Segoe UI',sans-serif;font-size:18px;font-weight:700;color:#ffcc44;letter-spacing:3px;margin-bottom:4px;text-shadow:0 1px 4px rgba(0,0,0,0.8);";
+    this.bossBarNameEl.style.cssText = `font-family:${THEME.fontUI};font-size:18px;font-weight:700;color:#ffcc44;letter-spacing:3px;margin-bottom:4px;text-shadow:0 1px 4px rgba(0,0,0,0.8);`;
 
     const barOuter = document.createElement('div');
     barOuter.style.cssText = 'width:400px;height:10px;background:rgba(0,0,0,0.6);border:1px solid rgba(255,255,255,0.15);border-radius:3px;overflow:hidden;';
@@ -209,7 +210,7 @@ export class WaveHUD {
     barOuter.appendChild(this.bossBarFill);
 
     this.bossBarHpText = document.createElement('div');
-    this.bossBarHpText.style.cssText = "font-family:monospace;font-size:11px;color:#999;margin-top:2px;";
+    this.bossBarHpText.style.cssText = `font-family:${THEME.fontMono};font-size:11px;color:${THEME.textSecondary};margin-top:2px;`;
 
     this.bossBarContainer.append(this.bossBarNameEl, barOuter, this.bossBarHpText);
 
@@ -384,6 +385,7 @@ export class WaveHUD {
 
   /** Show a dramatic banner in the center of the screen for 3 seconds. */
   private showBanner(text: string, description?: string, color?: string): void {
+    if (this.paused) return;
     this.bannerEl.textContent = text;
     this.bannerEl.style.color = color ?? '#ffcc44';
     this.bannerEl.style.opacity = '1';
@@ -453,6 +455,11 @@ export class WaveHUD {
   setPaused(p: boolean): void {
     this.paused = p;
     this.dirty = true;
+    if (p) {
+      this.bannerEl.style.opacity = '0';
+      this.bannerDescEl.style.opacity = '0';
+      this.bannerTimer = 0;
+    }
   }
 
   private render(): void {

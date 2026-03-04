@@ -60,6 +60,15 @@ export const PLAYER_BASE_SPEED = 180;
 /** Full health at spawn. */
 export const PLAYER_MAX_HEALTH = 100;
 
+/** Per-resource carry limits for players. Gold is unlimited (Infinity). */
+export const PLAYER_CARRY_LIMITS: Record<string, number> = {
+  wood: 100,
+  stone: 50,
+  iron: 50,
+  diamond: 50,
+  gold: Infinity,
+};
+
 /** Full stamina at spawn. */
 export const PLAYER_MAX_STAMINA = 100;
 
@@ -352,32 +361,52 @@ export const WALL_MAX_HEALTH = 150;
 /** Half-extent of a 1×1 building AABB in world pixels (legacy default). */
 export const BUILDING_HALF_EXTENT = TILE_SIZE / 2; // 16px
 
-/** Tile dimensions per building type (tiles along each edge). */
-export const BUILDING_SIZES: Record<string, number> = {
-  wall: 1, campfire: 3, warehouse: 3, lumbermill: 2, quarry: 2, mine: 2, farm: 2,
-  arrow_turret: 1, cannon_turret: 2, spike_trap: 1, bridge: 1,
-  light_tower: 1, healing_shrine: 1, barracks: 2, potion_shop: 2,
-  cat_house: 2, dormitory: 2,
+/** Tile dimensions per building type (width x height in tiles). */
+export const BUILDING_SIZES: Record<string, { w: number; h: number }> = {
+  wall: { w: 1, h: 1 }, campfire: { w: 3, h: 3 }, warehouse: { w: 3, h: 3 },
+  lumbermill: { w: 2, h: 2 }, quarry: { w: 2, h: 2 }, mine: { w: 2, h: 2 }, farm: { w: 2, h: 2 },
+  arrow_turret: { w: 1, h: 1 }, cannon_turret: { w: 2, h: 2 }, spike_trap: { w: 1, h: 1 }, bridge: { w: 1, h: 1 },
+  light_tower: { w: 1, h: 1 }, healing_shrine: { w: 1, h: 1 }, barracks: { w: 2, h: 2 }, potion_shop: { w: 2, h: 2 },
+  cat_house: { w: 2, h: 2 }, dormitory: { w: 2, h: 2 },
+  gate: { w: 3, h: 1 }, ballista: { w: 2, h: 2 }, laser_tower: { w: 1, h: 1 },
+  workshop: { w: 2, h: 2 }, training_center: { w: 2, h: 2 },
 };
 
-/** Half-extent in world pixels for a building of the given type. */
+/**
+ * Half-extent in world pixels for a building of the given type.
+ * For square buildings (backward compat) - returns single number.
+ */
 export function buildingHalfExtent(type: string): number {
-  return ((BUILDING_SIZES[type] ?? 1) * TILE_SIZE) / 2;
+  const size = BUILDING_SIZES[type];
+  if (!size) return TILE_SIZE / 2;
+  // For square buildings, use the width (same as height)
+  return (size.w * TILE_SIZE) / 2;
+}
+
+/**
+ * Full extent (half-width, half-height) for a building, accounting for rotation.
+ * Rotation 1 swaps width and height.
+ */
+export function buildingExtent(type: string, rotation: number = 0): { hx: number; hy: number } {
+  const size = BUILDING_SIZES[type] ?? { w: 1, h: 1 };
+  const w = rotation === 1 ? size.h : size.w;
+  const h = rotation === 1 ? size.w : size.h;
+  return { hx: (w * TILE_SIZE) / 2, hy: (h * TILE_SIZE) / 2 };
 }
 
 /**
  * Snap a world-pixel coordinate to the correct grid position for a building.
- * Odd-tile buildings align to tile centers; even-tile buildings align to tile corners.
+ * Each axis snaps independently: odd tile count = tile center, even = tile corner.
  */
-export function snapBuildingPosition(wx: number, wy: number, type: string): { x: number; y: number } {
-  const tiles = BUILDING_SIZES[type] ?? 1;
-  if (tiles % 2 === 1) {
-    return { x: Math.floor(wx / TILE_SIZE) * TILE_SIZE + TILE_SIZE / 2,
-             y: Math.floor(wy / TILE_SIZE) * TILE_SIZE + TILE_SIZE / 2 };
-  } else {
-    return { x: Math.round(wx / TILE_SIZE) * TILE_SIZE,
-             y: Math.round(wy / TILE_SIZE) * TILE_SIZE };
-  }
+export function snapBuildingPosition(wx: number, wy: number, type: string, rotation: number = 0): { x: number; y: number } {
+  const size = BUILDING_SIZES[type] ?? { w: 1, h: 1 };
+  const tw = rotation === 1 ? size.h : size.w;
+  const th = rotation === 1 ? size.w : size.h;
+  const snapAxis = (val: number, tiles: number) => {
+    if (tiles % 2 === 1) return Math.floor(val / TILE_SIZE) * TILE_SIZE + TILE_SIZE / 2;
+    return Math.round(val / TILE_SIZE) * TILE_SIZE;
+  };
+  return { x: snapAxis(wx, tw), y: snapAxis(wy, th) };
 }
 
 /** Wood cost to place a Wall. */
@@ -422,6 +451,17 @@ export const CAT_HOUSE_MAX_HEALTH = 100;
 /** Dormitory HP. */
 export const DORMITORY_MAX_HEALTH = 150;
 
+/** Gate HP. */
+export const GATE_MAX_HEALTH = 250;
+/** Ballista HP. */
+export const BALLISTA_MAX_HEALTH = 120;
+/** Laser tower HP. */
+export const LASER_TOWER_MAX_HEALTH = 100;
+/** Workshop HP. */
+export const WORKSHOP_MAX_HEALTH = 150;
+/** Training center HP. */
+export const TRAINING_CENTER_MAX_HEALTH = 220;
+
 /** Radius (px) for auto-depositing player resources into the warehouse. */
 export const WAREHOUSE_DEPOSIT_RADIUS = 80;
 
@@ -447,6 +487,11 @@ export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'i
   potion_shop:    { wood: 15, stone: 10, food: 5 },
   cat_house:      { wood: 10, stone: 5 },
   dormitory:      { wood: 20, stone: 15, iron: 5 },
+  gate:           { wood: 8, stone: 5 },
+  ballista:       { stone: 8, iron: 8 },
+  laser_tower:    { stone: 10, iron: 10, diamond: 1 },
+  workshop:       { wood: 15, iron: 10, diamond: 2 },
+  training_center: { wood: 20, iron: 15, diamond: 3 },
 };
 
 /** Ordered list of building types the player can cycle through in build mode. */
@@ -455,6 +500,7 @@ export const PLACEABLE_BUILDINGS: string[] = [
   'arrow_turret', 'cannon_turret', 'spike_trap', 'bridge',
   'light_tower', 'healing_shrine', 'potion_shop',
   'cat_house', 'dormitory',
+  'gate', 'ballista', 'laser_tower', 'workshop', 'training_center',
 ];
 
 // ─── Production Buildings ──────────────────────────────────────────────────
@@ -519,6 +565,7 @@ export const BUILDING_MAX_LEVEL: Record<BuildingType, number> = {
   arrow_turret: 3, cannon_turret: 3, spike_trap: 3,
   light_tower: 3, healing_shrine: 3, barracks: 3, potion_shop: 3,
   cat_house: 3, dormitory: 3,
+  gate: 3, ballista: 3, laser_tower: 3, workshop: 3, training_center: 3,
 };
 
 /** Cost multiplier for each upgrade level (index 0 = level 2, index 1 = level 3, etc.). */
@@ -577,6 +624,52 @@ export const GUARD_MELEE_KNOCKBACK = 150;
 export const GUARD_RADIUS = 10;
 /** Guard detection range for hostile enemies (px). */
 export const GUARD_DETECT_RANGE = 150;
+
+// ─── Ballista ──────────────────────────────────────────────────────────────
+
+/** Ballista targeting range (px). */
+export const BALLISTA_RANGE = 400;
+/** Ballista cooldown (seconds). */
+export const BALLISTA_COOLDOWN = 5;
+/** Ballista damage per bolt. */
+export const BALLISTA_DAMAGE = 40;
+/** Ballista projectile speed (px/s). */
+export const BALLISTA_PROJ_SPEED = 500;
+/** Ballista AOE radius per level (px) - explosion on ground impact. */
+export const UPGRADE_BALLISTA_AOE = [60, 80, 100];
+/** Ballista cooldown multiplier per level. */
+export const UPGRADE_BALLISTA_CD = [1, 0.85, 0.7];
+/** Ballista damage multiplier per level. */
+export const UPGRADE_BALLISTA_DMG = [1, 1.3, 1.6];
+
+// ─── Laser Tower ───────────────────────────────────────────────────────────
+
+/** Laser tower targeting range per level (px). */
+export const UPGRADE_LASER_RANGE = [250, 300, 350];
+/** Laser tower DPS per level. */
+export const UPGRADE_LASER_DPS = [15, 22, 30];
+
+// ─── Workshop ──────────────────────────────────────────────────────────────
+
+/** Workshop production interval per level (seconds per weapon). */
+export const WORKSHOP_PROD_INTERVAL = [30, 22, 15];
+
+// ─── Training Center ───────────────────────────────────────────────────────
+
+/** Max trained guards per training center level. */
+export const TRAINING_CENTER_MAX_GUARDS = [2, 3, 4];
+/** Training center guard role stats. */
+export const TC_WARRIOR_HP = 100;
+export const TC_WARRIOR_DAMAGE = 15;
+export const TC_WARRIOR_SPEED = 55;
+export const TC_RANGER_HP = 60;
+export const TC_RANGER_DAMAGE = 10;
+export const TC_RANGER_RANGE = 180;
+export const TC_RANGER_SPEED = 50;
+export const TC_MAGE_HP = 50;
+export const TC_MAGE_DAMAGE = 8;
+export const TC_MAGE_RANGE = 200;
+export const TC_MAGE_SPEED = 45;
 
 /**
  * Returns the resource cost to upgrade a building from its current level to the next,
@@ -654,7 +747,12 @@ export const CIVILIAN_SPAWN_WAVE_INTERVAL = 3;
 /** Hard cap on total civilian population. */
 export const CIVILIAN_MAX_POPULATION = 20;
 /** Base housing capacity provided by the campfire (no building needed). */
-export const CAMPFIRE_HOUSING_CAPACITY = 3;
+/** Base campfire housing capacity (flat, used as fallback). */
+export const CAMPFIRE_HOUSING_CAPACITY = 2;
+/** Campfire housing capacity per upgrade level (levels 1-5). */
+export const CAMPFIRE_HOUSING_PER_LEVEL = [2, 4, 6, 8, 10];
+/** Number of civilians spawned on wave clear after a campfire level-up. */
+export const CAMPFIRE_SPAWN_ON_LEVELUP = 2;
 
 /** Seconds a speech bubble stays visible. */
 export const CIVILIAN_SPEECH_DURATION = 4;

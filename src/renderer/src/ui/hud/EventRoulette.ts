@@ -2,6 +2,8 @@
 // EventRoulette - slot-machine spinner shown at the start of each day
 // ---------------------------------------------------------------------------
 
+import { THEME } from '../theme';
+
 /** Color palette for each event. */
 const EVENT_COLORS: Record<string, string> = {
   meteor_shower: '#ff6633',
@@ -53,12 +55,12 @@ export class EventRoulette {
       `height: ${ITEM_HEIGHT * VISIBLE_ITEMS}px`,
       'overflow: hidden',
       'border: 2px solid rgba(255, 200, 80, 0.5)',
-      'border-radius: 8px',
-      'background: rgba(4, 4, 12, 0.85)',
-      'backdrop-filter: blur(6px)',
+      `border-radius: ${THEME.radiusLg}`,
+      `background: ${THEME.panelBg}`,
+      `backdrop-filter: ${THEME.blurHeavy}`,
       'display: none',
       'pointer-events: none',
-      "font-family: 'Segoe UI', monospace",
+      `font-family: ${THEME.fontUI}`,
     ].join('; ');
 
     // Selection indicator (center highlight bar)

@@ -142,6 +142,8 @@ export enum MessageType {
   GAME_SAVED = 'GAME_SAVED',
   /** Client → Server: delete a save slot. */
   SAVE_DELETE = 'SAVE_DELETE',
+  /** Server → client: generic notification toast (e.g. inventory full). */
+  NOTIFICATION = 'NOTIFICATION',
 
   // ── Debug ─────────────────────────────────────────────────────────────────
   /** Client → Server: spawn a wave of enemies around the sender (dev tool). */
@@ -252,6 +254,12 @@ export enum MessageType {
   CIVILIAN_PANEL_STATE = 'CIVILIAN_PANEL_STATE',
   /** Client → Server: assign a civilian to a building (or unassign). */
   CIVILIAN_ASSIGN = 'CIVILIAN_ASSIGN',
+
+  // ── Training Center ─────────────────────────────────────────────────────
+  /** Client → Server: train a guard at a training center. */
+  TRAIN_GUARD = 'TRAIN_GUARD',
+  /** Server → Client: training result (success/fail + reason). */
+  TRAIN_GUARD_RESULT = 'TRAIN_GUARD_RESULT',
 }
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
@@ -406,6 +414,8 @@ export interface EntitySnapshot {
   downed?: boolean;
   /** Present only for 'building' faction entities. */
   buildingType?: import('./components').BuildingType;
+  /** Building rotation: 0 = default, 1 = rotated 90 degrees. */
+  buildingRotation?: number;
   /** Stored resource count for production buildings (lumbermill/mine/farm). */
   productionStored?: number;
   /** Max stored capacity for production buildings. */
@@ -440,6 +450,10 @@ export interface EntitySnapshot {
   cardRarity?: string;
   /** Boss definition ID. Only present for boss enemies. */
   bossId?: string;
+  /** Laser tower target entity ID (for client beam rendering). -1 or absent = idle. */
+  laserTargetId?: number;
+  /** Guard role (warrior/ranger/mage) for training center guards. */
+  guardRole?: string;
   /** True if this building is in ruins state (destroyed but repairable). */
   isRuins?: boolean;
   /** True if the ruins are still burning (visual fire effect). */
@@ -545,6 +559,8 @@ export interface ProjectileSpawnMessage extends BaseMessage {
   pierce?: boolean;
   /** True if projectile homes in on nearest enemy (mage). */
   homing?: boolean;
+  /** True if this is a ballista bolt (bigger arrow visual). */
+  ballista?: boolean;
 }
 
 /** Server → all: a projectile was destroyed. */
@@ -627,6 +643,7 @@ export interface ResourceUpdateMessage extends BaseMessage {
   diamond: number;
   gold: number;
   food: number;
+  weapons: number;
 }
 
 /** Client → Server: player pressed E to interact/pick up nearby item. */
@@ -753,6 +770,8 @@ export interface BuildPlaceMessage extends BaseMessage {
   /** World-pixel position (server will grid-snap). */
   x: number;
   y: number;
+  /** Building rotation: 0 = default, 1 = rotated 90 degrees. */
+  rotation?: number;
 }
 
 /** Server → placing client: placement confirmed or rejected. */
@@ -845,6 +864,7 @@ export interface WarehouseUpdateMessage extends BaseMessage {
   diamond: number;
   gold: number;
   food: number;
+  weapons: number;
   exists: boolean;
 }
 
@@ -872,6 +892,13 @@ export interface GameSavedMessage extends BaseMessage {
 export interface SaveDeleteMessage extends BaseMessage {
   type: typeof MessageType.SAVE_DELETE;
   slot: number;
+}
+
+/** Server → client: generic notification toast. */
+export interface NotificationMessage extends BaseMessage {
+  type: typeof MessageType.NOTIFICATION;
+  text: string;
+  level: 'info' | 'warning' | 'danger' | 'success';
 }
 
 // ── Phase 6 ──────────────────────────────────────────────────────────────────
@@ -1099,6 +1126,22 @@ export interface CivilianAssignMessage extends BaseMessage {
   buildingId: number | null;
 }
 
+// ── Training Center Messages ────────────────────────────────────────────────
+
+/** Client -> Server: request to train a guard at a training center. */
+export interface TrainGuardMessage extends BaseMessage {
+  type: typeof MessageType.TRAIN_GUARD;
+  buildingId: number;
+  role: 'warrior' | 'ranger' | 'mage';
+}
+
+/** Server -> Client: training result. */
+export interface TrainGuardResultMessage extends BaseMessage {
+  type: typeof MessageType.TRAIN_GUARD_RESULT;
+  success: boolean;
+  reason?: string;
+}
+
 // ── Phase 9: Day/Night Messages ──────────────────────────────────────────────
 
 export type DayNightPhase = 'day' | 'dusk' | 'night' | 'dawn';
@@ -1293,6 +1336,8 @@ export type AnyMessage =
   | CivilianPanelRequestMessage
   | CivilianPanelStateMessage
   | CivilianAssignMessage
+  | TrainGuardMessage
+  | TrainGuardResultMessage
   | DayNightSyncMessage
   | SleepVoteMessage
   | SleepUpdateMessage

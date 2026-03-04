@@ -79,6 +79,7 @@ export function createSaveManager(deps: SaveManagerDeps) {
         upgradeLevel: bld.upgradeLevel,
         currentHp: hp.current,
         maxHp: hp.max,
+        rotation: bld.rotation || undefined,
       };
 
       const prod = world.getComponent<ProductionComponent>(id, C.Production);
@@ -145,7 +146,7 @@ export function createSaveManager(deps: SaveManagerDeps) {
         playerId: p.playerId,
         displayName: p.displayName,
         slot: p.slot,
-        resources: { wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold, food: res.food },
+        resources: { wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold, food: res.food, weapons: res.weapons },
         hp: hp.current,
         maxHp: hp.max,
         x: pos.x,
