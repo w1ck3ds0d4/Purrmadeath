@@ -19,6 +19,10 @@ const BUILDING_LABELS: Record<string, string> = {
   quarry: 'Quarry',
   mine: 'Mine',
   farm: 'Farm',
+  workshop: 'Workshop',
+  brewery: 'Brewery',
+  lumber_camp: 'Lumber Camp',
+  repair_station: 'Repair Station',
 };
 
 /**
@@ -152,10 +156,15 @@ export class CivilianPanelOverlay {
       row.addEventListener('mouseenter', () => { if (!isSelected) row.style.borderColor = THEME.accentRgba(0.3); });
       row.addEventListener('mouseleave', () => { if (!isSelected) row.style.borderColor = THEME.borderSubtle; });
 
-      // Name
+      // Name + specialty badge
       const nameEl = document.createElement('span');
       nameEl.style.cssText = `font-weight: bold; color: ${THEME.accent}; min-width: 80px;`;
-      nameEl.textContent = civ.name;
+      if (civ.specialty) {
+        const specLabel = BUILDING_LABELS[civ.specialty] ?? civ.specialty;
+        nameEl.innerHTML = `${civ.name} <span style="color:#e8c96a;font-size:10px;font-weight:normal" title="Specialized in ${specLabel}">&#9733; ${specLabel}</span>`;
+      } else {
+        nameEl.textContent = civ.name;
+      }
       row.appendChild(nameEl);
 
       // State

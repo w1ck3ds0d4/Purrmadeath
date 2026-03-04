@@ -20,7 +20,8 @@ import {
   CIVILIAN_INITIAL_COUNT, CIVILIAN_SPAWN_WAVE_INTERVAL,
   CIVILIAN_MAX_POPULATION, CAMPFIRE_HOUSING_PER_LEVEL, CAMPFIRE_SPAWN_ON_LEVELUP,
   CIVILIAN_SPEECH_DURATION, CAT_NAMES,
-  CIVILIAN_RADIUS, buildingHalfExtent,
+  CIVILIAN_RADIUS, buildingHalfExtent, buildingExtent,
+  CIVILIAN_SPECIALIZATION_THRESHOLD,
 } from '@shared/constants';
 import { MessageType } from '@shared/protocol';
 import type { CivilianPanelEntry, WorkableBuildingEntry, CivilianPanelStateMessage } from '@shared/protocol';
@@ -68,6 +69,36 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
     return `Cat #${usedNames.size + 1}`;
   }
 
+  // ── Spawn position helper ───────────────────────────────────────────────
+
+  /** Check if a position overlaps any building AABB (with civilian radius margin). */
+  function overlapsBuilding(px: number, py: number): boolean {
+    for (const id of world.query(C.Building, C.Position)) {
+      const bldg = world.getComponent<BuildingComponent>(id, C.Building)!;
+      const bp = world.getComponent<PositionComponent>(id, C.Position)!;
+      const ext = buildingExtent(bldg.buildingType, bldg.rotation ?? 0);
+      const margin = CIVILIAN_RADIUS;
+      if (Math.abs(px - bp.x) < ext.hx + margin && Math.abs(py - bp.y) < ext.hy + margin) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Find a clear spawn position around a center point, avoiding buildings. */
+  function findClearSpawn(cx: number, cy: number, minDist: number, maxDist: number): { x: number; y: number } {
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const angle = Math.random() * Math.PI * 2;
+      const dist = minDist + Math.random() * (maxDist - minDist);
+      const x = cx + Math.cos(angle) * dist;
+      const y = cy + Math.sin(angle) * dist;
+      if (!overlapsBuilding(x, y)) return { x, y };
+    }
+    // Fallback: return further out
+    const angle = Math.random() * Math.PI * 2;
+    return { x: cx + Math.cos(angle) * (maxDist + 40), y: cy + Math.sin(angle) * (maxDist + 40) };
+  }
+
   // ── Spawn ───────────────────────────────────────────────────────────────
 
   function spawnCivilian(x: number, y: number, send: SendFn): number {
@@ -92,6 +123,8 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
       speechTimer: 0,
       carryResource: null,
       carryAmount: 0,
+      experience: {},
+      specialty: null,
     } as CivilianComponent);
 
     civilianIds.add(id);
@@ -105,13 +138,8 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
 
   function spawnInitialCivilians(origin: { x: number; y: number }, send: SendFn): void {
     for (let i = 0; i < CIVILIAN_INITIAL_COUNT; i++) {
-      const angle = (i / CIVILIAN_INITIAL_COUNT) * Math.PI * 2;
-      const dist = 60 + Math.random() * 40;
-      spawnCivilian(
-        origin.x + Math.cos(angle) * dist,
-        origin.y + Math.sin(angle) * dist,
-        send,
-      );
+      const pos = findClearSpawn(origin.x, origin.y, 60, 100);
+      spawnCivilian(pos.x, pos.y, send);
     }
     reassignWorkers();
   }
@@ -585,15 +613,30 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
 
     for (let i = 0; i < spawnCount; i++) {
       if (getCivilianCount() >= capacity || getCivilianCount() >= CIVILIAN_MAX_POPULATION) break;
-      const angle = Math.random() * Math.PI * 2;
-      const dist = 40 + Math.random() * 60;
-      spawnCivilian(
-        campPos.x + Math.cos(angle) * dist,
-        campPos.y + Math.sin(angle) * dist,
-        send,
-      );
+      const pos = findClearSpawn(campPos.x, campPos.y, 40, 100);
+      spawnCivilian(pos.x, pos.y, send);
     }
     if (spawnCount > 0) reassignWorkers();
+
+    // ── Civilian specialization: increment experience for assigned workers ──
+    for (const cid of civilianIds) {
+      if (!world.hasEntity(cid)) continue;
+      const civ = world.getComponent<CivilianComponent>(cid, C.Civilian)!;
+      if (civ.assignedBuildingId === null) continue;
+      if (!world.hasEntity(civ.assignedBuildingId)) continue;
+      const bldg = world.getComponent<BuildingComponent>(civ.assignedBuildingId, C.Building);
+      if (!bldg) continue;
+      const bType = bldg.buildingType;
+      civ.experience[bType] = (civ.experience[bType] ?? 0) + 1;
+      if (civ.specialty === null && civ.experience[bType] >= CIVILIAN_SPECIALIZATION_THRESHOLD) {
+        civ.specialty = bType;
+        civ.speechBubble = "I'm an expert now!";
+        civ.speechTimer = CIVILIAN_SPEECH_DURATION;
+        // Broadcast speech
+        const speechMsg = { type: MessageType.CIVILIAN_SPEECH, entityId: cid, text: civ.speechBubble };
+        for (const p of deps.players.values()) send(p.client, speechMsg);
+      }
+    }
   }
 
   // ── Building events ─────────────────────────────────────────────────────
@@ -658,6 +701,7 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
         assignedBuildingId: civ.assignedBuildingId,
         assignedBuildingType,
         downed,
+        specialty: civ.specialty ?? null,
       });
     }
 
@@ -731,6 +775,8 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
         currentHp: hp.current, maxHp: hp.max,
         hunger: civ.hunger,
         state: civ.state,
+        experience: civ.experience,
+        specialty: civ.specialty,
       });
     }
     return result;
@@ -759,6 +805,8 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
         speechTimer: 0,
         carryResource: null,
         carryAmount: 0,
+        experience: sc.experience ?? {},
+        specialty: sc.specialty ?? null,
       } as CivilianComponent);
 
       civilianIds.add(id);

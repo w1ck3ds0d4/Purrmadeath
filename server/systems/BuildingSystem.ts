@@ -18,6 +18,8 @@ import type {
   EnemyStatsComponent, GhostStateComponent, LightRevealComponent,
   HealAuraComponent, BarracksSpawnerComponent, GuardComponent,
   WorkerSlotComponent, HousingComponent, RuinsComponent, LaserBeamComponent,
+  TeslaCoilComponent, FlameAuraComponent, MoatComponent, RadarComponent,
+  RepairAuraComponent, TeleporterComponent, TavernComponent,
 } from '@shared/components';
 import {
   TILE_SIZE, PLAYER_RADIUS, ENEMY_RADIUS, RESOURCE_NODE_RADIUS,
@@ -52,9 +54,28 @@ import {
   TC_RANGER_HP, TC_RANGER_DAMAGE, TC_RANGER_RANGE, TC_RANGER_SPEED,
   TC_MAGE_HP, TC_MAGE_DAMAGE, TC_MAGE_RANGE, TC_MAGE_SPEED,
   getUpgradeCost, getRepairCost,
+  // New buildings
+  TESLA_COIL_MAX_HEALTH, FLAME_TOWER_MAX_HEALTH, CATAPULT_MAX_HEALTH,
+  MOAT_MAX_HEALTH, REINFORCED_WALL_MAX_HEALTH,
+  RADAR_TOWER_MAX_HEALTH, REPAIR_STATION_MAX_HEALTH, STORAGE_SHED_MAX_HEALTH,
+  TELEPORTER_PAD_MAX_HEALTH, BREWERY_MAX_HEALTH, LUMBER_CAMP_MAX_HEALTH, TAVERN_MAX_HEALTH,
+  TESLA_COIL_RANGE, TESLA_COIL_COOLDOWN, TESLA_COIL_DAMAGE, TESLA_COIL_CHAIN_COUNT, TESLA_COIL_CHAIN_RANGE,
+  UPGRADE_TESLA_DAMAGE, UPGRADE_TESLA_CHAIN, UPGRADE_TESLA_CD,
+  FLAME_TOWER_RANGE, FLAME_TOWER_DPS, FLAME_TOWER_ARC,
+  UPGRADE_FLAME_DPS, UPGRADE_FLAME_RANGE,
+  CATAPULT_RANGE, CATAPULT_COOLDOWN, CATAPULT_DAMAGE, CATAPULT_AOE_RADIUS, CATAPULT_PROJ_SPEED,
+  UPGRADE_CATAPULT_DMG, UPGRADE_CATAPULT_CD, UPGRADE_CATAPULT_AOE,
+  MOAT_SLOW_FACTOR,
+  UPGRADE_RADAR_RANGE,
+  REPAIR_STATION_HP_PER_TICK, REPAIR_STATION_INTERVAL, REPAIR_STATION_COST_WOOD, REPAIR_STATION_COST_STONE,
+  BREWERY_FOOD_COST, BREWERY_PRODUCTION_INTERVAL,
+  LUMBER_CAMP_PRODUCTION_INTERVAL, LUMBER_CAMP_AMOUNT,
+  TAVERN_MAX_HEROES, TAVERN_ROSTER_SIZE,
+  CIVILIAN_SPECIALTY_BONUS,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import { MessageType } from '@shared/protocol';
+import { HERO_IDS } from '@shared/definitions/HeroDefinitions';
 import type {
   BuildPlaceMessage, BuildConfirmMessage, BuildDemolishMessage, BuildUpgradeMessage,
   BuildUpgradeConfirmMessage, BuildRepairMessage, BuildRepairConfirmMessage,
@@ -81,6 +102,18 @@ const HP_MAP: Record<string, number> = {
   laser_tower: LASER_TOWER_MAX_HEALTH,
   workshop: WORKSHOP_MAX_HEALTH,
   training_center: TRAINING_CENTER_MAX_HEALTH,
+  tesla_coil: TESLA_COIL_MAX_HEALTH,
+  flame_tower: FLAME_TOWER_MAX_HEALTH,
+  catapult: CATAPULT_MAX_HEALTH,
+  moat: MOAT_MAX_HEALTH,
+  reinforced_wall: REINFORCED_WALL_MAX_HEALTH,
+  radar_tower: RADAR_TOWER_MAX_HEALTH,
+  repair_station: REPAIR_STATION_MAX_HEALTH,
+  storage_shed: STORAGE_SHED_MAX_HEALTH,
+  teleporter_pad: TELEPORTER_PAD_MAX_HEALTH,
+  brewery: BREWERY_MAX_HEALTH,
+  lumber_camp: LUMBER_CAMP_MAX_HEALTH,
+  tavern: TAVERN_MAX_HEALTH,
 };
 
 // ── Dependencies injected from GameSession ──────────────────────────────────
@@ -216,6 +249,17 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
+  /** Generate a random tavern roster of TAVERN_ROSTER_SIZE hero IDs. */
+  function generateTavernRoster(): string[] {
+    const pool = [...HERO_IDS];
+    const roster: string[] = [];
+    for (let i = 0; i < TAVERN_ROSTER_SIZE && pool.length > 0; i++) {
+      const idx = Math.floor(Math.random() * pool.length);
+      roster.push(pool.splice(idx, 1)[0]);
+    }
+    return roster;
+  }
+
   function handlePlace(clientId: string, msg: BuildPlaceMessage, send: SendFn): void {
     if (!isActive()) return;
     const player = players.get(clientId);
@@ -348,10 +392,69 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       world.addComponent(id, C.Housing, { capacity: CAT_HOUSE_CAPACITY[0], residentIds: [] } as HousingComponent);
     } else if (msg.buildingType === 'dormitory') {
       world.addComponent(id, C.Housing, { capacity: DORMITORY_CAPACITY[0], residentIds: [] } as HousingComponent);
+    } else if (msg.buildingType === 'tesla_coil') {
+      world.addComponent(id, C.TeslaCoil, {
+        range: TESLA_COIL_RANGE, cooldown: TESLA_COIL_COOLDOWN,
+        cooldownTimer: 0, damage: TESLA_COIL_DAMAGE,
+        chainCount: TESLA_COIL_CHAIN_COUNT, chainRange: TESLA_COIL_CHAIN_RANGE,
+      } as TeslaCoilComponent);
+    } else if (msg.buildingType === 'flame_tower') {
+      world.addComponent(id, C.FlameAura, {
+        range: FLAME_TOWER_RANGE, dps: FLAME_TOWER_DPS,
+        arcRadians: FLAME_TOWER_ARC, facing: 0,
+      } as FlameAuraComponent);
+    } else if (msg.buildingType === 'catapult') {
+      world.addComponent(id, C.Turret, {
+        range: CATAPULT_RANGE, cooldown: CATAPULT_COOLDOWN,
+        cooldownTimer: 0, damage: CATAPULT_DAMAGE, projectileSpeed: CATAPULT_PROJ_SPEED,
+      } as TurretComponent);
+    } else if (msg.buildingType === 'moat') {
+      world.addComponent(id, C.Moat, { slowFactor: MOAT_SLOW_FACTOR } as MoatComponent);
+    } else if (msg.buildingType === 'radar_tower') {
+      world.addComponent(id, C.Radar, { revealRadius: UPGRADE_RADAR_RANGE[0] } as RadarComponent);
+    } else if (msg.buildingType === 'repair_station') {
+      world.addComponent(id, C.RepairAura, {
+        repairPerTick: REPAIR_STATION_HP_PER_TICK[0], interval: REPAIR_STATION_INTERVAL[0], timer: 0,
+      } as RepairAuraComponent);
+    } else if (msg.buildingType === 'storage_shed') {
+      warehouseIds.add(id);
+      broadcastWarehouseUpdate(send);
+    } else if (msg.buildingType === 'teleporter_pad') {
+      // Auto-pair with nearest unpaired teleporter
+      let pairedId: number | null = null;
+      let bestDist = Infinity;
+      for (const otherId of world.query(C.Teleporter, C.Position)) {
+        if (otherId === id) continue;
+        const tp = world.getComponent<TeleporterComponent>(otherId, C.Teleporter)!;
+        if (tp.pairedId !== null) continue;
+        const oPos = world.getComponent<PositionComponent>(otherId, C.Position)!;
+        const d = distance(oPos.x - snapX, oPos.y - snapY);
+        if (d < bestDist) { bestDist = d; pairedId = otherId; }
+      }
+      world.addComponent(id, C.Teleporter, { pairedId } as TeleporterComponent);
+      if (pairedId !== null) {
+        const otherTp = world.getComponent<TeleporterComponent>(pairedId, C.Teleporter)!;
+        otherTp.pairedId = id;
+      }
+    } else if (msg.buildingType === 'brewery') {
+      world.addComponent(id, C.Production, {
+        resourceType: 'food', interval: BREWERY_PRODUCTION_INTERVAL,
+        timer: 0, amount: 1, stored: 0, maxStored: PRODUCTION_MAX_STORED,
+      } as ProductionComponent);
+    } else if (msg.buildingType === 'lumber_camp') {
+      world.addComponent(id, C.Production, {
+        resourceType: 'wood', interval: LUMBER_CAMP_PRODUCTION_INTERVAL,
+        timer: 0, amount: LUMBER_CAMP_AMOUNT, stored: 0, maxStored: PRODUCTION_MAX_STORED,
+      } as ProductionComponent);
+    } else if (msg.buildingType === 'tavern') {
+      const roster = generateTavernRoster();
+      world.addComponent(id, C.Tavern, {
+        maxHeroes: TAVERN_MAX_HEROES[0], heroIds: [], roster,
+      } as TavernComponent);
     }
 
     // Attach WorkerSlot to production buildings so civilians can staff them
-    if (['lumbermill', 'quarry', 'mine', 'farm', 'workshop'].includes(msg.buildingType)) {
+    if (['lumbermill', 'quarry', 'mine', 'farm', 'workshop', 'brewery', 'lumber_camp', 'repair_station'].includes(msg.buildingType)) {
       world.addComponent(id, C.WorkerSlot, { workerId: null } as WorkerSlotComponent);
     }
 
@@ -566,6 +669,43 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       housing.capacity = DORMITORY_CAPACITY[lvlIdx];
     }
 
+    // Scale tesla coil
+    const tesla = world.getComponent<TeslaCoilComponent>(targetId, C.TeslaCoil);
+    if (tesla) {
+      if (lvlIdx < UPGRADE_TESLA_DAMAGE.length) tesla.damage = UPGRADE_TESLA_DAMAGE[lvlIdx];
+      if (lvlIdx < UPGRADE_TESLA_CHAIN.length) tesla.chainCount = UPGRADE_TESLA_CHAIN[lvlIdx];
+      if (lvlIdx < UPGRADE_TESLA_CD.length) tesla.cooldown = TESLA_COIL_COOLDOWN * UPGRADE_TESLA_CD[lvlIdx];
+    }
+
+    // Scale flame tower
+    const flame = world.getComponent<FlameAuraComponent>(targetId, C.FlameAura);
+    if (flame) {
+      if (lvlIdx < UPGRADE_FLAME_DPS.length) flame.dps = UPGRADE_FLAME_DPS[lvlIdx];
+      if (lvlIdx < UPGRADE_FLAME_RANGE.length) flame.range = UPGRADE_FLAME_RANGE[lvlIdx];
+    }
+
+    // Scale catapult (uses TurretComponent)
+    if (turret && bldg.buildingType === 'catapult') {
+      turret.cooldown = (turret.cooldown / UPGRADE_CATAPULT_CD[oldLevel - 1]) * UPGRADE_CATAPULT_CD[lvlIdx];
+      turret.damage = Math.round((turret.damage / UPGRADE_CATAPULT_DMG[oldLevel - 1]) * UPGRADE_CATAPULT_DMG[lvlIdx]);
+      turret.cooldownTimer = 0;
+    }
+
+    // Scale radar tower
+    const radar = world.getComponent<RadarComponent>(targetId, C.Radar);
+    if (radar && lvlIdx < UPGRADE_RADAR_RANGE.length) radar.revealRadius = UPGRADE_RADAR_RANGE[lvlIdx];
+
+    // Scale repair station
+    const repair = world.getComponent<RepairAuraComponent>(targetId, C.RepairAura);
+    if (repair) {
+      if (lvlIdx < REPAIR_STATION_HP_PER_TICK.length) repair.repairPerTick = REPAIR_STATION_HP_PER_TICK[lvlIdx];
+      if (lvlIdx < REPAIR_STATION_INTERVAL.length) repair.interval = REPAIR_STATION_INTERVAL[lvlIdx];
+    }
+
+    // Scale tavern
+    const tavern = world.getComponent<TavernComponent>(targetId, C.Tavern);
+    if (tavern && lvlIdx < TAVERN_MAX_HEROES.length) tavern.maxHeroes = TAVERN_MAX_HEROES[lvlIdx];
+
     send(player.client, {
       type: MessageType.BUILD_UPGRADE_CONFIRM, success: true, entityId: targetId, newLevel,
     } as BuildUpgradeConfirmMessage);
@@ -668,7 +808,19 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
 
       const prod = world.getComponent<ProductionComponent>(id, C.Production)!;
       prod.timer += dt;
-      const effectiveInterval = prod.interval * intervalMult;
+      let effectiveInterval = prod.interval * intervalMult;
+
+      // Civilian specialty bonus: 25% faster production if worker is specialized in this building type
+      if (ws && ws.workerId !== null) {
+        const civComp = world.getComponent<import('@shared/components').CivilianComponent>(ws.workerId, C.Civilian);
+        if (civComp?.specialty) {
+          const bldg = world.getComponent<BuildingComponent>(id, C.Building);
+          if (bldg && civComp.specialty === bldg.buildingType) {
+            effectiveInterval *= CIVILIAN_SPECIALTY_BONUS;
+          }
+        }
+      }
+
       if (prod.timer < effectiveInterval) continue;
       prod.timer -= effectiveInterval;
       prod.stored = Math.min(prod.stored + prod.amount, prod.maxStored);
@@ -1087,6 +1239,162 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
   }
 
   /** Re-adds the functional components for a restored ruin. */
+  // ── Tesla Coil tick ──────────────────────────────────────────────────────
+
+  function tickTeslaCoils(dt: number, send: SendFn): void {
+    for (const id of world.query(C.TeslaCoil, C.Position)) {
+      const tc = world.getComponent<TeslaCoilComponent>(id, C.TeslaCoil)!;
+      const pos = world.getComponent<PositionComponent>(id, C.Position)!;
+
+      tc.cooldownTimer -= dt;
+      if (tc.cooldownTimer > 0) continue;
+
+      // Find nearest enemy in range
+      let nearestId = -1;
+      let nearestDist = tc.range + 1;
+      for (const eid of world.query(C.EnemyStats, C.Position)) {
+        const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
+        const d = distance(ep.x - pos.x, ep.y - pos.y);
+        if (d < nearestDist) { nearestDist = d; nearestId = eid; }
+      }
+
+      if (nearestId < 0) continue;
+      tc.cooldownTimer = tc.cooldown * (cards.debuffs.turretCooldownMult ?? 1);
+
+      // Deal damage to primary target
+      const hp0 = world.getComponent<HealthComponent>(nearestId, C.Health);
+      if (hp0) hp0.current -= tc.damage;
+
+      const chain: Array<{ x: number; y: number }> = [];
+      const ep0 = world.getComponent<PositionComponent>(nearestId, C.Position)!;
+      chain.push({ x: ep0.x, y: ep0.y });
+
+      // Chain to nearby enemies
+      const hitIds = new Set<number>([nearestId]);
+      let lastPos = ep0;
+      for (let c = 0; c < tc.chainCount; c++) {
+        let bestId = -1;
+        let bestDist = tc.chainRange + 1;
+        for (const eid of world.query(C.EnemyStats, C.Position)) {
+          if (hitIds.has(eid)) continue;
+          const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
+          const d = distance(ep.x - lastPos.x, ep.y - lastPos.y);
+          if (d < bestDist) { bestDist = d; bestId = eid; }
+        }
+        if (bestId < 0) break;
+        hitIds.add(bestId);
+        const hp = world.getComponent<HealthComponent>(bestId, C.Health);
+        if (hp) hp.current -= Math.round(tc.damage * 0.7);
+        const ep = world.getComponent<PositionComponent>(bestId, C.Position)!;
+        chain.push({ x: ep.x, y: ep.y });
+        lastPos = ep;
+      }
+
+      // Broadcast VFX
+      const chainMsg = { type: MessageType.TESLA_CHAIN, sourceX: pos.x, sourceY: pos.y, chain };
+      for (const p of players.values()) send(p.client, chainMsg);
+    }
+  }
+
+  // ── Flame Tower tick ────────────────────────────────────────────────────
+
+  function tickFlameTowers(dt: number): void {
+    for (const id of world.query(C.FlameAura, C.Position)) {
+      const fl = world.getComponent<FlameAuraComponent>(id, C.FlameAura)!;
+      const pos = world.getComponent<PositionComponent>(id, C.Position)!;
+
+      // Auto-rotate to nearest enemy
+      let nearestDist = fl.range + 1;
+      let nearestAngle = fl.facing;
+      for (const eid of world.query(C.EnemyStats, C.Position)) {
+        const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
+        const d = distance(ep.x - pos.x, ep.y - pos.y);
+        if (d < nearestDist) {
+          nearestDist = d;
+          nearestAngle = Math.atan2(ep.y - pos.y, ep.x - pos.x);
+        }
+      }
+      fl.facing = nearestAngle;
+
+      // Deal DPS to all enemies in cone
+      const halfArc = fl.arcRadians / 2;
+      for (const eid of world.query(C.EnemyStats, C.Position)) {
+        const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
+        const d = distance(ep.x - pos.x, ep.y - pos.y);
+        if (d > fl.range) continue;
+        const angle = Math.atan2(ep.y - pos.y, ep.x - pos.x);
+        let diff = angle - fl.facing;
+        while (diff > Math.PI) diff -= 2 * Math.PI;
+        while (diff < -Math.PI) diff += 2 * Math.PI;
+        if (Math.abs(diff) > halfArc) continue;
+        const hp = world.getComponent<HealthComponent>(eid, C.Health);
+        if (hp) hp.current -= fl.dps * dt;
+      }
+    }
+  }
+
+  // ── Repair Station tick ─────────────────────────────────────────────────
+
+  function tickRepairStations(dt: number): void {
+    for (const id of world.query(C.RepairAura, C.Position)) {
+      // Worker gating: only repair when a civilian is assigned
+      const ws = world.getComponent<WorkerSlotComponent>(id, C.WorkerSlot);
+      if (!ws || ws.workerId === null) continue;
+      if (!world.hasEntity(ws.workerId)) { ws.workerId = null; continue; }
+
+      const ra = world.getComponent<RepairAuraComponent>(id, C.RepairAura)!;
+      ra.timer += dt;
+      if (ra.timer < ra.interval) continue;
+      ra.timer -= ra.interval;
+
+      // Find the most damaged building (lowest HP ratio)
+      let worstId = -1;
+      let worstRatio = 1;
+      for (const bid of world.query(C.Building, C.Health)) {
+        if (bid === id) continue;
+        const bhp = world.getComponent<HealthComponent>(bid, C.Health)!;
+        if (bhp.current >= bhp.max) continue;
+        const ratio = bhp.current / bhp.max;
+        if (ratio < worstRatio) {
+          worstRatio = ratio;
+          worstId = bid;
+        }
+      }
+
+      if (worstId < 0) continue;
+
+      // Consume resources from warehouse
+      const pool = wPool();
+      if (pool.wood < REPAIR_STATION_COST_WOOD || pool.stone < REPAIR_STATION_COST_STONE) continue;
+      pool.wood -= REPAIR_STATION_COST_WOOD;
+      pool.stone -= REPAIR_STATION_COST_STONE;
+
+      // Repair the building
+      const bhp = world.getComponent<HealthComponent>(worstId, C.Health)!;
+      bhp.current = Math.min(bhp.max, bhp.current + ra.repairPerTick);
+    }
+  }
+
+  // ── Moat tick (apply slow to enemies on moat tiles) ─────────────────────
+
+  function tickMoats(): void {
+    for (const id of world.query(C.Moat, C.Position)) {
+      const moatPos = world.getComponent<PositionComponent>(id, C.Position)!;
+      const moatComp = world.getComponent<MoatComponent>(id, C.Moat)!;
+      const mhx = TILE_SIZE / 2;
+
+      for (const eid of world.query(C.EnemyStats, C.Position, C.Speed)) {
+        const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
+        const dx = Math.abs(ep.x - moatPos.x);
+        const dy = Math.abs(ep.y - moatPos.y);
+        if (dx < mhx && dy < mhx) {
+          const speed = world.getComponent<import('@shared/components').SpeedComponent>(eid, C.Speed)!;
+          speed.multiplier = Math.min(speed.multiplier, moatComp.slowFactor);
+        }
+      }
+    }
+  }
+
   function restoreBuildingComponents(id: number, buildingType: string): void {
     switch (buildingType) {
       case 'lumbermill':
@@ -1145,6 +1453,44 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
         world.addComponent(id, C.Housing, { capacity: cap, residentIds: [] } as HousingComponent);
         break;
       }
+      case 'tesla_coil':
+        world.addComponent(id, C.TeslaCoil, { range: TESLA_COIL_RANGE, cooldown: TESLA_COIL_COOLDOWN, cooldownTimer: 0, damage: TESLA_COIL_DAMAGE, chainCount: TESLA_COIL_CHAIN_COUNT, chainRange: TESLA_COIL_CHAIN_RANGE } as TeslaCoilComponent);
+        break;
+      case 'flame_tower':
+        world.addComponent(id, C.FlameAura, { range: FLAME_TOWER_RANGE, dps: FLAME_TOWER_DPS, arcRadians: FLAME_TOWER_ARC, facing: 0 } as FlameAuraComponent);
+        break;
+      case 'catapult':
+        world.addComponent(id, C.Turret, { range: CATAPULT_RANGE, cooldown: CATAPULT_COOLDOWN, cooldownTimer: 0, damage: CATAPULT_DAMAGE, projectileSpeed: CATAPULT_PROJ_SPEED } as TurretComponent);
+        break;
+      case 'moat':
+        world.addComponent(id, C.Moat, { slowFactor: MOAT_SLOW_FACTOR } as MoatComponent);
+        break;
+      case 'radar_tower':
+        world.addComponent(id, C.Radar, { revealRadius: UPGRADE_RADAR_RANGE[0] } as RadarComponent);
+        break;
+      case 'repair_station':
+        world.addComponent(id, C.RepairAura, { repairPerTick: REPAIR_STATION_HP_PER_TICK[0], interval: REPAIR_STATION_INTERVAL[0], timer: 0 } as RepairAuraComponent);
+        world.addComponent(id, C.WorkerSlot, { workerId: null } as WorkerSlotComponent);
+        break;
+      case 'storage_shed':
+        warehouseIds.add(id);
+        break;
+      case 'teleporter_pad':
+        world.addComponent(id, C.Teleporter, { pairedId: null } as TeleporterComponent);
+        break;
+      case 'brewery':
+        world.addComponent(id, C.Production, { timer: 0, interval: BREWERY_PRODUCTION_INTERVAL, amount: 1, maxStored: PRODUCTION_MAX_STORED, stored: 0, resourceType: 'food' } as ProductionComponent);
+        world.addComponent(id, C.WorkerSlot, { workerId: null } as WorkerSlotComponent);
+        break;
+      case 'lumber_camp':
+        world.addComponent(id, C.Production, { timer: 0, interval: LUMBER_CAMP_PRODUCTION_INTERVAL, amount: LUMBER_CAMP_AMOUNT, maxStored: PRODUCTION_MAX_STORED, stored: 0, resourceType: 'wood' } as ProductionComponent);
+        world.addComponent(id, C.WorkerSlot, { workerId: null } as WorkerSlotComponent);
+        break;
+      case 'tavern': {
+        const roster = generateTavernRoster();
+        world.addComponent(id, C.Tavern, { maxHeroes: TAVERN_MAX_HEROES[0], heroIds: [], roster } as TavernComponent);
+        break;
+      }
     }
   }
 
@@ -1169,6 +1515,10 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       tickSpikeTraps(dt, send);
       tickBuildingRegen(dt);
       tickRuins(dt, send);
+      tickTeslaCoils(dt, send);
+      tickFlameTowers(dt);
+      tickRepairStations(dt);
+      tickMoats();
     },
   };
 }

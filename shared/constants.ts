@@ -370,6 +370,12 @@ export const BUILDING_SIZES: Record<string, { w: number; h: number }> = {
   cat_house: { w: 2, h: 2 }, dormitory: { w: 2, h: 2 },
   gate: { w: 3, h: 1 }, ballista: { w: 2, h: 2 }, laser_tower: { w: 1, h: 1 },
   workshop: { w: 2, h: 2 }, training_center: { w: 2, h: 2 },
+  // ── New buildings ──────────────────────────────────────────────────────────
+  tesla_coil: { w: 1, h: 1 }, flame_tower: { w: 1, h: 1 }, catapult: { w: 2, h: 2 },
+  moat: { w: 1, h: 1 }, reinforced_wall: { w: 1, h: 1 },
+  radar_tower: { w: 2, h: 2 }, repair_station: { w: 2, h: 2 }, storage_shed: { w: 1, h: 1 },
+  teleporter_pad: { w: 1, h: 1 },
+  brewery: { w: 2, h: 2 }, lumber_camp: { w: 2, h: 2 }, tavern: { w: 2, h: 2 },
 };
 
 /**
@@ -462,6 +468,32 @@ export const WORKSHOP_MAX_HEALTH = 150;
 /** Training center HP. */
 export const TRAINING_CENTER_MAX_HEALTH = 220;
 
+// ── New Building HP ─────────────────────────────────────────────────────────
+/** Tesla coil HP. */
+export const TESLA_COIL_MAX_HEALTH = 100;
+/** Flame tower HP. */
+export const FLAME_TOWER_MAX_HEALTH = 100;
+/** Catapult HP. */
+export const CATAPULT_MAX_HEALTH = 200;
+/** Moat HP (effectively indestructible). */
+export const MOAT_MAX_HEALTH = 999;
+/** Reinforced wall HP. */
+export const REINFORCED_WALL_MAX_HEALTH = 300;
+/** Radar tower HP. */
+export const RADAR_TOWER_MAX_HEALTH = 120;
+/** Repair station HP. */
+export const REPAIR_STATION_MAX_HEALTH = 150;
+/** Storage shed HP. */
+export const STORAGE_SHED_MAX_HEALTH = 80;
+/** Teleporter pad HP. */
+export const TELEPORTER_PAD_MAX_HEALTH = 100;
+/** Brewery HP. */
+export const BREWERY_MAX_HEALTH = 150;
+/** Lumber camp HP. */
+export const LUMBER_CAMP_MAX_HEALTH = 180;
+/** Tavern HP. */
+export const TAVERN_MAX_HEALTH = 200;
+
 /** Radius (px) for auto-depositing player resources into the warehouse. */
 export const WAREHOUSE_DEPOSIT_RADIUS = 80;
 
@@ -492,15 +524,31 @@ export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'i
   laser_tower:    { stone: 10, iron: 10, diamond: 1 },
   workshop:       { wood: 15, iron: 10, diamond: 2 },
   training_center: { wood: 20, iron: 15, diamond: 3 },
+  // ── New buildings ──────────────────────────────────────────────────────────
+  tesla_coil:      { stone: 8, iron: 8, diamond: 1 },
+  flame_tower:     { stone: 6, iron: 6 },
+  catapult:        { stone: 15, iron: 10, diamond: 3 },
+  moat:            { stone: 3 },
+  reinforced_wall: { stone: 10, iron: 5 },
+  radar_tower:     { stone: 10, iron: 5, diamond: 2 },
+  repair_station:  { wood: 15, iron: 10 },
+  storage_shed:    { wood: 5, stone: 3 },
+  teleporter_pad:  { iron: 10, diamond: 5 },
+  brewery:         { wood: 15, stone: 10, food: 10 },
+  lumber_camp:     { wood: 20, stone: 10 },
+  tavern:          { wood: 20, stone: 15, iron: 10 },
 };
 
 /** Ordered list of building types the player can cycle through in build mode. */
 export const PLACEABLE_BUILDINGS: string[] = [
-  'wall', 'warehouse', 'lumbermill', 'quarry', 'mine', 'farm',
+  'wall', 'reinforced_wall', 'warehouse', 'lumbermill', 'quarry', 'mine', 'farm',
   'arrow_turret', 'cannon_turret', 'spike_trap', 'bridge',
   'light_tower', 'healing_shrine', 'potion_shop',
   'cat_house', 'dormitory',
   'gate', 'ballista', 'laser_tower', 'workshop', 'training_center',
+  'tesla_coil', 'flame_tower', 'catapult', 'moat',
+  'radar_tower', 'repair_station', 'storage_shed', 'teleporter_pad',
+  'brewery', 'lumber_camp', 'tavern',
 ];
 
 // ─── Production Buildings ──────────────────────────────────────────────────
@@ -566,6 +614,12 @@ export const BUILDING_MAX_LEVEL: Record<BuildingType, number> = {
   light_tower: 3, healing_shrine: 3, barracks: 3, potion_shop: 3,
   cat_house: 3, dormitory: 3,
   gate: 3, ballista: 3, laser_tower: 3, workshop: 3, training_center: 3,
+  // ── New buildings ──────────────────────────────────────────────────────────
+  tesla_coil: 3, flame_tower: 3, catapult: 3,
+  moat: 1, reinforced_wall: 3,
+  radar_tower: 3, repair_station: 3, storage_shed: 1,
+  teleporter_pad: 1,
+  brewery: 3, lumber_camp: 3, tavern: 3,
 };
 
 /** Cost multiplier for each upgrade level (index 0 = level 2, index 1 = level 3, etc.). */
@@ -836,3 +890,60 @@ export const ELEMENT_COLORS: Record<string, number> = {
   arcane:  0xdd44ff,
   nature:  0x66cc44,
 };
+
+// ── Tesla Coil ────────────────────────────────────────────────────────────
+export const TESLA_COIL_RANGE = 180;
+export const TESLA_COIL_COOLDOWN = 2.5;
+export const TESLA_COIL_DAMAGE = 10;
+export const TESLA_COIL_CHAIN_COUNT = 2;
+export const TESLA_COIL_CHAIN_RANGE = 80;
+/** Tesla coil upgrade arrays (level 1/2/3). */
+export const UPGRADE_TESLA_DAMAGE = [10, 14, 18];
+export const UPGRADE_TESLA_CHAIN = [2, 2, 3];
+export const UPGRADE_TESLA_CD = [1, 0.85, 0.7];
+
+// ── Flame Tower ───────────────────────────────────────────────────────────
+export const FLAME_TOWER_RANGE = 60;
+export const FLAME_TOWER_DPS = 12;
+/** 60-degree cone (30 deg each side). */
+export const FLAME_TOWER_ARC = Math.PI / 3;
+export const UPGRADE_FLAME_DPS = [12, 18, 25];
+export const UPGRADE_FLAME_RANGE = [60, 75, 90];
+
+// ── Catapult ──────────────────────────────────────────────────────────────
+export const CATAPULT_RANGE = 500;
+export const CATAPULT_COOLDOWN = 6;
+export const CATAPULT_DAMAGE = 35;
+export const CATAPULT_AOE_RADIUS = 120;
+export const CATAPULT_PROJ_SPEED = 200;
+export const UPGRADE_CATAPULT_DMG = [1, 1.3, 1.6];
+export const UPGRADE_CATAPULT_CD = [1, 0.85, 0.7];
+export const UPGRADE_CATAPULT_AOE = [120, 150, 180];
+
+// ── Moat ──────────────────────────────────────────────────────────────────
+export const MOAT_SLOW_FACTOR = 0.5;
+
+// ── Radar Tower ───────────────────────────────────────────────────────────
+export const UPGRADE_RADAR_RANGE = [300, 450, 600];
+
+// ── Repair Station (worker building) ──────────────────────────────────────
+export const REPAIR_STATION_HP_PER_TICK = [10, 15, 20];
+export const REPAIR_STATION_INTERVAL = [5, 4, 3];
+export const REPAIR_STATION_COST_WOOD = 1;
+export const REPAIR_STATION_COST_STONE = 1;
+
+// ── Brewery ───────────────────────────────────────────────────────────────
+export const BREWERY_FOOD_COST = 2;
+export const BREWERY_PRODUCTION_INTERVAL = 15;
+
+// ── Lumber Camp ───────────────────────────────────────────────────────────
+export const LUMBER_CAMP_PRODUCTION_INTERVAL = 8;
+export const LUMBER_CAMP_AMOUNT = 2;
+
+// ── Tavern ────────────────────────────────────────────────────────────────
+export const TAVERN_MAX_HEROES = [2, 3, 4];
+export const TAVERN_ROSTER_SIZE = 4;
+
+// ── Civilian Specialization ───────────────────────────────────────────────
+export const CIVILIAN_SPECIALIZATION_THRESHOLD = 5;
+export const CIVILIAN_SPECIALTY_BONUS = 0.75;

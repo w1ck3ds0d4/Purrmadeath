@@ -260,6 +260,28 @@ export enum MessageType {
   TRAIN_GUARD = 'TRAIN_GUARD',
   /** Server → Client: training result (success/fail + reason). */
   TRAIN_GUARD_RESULT = 'TRAIN_GUARD_RESULT',
+
+  // ── Teleporter ──────────────────────────────────────────────────────────
+  /** Client → Server: player pressed E near a teleporter pad. */
+  TELEPORTER_USE = 'TELEPORTER_USE',
+  /** Server → Client: teleporter result (success + destination, or fail). */
+  TELEPORTER_RESULT = 'TELEPORTER_RESULT',
+
+  // ── Tesla Coil ──────────────────────────────────────────────────────────
+  /** Server → all: tesla coil chain lightning VFX. */
+  TESLA_CHAIN = 'TESLA_CHAIN',
+
+  // ── Tavern / Heroes ─────────────────────────────────────────────────────
+  /** Server → Client: tavern roster and active hero state. */
+  TAVERN_STATE = 'TAVERN_STATE',
+  /** Client → Server: player wants to hire a hero from a tavern. */
+  HIRE_HERO = 'HIRE_HERO',
+  /** Server → Client: hire result (success/reason). */
+  HIRE_HERO_RESULT = 'HIRE_HERO_RESULT',
+  /** Server → all: a hero was killed. */
+  HERO_DIED = 'HERO_DIED',
+  /** Server → all: a hero used an ability (VFX). */
+  HERO_ABILITY = 'HERO_ABILITY',
 }
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
@@ -1101,6 +1123,8 @@ export interface CivilianPanelEntry {
   assignedBuildingId: number | null;
   assignedBuildingType: string | null;
   downed: boolean;
+  /** Building type the civilian is specialized in, or null. */
+  specialty: string | null;
 }
 
 /** One production building available for assignment. */
@@ -1140,6 +1164,71 @@ export interface TrainGuardResultMessage extends BaseMessage {
   type: typeof MessageType.TRAIN_GUARD_RESULT;
   success: boolean;
   reason?: string;
+}
+
+// ── Teleporter Messages ────────────────────────────────────────────────────
+
+export interface TeleporterUseMessage extends BaseMessage {
+  type: typeof MessageType.TELEPORTER_USE;
+  /** Entity ID of the teleporter pad the player is near. */
+  teleporterId: number;
+}
+
+export interface TeleporterResultMessage extends BaseMessage {
+  type: typeof MessageType.TELEPORTER_RESULT;
+  success: boolean;
+  /** Destination position (if success). */
+  x?: number;
+  y?: number;
+  reason?: string;
+}
+
+// ── Tesla Coil Messages ────────────────────────────────────────────────────
+
+export interface TeslaChainMessage extends BaseMessage {
+  type: typeof MessageType.TESLA_CHAIN;
+  /** Source tower position. */
+  sourceX: number;
+  sourceY: number;
+  /** Chain target positions in order. */
+  chain: Array<{ x: number; y: number }>;
+}
+
+// ── Tavern / Hero Messages ─────────────────────────────────────────────────
+
+export interface TavernStateMessage extends BaseMessage {
+  type: typeof MessageType.TAVERN_STATE;
+  tavernId: number;
+  roster: Array<{ heroId: string; name: string; cost: number; hp: number; damage: number; ability: string }>;
+  activeCount: number;
+  maxHeroes: number;
+}
+
+export interface HireHeroMessage extends BaseMessage {
+  type: typeof MessageType.HIRE_HERO;
+  tavernId: number;
+  heroId: string;
+}
+
+export interface HireHeroResultMessage extends BaseMessage {
+  type: typeof MessageType.HIRE_HERO_RESULT;
+  success: boolean;
+  reason?: string;
+}
+
+export interface HeroDiedMessage extends BaseMessage {
+  type: typeof MessageType.HERO_DIED;
+  heroId: string;
+  heroName: string;
+}
+
+export interface HeroAbilityMessage extends BaseMessage {
+  type: typeof MessageType.HERO_ABILITY;
+  heroId: string;
+  abilityId: string;
+  x: number;
+  y: number;
+  radius: number;
 }
 
 // ── Phase 9: Day/Night Messages ──────────────────────────────────────────────
@@ -1348,4 +1437,12 @@ export type AnyMessage =
   | CardPickupMessage
   | BossIntroMessage
   | BossPhaseMessage
+  | TeleporterUseMessage
+  | TeleporterResultMessage
+  | TeslaChainMessage
+  | TavernStateMessage
+  | HireHeroMessage
+  | HireHeroResultMessage
+  | HeroDiedMessage
+  | HeroAbilityMessage
   | BaseMessage;

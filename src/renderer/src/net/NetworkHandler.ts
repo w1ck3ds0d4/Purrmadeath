@@ -67,6 +67,10 @@ import type {
   BossIntroMessage,
   BossPhaseMessage,
   BuildRuinedMessage,
+  TavernStateMessage,
+  HireHeroResultMessage,
+  HeroDiedMessage,
+  HeroAbilityMessage,
   LobbySlot,
 } from '@shared/protocol';
 import type { NightOverlay } from '../render/NightOverlay';
@@ -100,6 +104,7 @@ import type { SkillTreeOverlay } from '../ui/overlays/SkillTreeOverlay';
 import type { AbilityVFXSystem } from '../systems/AbilityVFXSystem';
 import type { PotionShopOverlay, PotionShopData } from '../ui/overlays/PotionShopOverlay';
 import type { TrainingCenterOverlay } from '../ui/overlays/TrainingCenterOverlay';
+import type { TavernOverlay } from '../ui/overlays/TavernOverlay';
 import type { BuildMenuOverlay } from '../ui/overlays/BuildMenuOverlay';
 import type { CivilianPanelOverlay } from '../ui/overlays/CivilianPanelOverlay';
 import type { EventRoulette } from '../ui/hud/EventRoulette';
@@ -190,6 +195,7 @@ export interface NetworkHandlerDeps {
   statsOverlay: StatsOverlay;
   potionShopOverlay: PotionShopOverlay;
   trainingOverlay: TrainingCenterOverlay;
+  tavernOverlay: TavernOverlay;
   buildMenu: BuildMenuOverlay;
   civilianPanel: CivilianPanelOverlay;
   nightOverlay: NightOverlay;
@@ -858,6 +864,35 @@ export function registerMessageHandlers(
     if (!m.success && m.reason) {
       d.debug.log(`Training failed: ${m.reason}`);
     }
+  });
+
+  // ── Tavern / Heroes ────────────────────────────────────────────────────
+
+  net.on(MessageType.TAVERN_STATE, (msg) => {
+    const m = msg as TavernStateMessage;
+    const gold = d.combinedResources().gold ?? 0;
+    d.tavernOverlay.show(m.tavernId, m.roster, m.activeCount, m.maxHeroes, gold);
+  });
+
+  net.on(MessageType.HIRE_HERO_RESULT, (msg) => {
+    const m = msg as HireHeroResultMessage;
+    if (!m.success && m.reason) {
+      d.debug.log(`Hire failed: ${m.reason}`);
+    }
+    if (m.success) {
+      d.tavernOverlay.hide();
+    }
+  });
+
+  net.on(MessageType.HERO_DIED, (msg) => {
+    const m = msg as HeroDiedMessage;
+    d.notificationToast.show(`${m.heroName} has fallen!`, 'danger');
+    d.debug.log(`Hero died: ${m.heroName}`);
+  });
+
+  net.on(MessageType.HERO_ABILITY, (msg) => {
+    const m = msg as HeroAbilityMessage;
+    d.abilityVFX.trigger(m.abilityId, m.x, m.y, m.radius, 0.5);
   });
 
   // ── Errors ──────────────────────────────────────────────────────────────

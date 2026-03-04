@@ -23,7 +23,7 @@ import type {
 } from '@shared/components';
 import type {
   SaveData, SavedBuilding, SavedPlayer, SavedEnemy,
-  SavedPortal, SavedResourceNode, SavedItemDrop, SavedCivilian,
+  SavedPortal, SavedResourceNode, SavedItemDrop, SavedCivilian, SavedHero,
 } from '@shared/SaveFormat';
 import type { WaveState } from './WaveController';
 import type { SessionPlayer } from '../core/GameSession';
@@ -43,6 +43,7 @@ export interface LoadedSaveState {
   civilians: SavedCivilian[];
   dayTimeRemaining: number | null;
   permanentNight: boolean;
+  heroes: SavedHero[];
 }
 
 // ── Dependencies ────────────────────────────────────────────────────────────
@@ -314,6 +315,7 @@ export function createSaveManager(deps: SaveManagerDeps) {
       civilians: save.civilians ?? [],
       dayTimeRemaining: save.dayTimeRemaining ?? null,
       permanentNight: save.permanentNight ?? false,
+      heroes: save.heroes ?? [],
     };
   }
 

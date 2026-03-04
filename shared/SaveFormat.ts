@@ -32,6 +32,7 @@ export interface SaveData {
   dayTimeRemaining?: number;
   /** Day/night: permanent night flag (W50 milestone). */
   permanentNight?: boolean;
+  heroes?: SavedHero[];
   hostPlayerId: string;
   timestamp: number;
 }
@@ -87,6 +88,35 @@ export interface SavedBuilding {
   };
   housing?: {
     capacity: number;
+  };
+  teslaCoil?: {
+    range: number;
+    cooldown: number;
+    damage: number;
+    chainCount: number;
+    chainRange: number;
+  };
+  flameAura?: {
+    range: number;
+    dps: number;
+    arcRadians: number;
+  };
+  moat?: {
+    slowFactor: number;
+  };
+  radar?: {
+    revealRadius: number;
+  };
+  repairAura?: {
+    repairPerTick: number;
+    interval: number;
+  };
+  teleporter?: {
+    pairedId: number | null;
+  };
+  tavern?: {
+    maxHeroes: number;
+    roster: string[];
   };
 }
 
@@ -185,6 +215,20 @@ export interface SavedCivilian {
   maxHp: number;
   hunger: number;
   state: string;
+  /** Waves spent working at each building type. */
+  experience?: Record<string, number>;
+  /** Building type the civilian is specialized in, or null. */
+  specialty?: string | null;
+}
+
+export interface SavedHero {
+  x: number;
+  y: number;
+  heroId: string;
+  tavernId: number;
+  currentHp: number;
+  maxHp: number;
+  abilityCooldowns: Record<string, number>;
 }
 
 export interface SaveSlotInfo {

@@ -93,6 +93,15 @@ export class StatsOverlay {
 
     this.screen.appendChild(layout);
     document.getElementById('overlay')!.appendChild(this.screen);
+
+    // ESC to go back
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this.screen.style.display !== 'none') {
+        this.hide();
+        this.onBack?.();
+        e.stopPropagation();
+      }
+    });
   }
 
   show(stats: MetaStats, onBack: () => void): void {

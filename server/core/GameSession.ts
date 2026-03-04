@@ -123,6 +123,7 @@ import { PortalSystem } from '../systems/PortalSystem';
 import { CardSystem } from '../systems/CardSystem';
 import { createSkillSystem, type SkillSystem } from '../systems/SkillSystem';
 import { createBuildingSystem, type BuildingSystem } from '../systems/BuildingSystem';
+import { createHeroSystem, type HeroSystem } from '../systems/HeroSystem';
 import { createWaveController, type WaveController, type WaveState } from '../systems/WaveController';
 import { createWaveModifierSystem } from '../systems/WaveModifierSystem';
 import { createWorldEventController, type WorldEventController } from '../systems/WorldEventController';
@@ -197,6 +198,7 @@ export class GameSession {
   private respawn!: RespawnManager;
   private stats!: StatsCollector;
   private civilians!: CivilianSystem;
+  private heroes!: HeroSystem;
 
   private players = new Map<string, SessionPlayer>(); // keyed by clientId
   /** Fast lookup: entity IDs that belong to players (updated on spawn/despawn). */
@@ -358,6 +360,19 @@ export class GameSession {
       broadcastWarehouseUpdate: (send) => this.buildings.broadcastWarehouseUpdate(send),
     });
 
+    this.heroes = createHeroSystem({
+      world: this.world,
+      players: this.players,
+      warehousePool: this.warehousePool,
+      warehouseIds: this.warehouseIds,
+      getCampfirePosition: () => {
+        if (this.campfireEntityId < 0) return null;
+        const p = this.world.getComponent<PositionComponent>(this.campfireEntityId, C.Position);
+        return p ? { x: p.x, y: p.y } : null;
+      },
+      broadcastWarehouseUpdate: (send) => this.buildings.broadcastWarehouseUpdate(send),
+    });
+
     this.potions = createPotionSystem({
       world: this.world,
       players: this.players as any,
@@ -512,6 +527,7 @@ export class GameSession {
       civilianEntityIds: this.civilians.civilianIds,
       onCivilianDeath: (entityId, send) => this.civilians.handleCivilianDeath(entityId, send),
       onEnemyKilled: (deadId, attackerEntityId, variant, send) => this.onEnemyKilled(deadId, attackerEntityId, variant, send),
+      onHeroDeath: (entityId, send) => this.heroes.handleHeroDeath(entityId, send),
     });
 
     this.stats = createStatsCollector({
@@ -984,6 +1000,12 @@ export class GameSession {
     } else if (save?.civilians && save.civilians.length > 0) {
       this.civilians.restore(save.civilians);
       console.log(`[GameSession] Restored ${save.civilians.length} civilians from save`);
+    }
+
+    // Restore heroes
+    if (save?.heroes && save.heroes.length > 0) {
+      this.heroes.restore(save.heroes);
+      console.log(`[GameSession] Restored ${save.heroes.length} heroes from save`);
     }
 
     // Broadcast SESSION_STARTING
@@ -1723,6 +1745,44 @@ export class GameSession {
     send(player.client, { type: MessageType.TRAIN_GUARD_RESULT, success: true });
   }
 
+  handleHireHero(clientId: string, msg: import('@shared/protocol').HireHeroMessage, send: SendFn): void {
+    if (this.phase !== 'playing' || this.paused) return;
+    this.heroes.handleHireHero(clientId, msg.tavernId, msg.heroId, send);
+  }
+
+  handleTeleporterUse(clientId: string, msg: import('@shared/protocol').TeleporterUseMessage, send: SendFn): void {
+    if (this.phase !== 'playing' || this.paused) return;
+    const player = this.players.get(clientId);
+    if (!player || player.entityId === null) return;
+    if (this.world.hasComponent(player.entityId, C.Downed)) return;
+
+    const tp = this.world.getComponent<import('@shared/components').TeleporterComponent>(msg.teleporterId, C.Teleporter);
+    if (!tp || tp.pairedId === null) {
+      send(player.client, { type: MessageType.TELEPORTER_RESULT, success: false, reason: 'unpaired' });
+      return;
+    }
+
+    // Check player is near the teleporter
+    const tpPos = this.world.getComponent<PositionComponent>(msg.teleporterId, C.Position);
+    const pPos = this.world.getComponent<PositionComponent>(player.entityId, C.Position);
+    if (!tpPos || !pPos) return;
+    const dx = pPos.x - tpPos.x, dy = pPos.y - tpPos.y;
+    if (dx * dx + dy * dy > 50 * 50) {
+      send(player.client, { type: MessageType.TELEPORTER_RESULT, success: false, reason: 'too_far' });
+      return;
+    }
+
+    // Teleport to paired pad
+    const destPos = this.world.getComponent<PositionComponent>(tp.pairedId, C.Position);
+    if (!destPos) {
+      send(player.client, { type: MessageType.TELEPORTER_RESULT, success: false, reason: 'no_destination' });
+      return;
+    }
+
+    pPos.x = destPos.x;
+    pPos.y = destPos.y;
+    send(player.client, { type: MessageType.TELEPORTER_RESULT, success: true, x: destPos.x, y: destPos.y });
+  }
 
   /**
    * Called when a client presses E to interact with a nearby non-auto-pickup item.
@@ -1804,6 +1864,21 @@ export class GameSession {
       const sdy = bpos.y - playerPos.y;
       if (sdx * sdx + sdy * sdy <= shopRange * shopRange) {
         this.potions.handleShopOpen(clientId, bid, send);
+        return;
+      }
+    }
+
+    // Check for nearby tavern (F-key opens tavern overlay)
+    for (const bid of this.world.query(C.Building, C.Position)) {
+      const bldg = this.world.getComponent<BuildingComponent>(bid, C.Building);
+      if (bldg?.buildingType !== 'tavern') continue;
+      const bpos = this.world.getComponent<PositionComponent>(bid, C.Position)!;
+      const half = buildingHalfExtent('tavern');
+      const tavernRange = half + ITEM_DROP_INTERACT_RADIUS;
+      const tdx = bpos.x - playerPos.x;
+      const tdy = bpos.y - playerPos.y;
+      if (tdx * tdx + tdy * tdy <= tavernRange * tavernRange) {
+        this.heroes.sendTavernState(bid, clientId, send);
         return;
       }
     }
@@ -2430,6 +2505,8 @@ export class GameSession {
     data.permanentNight = this.dayNightState.permanentNight;
     // Save civilians
     data.civilians = this.civilians.serialize();
+    // Save heroes
+    data.heroes = this.heroes.serialize();
     return data;
   }
 
@@ -2885,6 +2962,7 @@ export class GameSession {
     const _t6 = performance.now();
     if (!this.gameOver) this.buildings.tick(dt, send);
     if (!this.gameOver) this.civilians.tick(dt, send);
+    if (!this.gameOver) this.heroes.tickHeroAbilities(dt, send);
     const _t7 = performance.now();
 
     // ── Card system ──────────────────────────────────────────────────────────

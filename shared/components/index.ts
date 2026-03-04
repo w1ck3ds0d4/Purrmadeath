@@ -62,6 +62,16 @@ export const C = {
   // ── Building expansion ──────────────────────────────────────────────────
   LaserBeam:       'LaserBeam',
   TrainingCenter:  'TrainingCenter',
+  // ── New buildings ─────────────────────────────────────────────────────
+  TeslaCoil:       'TeslaCoil',
+  FlameAura:       'FlameAura',
+  Moat:            'Moat',
+  Radar:           'Radar',
+  RepairAura:      'RepairAura',
+  Teleporter:      'Teleporter',
+  Tavern:          'Tavern',
+  // ── Heroes ────────────────────────────────────────────────────────────
+  Hero:            'Hero',
 } as const;
 
 // ─── Component interfaces ──────────────────────────────────────────────────────
@@ -244,7 +254,10 @@ export type BuildingType = 'campfire' | 'wall' | 'warehouse' | 'lumbermill' | 'q
   | 'arrow_turret' | 'cannon_turret' | 'spike_trap' | 'bridge'
   | 'light_tower' | 'healing_shrine' | 'barracks' | 'potion_shop'
   | 'cat_house' | 'dormitory'
-  | 'gate' | 'ballista' | 'laser_tower' | 'workshop' | 'training_center';
+  | 'gate' | 'ballista' | 'laser_tower' | 'workshop' | 'training_center'
+  | 'tesla_coil' | 'flame_tower' | 'catapult' | 'moat' | 'reinforced_wall'
+  | 'radar_tower' | 'repair_station' | 'storage_shed' | 'teleporter_pad'
+  | 'brewery' | 'lumber_camp' | 'tavern';
 
 /** Tags an entity as a player-built (or pre-placed) structure. */
 export interface BuildingComponent {
@@ -542,6 +555,10 @@ export interface CivilianComponent {
   carryResource: string | null;
   /** Amount of resource being carried. */
   carryAmount: number;
+  /** Waves spent working at each building type (for specialization). */
+  experience: Record<string, number>;
+  /** Building type the civilian is specialized in, or null. */
+  specialty: string | null;
 }
 
 /** Attached to housing buildings (cat_house, dormitory) and campfire. */
@@ -602,4 +619,73 @@ export interface BossComponent {
   channelTimer?: number;
   /** Whether currently channeling. */
   channeling?: boolean;
+}
+
+// ── New Building Components ─────────────────────────────────────────────────
+
+/** Tesla coil - chain lightning defense tower. */
+export interface TeslaCoilComponent {
+  range: number;
+  cooldown: number;
+  cooldownTimer: number;
+  damage: number;
+  /** Number of enemies the chain arcs to after the primary target. */
+  chainCount: number;
+  /** Max distance (px) for chain arc between enemies. */
+  chainRange: number;
+}
+
+/** Flame tower - continuous cone AOE fire damage. */
+export interface FlameAuraComponent {
+  range: number;
+  dps: number;
+  /** Cone half-angle in radians. */
+  arcRadians: number;
+  /** Current facing direction (auto-rotates to nearest enemy). */
+  facing: number;
+}
+
+/** Moat - ground tile that slows enemies walking over it. */
+export interface MoatComponent {
+  slowFactor: number;
+}
+
+/** Radar tower - extends minimap reveal radius for all players. */
+export interface RadarComponent {
+  revealRadius: number;
+}
+
+/** Repair station - worker-staffed building that repairs damaged buildings. */
+export interface RepairAuraComponent {
+  repairPerTick: number;
+  interval: number;
+  timer: number;
+}
+
+/** Teleporter pad - paired with another pad for instant player transport. */
+export interface TeleporterComponent {
+  /** Entity ID of the paired teleporter, or null if unpaired. */
+  pairedId: number | null;
+}
+
+/** Tavern - allows hiring hero NPCs. */
+export interface TavernComponent {
+  /** Max active heroes this tavern supports at its current level. */
+  maxHeroes: number;
+  /** Entity IDs of currently active heroes hired from this tavern. */
+  heroIds: number[];
+  /** Available hero definition IDs in this tavern's roster. */
+  roster: string[];
+}
+
+/** Tags an entity as a hired hero NPC. */
+export interface HeroComponent {
+  /** Hero definition ID (e.g. 'knight', 'wizard'). */
+  heroId: string;
+  /** Entity ID of the tavern this hero was hired from. */
+  tavernId: number;
+  /** Patrol radius around campfire (px). */
+  patrolRadius: number;
+  /** Per-ability cooldown timers keyed by ability id. */
+  abilityCooldowns: Record<string, number>;
 }

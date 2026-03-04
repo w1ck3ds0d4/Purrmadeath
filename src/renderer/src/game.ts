@@ -75,6 +75,7 @@ import { CardPickerOverlay } from './ui/overlays/CardPickerOverlay';
 import { SkillTreeOverlay } from './ui/overlays/SkillTreeOverlay';
 import { PotionShopOverlay } from './ui/overlays/PotionShopOverlay';
 import { TrainingCenterOverlay } from './ui/overlays/TrainingCenterOverlay';
+import { TavernOverlay } from './ui/overlays/TavernOverlay';
 import { CivilianPanelOverlay } from './ui/overlays/CivilianPanelOverlay';
 import { CLASS_STATS, DEFAULT_CLASS } from '@shared/definitions/ClassDefinitions';
 import { getActiveAbilities, type SkillActiveAbility, type AbilityParams } from '@shared/definitions/SkillDefinitions';
@@ -388,6 +389,17 @@ async function main(): Promise<void> {
     },
   });
 
+  // Wire tavern overlay
+  const tavernOverlay = new TavernOverlay();
+  tavernOverlay.setCallbacks({
+    onHire: (tavernId, heroId) => {
+      net.send({ type: MessageType.HIRE_HERO, tavernId, heroId });
+    },
+    onClose: () => {
+      tavernOverlay.hide();
+    },
+  });
+
   // Wire build menu overlay
   buildMenu.setCallbacks({
     onSelect: (type) => {
@@ -677,7 +689,7 @@ async function main(): Promise<void> {
     },
     stateMgr, menuOverlay, lobbyOverlay, pauseBanner, waveHUD, resourceHUD,
     deathOverlay, gameOverOverlay, chatOverlay, debug, buildOverlay, buildGhost,
-    warehouseHUD, cardPicker, skillTree, statsOverlay, abilityVFX, potionShopOverlay, trainingOverlay, buildMenu, civilianPanel, nightOverlay, eventRoulette, cardToast, notificationToast, combinedResources, electronAPI,
+    warehouseHUD, cardPicker, skillTree, statsOverlay, abilityVFX, potionShopOverlay, trainingOverlay, tavernOverlay, buildMenu, civilianPanel, nightOverlay, eventRoulette, cardToast, notificationToast, combinedResources, electronAPI,
   });
 
   // ── Session action helper ─────────────────────────────────────────────────
@@ -944,8 +956,6 @@ async function main(): Promise<void> {
           if (targetingSlot >= 0) cancelTargeting();
           buildCtrl.openPicker();
           buildMenu.show(combinedResources());
-          resourceHUD.expand();
-          if (warehouseExists) warehouseHUD.expand();
         }
       }
 
@@ -993,26 +1003,36 @@ async function main(): Promise<void> {
 
       // F-interact: pick up nearby non-auto-pickup items (also initiates revive)
       if (input.isJustPressed(Action.Interact) && pos) {
-        // Close overlays if open, otherwise check for training center / send interact
+        // Close overlays if open, otherwise check for interactive buildings / send interact
         if (trainingOverlay.isVisible) {
           trainingOverlay.hide();
         } else if (potionShopOverlay.isVisible) {
           potionShopOverlay.hide();
+        } else if (tavernOverlay.isVisible) {
+          tavernOverlay.hide();
         } else {
-          // Check for nearby training center (client-side proximity)
-          let openedTraining = false;
+          // Check for nearby interactive buildings (client-side proximity)
+          let openedBuilding = false;
           for (const bid of world.query(C.Building, C.Position)) {
             const b = world.getComponent<BuildingComponent>(bid, C.Building);
-            if (b?.buildingType !== 'training_center') continue;
+            if (!b) continue;
             const bp = world.getComponent<PositionComponent>(bid, C.Position)!;
             const dx = bp.x - pos.x, dy = bp.y - pos.y;
-            if (dx * dx + dy * dy <= 80 * 80) {
+            if (dx * dx + dy * dy > 80 * 80) continue;
+
+            if (b.buildingType === 'training_center') {
               trainingOverlay.show(bid);
-              openedTraining = true;
+              openedBuilding = true;
+              break;
+            }
+            if (b.buildingType === 'tavern') {
+              // Request tavern state from server - server sends TAVERN_STATE
+              net.send({ type: MessageType.INTERACT, x: pos.x, y: pos.y, t: performance.now() });
+              openedBuilding = true;
               break;
             }
           }
-          if (!openedTraining) {
+          if (!openedBuilding) {
             net.send({ type: MessageType.INTERACT, x: pos.x, y: pos.y, t: performance.now() });
           }
         }

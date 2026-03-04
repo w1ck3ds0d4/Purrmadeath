@@ -109,6 +109,20 @@ export class MenuOverlay {
       this.menuScreen.style.display = 'none';
       this.cardScreen.style.display = 'flex';
     });
+
+    // ESC to go back from sub-screens
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      if (this.cardScreen.style.display !== 'none') {
+        this.cardScreen.style.display = 'none';
+        this.menuScreen.style.display = 'flex';
+        e.stopPropagation();
+      } else if (this.saveSlotScreen.style.display !== 'none') {
+        this.saveSlotScreen.style.display = 'none';
+        this.menuScreen.style.display = 'flex';
+        e.stopPropagation();
+      }
+    });
   }
 
   setCallbacks(cbs: {

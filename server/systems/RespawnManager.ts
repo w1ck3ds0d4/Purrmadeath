@@ -79,6 +79,8 @@ export interface RespawnManagerDeps {
   onCivilianDeath?: (entityId: number, send: SendFn) => void;
   /** Set of entity IDs that are civilians (for downed-state routing). */
   civilianEntityIds?: Set<number>;
+  /** Called when a hero guard entity dies. */
+  onHeroDeath?: (entityId: number, send: SendFn) => void;
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
@@ -487,6 +489,11 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
 
         // Don't destroy the entity - it stays as ruins
         continue;
+      }
+
+      // Hero death: notify HeroSystem before destruction
+      if (faction?.type === 'guard' && world.hasComponent(deadId, C.Hero) && send && deps.onHeroDeath) {
+        deps.onHeroDeath(deadId, send);
       }
 
       world.destroyEntity(deadId);

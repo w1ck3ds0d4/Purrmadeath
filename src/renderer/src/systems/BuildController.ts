@@ -164,9 +164,12 @@ export function createBuildController(deps: BuildControllerDeps) {
         if (input.isJustPressed(Action.Upgrade)) deps.send({ type: MessageType.BUILD_UPGRADE, entityId: selectedId });
         if (input.isJustPressed(Action.Repair)) deps.send({ type: MessageType.BUILD_REPAIR, entityId: selectedId });
         if (input.isJustPressed(Action.Demolish)) {
-          deps.send({ type: MessageType.BUILD_DEMOLISH, entityId: selectedId });
-          selectedId = null;
-          buildOverlay.update('Click a building to select', {});
+          const selBldg = world.getComponent<BuildingComponent>(selectedId, C.Building);
+          if (selBldg && !selBldg.permanent) {
+            deps.send({ type: MessageType.BUILD_DEMOLISH, entityId: selectedId });
+            selectedId = null;
+            buildOverlay.update('Click a building to select', {});
+          }
         }
       }
 
@@ -269,11 +272,14 @@ export function createBuildController(deps: BuildControllerDeps) {
       }
     }
 
-    // X: demolish
+    // X: demolish (skip permanent buildings like campfire)
     if (input.isJustPressed(Action.Demolish) && selectedId !== null) {
-      deps.send({ type: MessageType.BUILD_DEMOLISH, entityId: selectedId });
-      selectedId = null;
-      buildOverlay.update(placingType, deps.combinedResources());
+      const selBldg = world.getComponent<BuildingComponent>(selectedId, C.Building);
+      if (selBldg && !selBldg.permanent) {
+        deps.send({ type: MessageType.BUILD_DEMOLISH, entityId: selectedId });
+        selectedId = null;
+        buildOverlay.update(placingType, deps.combinedResources());
+      }
     }
 
     // V: upgrade
