@@ -255,7 +255,7 @@ export type BuildingType = 'campfire' | 'wall' | 'warehouse' | 'lumbermill' | 'q
   | 'light_tower' | 'healing_shrine' | 'barracks' | 'potion_shop'
   | 'cat_house' | 'dormitory'
   | 'gate' | 'ballista' | 'laser_tower' | 'workshop' | 'training_center'
-  | 'tesla_coil' | 'flame_tower' | 'catapult' | 'moat' | 'reinforced_wall'
+  | 'tesla_coil' | 'flame_tower' | 'catapult' | 'moat'
   | 'radar_tower' | 'repair_station' | 'storage_shed' | 'teleporter_pad'
   | 'brewery' | 'lumber_camp' | 'tavern';
 

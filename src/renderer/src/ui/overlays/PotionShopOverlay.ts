@@ -82,7 +82,7 @@ export class PotionShopOverlay {
     // Close hint
     const hint = document.createElement('div');
     hint.style.cssText = `font-size: 11px; color: ${THEME.textMuted}; text-align: center;`;
-    hint.textContent = 'Press F or ESC to close';
+    hint.textContent = 'Press E or ESC to close';
     this.el.appendChild(hint);
 
     document.getElementById('overlay')!.appendChild(this.el);

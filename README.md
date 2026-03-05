@@ -18,19 +18,21 @@ Download the latest installer from the [Releases](https://github.com/WickedSoda/
 |---|---|
 | Move | W A S D / Arrow keys |
 | Attack | Left Mouse Button |
-| Interact / Harvest | F |
+| Interact / Harvest | E |
 | Sprint | Shift (hold) |
+| Ability 1 / 2 / 3 | 1 / 2 / 3 |
+| Use Potion | Q |
 | Build Mode | B |
-| Cycle buildings | Scroll wheel (in build mode) |
+| Rotate building | Scroll wheel (in build mode) |
 | Place building | Left Mouse Button (in build mode) |
-| Upgrade building | V (while selecting building) |
-| Repair building | G (while selecting building) |
+| Upgrade building | F (while selecting building) |
+| Repair building | R (while selecting building) |
 | Demolish building | X (while selecting building) |
-| Weapon slot 1 / 2 | 1 / 2 |
-| Toggle minimap | M |
+| Civilian Panel | C |
+| Skill Tree | K |
+| Dodge Roll | Space |
 | Pause / Menu | Escape |
 | Debug console | F4 |
-| Zoom | Scroll wheel |
 
 ### Buildings
 

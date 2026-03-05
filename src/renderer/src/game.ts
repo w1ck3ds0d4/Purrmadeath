@@ -937,11 +937,6 @@ async function main(): Promise<void> {
         localFacing = Math.atan2(worldMouseY - pos.y, worldMouseX - pos.x);
       }
 
-      // Weapon slot 1 (number key) - exit build mode when selecting weapon
-      if (input.isJustPressed(Action.WeaponSlot1)) {
-        if (buildCtrl.phase !== 'inactive') { exitBuildModeAndCollapse(); }
-      }
-
       // B key: build mode state machine (closing works even when canAct is false)
       if (input.isJustPressed(Action.BuildMode)) {
         const phase = buildCtrl.phase;
@@ -1075,9 +1070,9 @@ async function main(): Promise<void> {
         cancelTargeting();
       }
 
-      // Q/E/R: enter targeting or instant-cast
+      // 1/2/3: enter targeting or instant-cast
       if (canAct && buildCtrl.phase === 'inactive' && localFacing !== null && pos) {
-        const abilityKeys = [Action.SkillQ, Action.SkillE, Action.SkillR] as const;
+        const abilityKeys = [Action.Skill1, Action.Skill2, Action.Skill3] as const;
         for (let ai = 0; ai < 3; ai++) {
           if (input.isJustPressed(abilityKeys[ai]) && activeAbilities[ai] && abilityCooldowns[ai] <= 0.05) {
             const ab = activeAbilities[ai]!;
@@ -1308,21 +1303,20 @@ async function main(): Promise<void> {
 
     if (state === GameState.Playing) {
       hud.update(world, width, height);
-      const hotbarCooldown = CLASS_STATS[selectedClass].attackType === 'melee' ? MELEE_COOLDOWN : RANGED_COOLDOWN;
-      // Build unlocked slots set from active abilities (slots 1-3 for Q/E/R)
-      const unlockedSlots = new Set([0, 5]); // weapon + build always
-      if (potionEquipped) unlockedSlots.add(4); // potion slot
+      // Build unlocked slots set from active abilities (slots 0-2 for 1/2/3)
+      const unlockedSlots = new Set([4]); // build always
+      if (potionEquipped) unlockedSlots.add(3); // potion slot
       const abilityNames: string[] = [];
       for (let ai = 0; ai < 3; ai++) {
         if (activeAbilities[ai]) {
-          unlockedSlots.add(1 + ai);
+          unlockedSlots.add(ai);
           abilityNames.push(activeAbilities[ai]!.name);
         } else {
           abilityNames.push('');
         }
       }
       weaponHotbar.update(
-        selectedClass, attackCooldown, hotbarCooldown, width, height, buildCtrl.phase !== 'inactive',
+        width, height, buildCtrl.phase !== 'inactive',
         unlockedSlots, abilityNames, abilityCooldowns, abilityCooldownMaxes, targetingSlot,
         potionEquipped, potionCharges, potionMaxCharges, potionCooldown, potionCooldownMax,
       );

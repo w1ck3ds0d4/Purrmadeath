@@ -34,7 +34,6 @@ interface BuildingDetail {
 
 const BUILDING_DETAILS: Record<string, BuildingDetail> = {
   wall:             { hp: 150, description: 'Basic barrier that blocks enemy movement.' },
-  reinforced_wall:  { hp: 300, description: 'Heavily fortified wall with double HP.' },
   gate:             { hp: 250, description: 'Automatically opens for allies and closes for enemies.' },
   arrow_turret:     { hp: 100, description: 'Fires arrows at the nearest enemy.', range: 200, damage: 8, cooldown: 2.0 },
   cannon_turret:    { hp: 200, description: 'Slow but powerful cannon with splash damage.', range: 300, damage: 20, cooldown: 4.0 },
@@ -74,7 +73,7 @@ interface BuildCategory {
 }
 
 const BUILD_CATEGORIES: BuildCategory[] = [
-  { name: 'Defense',    accent: '#cc4444', buildings: ['wall', 'reinforced_wall', 'gate', 'arrow_turret', 'cannon_turret', 'ballista', 'laser_tower', 'tesla_coil', 'flame_tower', 'catapult', 'moat', 'spike_trap'] },
+  { name: 'Defense',    accent: '#cc4444', buildings: ['wall', 'gate', 'arrow_turret', 'cannon_turret', 'ballista', 'laser_tower', 'tesla_coil', 'flame_tower', 'catapult', 'moat', 'spike_trap'] },
   { name: 'Production', accent: '#44aa44', buildings: ['lumbermill', 'lumber_camp', 'quarry', 'mine', 'farm', 'brewery', 'workshop'] },
   { name: 'Military',   accent: '#cc8844', buildings: ['training_center'] },
   { name: 'Housing',    accent: '#cc88cc', buildings: ['cat_house', 'dormitory'] },
@@ -251,7 +250,7 @@ export class BuildMenuOverlay {
 
     const hint = document.createElement('div');
     hint.style.cssText = `font-family:${THEME.fontMono};font-size:11px;color:${THEME.textDim};text-align:center;`;
-    hint.textContent = 'V upgrade \u00B7 G repair \u00B7 X demolish \u00B7 B / ESC to close';
+    hint.textContent = 'F upgrade \u00B7 R repair \u00B7 X demolish \u00B7 Scroll rotate \u00B7 B / ESC to close';
     footer.appendChild(hint);
 
     panel.appendChild(footer);

@@ -372,7 +372,7 @@ export const BUILDING_SIZES: Record<string, { w: number; h: number }> = {
   workshop: { w: 2, h: 2 }, training_center: { w: 2, h: 2 },
   // ── New buildings ──────────────────────────────────────────────────────────
   tesla_coil: { w: 1, h: 1 }, flame_tower: { w: 1, h: 1 }, catapult: { w: 2, h: 2 },
-  moat: { w: 1, h: 1 }, reinforced_wall: { w: 1, h: 1 },
+  moat: { w: 1, h: 1 },
   radar_tower: { w: 2, h: 2 }, repair_station: { w: 2, h: 2 }, storage_shed: { w: 1, h: 1 },
   teleporter_pad: { w: 1, h: 1 },
   brewery: { w: 2, h: 2 }, lumber_camp: { w: 2, h: 2 }, tavern: { w: 2, h: 2 },
@@ -477,8 +477,6 @@ export const FLAME_TOWER_MAX_HEALTH = 100;
 export const CATAPULT_MAX_HEALTH = 200;
 /** Moat HP (effectively indestructible). */
 export const MOAT_MAX_HEALTH = 999;
-/** Reinforced wall HP. */
-export const REINFORCED_WALL_MAX_HEALTH = 300;
 /** Radar tower HP. */
 export const RADAR_TOWER_MAX_HEALTH = 120;
 /** Repair station HP. */
@@ -529,7 +527,6 @@ export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'i
   flame_tower:     { stone: 6, iron: 6 },
   catapult:        { stone: 15, iron: 10, diamond: 3 },
   moat:            { stone: 3 },
-  reinforced_wall: { stone: 10, iron: 5 },
   radar_tower:     { stone: 10, iron: 5, diamond: 2 },
   repair_station:  { wood: 15, iron: 10 },
   storage_shed:    { wood: 5, stone: 3 },
@@ -541,7 +538,7 @@ export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'i
 
 /** Ordered list of building types the player can cycle through in build mode. */
 export const PLACEABLE_BUILDINGS: string[] = [
-  'wall', 'reinforced_wall', 'warehouse', 'lumbermill', 'quarry', 'mine', 'farm',
+  'wall', 'warehouse', 'lumbermill', 'quarry', 'mine', 'farm',
   'arrow_turret', 'cannon_turret', 'spike_trap', 'bridge',
   'light_tower', 'healing_shrine', 'potion_shop',
   'cat_house', 'dormitory',
@@ -616,7 +613,7 @@ export const BUILDING_MAX_LEVEL: Record<BuildingType, number> = {
   gate: 3, ballista: 3, laser_tower: 3, workshop: 3, training_center: 3,
   // ── New buildings ──────────────────────────────────────────────────────────
   tesla_coil: 3, flame_tower: 3, catapult: 3,
-  moat: 1, reinforced_wall: 3,
+  moat: 1,
   radar_tower: 3, repair_station: 3, storage_shed: 1,
   teleporter_pad: 1,
   brewery: 3, lumber_camp: 3, tavern: 3,

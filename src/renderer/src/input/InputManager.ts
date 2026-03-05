@@ -1,5 +1,5 @@
-// ─── Action enum ──────────────────────────────────────────────────────────────
-// Abstract intent - physical key → Action so rebinding and gamepad support
+// ── Action enum ──────────────────────────────────────────────────────────────
+// Abstract intent - physical key -> Action so rebinding and gamepad support
 // require changes only to the DEFAULT_BINDINGS table, not any game system.
 
 export enum Action {
@@ -11,15 +11,14 @@ export enum Action {
   Attack,
   Sprint,
   Pause,
-  WeaponSlot1,
   BuildMode,
   Demolish,
   Upgrade,
   Repair,
   DodgeRoll,
-  SkillQ,
-  SkillE,
-  SkillR,
+  Skill1,
+  Skill2,
+  Skill3,
   UsePotion,
   SkillTree,
   CivilianPanel,
@@ -33,24 +32,23 @@ const DEFAULT_BINDINGS: Readonly<Record<Action, readonly string[]>> = {
   [Action.MoveDown]:           ['s', 'ArrowDown'],
   [Action.MoveLeft]:           ['a', 'ArrowLeft'],
   [Action.MoveRight]:          ['d', 'ArrowRight'],
-  [Action.Interact]:           ['f'],
+  [Action.Interact]:           ['e'],
   [Action.Attack]:             ['MouseLeft'],
   [Action.Sprint]:             ['Shift'],
   [Action.Pause]:              ['Escape'],
-  [Action.WeaponSlot1]:        ['1'],
   [Action.BuildMode]:          ['b'],
   [Action.Demolish]:           ['x'],
-  [Action.Upgrade]:            ['v'],
-  [Action.Repair]:             ['g'],
+  [Action.Upgrade]:            ['f'],
+  [Action.Repair]:             ['r'],
   [Action.DodgeRoll]:          [' '],
-  [Action.SkillQ]:             ['q'],
-  [Action.SkillE]:             ['e'],
-  [Action.SkillR]:             ['r'],
-  [Action.UsePotion]:          ['3'],
+  [Action.Skill1]:             ['1'],
+  [Action.Skill2]:             ['2'],
+  [Action.Skill3]:             ['3'],
+  [Action.UsePotion]:          ['q'],
   [Action.SkillTree]:          ['k'],
   [Action.CivilianPanel]:      ['c'],
   [Action.Cancel]:             ['MouseRight'],
-  [Action.RotateBuilding]:     ['r'],
+  [Action.RotateBuilding]:     ['ScrollDown', 'ScrollUp'],
 };
 
 export class InputManager {
@@ -82,7 +80,12 @@ export class InputManager {
       else if (e.button === 2) this.held.delete('MouseRight');
     });
     document.addEventListener('contextmenu', (e) => e.preventDefault());
-    document.addEventListener('wheel', (e) => { this.scrollDelta += e.deltaY; });
+    document.addEventListener('wheel', (e) => {
+      this.scrollDelta += e.deltaY;
+      // Inject synthetic scroll keys for just-pressed detection
+      if (e.deltaY > 0) this.justPressedSet.add('ScrollDown');
+      else if (e.deltaY < 0) this.justPressedSet.add('ScrollUp');
+    });
 
     // Clear all input when the window loses focus (prevents stuck keys on Alt+Tab, etc.)
     window.addEventListener('blur', () => {

@@ -196,7 +196,7 @@ export function createBuildController(deps: BuildControllerDeps) {
 
     // ── Normal placing mode ──────────────────────────────────────────────────
 
-    // R: toggle rotation for non-square buildings
+    // Scroll: toggle rotation for non-square buildings
     if (input.isJustPressed(Action.RotateBuilding) && isRotatable(placingType)) {
       rotation = rotation === 0 ? 1 : 0;
     }
