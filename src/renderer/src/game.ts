@@ -133,6 +133,9 @@ async function main(): Promise<void> {
   const hud          = new HUD(renderer.stage);
   const weaponHotbar = new WeaponHotbar(renderer.stage);
   const minimap      = new Minimap(renderer.stage);
+  const campfireIndicator = new Graphics();
+  campfireIndicator.zIndex = 199;
+  renderer.stage.addChild(campfireIndicator);
 
   // Coords display between minimap and wave HUD
   const coordsEl = document.createElement('div');
@@ -1325,6 +1328,7 @@ async function main(): Promise<void> {
       // Night overlay: gather light sources from players + buildings + portals
       const playerLights: { x: number; y: number; radius: number; color?: number }[] = [];
       const lightSources: { x: number; y: number; radius: number; color?: number }[] = [];
+      let campfirePos: { x: number; y: number } | null = null;
       const vMult = eventVisionMult; // fog modifier or solar eclipse
       for (const eid of world.query(C.Position, C.Faction)) {
         const f = world.getComponent<FactionComponent>(eid, C.Faction);
@@ -1349,14 +1353,38 @@ async function main(): Promise<void> {
         } else if (b.buildingType === 'campfire') {
           const p = world.getComponent<PositionComponent>(eid, C.Position)!;
           lightSources.push({ x: p.x, y: p.y, radius: TORCH_RADIUS * 1.5 * vMult });
+          campfirePos = { x: p.x, y: p.y };
         }
       }
       nightOverlay.update(camera.viewX, camera.viewY, camera.zoom, width, height, lightSources);
       minimap.setDarkness(nightOverlay.getDarkness());
-      minimap.update(world, localEntityId, camera.x, camera.y, width, height, playerLights);
+      minimap.update(world, localEntityId, camera.x, camera.y, width, height, playerLights, campfirePos);
+
+      // Campfire off-screen edge indicator
+      campfireIndicator.clear();
+      if (campfirePos) {
+        const sx = (campfirePos.x - camera.viewX) * camera.zoom + width / 2;
+        const sy = (campfirePos.y - camera.viewY) * camera.zoom + height / 2;
+        const margin = 60;
+        if (sx < -margin || sx > width + margin || sy < -margin || sy > height + margin) {
+          const angle = Math.atan2(campfirePos.y - camera.viewY, campfirePos.x - camera.viewX);
+          const pad = 40;
+          const ex = Math.max(pad, Math.min(width - pad, width / 2 + Math.cos(angle) * (width / 2 - pad)));
+          const ey = Math.max(pad, Math.min(height - pad, height / 2 + Math.sin(angle) * (height / 2 - pad)));
+          const as = 8;
+          campfireIndicator.moveTo(ex + Math.cos(angle) * as, ey + Math.sin(angle) * as);
+          campfireIndicator.lineTo(ex + Math.cos(angle + 2.4) * as, ey + Math.sin(angle + 2.4) * as);
+          campfireIndicator.lineTo(ex + Math.cos(angle - 2.4) * as, ey + Math.sin(angle - 2.4) * as);
+          campfireIndicator.closePath();
+          campfireIndicator.fill({ color: 0xff8844, alpha: 0.7 });
+          campfireIndicator.circle(ex, ey, 3);
+          campfireIndicator.fill({ color: 0xffcc66, alpha: 0.5 });
+        }
+      }
     } else {
       // Safety: ensure night overlay never renders outside gameplay
       nightOverlay.hide();
+      campfireIndicator.clear();
     }
 
     const tileX = Math.floor(camera.x / TILE_SIZE);

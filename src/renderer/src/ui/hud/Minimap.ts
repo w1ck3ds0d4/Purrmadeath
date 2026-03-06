@@ -112,6 +112,7 @@ export class Minimap {
     screenW: number,
     _screenH: number,
     lightSources?: LightSource[],
+    campfirePos?: { x: number; y: number } | null,
   ): void {
     if (!this.visible) return;
 
@@ -197,6 +198,44 @@ export class Minimap {
     this.dotGfx.moveTo(cx, cy - 4);
     this.dotGfx.lineTo(cx, cy + 4);
     this.dotGfx.stroke({ color: 0xffffff, alpha: 0.5, width: 1 });
+
+    // ── Campfire waypoint marker ──
+    if (campfirePos) {
+      const rx = campfirePos.x - centerX;
+      const ry = campfirePos.y - centerY;
+
+      if (Math.abs(rx) <= MAP_RANGE && Math.abs(ry) <= MAP_RANGE) {
+        // Campfire is on minimap - draw a diamond marker
+        const fx = mapX + halfMap + (rx / MAP_RANGE) * halfMap;
+        const fy = mapY + halfMap + (ry / MAP_RANGE) * halfMap;
+        const s = 5;
+        this.dotGfx.moveTo(fx, fy - s);
+        this.dotGfx.lineTo(fx + s, fy);
+        this.dotGfx.lineTo(fx, fy + s);
+        this.dotGfx.lineTo(fx - s, fy);
+        this.dotGfx.closePath();
+        this.dotGfx.fill({ color: 0xff8844, alpha: 0.9 });
+        this.dotGfx.stroke({ color: 0xffcc66, alpha: 0.8, width: 1 });
+      } else {
+        // Campfire is off minimap - draw arrow at edge pointing toward it
+        const angle = Math.atan2(ry, rx);
+        const edgeR = halfMap - 6;
+        const ax = mapX + halfMap + Math.cos(angle) * edgeR;
+        const ay = mapY + halfMap + Math.sin(angle) * edgeR;
+        const arrowSize = 5;
+        const tipX = ax + Math.cos(angle) * arrowSize;
+        const tipY = ay + Math.sin(angle) * arrowSize;
+        const lx = ax + Math.cos(angle + 2.5) * arrowSize;
+        const ly = ay + Math.sin(angle + 2.5) * arrowSize;
+        const rrx = ax + Math.cos(angle - 2.5) * arrowSize;
+        const rry = ay + Math.sin(angle - 2.5) * arrowSize;
+        this.dotGfx.moveTo(tipX, tipY);
+        this.dotGfx.lineTo(lx, ly);
+        this.dotGfx.lineTo(rrx, rry);
+        this.dotGfx.closePath();
+        this.dotGfx.fill({ color: 0xff8844, alpha: 0.8 });
+      }
+    }
 
     // Night: dark overlay on minimap with light-source cutouts
     if (this.darkness > 0.01 && lightSources) {
