@@ -13,7 +13,6 @@ import {
   RESOURCE_NODE_RADIUS,
   CAMPFIRE_HOUSING_PER_LEVEL,
   CAT_HOUSE_CAPACITY,
-  DORMITORY_CAPACITY,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import type { InputManager } from '../input/InputManager';
@@ -114,7 +113,6 @@ export function createBuildController(deps: BuildControllerDeps) {
       switch (bComp.buildingType) {
         case 'campfire': capacity += CAMPFIRE_HOUSING_PER_LEVEL[lvl] ?? 2; break;
         case 'cat_house': capacity += CAT_HOUSE_CAPACITY[Math.min(lvl, 2)] ?? 2; break;
-        case 'dormitory': capacity += DORMITORY_CAPACITY[Math.min(lvl, 2)] ?? 5; break;
       }
     }
     for (const eid of world.query(C.Faction)) {
@@ -137,7 +135,7 @@ export function createBuildController(deps: BuildControllerDeps) {
 
   /** Check if a building type has housing stats to show. */
   function isHousingBuilding(type: string): boolean {
-    return type === 'campfire' || type === 'cat_house' || type === 'dormitory';
+    return type === 'campfire' || type === 'cat_house';
   }
 
   function update(): void {

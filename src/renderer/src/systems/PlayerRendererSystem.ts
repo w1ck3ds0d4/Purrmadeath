@@ -90,7 +90,6 @@ const BUILDING_COLORS: Record<string, { body: number; border: number }> = {
   barracks:       { body: 0x886644, border: 0x664422 },
   potion_shop:    { body: 0x9944aa, border: 0x772288 },
   cat_house:      { body: 0xc49a4a, border: 0xa07a30 },
-  dormitory:      { body: 0xb08040, border: 0x906020 },
   ballista:       { body: 0x6a5a4a, border: 0x9a8a6a },
   laser_tower:    { body: 0xcc3333, border: 0xee5555 },
   gate:           { body: 0x8a7a5a, border: 0xaa9a7a },
@@ -652,13 +651,6 @@ export class PlayerRendererSystem {
         if (bType === 'cat_house') {
           gfx.poly([0, -8, 7, -2, 7, 6, -7, 6, -7, -2]);
           gfx.stroke({ color: 0xeeddbb, alpha: 0.8, width: 1.5 });
-        }
-        // Dormitory: larger house outline
-        if (bType === 'dormitory') {
-          gfx.poly([0, -10, 9, -3, 9, 8, -9, 8, -9, -3]);
-          gfx.stroke({ color: 0xeeddbb, alpha: 0.8, width: 1.5 });
-          gfx.moveTo(-3, 8); gfx.lineTo(-3, 2); gfx.lineTo(3, 2); gfx.lineTo(3, 8);
-          gfx.stroke({ color: 0xeeddbb, alpha: 0.6, width: 1 });
         }
         // Workshop: anvil icon
         if (bType === 'workshop') {

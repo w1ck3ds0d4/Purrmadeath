@@ -367,15 +367,15 @@ export const BUILDING_SIZES: Record<string, { w: number; h: number }> = {
   lumbermill: { w: 2, h: 2 }, quarry: { w: 2, h: 2 }, mine: { w: 2, h: 2 }, farm: { w: 2, h: 2 },
   arrow_turret: { w: 1, h: 1 }, cannon_turret: { w: 2, h: 2 }, spike_trap: { w: 1, h: 1 }, bridge: { w: 1, h: 1 },
   light_tower: { w: 1, h: 1 }, healing_shrine: { w: 1, h: 1 }, barracks: { w: 2, h: 2 }, potion_shop: { w: 2, h: 2 },
-  cat_house: { w: 2, h: 2 }, dormitory: { w: 2, h: 2 },
+  cat_house: { w: 2, h: 2 },
   gate: { w: 3, h: 1 }, ballista: { w: 2, h: 2 }, laser_tower: { w: 1, h: 1 },
   workshop: { w: 2, h: 2 }, training_center: { w: 2, h: 2 },
   // ── New buildings ──────────────────────────────────────────────────────────
   tesla_coil: { w: 1, h: 1 }, flame_tower: { w: 1, h: 1 }, catapult: { w: 2, h: 2 },
   moat: { w: 1, h: 1 },
-  radar_tower: { w: 2, h: 2 }, repair_station: { w: 2, h: 2 }, storage_shed: { w: 1, h: 1 },
+  repair_station: { w: 2, h: 2 }, storage_shed: { w: 1, h: 1 },
   teleporter_pad: { w: 1, h: 1 },
-  brewery: { w: 2, h: 2 }, lumber_camp: { w: 2, h: 2 }, tavern: { w: 2, h: 2 },
+  tavern: { w: 2, h: 2 },
 };
 
 /**
@@ -454,9 +454,6 @@ export const BARRACKS_MAX_HEALTH = 200;
 export const POTION_SHOP_MAX_HEALTH = 150;
 /** Cat house HP. */
 export const CAT_HOUSE_MAX_HEALTH = 100;
-/** Dormitory HP. */
-export const DORMITORY_MAX_HEALTH = 150;
-
 /** Gate HP. */
 export const GATE_MAX_HEALTH = 250;
 /** Ballista HP. */
@@ -477,18 +474,12 @@ export const FLAME_TOWER_MAX_HEALTH = 100;
 export const CATAPULT_MAX_HEALTH = 200;
 /** Moat HP (effectively indestructible). */
 export const MOAT_MAX_HEALTH = 999;
-/** Radar tower HP. */
-export const RADAR_TOWER_MAX_HEALTH = 120;
 /** Repair station HP. */
 export const REPAIR_STATION_MAX_HEALTH = 150;
 /** Storage shed HP. */
 export const STORAGE_SHED_MAX_HEALTH = 80;
 /** Teleporter pad HP. */
 export const TELEPORTER_PAD_MAX_HEALTH = 100;
-/** Brewery HP. */
-export const BREWERY_MAX_HEALTH = 150;
-/** Lumber camp HP. */
-export const LUMBER_CAMP_MAX_HEALTH = 180;
 /** Tavern HP. */
 export const TAVERN_MAX_HEALTH = 200;
 
@@ -516,7 +507,6 @@ export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'i
   barracks:       { wood: 15, iron: 10 },
   potion_shop:    { wood: 15, stone: 10, food: 5 },
   cat_house:      { wood: 10, stone: 5 },
-  dormitory:      { wood: 20, stone: 15, iron: 5 },
   gate:           { wood: 8, stone: 5 },
   ballista:       { stone: 8, iron: 8 },
   laser_tower:    { stone: 10, iron: 10, diamond: 1 },
@@ -527,12 +517,9 @@ export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'i
   flame_tower:     { stone: 6, iron: 6 },
   catapult:        { stone: 15, iron: 10, diamond: 3 },
   moat:            { stone: 3 },
-  radar_tower:     { stone: 10, iron: 5, diamond: 2 },
   repair_station:  { wood: 15, iron: 10 },
   storage_shed:    { wood: 5, stone: 3 },
   teleporter_pad:  { iron: 10, diamond: 5 },
-  brewery:         { wood: 15, stone: 10, food: 10 },
-  lumber_camp:     { wood: 20, stone: 10 },
   tavern:          { wood: 20, stone: 15, iron: 10 },
 };
 
@@ -541,11 +528,11 @@ export const PLACEABLE_BUILDINGS: string[] = [
   'wall', 'warehouse', 'lumbermill', 'quarry', 'mine', 'farm',
   'arrow_turret', 'cannon_turret', 'spike_trap', 'bridge',
   'light_tower', 'healing_shrine', 'potion_shop',
-  'cat_house', 'dormitory',
+  'cat_house',
   'gate', 'ballista', 'laser_tower', 'workshop', 'training_center',
   'tesla_coil', 'flame_tower', 'catapult', 'moat',
-  'radar_tower', 'repair_station', 'storage_shed', 'teleporter_pad',
-  'brewery', 'lumber_camp', 'tavern',
+  'repair_station', 'storage_shed', 'teleporter_pad',
+  'tavern',
 ];
 
 // ─── Production Buildings ──────────────────────────────────────────────────
@@ -609,14 +596,14 @@ export const BUILDING_MAX_LEVEL: Record<BuildingType, number> = {
   wall: 3, warehouse: 3, lumbermill: 3, quarry: 3, mine: 3, farm: 3,
   arrow_turret: 3, cannon_turret: 3, spike_trap: 3,
   light_tower: 3, healing_shrine: 3, barracks: 3, potion_shop: 3,
-  cat_house: 3, dormitory: 3,
+  cat_house: 3,
   gate: 3, ballista: 3, laser_tower: 3, workshop: 3, training_center: 3,
   // ── New buildings ──────────────────────────────────────────────────────────
   tesla_coil: 3, flame_tower: 3, catapult: 3,
   moat: 1,
-  radar_tower: 3, repair_station: 3, storage_shed: 1,
+  repair_station: 3, storage_shed: 1,
   teleporter_pad: 1,
-  brewery: 3, lumber_camp: 3, tavern: 3,
+  tavern: 3,
 };
 
 /** Cost multiplier for each upgrade level (index 0 = level 2, index 1 = level 3, etc.). */
@@ -812,9 +799,6 @@ export const CIVILIAN_BLEED_TIME = 30;
 
 /** Housing capacity per upgrade level for cat_house. */
 export const CAT_HOUSE_CAPACITY = [2, 3, 4];
-/** Housing capacity per upgrade level for dormitory. */
-export const DORMITORY_CAPACITY = [5, 7, 10];
-
 // ─── Remote Player Interpolation ────────────────────────────────────────────
 
 /** Lerp speed toward extrapolated target. Higher = snappier, lower = smoother. */
@@ -920,22 +904,11 @@ export const UPGRADE_CATAPULT_AOE = [120, 150, 180];
 // ── Moat ──────────────────────────────────────────────────────────────────
 export const MOAT_SLOW_FACTOR = 0.5;
 
-// ── Radar Tower ───────────────────────────────────────────────────────────
-export const UPGRADE_RADAR_RANGE = [300, 450, 600];
-
 // ── Repair Station (worker building) ──────────────────────────────────────
 export const REPAIR_STATION_HP_PER_TICK = [10, 15, 20];
 export const REPAIR_STATION_INTERVAL = [5, 4, 3];
 export const REPAIR_STATION_COST_WOOD = 1;
 export const REPAIR_STATION_COST_STONE = 1;
-
-// ── Brewery ───────────────────────────────────────────────────────────────
-export const BREWERY_FOOD_COST = 2;
-export const BREWERY_PRODUCTION_INTERVAL = 15;
-
-// ── Lumber Camp ───────────────────────────────────────────────────────────
-export const LUMBER_CAMP_PRODUCTION_INTERVAL = 8;
-export const LUMBER_CAMP_AMOUNT = 2;
 
 // ── Tavern ────────────────────────────────────────────────────────────────
 export const TAVERN_MAX_HEROES = [2, 3, 4];

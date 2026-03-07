@@ -20,8 +20,6 @@ const BUILDING_LABELS: Record<string, string> = {
   mine: 'Mine',
   farm: 'Farm',
   workshop: 'Workshop',
-  brewery: 'Brewery',
-  lumber_camp: 'Lumber Camp',
   repair_station: 'Repair Station',
 };
 

@@ -48,22 +48,18 @@ const BUILDING_DETAILS: Record<string, BuildingDetail> = {
   quarry:           { hp: 180, description: 'Assign civilians to mine stone over time.' },
   mine:             { hp: 200, description: 'Assign civilians to extract iron and rare diamonds.' },
   farm:             { hp: 150, description: 'Assign civilians to grow food for the settlement.' },
-  brewery:          { hp: 150, description: 'Consumes food to brew potions for the party.' },
-  lumber_camp:      { hp: 180, description: 'Produces 2 wood per tick at 8-second intervals.' },
   workshop:         { hp: 150, description: 'Assign civilians to forge weapons for guards.' },
   warehouse:        { hp: 200, description: 'Shared storage depot. Civilians deposit resources here.' },
   storage_shed:     { hp: 80, description: 'Small secondary deposit point for resources.' },
   bridge:           { hp: 999, description: 'Allows movement across water tiles.' },
   light_tower:      { hp: 120, description: 'Reveals the fog of war in a radius around it.', range: 200 },
   healing_shrine:   { hp: 100, description: 'Heals nearby players and allies over time.', range: 120, special: '3 HP/s' },
-  radar_tower:      { hp: 120, description: 'Extends the minimap reveal radius.', range: 300, special: 'Minimap reveal' },
   repair_station:   { hp: 150, description: 'Assign a civilian to repair damaged buildings. Consumes wood and stone from the warehouse.', special: '10 HP per repair' },
   teleporter_pad:   { hp: 100, description: 'Place two pads, then press E to teleport between them.' },
   potion_shop:      { hp: 150, description: 'Brew and equip potions for combat advantages.' },
   training_center:  { hp: 220, description: 'Spend 1 weapon + 1 civilian to train a combat guard.' },
   tavern:           { hp: 200, description: 'Hire powerful hero NPCs using gold.' },
   cat_house:        { hp: 100, description: 'Provides housing for 2/3/4 additional civilians.' },
-  dormitory:        { hp: 150, description: 'Large housing for 5/7/10 additional civilians.' },
 };
 
 interface BuildCategory {
@@ -74,10 +70,10 @@ interface BuildCategory {
 
 const BUILD_CATEGORIES: BuildCategory[] = [
   { name: 'Defense',    accent: '#cc4444', buildings: ['wall', 'gate', 'arrow_turret', 'cannon_turret', 'ballista', 'laser_tower', 'tesla_coil', 'flame_tower', 'catapult', 'moat', 'spike_trap'] },
-  { name: 'Production', accent: '#44aa44', buildings: ['lumbermill', 'lumber_camp', 'quarry', 'mine', 'farm', 'brewery', 'workshop'] },
+  { name: 'Production', accent: '#44aa44', buildings: ['lumbermill', 'quarry', 'mine', 'farm', 'workshop'] },
   { name: 'Military',   accent: '#cc8844', buildings: ['training_center'] },
-  { name: 'Housing',    accent: '#cc88cc', buildings: ['cat_house', 'dormitory'] },
-  { name: 'Utility',    accent: '#4488cc', buildings: ['warehouse', 'storage_shed', 'bridge', 'light_tower', 'healing_shrine', 'radar_tower', 'repair_station', 'teleporter_pad'] },
+  { name: 'Housing',    accent: '#cc88cc', buildings: ['cat_house'] },
+  { name: 'Utility',    accent: '#4488cc', buildings: ['warehouse', 'storage_shed', 'bridge', 'light_tower', 'healing_shrine', 'repair_station', 'teleporter_pad'] },
   { name: 'Shops',      accent: '#aa66ff', buildings: ['potion_shop', 'tavern'] },
 ];
 

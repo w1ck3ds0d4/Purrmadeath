@@ -18,7 +18,7 @@ import type {
   EnemyStatsComponent, GhostStateComponent, LightRevealComponent,
   HealAuraComponent, BarracksSpawnerComponent, GuardComponent,
   WorkerSlotComponent, HousingComponent, RuinsComponent, LaserBeamComponent,
-  TeslaCoilComponent, FlameAuraComponent, MoatComponent, RadarComponent,
+  TeslaCoilComponent, FlameAuraComponent, MoatComponent,
   RepairAuraComponent, TeleporterComponent, TavernComponent,
 } from '@shared/components';
 import {
@@ -43,7 +43,7 @@ import {
   BARRACKS_MAX_GUARDS, BARRACKS_SPAWN_INTERVAL,
   BARRACKS_GUARD_HP, BARRACKS_GUARD_DAMAGE, BARRACKS_GUARD_SPEED, BARRACKS_GUARD_PATROL_RADIUS,
   GUARD_ATTACK_COOLDOWN, GUARD_MELEE_RANGE, GUARD_MELEE_KNOCKBACK, GUARD_RADIUS,
-  CAT_HOUSE_MAX_HEALTH, DORMITORY_MAX_HEALTH, CAT_HOUSE_CAPACITY, DORMITORY_CAPACITY,
+  CAT_HOUSE_MAX_HEALTH, CAT_HOUSE_CAPACITY,
   GATE_MAX_HEALTH, BALLISTA_MAX_HEALTH, LASER_TOWER_MAX_HEALTH, WORKSHOP_MAX_HEALTH, TRAINING_CENTER_MAX_HEALTH,
   BALLISTA_RANGE, BALLISTA_COOLDOWN, BALLISTA_DAMAGE, BALLISTA_PROJ_SPEED,
   UPGRADE_BALLISTA_AOE, UPGRADE_BALLISTA_CD, UPGRADE_BALLISTA_DMG,
@@ -57,8 +57,8 @@ import {
   // New buildings
   TESLA_COIL_MAX_HEALTH, FLAME_TOWER_MAX_HEALTH, CATAPULT_MAX_HEALTH,
   MOAT_MAX_HEALTH,
-  RADAR_TOWER_MAX_HEALTH, REPAIR_STATION_MAX_HEALTH, STORAGE_SHED_MAX_HEALTH,
-  TELEPORTER_PAD_MAX_HEALTH, BREWERY_MAX_HEALTH, LUMBER_CAMP_MAX_HEALTH, TAVERN_MAX_HEALTH,
+  REPAIR_STATION_MAX_HEALTH, STORAGE_SHED_MAX_HEALTH,
+  TELEPORTER_PAD_MAX_HEALTH, TAVERN_MAX_HEALTH,
   TESLA_COIL_RANGE, TESLA_COIL_COOLDOWN, TESLA_COIL_DAMAGE, TESLA_COIL_CHAIN_COUNT, TESLA_COIL_CHAIN_RANGE,
   UPGRADE_TESLA_DAMAGE, UPGRADE_TESLA_CHAIN, UPGRADE_TESLA_CD,
   FLAME_TOWER_RANGE, FLAME_TOWER_DPS, FLAME_TOWER_ARC,
@@ -66,10 +66,7 @@ import {
   CATAPULT_RANGE, CATAPULT_COOLDOWN, CATAPULT_DAMAGE, CATAPULT_AOE_RADIUS, CATAPULT_PROJ_SPEED,
   UPGRADE_CATAPULT_DMG, UPGRADE_CATAPULT_CD, UPGRADE_CATAPULT_AOE,
   MOAT_SLOW_FACTOR,
-  UPGRADE_RADAR_RANGE,
   REPAIR_STATION_HP_PER_TICK, REPAIR_STATION_INTERVAL, REPAIR_STATION_COST_WOOD, REPAIR_STATION_COST_STONE,
-  BREWERY_FOOD_COST, BREWERY_PRODUCTION_INTERVAL,
-  LUMBER_CAMP_PRODUCTION_INTERVAL, LUMBER_CAMP_AMOUNT,
   TAVERN_MAX_HEROES, TAVERN_ROSTER_SIZE,
   CIVILIAN_SPECIALTY_BONUS,
 } from '@shared/constants';
@@ -96,7 +93,6 @@ const HP_MAP: Record<string, number> = {
   barracks: BARRACKS_MAX_HEALTH,
   potion_shop: POTION_SHOP_MAX_HEALTH,
   cat_house: CAT_HOUSE_MAX_HEALTH,
-  dormitory: DORMITORY_MAX_HEALTH,
   gate: GATE_MAX_HEALTH,
   ballista: BALLISTA_MAX_HEALTH,
   laser_tower: LASER_TOWER_MAX_HEALTH,
@@ -106,12 +102,9 @@ const HP_MAP: Record<string, number> = {
   flame_tower: FLAME_TOWER_MAX_HEALTH,
   catapult: CATAPULT_MAX_HEALTH,
   moat: MOAT_MAX_HEALTH,
-  radar_tower: RADAR_TOWER_MAX_HEALTH,
   repair_station: REPAIR_STATION_MAX_HEALTH,
   storage_shed: STORAGE_SHED_MAX_HEALTH,
   teleporter_pad: TELEPORTER_PAD_MAX_HEALTH,
-  brewery: BREWERY_MAX_HEALTH,
-  lumber_camp: LUMBER_CAMP_MAX_HEALTH,
   tavern: TAVERN_MAX_HEALTH,
 };
 
@@ -389,8 +382,6 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       } as import('@shared/components').TrainingCenterComponent);
     } else if (msg.buildingType === 'cat_house') {
       world.addComponent(id, C.Housing, { capacity: CAT_HOUSE_CAPACITY[0], residentIds: [] } as HousingComponent);
-    } else if (msg.buildingType === 'dormitory') {
-      world.addComponent(id, C.Housing, { capacity: DORMITORY_CAPACITY[0], residentIds: [] } as HousingComponent);
     } else if (msg.buildingType === 'tesla_coil') {
       world.addComponent(id, C.TeslaCoil, {
         range: TESLA_COIL_RANGE, cooldown: TESLA_COIL_COOLDOWN,
@@ -409,8 +400,6 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       } as TurretComponent);
     } else if (msg.buildingType === 'moat') {
       world.addComponent(id, C.Moat, { slowFactor: MOAT_SLOW_FACTOR } as MoatComponent);
-    } else if (msg.buildingType === 'radar_tower') {
-      world.addComponent(id, C.Radar, { revealRadius: UPGRADE_RADAR_RANGE[0] } as RadarComponent);
     } else if (msg.buildingType === 'repair_station') {
       world.addComponent(id, C.RepairAura, {
         repairPerTick: REPAIR_STATION_HP_PER_TICK[0], interval: REPAIR_STATION_INTERVAL[0], timer: 0,
@@ -435,16 +424,6 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
         const otherTp = world.getComponent<TeleporterComponent>(pairedId, C.Teleporter)!;
         otherTp.pairedId = id;
       }
-    } else if (msg.buildingType === 'brewery') {
-      world.addComponent(id, C.Production, {
-        resourceType: 'food', interval: BREWERY_PRODUCTION_INTERVAL,
-        timer: 0, amount: 1, stored: 0, maxStored: PRODUCTION_MAX_STORED,
-      } as ProductionComponent);
-    } else if (msg.buildingType === 'lumber_camp') {
-      world.addComponent(id, C.Production, {
-        resourceType: 'wood', interval: LUMBER_CAMP_PRODUCTION_INTERVAL,
-        timer: 0, amount: LUMBER_CAMP_AMOUNT, stored: 0, maxStored: PRODUCTION_MAX_STORED,
-      } as ProductionComponent);
     } else if (msg.buildingType === 'tavern') {
       const roster = generateTavernRoster();
       world.addComponent(id, C.Tavern, {
@@ -453,7 +432,7 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     }
 
     // Attach WorkerSlot to production buildings so civilians can staff them
-    if (['lumbermill', 'quarry', 'mine', 'farm', 'workshop', 'brewery', 'lumber_camp', 'repair_station'].includes(msg.buildingType)) {
+    if (['lumbermill', 'quarry', 'mine', 'farm', 'workshop', 'repair_station'].includes(msg.buildingType)) {
       world.addComponent(id, C.WorkerSlot, { workerId: null } as WorkerSlotComponent);
     }
 
@@ -664,10 +643,6 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     if (housing && bldg.buildingType === 'cat_house' && lvlIdx < CAT_HOUSE_CAPACITY.length) {
       housing.capacity = CAT_HOUSE_CAPACITY[lvlIdx];
     }
-    if (housing && bldg.buildingType === 'dormitory' && lvlIdx < DORMITORY_CAPACITY.length) {
-      housing.capacity = DORMITORY_CAPACITY[lvlIdx];
-    }
-
     // Scale tesla coil
     const tesla = world.getComponent<TeslaCoilComponent>(targetId, C.TeslaCoil);
     if (tesla) {
@@ -689,10 +664,6 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       turret.damage = Math.round((turret.damage / UPGRADE_CATAPULT_DMG[oldLevel - 1]) * UPGRADE_CATAPULT_DMG[lvlIdx]);
       turret.cooldownTimer = 0;
     }
-
-    // Scale radar tower
-    const radar = world.getComponent<RadarComponent>(targetId, C.Radar);
-    if (radar && lvlIdx < UPGRADE_RADAR_RANGE.length) radar.revealRadius = UPGRADE_RADAR_RANGE[lvlIdx];
 
     // Scale repair station
     const repair = world.getComponent<RepairAuraComponent>(targetId, C.RepairAura);
@@ -1447,11 +1418,8 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
         warehouseIds.add(id);
         break;
       case 'cat_house':
-      case 'dormitory': {
-        const cap = buildingType === 'cat_house' ? CAT_HOUSE_CAPACITY[0] : DORMITORY_CAPACITY[0];
-        world.addComponent(id, C.Housing, { capacity: cap, residentIds: [] } as HousingComponent);
+        world.addComponent(id, C.Housing, { capacity: CAT_HOUSE_CAPACITY[0], residentIds: [] } as HousingComponent);
         break;
-      }
       case 'tesla_coil':
         world.addComponent(id, C.TeslaCoil, { range: TESLA_COIL_RANGE, cooldown: TESLA_COIL_COOLDOWN, cooldownTimer: 0, damage: TESLA_COIL_DAMAGE, chainCount: TESLA_COIL_CHAIN_COUNT, chainRange: TESLA_COIL_CHAIN_RANGE } as TeslaCoilComponent);
         break;
@@ -1464,9 +1432,6 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       case 'moat':
         world.addComponent(id, C.Moat, { slowFactor: MOAT_SLOW_FACTOR } as MoatComponent);
         break;
-      case 'radar_tower':
-        world.addComponent(id, C.Radar, { revealRadius: UPGRADE_RADAR_RANGE[0] } as RadarComponent);
-        break;
       case 'repair_station':
         world.addComponent(id, C.RepairAura, { repairPerTick: REPAIR_STATION_HP_PER_TICK[0], interval: REPAIR_STATION_INTERVAL[0], timer: 0 } as RepairAuraComponent);
         world.addComponent(id, C.WorkerSlot, { workerId: null } as WorkerSlotComponent);
@@ -1476,14 +1441,6 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
         break;
       case 'teleporter_pad':
         world.addComponent(id, C.Teleporter, { pairedId: null } as TeleporterComponent);
-        break;
-      case 'brewery':
-        world.addComponent(id, C.Production, { timer: 0, interval: BREWERY_PRODUCTION_INTERVAL, amount: 1, maxStored: PRODUCTION_MAX_STORED, stored: 0, resourceType: 'food' } as ProductionComponent);
-        world.addComponent(id, C.WorkerSlot, { workerId: null } as WorkerSlotComponent);
-        break;
-      case 'lumber_camp':
-        world.addComponent(id, C.Production, { timer: 0, interval: LUMBER_CAMP_PRODUCTION_INTERVAL, amount: LUMBER_CAMP_AMOUNT, maxStored: PRODUCTION_MAX_STORED, stored: 0, resourceType: 'wood' } as ProductionComponent);
-        world.addComponent(id, C.WorkerSlot, { workerId: null } as WorkerSlotComponent);
         break;
       case 'tavern': {
         const roster = generateTavernRoster();

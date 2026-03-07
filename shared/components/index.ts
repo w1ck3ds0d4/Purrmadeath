@@ -253,11 +253,11 @@ export interface ResourcesComponent {
 export type BuildingType = 'campfire' | 'wall' | 'warehouse' | 'lumbermill' | 'quarry' | 'mine' | 'farm'
   | 'arrow_turret' | 'cannon_turret' | 'spike_trap' | 'bridge'
   | 'light_tower' | 'healing_shrine' | 'barracks' | 'potion_shop'
-  | 'cat_house' | 'dormitory'
+  | 'cat_house'
   | 'gate' | 'ballista' | 'laser_tower' | 'workshop' | 'training_center'
   | 'tesla_coil' | 'flame_tower' | 'catapult' | 'moat'
-  | 'radar_tower' | 'repair_station' | 'storage_shed' | 'teleporter_pad'
-  | 'brewery' | 'lumber_camp' | 'tavern';
+  | 'repair_station' | 'storage_shed' | 'teleporter_pad'
+  | 'tavern';
 
 /** Tags an entity as a player-built (or pre-placed) structure. */
 export interface BuildingComponent {
@@ -561,7 +561,7 @@ export interface CivilianComponent {
   specialty: string | null;
 }
 
-/** Attached to housing buildings (cat_house, dormitory) and campfire. */
+/** Attached to housing buildings (cat_house) and campfire. */
 export interface HousingComponent {
   /** Max civilians this building can house. */
   capacity: number;

@@ -9,7 +9,7 @@ import {
   UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RATE, UPGRADE_HEAL_RANGE,
   BALLISTA_DAMAGE, BALLISTA_RANGE, BALLISTA_COOLDOWN,
   UPGRADE_BALLISTA_DMG, UPGRADE_BALLISTA_CD, UPGRADE_BALLISTA_AOE,
-  CAT_HOUSE_CAPACITY, DORMITORY_CAPACITY,
+  CAT_HOUSE_CAPACITY,
   CAMPFIRE_HOUSING_PER_LEVEL,
 } from '@shared/constants';
 import type { BuildingType } from '@shared/components';
@@ -210,11 +210,6 @@ export class BuildModeOverlay {
       }
       case 'cat_house': {
         const cap = CAT_HOUSE_CAPACITY[i];
-        stats = `Housing: ${cap} slots${popStr}`;
-        break;
-      }
-      case 'dormitory': {
-        const cap = DORMITORY_CAPACITY[i];
         stats = `Housing: ${cap} slots${popStr}`;
         break;
       }
