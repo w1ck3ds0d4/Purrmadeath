@@ -17,6 +17,32 @@ interface VFXEntry {
 const DEFAULT_DURATION = 0.5;
 
 // Ability-specific colors
+interface LightningBolt {
+  sourceX: number;
+  sourceY: number;
+  targets: Array<{ x: number; y: number }>;
+  elapsed: number;
+  duration: number;
+  /** Pre-computed jagged segments per bolt (source -> each target). */
+  segments: Array<Array<{ x: number; y: number }>>;
+}
+
+/** Generate a jagged lightning path between two points. */
+function generateLightningPath(x1: number, y1: number, x2: number, y2: number, jag: number): Array<{ x: number; y: number }> {
+  const pts: Array<{ x: number; y: number }> = [{ x: x1, y: y1 }];
+  const dx = x2 - x1, dy = y2 - y1;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  const steps = Math.max(3, Math.floor(dist / 12));
+  const nx = -dy / dist, ny = dx / dist; // perpendicular
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    const offset = (Math.random() - 0.5) * 2 * jag;
+    pts.push({ x: x1 + dx * t + nx * offset, y: y1 + dy * t + ny * offset });
+  }
+  pts.push({ x: x2, y: y2 });
+  return pts;
+}
+
 const ABILITY_COLORS: Record<string, { fill: number; stroke: number }> = {
   whirlwind:     { fill: 0xcc3333, stroke: 0xff4444 },
   shield_wall:   { fill: 0x3377cc, stroke: 0x55aaff },
@@ -36,6 +62,7 @@ const ABILITY_COLORS: Record<string, { fill: number; stroke: number }> = {
 export class AbilityVFXSystem {
   private gfx: Graphics;
   private effects: VFXEntry[] = [];
+  private bolts: LightningBolt[] = [];
 
   constructor(parent: Container) {
     this.gfx = new Graphics();
@@ -56,11 +83,26 @@ export class AbilityVFXSystem {
     });
   }
 
+  /** Trigger chain lightning bolts from source to all targets. */
+  triggerLightning(sourceX: number, sourceY: number, targets: Array<{ x: number; y: number }>): void {
+    const segments: Array<Array<{ x: number; y: number }>> = [];
+    for (const t of targets) {
+      segments.push(generateLightningPath(sourceX, sourceY, t.x, t.y, 10));
+    }
+    this.bolts.push({ sourceX, sourceY, targets, elapsed: 0, duration: 0.35, segments });
+  }
+
   update(dt: number): void {
     for (let i = this.effects.length - 1; i >= 0; i--) {
       this.effects[i].elapsed += dt;
       if (this.effects[i].elapsed >= this.effects[i].duration) {
         this.effects.splice(i, 1);
+      }
+    }
+    for (let i = this.bolts.length - 1; i >= 0; i--) {
+      this.bolts[i].elapsed += dt;
+      if (this.bolts[i].elapsed >= this.bolts[i].duration) {
+        this.bolts.splice(i, 1);
       }
     }
   }
@@ -107,6 +149,40 @@ export class AbilityVFXSystem {
         default:
           this.drawExpandingRing(fx, t, colors);
           break;
+      }
+    }
+
+    // ── Lightning bolts ──
+    for (const bolt of this.bolts) {
+      const bt = bolt.elapsed / bolt.duration;
+      const alpha = bt < 0.15 ? bt / 0.15 : (1 - bt) * 0.8;
+
+      // Core bolt (bright white-blue)
+      for (const seg of bolt.segments) {
+        if (seg.length < 2) continue;
+        this.gfx.moveTo(seg[0].x, seg[0].y);
+        for (let i = 1; i < seg.length; i++) this.gfx.lineTo(seg[i].x, seg[i].y);
+        this.gfx.stroke({ color: 0xaaddff, alpha, width: 2.5 });
+        // Glow pass
+        this.gfx.moveTo(seg[0].x, seg[0].y);
+        for (let i = 1; i < seg.length; i++) this.gfx.lineTo(seg[i].x, seg[i].y);
+        this.gfx.stroke({ color: 0x4488ff, alpha: alpha * 0.4, width: 6 });
+      }
+
+      // Impact flash at source
+      if (bt < 0.2) {
+        const flashAlpha = (1 - bt / 0.2) * 0.5;
+        this.gfx.circle(bolt.sourceX, bolt.sourceY, 8);
+        this.gfx.fill({ color: 0xaaddff, alpha: flashAlpha });
+      }
+
+      // Impact sparks at each target
+      for (const tgt of bolt.targets) {
+        const sparkAlpha = alpha * 0.6;
+        this.gfx.circle(tgt.x, tgt.y, 4);
+        this.gfx.fill({ color: 0xffffff, alpha: sparkAlpha });
+        this.gfx.circle(tgt.x, tgt.y, 8);
+        this.gfx.fill({ color: 0x4488ff, alpha: sparkAlpha * 0.3 });
       }
     }
   }
@@ -236,6 +312,7 @@ export class AbilityVFXSystem {
 
   destroy(): void {
     this.effects.length = 0;
+    this.bolts.length = 0;
     this.gfx.clear();
   }
 }

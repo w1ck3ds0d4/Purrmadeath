@@ -20,6 +20,8 @@ import type {
   EnemyStatsComponent, GhostStateComponent,
   LightRevealComponent, HealAuraComponent, BarracksSpawnerComponent,
   SpeedComponent, WorkerSlotComponent, HousingComponent,
+  TeslaCoilComponent, FlameAuraComponent, MoatComponent,
+  RepairAuraComponent, TeleporterComponent, TavernComponent,
 } from '@shared/components';
 import type {
   SaveData, SavedBuilding, SavedPlayer, SavedEnemy,
@@ -131,6 +133,24 @@ export function createSaveManager(deps: SaveManagerDeps) {
 
       const hComp = world.getComponent<HousingComponent>(id, C.Housing);
       if (hComp) saved.housing = { capacity: hComp.capacity };
+
+      const tc = world.getComponent<TeslaCoilComponent>(id, C.TeslaCoil);
+      if (tc) saved.teslaCoil = { range: tc.range, cooldown: tc.cooldown, damage: tc.damage, chainCount: tc.chainCount, chainRange: tc.chainRange };
+
+      const fa = world.getComponent<FlameAuraComponent>(id, C.FlameAura);
+      if (fa) saved.flameAura = { range: fa.range, dps: fa.dps, arcRadians: fa.arcRadians };
+
+      const moat = world.getComponent<MoatComponent>(id, C.Moat);
+      if (moat) saved.moat = { slowFactor: moat.slowFactor };
+
+      const ra = world.getComponent<RepairAuraComponent>(id, C.RepairAura);
+      if (ra) saved.repairAura = { repairPerTick: ra.repairPerTick, interval: ra.interval };
+
+      const tp = world.getComponent<TeleporterComponent>(id, C.Teleporter);
+      if (tp) saved.teleporter = { pairedId: tp.pairedId };
+
+      const tav = world.getComponent<TavernComponent>(id, C.Tavern);
+      if (tav) saved.tavern = { maxHeroes: tav.maxHeroes, roster: [...tav.roster] };
 
       buildings.push(saved);
     }

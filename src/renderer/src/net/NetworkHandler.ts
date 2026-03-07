@@ -71,6 +71,8 @@ import type {
   HireHeroResultMessage,
   HeroDiedMessage,
   HeroAbilityMessage,
+  TeslaChainMessage,
+  TeleporterResultMessage,
   LobbySlot,
 } from '@shared/protocol';
 import type { NightOverlay } from '../render/NightOverlay';
@@ -893,6 +895,24 @@ export function registerMessageHandlers(
   net.on(MessageType.HERO_ABILITY, (msg) => {
     const m = msg as HeroAbilityMessage;
     d.abilityVFX.trigger(m.abilityId, m.x, m.y, m.radius, 0.5);
+  });
+
+  // ── Tesla Chain VFX ──────────────────────────────────────────────────────
+
+  net.on(MessageType.TESLA_CHAIN, (msg) => {
+    const m = msg as TeslaChainMessage;
+    d.abilityVFX.triggerLightning(m.sourceX, m.sourceY, m.chain);
+  });
+
+  // ── Teleporter ──────────────────────────────────────────────────────────
+
+  net.on(MessageType.TELEPORTER_RESULT, (msg) => {
+    const m = msg as TeleporterResultMessage;
+    if (m.success && m.x != null && m.y != null) {
+      // Snap camera to destination so next snapshot reconciles smoothly
+      d.camera.targetX = m.x;
+      d.camera.targetY = m.y;
+    }
   });
 
   // ── Errors ──────────────────────────────────────────────────────────────

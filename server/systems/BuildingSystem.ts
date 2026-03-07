@@ -1219,45 +1219,43 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       tc.cooldownTimer -= dt;
       if (tc.cooldownTimer > 0) continue;
 
-      // Find nearest enemy in range
-      let nearestId = -1;
-      let nearestDist = tc.range + 1;
+      // Hit ALL enemies within range (AOE zap)
+      const chain: Array<{ x: number; y: number }> = [];
+      const hitIds = new Set<number>();
       for (const eid of world.query(C.EnemyStats, C.Position)) {
         const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
         const d = distance(ep.x - pos.x, ep.y - pos.y);
-        if (d < nearestDist) { nearestDist = d; nearestId = eid; }
+        if (d <= tc.range) {
+          hitIds.add(eid);
+          const hp = world.getComponent<HealthComponent>(eid, C.Health);
+          if (hp) hp.current -= tc.damage;
+          chain.push({ x: ep.x, y: ep.y });
+        }
       }
 
-      if (nearestId < 0) continue;
+      if (chain.length === 0) continue;
       tc.cooldownTimer = tc.cooldown * (cards.debuffs.turretCooldownMult ?? 1);
 
-      // Deal damage to primary target
-      const hp0 = world.getComponent<HealthComponent>(nearestId, C.Health);
-      if (hp0) hp0.current -= tc.damage;
-
-      const chain: Array<{ x: number; y: number }> = [];
-      const ep0 = world.getComponent<PositionComponent>(nearestId, C.Position)!;
-      chain.push({ x: ep0.x, y: ep0.y });
-
-      // Chain to nearby enemies
-      const hitIds = new Set<number>([nearestId]);
-      let lastPos = ep0;
+      // Secondary chain arcs: from each hit enemy, arc to nearby un-hit enemies
       for (let c = 0; c < tc.chainCount; c++) {
-        let bestId = -1;
-        let bestDist = tc.chainRange + 1;
+        const newHits: Array<{ id: number; x: number; y: number }> = [];
         for (const eid of world.query(C.EnemyStats, C.Position)) {
           if (hitIds.has(eid)) continue;
           const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
-          const d = distance(ep.x - lastPos.x, ep.y - lastPos.y);
-          if (d < bestDist) { bestDist = d; bestId = eid; }
+          // Check if within chain range of any already-hit enemy
+          let inRange = false;
+          for (const pt of chain) {
+            if (distance(ep.x - pt.x, ep.y - pt.y) <= tc.chainRange) { inRange = true; break; }
+          }
+          if (inRange) newHits.push({ id: eid, x: ep.x, y: ep.y });
         }
-        if (bestId < 0) break;
-        hitIds.add(bestId);
-        const hp = world.getComponent<HealthComponent>(bestId, C.Health);
-        if (hp) hp.current -= Math.round(tc.damage * 0.7);
-        const ep = world.getComponent<PositionComponent>(bestId, C.Position)!;
-        chain.push({ x: ep.x, y: ep.y });
-        lastPos = ep;
+        if (newHits.length === 0) break;
+        for (const nh of newHits) {
+          hitIds.add(nh.id);
+          const hp = world.getComponent<HealthComponent>(nh.id, C.Health);
+          if (hp) hp.current -= Math.round(tc.damage * 0.5);
+          chain.push({ x: nh.x, y: nh.y });
+        }
       }
 
       // Broadcast VFX

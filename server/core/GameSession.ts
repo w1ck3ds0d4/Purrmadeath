@@ -847,6 +847,43 @@ export class GameSession {
             residentIds: [],
           } as import('@shared/components').HousingComponent);
         }
+        // Restore new building components
+        if (sb.teslaCoil) {
+          this.world.addComponent(eid, C.TeslaCoil, {
+            range: sb.teslaCoil.range, cooldown: sb.teslaCoil.cooldown,
+            cooldownTimer: 0, damage: sb.teslaCoil.damage,
+            chainCount: sb.teslaCoil.chainCount, chainRange: sb.teslaCoil.chainRange,
+          } as import('@shared/components').TeslaCoilComponent);
+        }
+        if (sb.flameAura) {
+          this.world.addComponent(eid, C.FlameAura, {
+            range: sb.flameAura.range, dps: sb.flameAura.dps,
+            arcRadians: sb.flameAura.arcRadians, facing: 0,
+          } as import('@shared/components').FlameAuraComponent);
+        }
+        if (sb.moat) {
+          this.world.addComponent(eid, C.Moat, {
+            slowFactor: sb.moat.slowFactor,
+          } as import('@shared/components').MoatComponent);
+        }
+        if (sb.repairAura) {
+          this.world.addComponent(eid, C.RepairAura, {
+            repairPerTick: sb.repairAura.repairPerTick, interval: sb.repairAura.interval, timer: 0,
+          } as import('@shared/components').RepairAuraComponent);
+        }
+        if (sb.teleporter) {
+          this.world.addComponent(eid, C.Teleporter, {
+            pairedId: sb.teleporter.pairedId,
+          } as import('@shared/components').TeleporterComponent);
+        }
+        if (sb.tavern) {
+          this.world.addComponent(eid, C.Tavern, {
+            maxHeroes: sb.tavern.maxHeroes, heroIds: [], roster: sb.tavern.roster ?? [],
+          } as import('@shared/components').TavernComponent);
+        }
+        if (sb.buildingType === 'storage_shed') {
+          this.warehouseIds.add(eid);
+        }
       }
 
       // Restore player resources and class from save (match by playerId)
