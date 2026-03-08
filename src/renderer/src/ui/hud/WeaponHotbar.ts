@@ -2,9 +2,9 @@ import { Container, Graphics, Text } from 'pixi.js';
 import { POTION_POOL } from '@shared/definitions/PotionDefinitions';
 import type { PotionType } from '@shared/definitions/PotionDefinitions';
 
-const SLOT_SIZE = 48;
+const SLOT_SIZE = 56;
 const SLOT_GAP  = 6;
-const PAD       = 40;   // room below for health + stamina bars
+const PAD       = 44;   // room below for health + stamina bars
 const SLOT_COUNT = 5;
 
 const SELECTED_BORDER = 0xc41830;  // crimson accent
@@ -14,9 +14,9 @@ const SLOT_BG_SELECTED = 0x2a1418;
 const LOCKED_BG = 0x110608;
 const COOLDOWN_OVERLAY = 0x000000;
 
-// Slot 0-2: skill abilities (1/2/3), 3: potion (Q), 4: build (B)
+// Slot 0-2: skill abilities (1/2/3), 3: potion (4), 4: build (Q)
 const SLOT_LABELS = ['Skill', 'Skill', 'Skill', 'Potion', 'Build'];
-const SLOT_KEYS   = ['1', '2', '3', 'Q', 'B'];
+const SLOT_KEYS   = ['1', '2', '3', '4', 'Q'];
 const DEFAULT_UNLOCKED = new Set([4]); // build hammer always unlocked
 
 /** Total pixel width of the hotbar (exported so HUD bars can match). */
@@ -166,7 +166,7 @@ export class WeaponHotbar {
       // Key label (top-left corner of slot)
       const kt = this.keyTexts[i];
       kt.position.set(x + 4, y + 2);
-      kt.style.fill = locked ? 0x3a3a4a : (isSelected ? SELECTED_BORDER : 0x8a9ab0);
+      kt.style.fill = locked ? 0x5a5a6a : (isSelected ? SELECTED_BORDER : 0x8a9ab0);
 
       // Label (centered in slot)
       const lt = this.labelTexts[i];
@@ -174,7 +174,7 @@ export class WeaponHotbar {
         x + (SLOT_SIZE - lt.width) / 2,
         y + (SLOT_SIZE - lt.height) / 2 + (i === 3 && potionEquipped ? 0 : 4),
       );
-      lt.style.fill = locked ? 0x3a3a4a : (isSelected ? 0xffffff : 0x8a9ab0);
+      lt.style.fill = locked ? 0x5a5a6a : (isSelected ? 0xffffff : 0x8a9ab0);
 
       // Charge counter (potion slot only)
       const ct = this.chargeTexts[i];

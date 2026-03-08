@@ -1,6 +1,6 @@
 import { app, BrowserWindow, shell, session, ipcMain } from 'electron';
 import { join } from 'path';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, fork, type ChildProcess } from 'node:child_process';
 import * as dgram from 'node:dgram';
 import * as fs from 'node:fs';
 import { DISCOVERY_PORT } from '../../server/discovery';
@@ -13,29 +13,68 @@ if (!app.isPackaged) {
 }
 
 // ─── Embedded Game Server ─────────────────────────────────────────────────────
-// Auto-start the game server so every device running the Electron app can host.
-// If the port is already bound (e.g. `npm start` concurrently script), we detect
-// the EADDRINUSE error and silently fall back to the existing server.
+// Always start a local game server so singleplayer works offline.
+// In dev: uses tsx to run TypeScript directly.
+// In production: forks the pre-bundled server JS using Electron's embedded Node.js.
+// If the port is already bound, we detect EADDRINUSE and fall back.
 
 let serverProcess: ChildProcess | null = null;
+let localServerReady = false;
+
+/** Data directories for the embedded server (userData path in production). */
+function getServerDataDirs(): { metastatsDir: string; savesDir: string } {
+  const base = app.isPackaged ? app.getPath('userData') : join(__dirname, '../..');
+  const metastatsDir = join(base, 'metastats');
+  const savesDir = join(base, 'saves');
+  // Ensure directories exist
+  if (!fs.existsSync(metastatsDir)) fs.mkdirSync(metastatsDir, { recursive: true });
+  if (!fs.existsSync(savesDir)) fs.mkdirSync(savesDir, { recursive: true });
+  return { metastatsDir, savesDir };
+}
 
 function startEmbeddedServer(): void {
-  const serverScript = join(__dirname, '../../server/server.ts');
-  serverProcess = spawn('npx', ['tsx', serverScript], {
-    shell: true,
-    stdio: 'pipe',
-    cwd: join(__dirname, '../..'),
-  });
+  const { metastatsDir, savesDir } = getServerDataDirs();
+  const env = { ...process.env, METASTATS_DIR: metastatsDir, SAVES_DIR: savesDir };
+
+  if (app.isPackaged) {
+    // Production: fork the pre-bundled server JS
+    const serverScript = join(process.resourcesPath, 'server', 'server.mjs');
+    serverProcess = fork(serverScript, [], {
+      stdio: 'pipe',
+      env,
+    });
+  } else {
+    // Dev: use tsx to run TypeScript directly
+    const serverScript = join(__dirname, '../../server/server.ts');
+    serverProcess = spawn('npx', ['tsx', serverScript], {
+      shell: true,
+      stdio: 'pipe',
+      cwd: join(__dirname, '../..'),
+      env,
+    });
+  }
 
   serverProcess.stdout?.on('data', (data: Buffer) => {
-    console.log(`[EmbeddedServer] ${data.toString().trim()}`);
+    const msg = data.toString().trim();
+    console.log(`[EmbeddedServer] ${msg}`);
+    if (msg.includes('Purrmadeath server started')) {
+      localServerReady = true;
+      // Notify all renderer windows that local server is ready
+      for (const win of BrowserWindow.getAllWindows()) {
+        win.webContents.send('local-server-ready');
+      }
+    }
   });
 
   serverProcess.stderr?.on('data', (data: Buffer) => {
     const msg = data.toString().trim();
     if (msg.includes('EADDRINUSE')) {
       console.log('[Main] Server port already in use, using existing server');
+      localServerReady = true; // Existing server is fine
       serverProcess = null;
+      for (const win of BrowserWindow.getAllWindows()) {
+        win.webContents.send('local-server-ready');
+      }
     } else if (msg) {
       console.error(`[EmbeddedServer] ${msg}`);
     }
@@ -46,6 +85,7 @@ function startEmbeddedServer(): void {
       console.log(`[EmbeddedServer] Server exited with code ${code}`);
     }
     serverProcess = null;
+    localServerReady = false;
   });
 }
 
@@ -54,7 +94,11 @@ function stopEmbeddedServer(): void {
     serverProcess.kill();
     serverProcess = null;
   }
+  localServerReady = false;
 }
+
+// IPC: renderer checks if local server is ready
+ipcMain.handle('local-server-ready', () => localServerReady);
 
 // ─── LAN Session Discovery ─────────────────────────────────────────────────────
 // Listens for UDP beacon broadcasts from game servers on the LAN.
@@ -251,11 +295,12 @@ app.whenReady().then(() => {
     });
   });
 
-  // Dev: start local server + LAN discovery. Production: connect to remote server.
-  if (!app.isPackaged) {
-    startEmbeddedServer();
-    startDiscoveryListener();
-  } else {
+  // Always start local server + LAN discovery (for singleplayer offline + LAN play)
+  startEmbeddedServer();
+  startDiscoveryListener();
+
+  // Production: also check for updates
+  if (app.isPackaged) {
     autoUpdater.on('update-available', () => {
       BrowserWindow.getAllWindows()[0]?.webContents.send('update-available');
     });
@@ -273,6 +318,6 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  if (!app.isPackaged) stopEmbeddedServer();
+  stopEmbeddedServer();
   if (process.platform !== 'darwin') app.quit();
 });

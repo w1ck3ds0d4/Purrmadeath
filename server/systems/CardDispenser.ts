@@ -4,7 +4,7 @@ import {
   HealthComponent,
 } from '@shared/components';
 import type { SpeedComponent, DefenseComponent, StaminaComponent, KnockbackReceiverComponent } from '@shared/components';
-import { PLAYER_MAX_HEALTH } from '@shared/constants';
+import { CLASS_STATS } from '@shared/definitions/ClassDefinitions';
 import { MessageType } from '@shared/protocol';
 import type { CardPickupMessage } from '@shared/protocol';
 import type { CardDefinition, CardEffect } from '@shared/definitions/CardDefinitions';
@@ -28,6 +28,8 @@ export interface CardDispenserDeps {
   offerTimeout: number;
   setPaused: (value: boolean) => void;
   creditResources: (entityId: number, resource: string, amount: number, send: SendFn) => void;
+  /** Returns skill-based maxHp bonus for a player. */
+  getSkillMaxHpBonus?: (clientId: string) => number;
 }
 
 // -- Factory -----------------------------------------------------------------
@@ -84,7 +86,9 @@ export function createCardDispenser(deps: CardDispenserDeps) {
       } else if (effect.stat === 'maxHp') {
         const hp = world.getComponent<HealthComponent>(eid, C.Health);
         if (hp) {
-          hp.max = Math.max(1, PLAYER_MAX_HEALTH + buffs.maxHpBonus - cards.debuffs.playerMaxHpPenalty);
+          const baseHp = CLASS_STATS[player.playerClass].hp;
+          const skillMod = deps.getSkillMaxHpBonus?.(player.client.id) ?? 0;
+          hp.max = Math.max(1, baseHp + skillMod + buffs.maxHpBonus - cards.debuffs.playerMaxHpPenalty);
           hp.current = Math.min(hp.current + Math.max(0, effect.value), hp.max);
         }
       } else if (effect.stat === 'defense') {
@@ -113,7 +117,9 @@ export function createCardDispenser(deps: CardDispenserDeps) {
           const pBuffs = cards.getBuffs(p.client.id);
           const hp = world.getComponent<HealthComponent>(p.entityId, C.Health);
           if (hp) {
-            hp.max = Math.max(1, PLAYER_MAX_HEALTH + pBuffs.maxHpBonus - cards.debuffs.playerMaxHpPenalty);
+            const pBaseHp = CLASS_STATS[p.playerClass].hp;
+            const pSkillMod = deps.getSkillMaxHpBonus?.(p.client.id) ?? 0;
+            hp.max = Math.max(1, pBaseHp + pSkillMod + pBuffs.maxHpBonus - cards.debuffs.playerMaxHpPenalty);
             hp.current = Math.min(hp.current, hp.max);
           }
         }

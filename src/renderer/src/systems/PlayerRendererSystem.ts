@@ -19,7 +19,7 @@ import {
   RuinsComponent,
   GuardComponent,
 } from '@shared/components';
-import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, ENEMY_MELEE_RANGE, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, CARD_DROP_RADIUS, buildingHalfExtent, buildingExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, BALLISTA_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_LASER_RANGE, UPGRADE_HEAL_RANGE, STATUS_BURN, STATUS_POISON, STATUS_SLOW, STATUS_STUN, STATUS_HOLY, STATUS_SHADOW, STATUS_ARCANE, STATUS_NATURE } from '@shared/constants';
+import { PLAYER_RADIUS, PLAYER_COLORS, MELEE_RANGE, MELEE_ARC, ENEMY_MELEE_RANGE, PORTAL_RADIUS, RESOURCE_NODE_RADIUS, ITEM_DROP_RADIUS, CARD_DROP_RADIUS, buildingHalfExtent, buildingExtent, buildingExclusionExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, BALLISTA_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_LASER_RANGE, UPGRADE_HEAL_RANGE, TESLA_COIL_RANGE, UPGRADE_FLAME_RANGE, CATAPULT_RANGE, STATUS_BURN, STATUS_POISON, STATUS_SLOW, STATUS_STUN, STATUS_HOLY, STATUS_SHADOW, STATUS_ARCANE, STATUS_NATURE } from '@shared/constants';
 import { FACTION_COLORS, type EnemyFaction } from '@shared/definitions/EnemyVariants';
 
 /** Turret type → base range in pixels. */
@@ -28,6 +28,9 @@ const TURRET_RANGES: Record<string, number> = {
   cannon_turret: CANNON_TURRET_RANGE,
   ballista: BALLISTA_RANGE,
   laser_tower: UPGRADE_LASER_RANGE[0],
+  tesla_coil: TESLA_COIL_RANGE,
+  flame_tower: UPGRADE_FLAME_RANGE[0],
+  catapult: CATAPULT_RANGE,
 };
 
 /** Building type → range color for the selection indicator. */
@@ -38,6 +41,9 @@ const RANGE_COLORS: Record<string, number> = {
   laser_tower: 0xff4444,
   light_tower: 0xffdd44,
   healing_shrine: 0x44ff88,
+  tesla_coil: 0x66ddff,
+  flame_tower: 0xff6622,
+  catapult: 0xcc8844,
 };
 
 // Enemy body colors by variant
@@ -244,7 +250,15 @@ export class PlayerRendererSystem {
     dt = 0,
     smoothX = 0,
     smoothY = 0,
+    cameraX = 0,
+    cameraY = 0,
+    zoom = 1,
+    screenW = 1920,
+    screenH = 1080,
   ): void {
+    // Viewport culling bounds (world-space)
+    const cullHalfW = screenW / (2 * zoom) + 100; // 100px margin
+    const cullHalfH = screenH / (2 * zoom) + 100;
     // Collect all renderable entities: players, enemies, portals, resources, item drops
     // Reuse class-level Sets to avoid per-frame allocations
     const playerIds = this._playerIds;    playerIds.clear();
@@ -330,6 +344,17 @@ export class PlayerRendererSystem {
       }
 
       const gfx = this.sprites.get(id)!;
+
+      // ── Viewport culling: skip drawing off-screen entities ────────────────
+      const isLocal = id === localEntityId;
+      const offScreen = !isLocal &&
+        (pos.x < cameraX - cullHalfW || pos.x > cameraX + cullHalfW ||
+         pos.y < cameraY - cullHalfH || pos.y > cameraY + cullHalfH);
+      if (offScreen) {
+        gfx.visible = false;
+        continue;
+      }
+      gfx.visible = true;
 
       // ── Timers ────────────────────────────────────────────────────────────────
 
@@ -459,6 +484,8 @@ export class PlayerRendererSystem {
         const bColors = BUILDING_COLORS[bType] ?? BUILDING_COLORS.wall;
         const bRot = bldg?.rotation ?? 0;
         const { hx: bHx, hy: bHy } = buildingExtent(bType, bRot);
+        // All buildings render below entities so ghosts/players appear on top
+        gfx.zIndex = bType === 'bridge' ? -9 : -5;
 
         const bFlash = this.hitTimers.get(id) ?? 0;
         if (bFlash > 0) this.hitTimers.set(id, Math.max(0, bFlash - dt));
@@ -591,7 +618,6 @@ export class PlayerRendererSystem {
               gfx.stroke({ color: 0xff6666, alpha: 0.8, width: 1 });
             }
           }
-          gfx.zIndex = -5; // above tiles (-10), below entities (0)
         }
 
         // Bridge: filled plank rectangle above water tiles
@@ -605,7 +631,6 @@ export class PlayerRendererSystem {
           gfx.stroke({ color: 0xddcc99, alpha: 0.6, width: 1.5 });
           gfx.rect(-bHx, -bHy, bHx * 2, bHy * 2);
           gfx.stroke({ color: 0x6a4a2a, alpha: 0.8, width: 1 });
-          gfx.zIndex = -9; // above tiles (-10), below buildings (-5)
         }
 
         // Light tower: radiating light rays
@@ -741,6 +766,13 @@ export class PlayerRendererSystem {
             gfx.fill({ color, alpha: 0.06 });
             gfx.circle(0, 0, range);
             gfx.stroke({ color, alpha: 0.25, width: 1 });
+          }
+
+          // Exclusion zone outline
+          const excl = buildingExclusionExtent(bType, bRot);
+          if (excl.hx > bHx || excl.hy > bHy) {
+            gfx.rect(-excl.hx, -excl.hy, excl.hx * 2, excl.hy * 2);
+            gfx.stroke({ color: 0xffaa44, alpha: 0.35, width: 1 });
           }
         }
 
@@ -1101,6 +1133,12 @@ export class PlayerRendererSystem {
 
     for (const id of living) {
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
+
+      // Viewport culling for health bars
+      if (id !== localEntityId &&
+        (pos.x < cameraX - cullHalfW || pos.x > cameraX + cullHalfW ||
+         pos.y < cameraY - cullHalfH || pos.y > cameraY + cullHalfH)) continue;
+
       const hp  = world.getComponent<HealthComponent>(id, C.Health);
       if (!hp || hp.max <= 0) continue;
 

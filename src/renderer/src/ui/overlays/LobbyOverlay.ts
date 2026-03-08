@@ -34,6 +34,9 @@ export class LobbyOverlay {
 
   private isHost = false;
   private locked = false;
+  private singleplayer = false;
+  private leftCol: HTMLElement;
+  private rightCol: HTMLElement;
 
   private onStart: (() => void) | null = null;
   private onLeave: (() => void) | null = null;
@@ -48,6 +51,8 @@ export class LobbyOverlay {
     this.chatLog    = this.require('lobby-chat-log');
     this.chatInput  = this.require('lobby-chat-input') as HTMLInputElement;
     this.startBtn   = this.require('btn-lobby-start');
+    this.leftCol    = this.screen.querySelector('.lobby-col-left') as HTMLElement;
+    this.rightCol   = this.screen.querySelector('.lobby-col-right') as HTMLElement;
 
     // Class selector buttons
     const selector = this.require('class-selector');
@@ -117,6 +122,11 @@ export class LobbyOverlay {
     this.onKick = cbs.onKick;
   }
 
+  setSingleplayer(sp: boolean): void {
+    this.singleplayer = sp;
+    this.leftCol.style.display = sp ? 'none' : '';
+  }
+
   show(sessionId: string, code: string, isHost: boolean): void {
     this.isHost = isHost;
     this.screen.style.display = 'flex';
@@ -166,6 +176,7 @@ export class LobbyOverlay {
   hide(): void {
     this.screen.style.display = 'none';
     this.setClassLocked(false);
+    this.setSingleplayer(false);
   }
 
   updatePlayers(slots: LobbySlot[]): void {

@@ -8,7 +8,7 @@ import {
   ResourceNodeComponent,
   GhostStateComponent,
 } from '@shared/components';
-import { PLAYER_COLORS, TILE_SIZE, NIGHT_VISION_MULT, NIGHT_DARKNESS_ALPHA } from '@shared/constants';
+import { PLAYER_COLORS, TILE_SIZE } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import type { LightSource } from '../../render/NightOverlay';
 
@@ -72,7 +72,7 @@ export class Minimap {
   private maskGfx: Graphics;
   private visible = true;
   private tileGetter: TileGetter | null = null;
-  /** Current darkness level (0 = day, 1 = full night). */
+  /** @deprecated Minimap fog removed - kept for API compat. */
   private darkness = 0;
 
   /** Last camera cell used for terrain cache invalidation. */
@@ -188,7 +188,7 @@ export class Minimap {
 
     // ── Border (drawn on dot layer, above terrain) ──
     this.dotGfx.rect(mapX, mapY, MAP_SIZE, MAP_SIZE);
-    this.dotGfx.stroke({ color: 0x000000, alpha: 0.6, width: 2 });
+    this.dotGfx.stroke({ color: 0x1a0a0e, alpha: 0.85, width: 3 });
 
     // ── Local player crosshair (always centered) ──
     const cx = mapX + halfMap;
@@ -237,31 +237,7 @@ export class Minimap {
       }
     }
 
-    // Night: dark overlay on minimap with light-source cutouts
-    if (this.darkness > 0.01 && lightSources) {
-      this.dotGfx.rect(mapX, mapY, MAP_SIZE, MAP_SIZE);
-      this.dotGfx.fill({ color: 0x0a0a2a, alpha: this.darkness * NIGHT_DARKNESS_ALPHA });
-
-      // Cut a vision circle for each light source
-      for (const src of lightSources) {
-        const relX = src.x - centerX;
-        const relY = src.y - centerY;
-        if (Math.abs(relX) > MAP_RANGE || Math.abs(relY) > MAP_RANGE) continue;
-        const lx = mapX + halfMap + (relX / MAP_RANGE) * halfMap;
-        const ly = mapY + halfMap + (relY / MAP_RANGE) * halfMap;
-        // Scale light radius to minimap pixels
-        const lr = (src.radius / MAP_RANGE) * halfMap;
-        this.dotGfx.circle(lx, ly, lr);
-        this.dotGfx.cut();
-      }
-    } else if (this.darkness > 0.01) {
-      // Fallback: single center circle if no light sources provided
-      const visRadius = halfMap * NIGHT_VISION_MULT;
-      this.dotGfx.rect(mapX, mapY, MAP_SIZE, MAP_SIZE);
-      this.dotGfx.fill({ color: 0x0a0a2a, alpha: this.darkness * NIGHT_DARKNESS_ALPHA });
-      this.dotGfx.circle(cx, cy, visRadius);
-      this.dotGfx.cut();
-    }
+    // Minimap fog removed - full visibility at all times
   }
 
   private rebuildTerrain(

@@ -11,6 +11,13 @@ import {
   UPGRADE_BALLISTA_DMG, UPGRADE_BALLISTA_CD, UPGRADE_BALLISTA_AOE,
   CAT_HOUSE_CAPACITY,
   CAMPFIRE_HOUSING_PER_LEVEL,
+  UPGRADE_TRAP_DMG,
+  UPGRADE_LASER_DPS, UPGRADE_LASER_RANGE,
+  TESLA_COIL_COOLDOWN, UPGRADE_TESLA_DAMAGE, UPGRADE_TESLA_CHAIN, UPGRADE_TESLA_CD,
+  UPGRADE_FLAME_DPS, UPGRADE_FLAME_RANGE,
+  CATAPULT_DAMAGE, CATAPULT_COOLDOWN, CATAPULT_RANGE,
+  UPGRADE_CATAPULT_DMG, UPGRADE_CATAPULT_CD, UPGRADE_CATAPULT_AOE,
+  UPGRADE_CANNON_AOE,
 } from '@shared/constants';
 import type { BuildingType } from '@shared/components';
 
@@ -81,10 +88,7 @@ export class BuildModeOverlay {
     this.costEl.style.cssText = 'margin-bottom: 6px; font-weight: bold;';
     this.el.appendChild(this.costEl);
 
-    const hint = document.createElement('div');
-    hint.style.cssText = `font-size: 11px; color: ${THEME.textMuted};`;
-    hint.textContent = 'B to reopen menu \u00B7 Click to select \u00B7 X demolish \u00B7 F upgrade \u00B7 R repair \u00B7 Scroll rotate';
-    this.el.appendChild(hint);
+    // Controls hint removed - shown in controls panel instead
 
     document.getElementById('overlay')!.appendChild(this.el);
   }
@@ -109,13 +113,13 @@ export class BuildModeOverlay {
     this.infoEl.style.display = 'none';
   }
 
-  /** Show info for a selected existing building (name + level + upgrade/repair cost + HP + stats). */
+  /** Show info for a selected existing building (name + level + upgrade/repair cost + stats). */
   updateSelection(buildingType: string, level: number, available: Record<string, number>, currentHp?: number, maxHp?: number, housingInfo?: { population: number; capacity: number }): void {
     const name = buildingType.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
     this.titleEl.textContent = `${name}  Lv.${level}`;
 
-    // HP bar
-    this.updateHpBar(currentHp, maxHp);
+    // HP bar hidden - keep tooltip clean
+    (this.hpBarOuter.parentElement as HTMLElement).style.display = 'none';
 
     // Stats
     this.updateStats(buildingType, level, housingInfo);
@@ -165,63 +169,103 @@ export class BuildModeOverlay {
     }
   }
 
-  private updateStats(buildingType: string, level: number, housingInfo?: { population: number; capacity: number }): void {
+  /** Get stat string for a building at a given level index. */
+  private getStatsForLevel(buildingType: string, level: number, housingInfo?: { population: number; capacity: number }): string {
     const i = Math.max(0, Math.min(level - 1, 2));
-    let stats = '';
-    const popStr = housingInfo ? `  |  Population: ${housingInfo.population}/${housingInfo.capacity}` : '';
+    const popStr = housingInfo ? `  |  Pop: ${housingInfo.population}/${housingInfo.capacity}` : '';
 
     switch (buildingType) {
       case 'arrow_turret': {
         const dmg = Math.round(ARROW_TURRET_DAMAGE * UPGRADE_ARROW_DMG[i]);
         const cd = (ARROW_TURRET_COOLDOWN * UPGRADE_ARROW_CD[i]).toFixed(1);
-        stats = `Dmg: ${dmg}  |  Range: ${ARROW_TURRET_RANGE}  |  Rate: ${cd}s`;
-        break;
+        return `Dmg: ${dmg}  |  Range: ${ARROW_TURRET_RANGE}  |  Rate: ${cd}s`;
       }
       case 'cannon_turret': {
         const dmg = Math.round(CANNON_TURRET_DAMAGE * UPGRADE_CANNON_DMG[i]);
         const cd = (CANNON_TURRET_COOLDOWN * UPGRADE_CANNON_CD[i]).toFixed(1);
-        stats = `Dmg: ${dmg}  |  Range: ${CANNON_TURRET_RANGE}  |  Rate: ${cd}s`;
-        break;
+        const aoe = UPGRADE_CANNON_AOE[i];
+        return `Dmg: ${dmg}  |  Range: ${CANNON_TURRET_RANGE}  |  Rate: ${cd}s  |  AoE: ${aoe}px`;
       }
       case 'ballista': {
         const dmg = Math.round(BALLISTA_DAMAGE * UPGRADE_BALLISTA_DMG[i]);
         const cd = (BALLISTA_COOLDOWN * UPGRADE_BALLISTA_CD[i]).toFixed(1);
         const aoe = UPGRADE_BALLISTA_AOE[i];
-        stats = `Dmg: ${dmg}  |  Range: ${BALLISTA_RANGE}  |  Rate: ${cd}s  |  AoE: ${aoe}px`;
-        break;
+        return `Dmg: ${dmg}  |  Range: ${BALLISTA_RANGE}  |  Rate: ${cd}s  |  AoE: ${aoe}px`;
       }
       case 'spike_trap':
-        stats = `Dmg: ${SPIKE_TRAP_DAMAGE}`;
-        break;
+        return `Dmg: ${Math.round(SPIKE_TRAP_DAMAGE * UPGRADE_TRAP_DMG[i])}`;
       case 'light_tower':
-        stats = `Reveal Range: ${UPGRADE_LIGHT_RANGE[i]}px`;
-        break;
+        return `Reveal Range: ${UPGRADE_LIGHT_RANGE[i]}px`;
       case 'healing_shrine':
-        stats = `Heal: ${UPGRADE_HEAL_RATE[i]} HP/s  |  Range: ${UPGRADE_HEAL_RANGE[i]}px`;
-        break;
+        return `Heal: ${UPGRADE_HEAL_RATE[i]} HP/s  |  Range: ${UPGRADE_HEAL_RANGE[i]}px`;
+      case 'tesla_coil': {
+        const dmg = UPGRADE_TESLA_DAMAGE[i];
+        const cd = (TESLA_COIL_COOLDOWN * UPGRADE_TESLA_CD[i]).toFixed(1);
+        const chains = UPGRADE_TESLA_CHAIN[i];
+        return `Dmg: ${dmg}  |  Rate: ${cd}s  |  Chains: ${chains}`;
+      }
+      case 'flame_tower':
+        return `DPS: ${UPGRADE_FLAME_DPS[i]}  |  Range: ${UPGRADE_FLAME_RANGE[i]}px`;
+      case 'catapult': {
+        const dmg = Math.round(CATAPULT_DAMAGE * UPGRADE_CATAPULT_DMG[i]);
+        const cd = (CATAPULT_COOLDOWN * UPGRADE_CATAPULT_CD[i]).toFixed(1);
+        const aoe = UPGRADE_CATAPULT_AOE[i];
+        return `Dmg: ${dmg}  |  Range: ${CATAPULT_RANGE}  |  Rate: ${cd}s  |  AoE: ${aoe}px`;
+      }
+      case 'laser_tower':
+        return `DPS: ${UPGRADE_LASER_DPS[i]}  |  Range: ${UPGRADE_LASER_RANGE[i]}px`;
       case 'potion_shop':
-        stats = 'Brew and equip potions';
-        break;
+        return 'Brew and equip potions';
       case 'campfire': {
         const campI = Math.max(0, Math.min(level - 1, 4));
         const cap = CAMPFIRE_HOUSING_PER_LEVEL[campI];
-        stats = `Housing: ${cap} slots${popStr}`;
-        break;
+        return `Housing: ${cap} slots${popStr}`;
       }
       case 'cat_house': {
         const cap = CAT_HOUSE_CAPACITY[i];
-        stats = `Housing: ${cap} slots${popStr}`;
-        break;
+        return `Housing: ${cap} slots${popStr}`;
       }
       default: {
         const prod = PROD_RESOURCE[buildingType];
-        if (prod) stats = `Produces: ${prod}`;
-        break;
+        return prod ? `Produces: ${prod}` : '';
+      }
+    }
+  }
+
+  private updateStats(buildingType: string, level: number, housingInfo?: { population: number; capacity: number }): void {
+    const stats = this.getStatsForLevel(buildingType, level, housingInfo);
+    const maxLevel = BUILDING_MAX_LEVEL[buildingType as BuildingType] ?? 1;
+
+    let html = '';
+    if (stats) html += stats;
+
+    // Next level preview
+    if (level < maxLevel) {
+      // For housing buildings, compute what capacity would be after upgrading
+      let nextHousingInfo = housingInfo;
+      if (housingInfo) {
+        const curCap = buildingType === 'campfire'
+          ? (CAMPFIRE_HOUSING_PER_LEVEL[Math.max(0, Math.min(level - 1, 4))] ?? 2)
+          : buildingType === 'cat_house'
+            ? (CAT_HOUSE_CAPACITY[Math.max(0, Math.min(level - 1, 2))] ?? 2)
+            : 0;
+        const nextCap = buildingType === 'campfire'
+          ? (CAMPFIRE_HOUSING_PER_LEVEL[Math.max(0, Math.min(level, 4))] ?? curCap)
+          : buildingType === 'cat_house'
+            ? (CAT_HOUSE_CAPACITY[Math.max(0, Math.min(level, 2))] ?? curCap)
+            : 0;
+        if (nextCap !== curCap) {
+          nextHousingInfo = { population: housingInfo.population, capacity: housingInfo.capacity - curCap + nextCap };
+        }
+      }
+      const nextStats = this.getStatsForLevel(buildingType, level + 1, nextHousingInfo);
+      if (nextStats && nextStats !== stats) {
+        html += `<br><span style="color: #88cc88; font-size: 11px">Lv.${level + 1}: ${nextStats}</span>`;
       }
     }
 
-    if (stats) {
-      this.infoEl.textContent = stats;
+    if (html) {
+      this.infoEl.innerHTML = html;
       this.infoEl.style.display = 'block';
     } else {
       this.infoEl.style.display = 'none';

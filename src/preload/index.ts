@@ -31,6 +31,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Quits the app and installs the downloaded update. */
   installUpdate: () => ipcRenderer.invoke('install-update'),
 
+  /** Check if the local embedded server is ready. */
+  isLocalServerReady: () => ipcRenderer.invoke('local-server-ready') as Promise<boolean>,
+
+  /** Called when local server becomes ready (after startup). */
+  onLocalServerReady: (cb: () => void) => ipcRenderer.on('local-server-ready', cb),
+
+  /** Trigger an update check manually. */
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+
   // ── Save system ──────────────────────────────────────────────────────────
   /** Get save slot info for a player UUID. Returns SaveSlotInfo[]. */
   getSaveSlots: (playerId: string) => ipcRenderer.invoke('get-save-slots', playerId),

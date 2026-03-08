@@ -11,17 +11,19 @@ export class MenuOverlay {
   private menuScreen:  HTMLElement;
   private pauseScreen: HTMLElement;
 
-  private onHost:       (() => void) | null = null;
-  private onJoin:       ((code: string) => void) | null = null;
-  private onResume:     (() => void) | null = null;
-  private onQuitToMenu: (() => void) | null = null;
-  private onStats:      (() => void) | null = null;
+  private onHost:           (() => void) | null = null;
+  private onJoin:           ((code: string) => void) | null = null;
+  private onSingleplayer:   (() => void) | null = null;
+  private onResume:         (() => void) | null = null;
+  private onQuitToMenu:     (() => void) | null = null;
+  private onStats:          (() => void) | null = null;
 
   private nameInput:       HTMLInputElement;
   private codeInput:       HTMLInputElement;
   private pauseSubtitle:   HTMLElement;
   private pauseStats:      HTMLElement;
   private connectionStatus: HTMLElement;
+  private singleplayerBtn: HTMLElement;
   private hostBtn:         HTMLElement;
   private joinBtn:         HTMLElement;
 
@@ -42,6 +44,7 @@ export class MenuOverlay {
     this.pauseSubtitle   = this.require('pause-subtitle');
     this.pauseStats      = this.require('pause-stats');
     this.connectionStatus = this.require('connection-status');
+    this.singleplayerBtn = this.require('btn-singleplayer');
     this.hostBtn         = this.require('btn-host-game');
     this.joinBtn         = this.require('btn-join-game');
 
@@ -73,6 +76,7 @@ export class MenuOverlay {
       }
     });
 
+    this.singleplayerBtn.addEventListener('click', () => this.onSingleplayer?.());
     this.hostBtn.addEventListener('click', () => this.onHost?.());
     this.joinBtn.addEventListener('click', () => this.onJoin?.(this.codeInput.value.trim()));
     this.require('btn-resume').addEventListener('click', () => this.onResume?.());
@@ -126,17 +130,19 @@ export class MenuOverlay {
   }
 
   setCallbacks(cbs: {
-    onHost:       () => void;
-    onJoin:       (code: string) => void;
-    onResume:     () => void;
-    onQuitToMenu: () => void;
-    onStats?:     () => void;
+    onHost:         () => void;
+    onJoin:         (code: string) => void;
+    onSingleplayer: () => void;
+    onResume:       () => void;
+    onQuitToMenu:   () => void;
+    onStats?:       () => void;
   }): void {
-    this.onHost       = cbs.onHost;
-    this.onJoin       = cbs.onJoin;
-    this.onResume     = cbs.onResume;
-    this.onQuitToMenu = cbs.onQuitToMenu;
-    this.onStats      = cbs.onStats ?? null;
+    this.onHost         = cbs.onHost;
+    this.onJoin         = cbs.onJoin;
+    this.onSingleplayer = cbs.onSingleplayer;
+    this.onResume       = cbs.onResume;
+    this.onQuitToMenu   = cbs.onQuitToMenu;
+    this.onStats        = cbs.onStats ?? null;
   }
 
   /** The player name entered in the main menu input. */
@@ -171,7 +177,7 @@ export class MenuOverlay {
     }
   }
 
-  /** Enable or disable Host and Join buttons (grayed out when not connected). */
+  /** Enable or disable Host and Join buttons (grayed out when not connected to remote). */
   setButtonsEnabled(enabled: boolean): void {
     const opacity = enabled ? '1' : '0.4';
     const events  = enabled ? 'auto' : 'none';
@@ -179,6 +185,12 @@ export class MenuOverlay {
     this.hostBtn.style.pointerEvents = events;
     this.joinBtn.style.opacity = opacity;
     this.joinBtn.style.pointerEvents = events;
+  }
+
+  /** Enable or disable the Singleplayer button (depends on local server readiness). */
+  setSingleplayerEnabled(enabled: boolean): void {
+    this.singleplayerBtn.style.opacity = enabled ? '1' : '0.4';
+    this.singleplayerBtn.style.pointerEvents = enabled ? 'auto' : 'none';
   }
 
   /** Switch code input placeholder between prod and dev modes. */

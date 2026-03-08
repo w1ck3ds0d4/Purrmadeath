@@ -93,6 +93,7 @@ export function computeModifierAggregate(ids: WaveModifierId[]): ModifierAggrega
   const agg: ModifierAggregate = { enemyCountMult: 1, enemyHpMult: 1, enemySpeedMult: 1, enemyDamageMult: 1, visionMult: 1 };
   for (const id of ids) {
     const m = WAVE_MODIFIERS[id];
+    if (!m) continue; // skip invalid modifier IDs
     agg.enemyCountMult *= m.enemyCountMult;
     agg.enemyHpMult *= m.enemyHpMult;
     agg.enemySpeedMult *= m.enemySpeedMult;

@@ -24,9 +24,9 @@ const BRANCH_COUNT = 5;
 // -- Colors --------------------------------------------------------------------
 
 const BG = THEME.panelBg;
-const LOCKED_COLOR = '#2a2a3a';
-const LOCKED_BORDER = '#3a3a4a';
-const AVAILABLE_GLOW = 'rgba(200, 220, 255, 0.6)';
+const LOCKED_COLOR = 'rgba(30, 12, 16, 0.8)';
+const LOCKED_BORDER = THEME.borderSubtle;
+const AVAILABLE_GLOW = THEME.accentRgba(0.6);
 const ALLOCATED_TEXT = '#ffffff';
 
 function hexColor(n: number): string {

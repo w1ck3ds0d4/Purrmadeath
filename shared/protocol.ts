@@ -176,6 +176,8 @@ export enum MessageType {
   META_STATS_REQUEST = 'META_STATS_REQUEST',
   /** Server → Client: response with persistent meta stats. */
   META_STATS_RESPONSE = 'META_STATS_RESPONSE',
+  /** Client → Server: upload local meta stats for sync. */
+  META_STATS_UPLOAD = 'META_STATS_UPLOAD',
 
   CARD_OFFER   = 'CARD_OFFER',
   CARD_PICK    = 'CARD_PICK',
@@ -943,6 +945,12 @@ export interface MetaStatsResponseMessage extends BaseMessage {
   stats: import('./definitions/MetaStats').MetaStats;
 }
 
+/** Client → Server: upload local meta stats for sync (singleplayer -> remote). */
+export interface MetaStatsUploadMessage extends BaseMessage {
+  type: typeof MessageType.META_STATS_UPLOAD;
+  stats: import('./definitions/MetaStats').MetaStats;
+}
+
 // ── Cards ───────────────────────────────────────────────────────────────────
 
 export interface CardOfferMessage extends BaseMessage {
@@ -1141,6 +1149,8 @@ export interface CivilianPanelStateMessage extends BaseMessage {
   buildings: WorkableBuildingEntry[];
   population: number;
   housingCapacity: number;
+  /** Seconds until next civilian spawn (0 if at capacity). */
+  nextSpawnSeconds: number;
 }
 
 /** Client → Server: assign a civilian to a building (or null to unassign). */
@@ -1403,6 +1413,7 @@ export type AnyMessage =
   | EnemyIntroMessage
   | MetaStatsRequestMessage
   | MetaStatsResponseMessage
+  | MetaStatsUploadMessage
   | CardOfferMessage
   | CardPickMessage
   | CardAppliedMessage

@@ -163,6 +163,8 @@ export interface GameplayState {
   completedBuffs: { displayName: string; reward: string; medalColor: string }[];
   /** Torch/vision radius multiplier from wave modifiers or world events (1.0 = normal). */
   eventVisionMult: number;
+  /** When true, auto-send SESSION_START on SESSION_ACK (singleplayer quick-start). */
+  pendingSingleplayerAutoStart: boolean;
 }
 
 // ── Dependencies ────────────────────────────────────────────────────────────
@@ -223,8 +225,6 @@ export function registerMessageHandlers(
     console.log(`[Net] Connected - clientId: ${ack.clientId}, server v${ack.serverVersion}`);
 
     s.transportReady = true;
-    d.menuOverlay.setConnectionStatus('connected');
-    d.menuOverlay.setButtonsEnabled(true);
 
     if (ack.serverVersion !== GAME_VERSION) {
       console.warn(`[Net] Version mismatch: client ${GAME_VERSION}, server ${ack.serverVersion}`);
@@ -234,8 +234,26 @@ export function registerMessageHandlers(
       return;
     }
 
+    // Enable buttons based on which server we're connected to
+    const isLocal = net.url.includes('localhost') || net.url.includes('127.0.0.1');
+    d.menuOverlay.setSingleplayerEnabled(isLocal);
+    d.menuOverlay.setButtonsEnabled(true);
+    d.menuOverlay.setConnectionStatus('connected');
+
     if (ack.lastDisplayName) {
       d.menuOverlay.displayName = ack.lastDisplayName;
+    }
+
+    // Sync local meta stats to remote server on first remote connect
+    if (!isLocal) {
+      try {
+        const cached = localStorage.getItem('purrmadeath_metastats');
+        if (cached) {
+          const localStats = JSON.parse(cached);
+          net.send({ type: MessageType.META_STATS_UPLOAD, stats: localStats });
+          console.log('[Net] Uploaded local meta stats to remote server for sync');
+        }
+      } catch { /* ignore parse errors */ }
     }
   });
 
@@ -263,6 +281,8 @@ export function registerMessageHandlers(
       d.lobbyOverlay.setClassLocked(false);
     }
 
+    // Always show lobby for class selection (singleplayer and multiplayer)
+    s.pendingSingleplayerAutoStart = false;
     d.stateMgr.transition(GameState.Lobby);
   });
 
@@ -592,6 +612,25 @@ export function registerMessageHandlers(
 
   net.on(MessageType.RESOURCE_UPDATE, (msg) => {
     const ru = msg as ResourceUpdateMessage;
+    // Show floating resource gain popups
+    const prev = s.localResources;
+    // Show floating popups only for actual gains (skip initial sync where all prev values are 0)
+    const isInitialSync = prev.wood === 0 && prev.stone === 0 && prev.iron === 0
+      && prev.diamond === 0 && prev.gold === 0 && prev.food === 0 && prev.weapons === 0;
+    if (!isInitialSync && s.localEntityId != null) {
+      const pos = d.world.getComponent<PositionComponent>(s.localEntityId, C.Position);
+      if (pos) {
+        const diffs: [string, number][] = [
+          ['wood', ru.wood - prev.wood], ['stone', ru.stone - prev.stone],
+          ['iron', ru.iron - prev.iron], ['diamond', ru.diamond - prev.diamond],
+          ['gold', ru.gold - prev.gold], ['food', ru.food - prev.food],
+          ['weapons', ru.weapons - prev.weapons],
+        ];
+        for (const [res, diff] of diffs) {
+          if (diff > 0) d.damageNumbers.addResource(pos.x, pos.y, diff, res);
+        }
+      }
+    }
     d.resourceHUD.setResources(ru.wood, ru.stone, ru.iron, ru.diamond, ru.gold, ru.food, ru.weapons);
     s.localResources = { wood: ru.wood, stone: ru.stone, iron: ru.iron, diamond: ru.diamond, gold: ru.gold, food: ru.food, weapons: ru.weapons };
     if (s.buildModeActive && s.placingType) {
@@ -606,7 +645,8 @@ export function registerMessageHandlers(
     s.warehouseExists = wu.exists;
     if (s.warehouseExists) {
       d.warehouseHUD.update(s.warehouseResources);
-      if (!d.skillTree.isVisible) d.warehouseHUD.show();
+      // Warehouse HUD only visible in build mode
+      if (s.buildModeActive && !d.skillTree.isVisible) d.warehouseHUD.show();
     } else {
       d.warehouseHUD.hide();
     }
@@ -620,7 +660,11 @@ export function registerMessageHandlers(
 
   net.on(MessageType.PAUSE_VOTE_UPDATE, (msg) => {
     const update = msg as PauseVoteUpdateMessage;
-    d.pauseBanner.show(update.direction, update.voters, update.required);
+    if (update.voters.length === 0) {
+      d.pauseBanner.hide();
+    } else {
+      d.pauseBanner.show(update.direction, update.voters, update.required);
+    }
   });
 
   net.on(MessageType.PAUSE_STATE, (msg) => {
@@ -742,11 +786,18 @@ export function registerMessageHandlers(
       timePlayed: go.timePlayed,
       reason: go.reason,
     });
+    // Auto-request updated meta stats to keep local cache fresh for cross-server sync
+    net.send({ type: MessageType.META_STATS_REQUEST });
   });
 
   net.on(MessageType.META_STATS_RESPONSE, (msg) => {
     const resp = msg as MetaStatsResponseMessage;
-    d.statsOverlay.show(resp.stats, () => d.menuOverlay.showMenu());
+    // Cache locally for cross-server sync
+    try { localStorage.setItem('purrmadeath_metastats', JSON.stringify(resp.stats)); } catch { /* ignore */ }
+    // Only show stats overlay if not in game over (auto-request after game over just caches)
+    if (!s.localGameOver) {
+      d.statsOverlay.show(resp.stats, () => d.menuOverlay.showMenu());
+    }
   });
 
   // ── Save system ─────────────────────────────────────────────────────────
@@ -848,7 +899,7 @@ export function registerMessageHandlers(
   net.on(MessageType.CIVILIAN_PANEL_STATE, (msg) => {
     const m = msg as unknown as CivilianPanelStateMessage;
     if (d.civilianPanel.isVisible) {
-      d.civilianPanel.update(m.civilians, m.buildings, m.population, m.housingCapacity);
+      d.civilianPanel.update(m.civilians, m.buildings, m.population, m.housingCapacity, m.nextSpawnSeconds);
     } else {
       d.civilianPanel.show(m.civilians, m.buildings, m.population, m.housingCapacity, {
         onAssign: (civilianId, buildingId) => {
@@ -864,6 +915,7 @@ export function registerMessageHandlers(
   net.on(MessageType.TRAIN_GUARD_RESULT, (msg) => {
     const m = msg as unknown as { success: boolean; reason?: string };
     if (!m.success && m.reason) {
+      d.notificationToast.show(m.reason, 'warning');
       d.debug.log(`Training failed: ${m.reason}`);
     }
   });
@@ -943,8 +995,10 @@ export function registerMessageHandlers(
   net.onConnect(() => {
     d.menuOverlay.setConnectionStatus('connecting');
     // Send handshake eagerly so the server has our playerId for META_STATS_REQUEST
+    // Use saved localStorage name first (input may not be filled yet at startup)
     if (!s.handshakeSent) {
-      const name = d.menuOverlay.displayName || 'Player';
+      const saved = localStorage.getItem('displayName') ?? '';
+      const name = saved || d.menuOverlay.displayName || 'Player';
       net.send({ type: MessageType.HANDSHAKE, displayName: name, version: GAME_VERSION, playerId: s.localPlayerId });
       s.handshakeSent = true;
     }

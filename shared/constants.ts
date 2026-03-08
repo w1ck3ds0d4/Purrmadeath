@@ -28,7 +28,7 @@ export const MAX_MESSAGES_PER_SECOND = 300;
 export const MAX_CONNECTIONS = 16;
 
 /** Semantic version string - compared in HANDSHAKE for version gating. */
-export const GAME_VERSION = '1.0.8';
+export const GAME_VERSION = '1.0.9';
 
 /** Milliseconds a disconnected player's slot is held before removal. */
 export const RECONNECT_GRACE_MS = 30_000;
@@ -283,7 +283,7 @@ export const ITEM_DROP_RADIUS = 8;
 /** Seconds before an uncollected item drop despawns. */
 export const ITEM_DROP_LIFETIME = 60;
 /** Auto-pickup radius in world pixels. */
-export const ITEM_DROP_PICKUP_RADIUS = 28;
+export const ITEM_DROP_PICKUP_RADIUS = 52;
 /** E-interact pickup radius in world pixels. */
 export const ITEM_DROP_INTERACT_RADIUS = 40;
 /** Initial scatter velocity when an item drop spawns (px/s). */
@@ -377,6 +377,26 @@ export const BUILDING_SIZES: Record<string, { w: number; h: number }> = {
   teleporter_pad: { w: 1, h: 1 },
   tavern: { w: 2, h: 2 },
 };
+
+/**
+ * Exclusion zone sizes (in tiles) - no other buildings can be placed within this zone.
+ * Buildings not listed here default to their footprint size (no extra padding).
+ * Players, civilians, and enemies can still walk through exclusion zones.
+ */
+export const BUILDING_EXCLUSION_SIZES: Record<string, { w: number; h: number }> = {
+  campfire: { w: 5, h: 5 },
+};
+
+/**
+ * Exclusion extent (half-width, half-height) for placement checks.
+ * Falls back to building footprint if no exclusion size is defined.
+ */
+export function buildingExclusionExtent(type: string, rotation: number = 0): { hx: number; hy: number } {
+  const size = BUILDING_EXCLUSION_SIZES[type] ?? BUILDING_SIZES[type] ?? { w: 1, h: 1 };
+  const w = rotation === 1 ? size.h : size.w;
+  const h = rotation === 1 ? size.w : size.h;
+  return { hx: (w * TILE_SIZE) / 2, hy: (h * TILE_SIZE) / 2 };
+}
 
 /**
  * Half-extent in world pixels for a building of the given type.
@@ -531,7 +551,7 @@ export const PLACEABLE_BUILDINGS: string[] = [
   'cat_house',
   'gate', 'ballista', 'laser_tower', 'workshop', 'training_center',
   'tesla_coil', 'flame_tower', 'catapult', 'moat',
-  'repair_station', 'storage_shed', 'teleporter_pad',
+  'repair_station', 'teleporter_pad',
   'tavern',
 ];
 

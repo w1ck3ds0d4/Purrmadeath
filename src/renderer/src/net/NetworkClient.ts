@@ -35,7 +35,7 @@ export class NetworkClient {
   private msgCountStart = 0;
   private msgsPerSec = 0;
 
-  constructor(private url: string) {
+  constructor(private _url: string) {
     // Internal PONG handler for latency / packet-loss tracking.
     // Registered once so reconnects don't stack up duplicate handlers.
     this.on(MessageType.PONG, () => {
@@ -44,8 +44,11 @@ export class NetworkClient {
     });
   }
 
+  /** Current WebSocket URL. */
+  get url(): string { return this._url; }
+
   connect(): void {
-    this.ws = new WebSocket(this.url);
+    this.ws = new WebSocket(this._url);
 
     this.ws.onopen = () => {
       console.log('[Net] Connected to server');
@@ -106,7 +109,7 @@ export class NetworkClient {
 
   /** Close current connection and reconnect to a different URL (dev-mode IP switching). */
   reconnectTo(newUrl: string): void {
-    this.url = newUrl;
+    this._url = newUrl;
     this.stopPing();
     // Detach handlers from old socket so its onclose doesn't trigger drop/reconnect
     if (this.ws) {

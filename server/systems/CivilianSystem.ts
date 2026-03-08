@@ -57,6 +57,11 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
   const STUCK_THRESHOLD = 1.5; // seconds with no progress before nudging
   const STUCK_PROGRESS_MIN = 3; // min pixels moved to count as progress
 
+  // Timer-based civilian spawning (2 civilians every 60 seconds)
+  const CIVILIAN_SPAWN_TIMER_INTERVAL = 60; // seconds
+  const CIVILIAN_SPAWN_PER_TICK = 2;
+  let civilianSpawnTimer = 0;
+
   // ── Name picker ─────────────────────────────────────────────────────────
 
   function pickName(): string {
@@ -233,10 +238,15 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
 
   // ── AI tick ─────────────────────────────────────────────────────────────
 
+  let aiTickCounter = 0;
+
   function tickAI(dt: number, send: SendFn): void {
+    aiTickCounter++;
     const campPos = deps.getCampfirePosition();
 
+    let civIdx = 0;
     for (const id of civilianIds) {
+      civIdx++;
       if (!world.hasEntity(id)) continue;
       // Downed civilians don't act
       if (world.hasComponent(id, C.Downed)) continue;
@@ -245,7 +255,11 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
       const speed = world.getComponent<SpeedComponent>(id, C.Speed)!;
       const input = world.getComponent<PlayerInputComponent>(id, C.PlayerInput)!;
 
-      // Flee from nearby enemies (overrides everything)
+      // Stagger non-urgent AI: only 1 in 3 civilians do full pathfinding per tick
+      // Flee checks always run (urgent). Working/idle movement throttled.
+      const doFullAI = (civIdx % 3) === (aiTickCounter % 3);
+
+      // Flee from nearby enemies (overrides everything) - always checked
       const nearestEnemy = findNearestEnemy(pos.x, pos.y, CIVILIAN_FLEE_RANGE);
       if (nearestEnemy) {
         civ.state = 'fleeing';
@@ -277,6 +291,9 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
 
       // Not fleeing - restore normal speed
       speed.base = CIVILIAN_SPEED;
+
+      // Throttle non-urgent AI (pathfinding to buildings, idle wandering)
+      if (!doFullAI) continue;
 
       // Resume delivery if still carrying resources after fleeing
       if (civ.state !== 'delivering' && civ.carryAmount > 0 && civ.carryResource) {
@@ -587,6 +604,25 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
         setSpeech(id, civ, msgs[Math.floor(Math.random() * msgs.length)], send);
       }
     }
+
+    // Timer-based civilian spawning: 2 every 60 seconds while housing available
+    civilianSpawnTimer += dt;
+    if (civilianSpawnTimer >= CIVILIAN_SPAWN_TIMER_INTERVAL) {
+      civilianSpawnTimer = 0;
+      const campPos = deps.getCampfirePosition();
+      if (campPos) {
+        const capacity = getHousingCapacity();
+        const currentPop = getCivilianCount();
+        const availableSlots = Math.max(0, Math.min(capacity, CIVILIAN_MAX_POPULATION) - currentPop);
+        const toSpawn = Math.min(CIVILIAN_SPAWN_PER_TICK, availableSlots);
+        for (let i = 0; i < toSpawn; i++) {
+          if (getCivilianCount() >= capacity || getCivilianCount() >= CIVILIAN_MAX_POPULATION) break;
+          const pos = findClearSpawn(campPos.x, campPos.y, 40, 100);
+          spawnCivilian(pos.x, pos.y, send);
+        }
+        if (toSpawn > 0) reassignWorkers();
+      }
+    }
   }
 
   // ── Wave cleared hook ───────────────────────────────────────────────────
@@ -595,7 +631,7 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
     const campPos = deps.getCampfirePosition();
     if (!campPos) return;
 
-    // Check for campfire level-up: spawn 2 civilians when campfire is upgraded
+    // Campfire level-up bonus: spawn 2 civilians when campfire is upgraded
     const currentCfLevel = deps.getCampfireLevel();
     let spawnCount = 0;
     if (currentCfLevel > lastKnownCampfireLevel) {
@@ -603,14 +639,8 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
       lastKnownCampfireLevel = currentCfLevel;
     }
 
-    // Every wave: spawn 1-3 civilians based on available housing slots
+    // Spawn campfire bonus civilians (timer handles regular spawning now)
     const capacity = getHousingCapacity();
-    const currentPop = getCivilianCount();
-    const availableSlots = Math.max(0, Math.min(capacity, CIVILIAN_MAX_POPULATION) - currentPop);
-    if (wave > 0 && availableSlots > 0) {
-      spawnCount += Math.min(1 + Math.floor(Math.random() * 3), availableSlots); // 1-3 capped by slots
-    }
-
     for (let i = 0; i < spawnCount; i++) {
       if (getCivilianCount() >= capacity || getCivilianCount() >= CIVILIAN_MAX_POPULATION) break;
       const pos = findClearSpawn(campPos.x, campPos.y, 40, 100);
@@ -721,12 +751,16 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
       });
     }
 
+    const pop = getCivilianCount();
+    const cap = getHousingCapacity();
+    const atCapacity = pop >= cap;
     return {
       type: MessageType.CIVILIAN_PANEL_STATE,
       civilians: civEntries,
       buildings: bldgEntries,
-      population: getCivilianCount(),
-      housingCapacity: getHousingCapacity(),
+      population: pop,
+      housingCapacity: cap,
+      nextSpawnSeconds: atCapacity ? 0 : Math.max(0, CIVILIAN_SPAWN_TIMER_INTERVAL - civilianSpawnTimer),
     };
   }
 

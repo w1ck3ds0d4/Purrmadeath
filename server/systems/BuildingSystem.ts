@@ -1,6 +1,7 @@
 import { World } from '@shared/ecs/World';
 import { distance } from '@shared/math/utils';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
+import { createSpatialHash, type SpatialHash } from './SpatialHash';
 import {
   C,
   PositionComponent,
@@ -24,7 +25,7 @@ import type {
 import {
   TILE_SIZE, PLAYER_RADIUS, ENEMY_RADIUS, RESOURCE_NODE_RADIUS,
   PROJECTILE_RADIUS, RANGED_LIFETIME,
-  BUILDING_COSTS, BUILDING_SIZES, buildingHalfExtent, buildingExtent, snapBuildingPosition,
+  BUILDING_COSTS, BUILDING_SIZES, buildingHalfExtent, buildingExtent, buildingExclusionExtent, snapBuildingPosition,
   BUILDING_MAX_LEVEL, DEMOLISH_REFUND_PERCENT, RUINS_REPAIR_COST_MULT, RUINS_RESTORE_COST_MULT,
   CAMPFIRE_MAX_HEALTH, WALL_MAX_HEALTH, WAREHOUSE_MAX_HEALTH,
   LUMBERMILL_MAX_HEALTH, QUARRY_MAX_HEALTH, MINE_MAX_HEALTH, FARM_MAX_HEALTH,
@@ -148,6 +149,16 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
   // Warehouse pool is a mutable ref - read via closure each time
   function wPool(): Record<string, number> { return deps.warehousePool; }
 
+  // Spatial hash for enemy positions - rebuilt once per tick
+  const enemyHash: SpatialHash = createSpatialHash(256);
+  function rebuildEnemyHash(): void {
+    enemyHash.clear();
+    for (const eid of world.query(C.EnemyStats, C.Position)) {
+      const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
+      enemyHash.insert(eid, ep.x, ep.y);
+    }
+  }
+
   // ── Cost helpers ──────────────────────────────────────────────────────────
 
   function deductBuildingCost(
@@ -201,6 +212,8 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
   // ── Footprint collision ───────────────────────────────────────────────────
 
   function footprintCollides(cx: number, cy: number, buildingType: string, rotation: number = 0): boolean {
+    // Use exclusion extent for building-vs-building checks (e.g. campfire 5x5 no-build zone)
+    const newExcl = buildingExclusionExtent(buildingType, rotation);
     const newExt = buildingExtent(buildingType, rotation);
     for (const id of world.query(C.Position, C.Faction)) {
       const f = world.getComponent<FactionComponent>(id, C.Faction)!;
@@ -209,9 +222,12 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       let exHy: number;
       if (f.type === 'building') {
         const b = world.getComponent<BuildingComponent>(id, C.Building);
-        const bExt = buildingExtent(b?.buildingType ?? 'wall', b?.rotation ?? 0);
-        exHx = bExt.hx;
-        exHy = bExt.hy;
+        const bExcl = buildingExclusionExtent(b?.buildingType ?? 'wall', b?.rotation ?? 0);
+        // No-build check: either building's exclusion zone prevents overlap
+        exHx = Math.max(newExcl.hx, bExcl.hx);
+        exHy = Math.max(newExcl.hy, bExcl.hy);
+        if (Math.abs(pos.x - cx) < exHx + newExt.hx && Math.abs(pos.y - cy) < exHy + newExt.hy) return true;
+        continue;
       } else if (f.type === 'resource') {
         exHx = RESOURCE_NODE_RADIUS;
         exHy = RESOURCE_NODE_RADIUS;
@@ -807,18 +823,15 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       const bldg = world.getComponent<BuildingComponent>(id, C.Building);
       const halfExt = buildingHalfExtent(bldg?.buildingType ?? 'arrow_turret');
 
+      // Use spatial hash for fast neighbor lookup
       let bestId = -1;
       let bestDist = turret.range * turret.range;
-      for (const eid of world.query(C.Position, C.Faction)) {
-        const ef = world.getComponent<FactionComponent>(eid, C.Faction)!;
-        if (ef.type !== 'enemy' && ef.type !== 'portal') continue;
-        const ghostSt = world.getComponent<GhostStateComponent>(eid, C.GhostState);
-        if (ghostSt?.hidden) continue;
-        const epos = world.getComponent<PositionComponent>(eid, C.Position)!;
-        const dx = epos.x - tpos.x, dy = epos.y - tpos.y;
-        const d2 = dx * dx + dy * dy;
-        if (d2 < bestDist) { bestDist = d2; bestId = eid; }
-      }
+      enemyHash.queryRange(tpos.x, tpos.y, turret.range, (entry, dSq) => {
+        // Skip hidden ghosts
+        const ghostSt = world.getComponent<GhostStateComponent>(entry.id, C.GhostState);
+        if (ghostSt?.hidden) return;
+        if (dSq < bestDist) { bestDist = dSq; bestId = entry.id; }
+      });
 
       if (bestId < 0) continue;
       turret.cooldownTimer = turret.cooldown * cards.debuffs.turretCooldownMult;
@@ -967,7 +980,10 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       const rangeSq = aura.range * aura.range;
       const healAmount = aura.healPerSecond * dt;
 
-      for (const pid of playerEntityIds) {
+      // Heal players, civilians, and guards
+      for (const pid of world.query(C.Position, C.Health, C.Faction)) {
+        const f = world.getComponent<FactionComponent>(pid, C.Faction)!;
+        if (f.type !== 'player' && f.type !== 'civilian' && f.type !== 'guard') continue;
         if (world.hasComponent(pid, C.Downed)) continue;
         const ppos = world.getComponent<PositionComponent>(pid, C.Position);
         const php = world.getComponent<HealthComponent>(pid, C.Health);
@@ -1219,39 +1235,31 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       tc.cooldownTimer -= dt;
       if (tc.cooldownTimer > 0) continue;
 
-      // Hit ALL enemies within range (AOE zap)
+      // Hit ALL enemies within range (AOE zap) via spatial hash
       const chain: Array<{ x: number; y: number }> = [];
       const hitIds = new Set<number>();
-      for (const eid of world.query(C.EnemyStats, C.Position)) {
-        const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
-        const d = distance(ep.x - pos.x, ep.y - pos.y);
-        if (d <= tc.range) {
-          hitIds.add(eid);
-          const hp = world.getComponent<HealthComponent>(eid, C.Health);
-          if (hp) hp.current -= tc.damage;
-          chain.push({ x: ep.x, y: ep.y });
-        }
-      }
+      enemyHash.queryRange(pos.x, pos.y, tc.range, (entry) => {
+        hitIds.add(entry.id);
+        const hp = world.getComponent<HealthComponent>(entry.id, C.Health);
+        if (hp) hp.current -= tc.damage;
+        chain.push({ x: entry.x, y: entry.y });
+      });
 
       if (chain.length === 0) continue;
       tc.cooldownTimer = tc.cooldown * (cards.debuffs.turretCooldownMult ?? 1);
 
-      // Secondary chain arcs: from each hit enemy, arc to nearby un-hit enemies
+      // Secondary chain arcs via spatial hash
       for (let c = 0; c < tc.chainCount; c++) {
         const newHits: Array<{ id: number; x: number; y: number }> = [];
-        for (const eid of world.query(C.EnemyStats, C.Position)) {
-          if (hitIds.has(eid)) continue;
-          const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
-          // Check if within chain range of any already-hit enemy
-          let inRange = false;
-          for (const pt of chain) {
-            if (distance(ep.x - pt.x, ep.y - pt.y) <= tc.chainRange) { inRange = true; break; }
-          }
-          if (inRange) newHits.push({ id: eid, x: ep.x, y: ep.y });
+        for (const pt of chain) {
+          enemyHash.queryRange(pt.x, pt.y, tc.chainRange, (entry) => {
+            if (hitIds.has(entry.id)) return;
+            hitIds.add(entry.id); // mark immediately to prevent duplicates
+            newHits.push({ id: entry.id, x: entry.x, y: entry.y });
+          });
         }
         if (newHits.length === 0) break;
         for (const nh of newHits) {
-          hitIds.add(nh.id);
           const hp = world.getComponent<HealthComponent>(nh.id, C.Health);
           if (hp) hp.current -= Math.round(tc.damage * 0.5);
           chain.push({ x: nh.x, y: nh.y });
@@ -1272,32 +1280,23 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
 
       // Auto-rotate to nearest enemy
-      let nearestDist = fl.range + 1;
-      let nearestAngle = fl.facing;
-      for (const eid of world.query(C.EnemyStats, C.Position)) {
-        const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
-        const d = distance(ep.x - pos.x, ep.y - pos.y);
-        if (d < nearestDist) {
-          nearestDist = d;
-          nearestAngle = Math.atan2(ep.y - pos.y, ep.x - pos.x);
-        }
+      // Find nearest enemy via spatial hash for facing
+      const nearest = enemyHash.queryNearest(pos.x, pos.y, fl.range);
+      if (nearest) {
+        fl.facing = Math.atan2(nearest.y - pos.y, nearest.x - pos.x);
       }
-      fl.facing = nearestAngle;
 
-      // Deal DPS to all enemies in cone
+      // Deal DPS to all enemies in cone via spatial hash
       const halfArc = fl.arcRadians / 2;
-      for (const eid of world.query(C.EnemyStats, C.Position)) {
-        const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
-        const d = distance(ep.x - pos.x, ep.y - pos.y);
-        if (d > fl.range) continue;
-        const angle = Math.atan2(ep.y - pos.y, ep.x - pos.x);
+      enemyHash.queryRange(pos.x, pos.y, fl.range, (entry) => {
+        const angle = Math.atan2(entry.y - pos.y, entry.x - pos.x);
         let diff = angle - fl.facing;
         while (diff > Math.PI) diff -= 2 * Math.PI;
         while (diff < -Math.PI) diff += 2 * Math.PI;
-        if (Math.abs(diff) > halfArc) continue;
-        const hp = world.getComponent<HealthComponent>(eid, C.Health);
+        if (Math.abs(diff) > halfArc) return;
+        const hp = world.getComponent<HealthComponent>(entry.id, C.Health);
         if (hp) hp.current -= fl.dps * dt;
-      }
+      });
     }
   }
 
@@ -1351,15 +1350,15 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       const moatComp = world.getComponent<MoatComponent>(id, C.Moat)!;
       const mhx = TILE_SIZE / 2;
 
-      for (const eid of world.query(C.EnemyStats, C.Position, C.Speed)) {
-        const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
-        const dx = Math.abs(ep.x - moatPos.x);
-        const dy = Math.abs(ep.y - moatPos.y);
+      // Use spatial hash - moat tile is small, query with tile radius
+      enemyHash.queryRange(moatPos.x, moatPos.y, mhx * 1.5, (entry) => {
+        const dx = Math.abs(entry.x - moatPos.x);
+        const dy = Math.abs(entry.y - moatPos.y);
         if (dx < mhx && dy < mhx) {
-          const speed = world.getComponent<import('@shared/components').SpeedComponent>(eid, C.Speed)!;
-          speed.multiplier = Math.min(speed.multiplier, moatComp.slowFactor);
+          const speed = world.getComponent<import('@shared/components').SpeedComponent>(entry.id, C.Speed);
+          if (speed) speed.multiplier = Math.min(speed.multiplier, moatComp.slowFactor);
         }
-      }
+      });
     }
   }
 
@@ -1450,16 +1449,49 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
 
   // ── Public API ────────────────────────────────────────────────────────────
 
+  /** Manually deposit a player's resources into the warehouse pool. Returns true if anything was transferred. */
+  function depositPlayerToWarehouse(playerEntityId: number, send: SendFn): boolean {
+    if (warehouseIds.size === 0) return false;
+
+    // Check if player is near any warehouse
+    const pPos = world.getComponent<PositionComponent>(playerEntityId, C.Position);
+    if (!pPos) return false;
+
+    const r2 = WAREHOUSE_DEPOSIT_RADIUS * WAREHOUSE_DEPOSIT_RADIUS;
+    let near = false;
+    for (const wid of warehouseIds) {
+      const wPos = world.getComponent<PositionComponent>(wid, C.Position);
+      if (!wPos) continue;
+      const dx = pPos.x - wPos.x, dy = pPos.y - wPos.y;
+      if (dx * dx + dy * dy <= r2) { near = true; break; }
+    }
+    if (!near) return false;
+
+    const res = world.getComponent<ResourcesComponent>(playerEntityId, C.Resources);
+    if (!res) return false;
+
+    let transferred = false;
+    for (const key of ['wood', 'stone', 'iron', 'diamond', 'gold', 'food'] as const) {
+      if (res[key] > 0) {
+        wPool()[key] += res[key];
+        res[key] = 0;
+        transferred = true;
+      }
+    }
+    return transferred;
+  }
+
   return {
     handlePlace,
     handleDemolish,
     handleUpgrade,
     handleRepair: handleRuinRepair,
     broadcastWarehouseUpdate,
+    depositPlayerToWarehouse,
     cleanupBridge,
     spawnTrainedGuard,
     tick(dt: number, send: SendFn): void {
-      tickWarehouseDeposit(send);
+      rebuildEnemyHash();
       tickProduction(dt);
       tickTurrets(dt, send);
       tickLaserBeams(dt, send);

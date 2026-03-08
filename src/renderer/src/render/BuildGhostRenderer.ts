@@ -1,5 +1,5 @@
 import { Container, Graphics } from 'pixi.js';
-import { snapBuildingPosition, buildingExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, BALLISTA_RANGE, UPGRADE_LASER_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RANGE } from '@shared/constants';
+import { snapBuildingPosition, buildingExtent, buildingExclusionExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, BALLISTA_RANGE, UPGRADE_LASER_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RANGE, TESLA_COIL_RANGE, UPGRADE_FLAME_RANGE, CATAPULT_RANGE } from '@shared/constants';
 import { POTION_SHOP_INTERACT_RANGE } from '@shared/definitions/PotionDefinitions';
 
 const VALID_COLOR   = 0x44cc66;
@@ -14,6 +14,9 @@ const BUILDING_RANGES: Record<string, number> = {
   light_tower: UPGRADE_LIGHT_RANGE[0],
   healing_shrine: UPGRADE_HEAL_RANGE[0],
   potion_shop: POTION_SHOP_INTERACT_RANGE,
+  tesla_coil: TESLA_COIL_RANGE,
+  flame_tower: UPGRADE_FLAME_RANGE[0],
+  catapult: CATAPULT_RANGE,
 };
 
 /** Per-type range circle color. */
@@ -25,6 +28,9 @@ const RANGE_COLORS: Record<string, number> = {
   light_tower: 0xffdd44,
   healing_shrine: 0x44ff88,
   potion_shop: 0xaa66ff,
+  tesla_coil: 0x66ddff,
+  flame_tower: 0xff6622,
+  catapult: 0xcc8844,
 };
 
 /**
@@ -83,6 +89,13 @@ export class BuildGhostRenderer {
     this.gfx.fill({ color, alpha: 0.35 });
     this.gfx.rect(this.snapX - ext.hx, this.snapY - ext.hy, ext.hx * 2, ext.hy * 2);
     this.gfx.stroke({ color, alpha: 0.7, width: 2 });
+
+    // Exclusion zone outline (only if larger than footprint)
+    const excl = buildingExclusionExtent(buildingType, rotation);
+    if (excl.hx > ext.hx || excl.hy > ext.hy) {
+      this.gfx.rect(this.snapX - excl.hx, this.snapY - excl.hy, excl.hx * 2, excl.hy * 2);
+      this.gfx.stroke({ color: 0xffaa44, alpha: 0.4, width: 1 });
+    }
   }
 
   destroy(): void {

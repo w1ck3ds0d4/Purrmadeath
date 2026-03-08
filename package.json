@@ -1,6 +1,6 @@
 {
   "name": "purrmadeath",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "2D co-op roguelike - base building, procedural world, up to 4 players",
   "author": "WickedSoda",
   "private": true,
@@ -17,7 +17,8 @@
     "lint": "eslint src server shared --ext .ts",
     "typecheck": "tsc --noEmit",
     "check-version": "node scripts/check-version.cjs",
-    "build:win": "node scripts/check-version.cjs && electron-vite build && electron-builder --win",
+    "build:server": "npx esbuild server/server.ts --bundle --platform=node --format=esm --outfile=resources/server/server.mjs --alias:@shared=./shared --external:ws",
+    "build:win": "node scripts/check-version.cjs && npm run build:server && electron-vite build && electron-builder --win",
     "publish": "node scripts/check-version.cjs && electron-vite build && electron-builder --win --publish always",
     "aws:start": "node scripts/aws.mjs start",
     "aws:stop": "node scripts/aws.mjs stop",
@@ -52,6 +53,13 @@
     "directories": {
       "output": "dist"
     },
+    "extraResources": [
+      {
+        "from": "resources/server/",
+        "to": "server/",
+        "filter": ["**/*"]
+      }
+    ],
     "win": {
       "target": "nsis"
     },

@@ -11,6 +11,7 @@ const STATE_LABELS: Record<string, { label: string; color: string }> = {
   working:   { label: 'Working',   color: '#44cc44' },
   fleeing:   { label: 'Fleeing',   color: '#ff4444' },
   wandering: { label: 'Wandering', color: '#ccaa44' },
+  delivering: { label: 'Delivering', color: '#6699cc' },
   downed:    { label: 'Downed',    color: '#ff3333' },
 };
 
@@ -23,23 +24,26 @@ const BUILDING_LABELS: Record<string, string> = {
   repair_station: 'Repair Station',
 };
 
+type Tab = 'civilians' | 'buildings';
+
 /**
- * HTML overlay for the Civilian Management Panel (C key).
- * Shows all civilians with status, hunger, assignment, and lets the player
- * reassign workers to production buildings.
+ * Tabbed civilian management panel (C key).
+ * Two tabs: Civilians (scrollable list) and Buildings (with assignment).
  */
 export class CivilianPanelOverlay {
   private el: HTMLElement;
-  private titleEl: HTMLElement;
   private popEl: HTMLElement;
-  private listEl: HTMLElement;
-  private buildingsEl: HTMLElement;
+  private tabBar: HTMLElement;
+  private tabBtnCiv: HTMLElement;
+  private tabBtnBuild: HTMLElement;
+  private contentEl: HTMLElement;
   private hintEl: HTMLElement;
   private visible = false;
   private callbacks: CivilianPanelCallbacks | null = null;
   private civilians: CivilianPanelEntry[] = [];
   private buildings: WorkableBuildingEntry[] = [];
   private selectedCivilianId: number | null = null;
+  private activeTab: Tab = 'civilians';
 
   constructor() {
     this.el = document.createElement('div');
@@ -51,49 +55,95 @@ export class CivilianPanelOverlay {
       'left: 50%',
       'transform: translate(-50%, -50%)',
       'z-index: 50',
-      'padding: 20px 24px',
+      'padding: 16px 20px',
       'display: none',
-      'min-width: 500px',
-      'max-width: 560px',
-      'max-height: 70vh',
-      'overflow-y: auto',
+      'width: 520px',
       'user-select: none',
       'pointer-events: auto',
     ].join('; ');
 
     // Title
-    this.titleEl = document.createElement('div');
-    this.titleEl.style.cssText = titleStyle(16) + '; margin-bottom: 4px;';
-    this.titleEl.textContent = 'CIVILIAN MANAGEMENT';
-    this.el.appendChild(this.titleEl);
+    const titleEl = document.createElement('div');
+    titleEl.style.cssText = titleStyle(14) + '; margin-bottom: 4px;';
+    titleEl.textContent = 'CIVILIAN MANAGEMENT';
+    this.el.appendChild(titleEl);
 
     // Population counter
     this.popEl = document.createElement('div');
-    this.popEl.style.cssText = `text-align: center; color: ${THEME.textSecondary}; font-size: 12px; margin-bottom: 14px;`;
+    this.popEl.style.cssText = `text-align: center; color: ${THEME.textSecondary}; font-size: 11px; margin-bottom: 10px;`;
     this.el.appendChild(this.popEl);
 
-    // Civilians list
-    this.listEl = document.createElement('div');
-    this.listEl.style.cssText = 'display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px;';
-    this.el.appendChild(this.listEl);
+    // Tab bar
+    this.tabBar = document.createElement('div');
+    this.tabBar.style.cssText = `display: flex; gap: 0; margin-bottom: 8px; border-bottom: 1px solid ${THEME.accentRgba(0.2)};`;
 
-    // Buildings section
-    const buildTitle = document.createElement('div');
-    buildTitle.style.cssText = `font-weight: bold; font-size: 13px; color: ${THEME.accent}; margin-bottom: 6px; border-top: 1px solid ${THEME.accentRgba(0.2)}; padding-top: 10px; text-transform: uppercase; letter-spacing: 2px;`;
-    buildTitle.textContent = 'PRODUCTION BUILDINGS';
-    this.el.appendChild(buildTitle);
+    this.tabBtnCiv = this.createTabBtn('Civilians', 'civilians');
+    this.tabBtnBuild = this.createTabBtn('Buildings', 'buildings');
+    this.tabBar.appendChild(this.tabBtnCiv);
+    this.tabBar.appendChild(this.tabBtnBuild);
+    this.el.appendChild(this.tabBar);
 
-    this.buildingsEl = document.createElement('div');
-    this.buildingsEl.style.cssText = 'display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px;';
-    this.el.appendChild(this.buildingsEl);
+    // Content area (scrollable)
+    this.contentEl = document.createElement('div');
+    this.contentEl.style.cssText = [
+      'display: flex',
+      'flex-direction: column',
+      'gap: 4px',
+      'max-height: 340px',
+      'overflow-y: auto',
+      'padding-right: 4px',
+    ].join('; ');
+    // Custom scrollbar
+    const styleTag = document.createElement('style');
+    styleTag.textContent = `
+      #civilian-panel-overlay .civ-scroll::-webkit-scrollbar { width: 4px; }
+      #civilian-panel-overlay .civ-scroll::-webkit-scrollbar-track { background: transparent; }
+      #civilian-panel-overlay .civ-scroll::-webkit-scrollbar-thumb { background: rgba(200,60,60,0.3); border-radius: 2px; }
+    `;
+    this.el.appendChild(styleTag);
+    this.contentEl.classList.add('civ-scroll');
+    this.el.appendChild(this.contentEl);
 
     // Hint
     this.hintEl = document.createElement('div');
-    this.hintEl.style.cssText = hintStyle() + '; margin-top: 6px;';
-    this.hintEl.textContent = 'Click a civilian, then a building to assign. Press C or ESC to close.';
+    this.hintEl.style.cssText = hintStyle() + '; margin-top: 8px; font-size: 10px;';
+    this.hintEl.textContent = 'Click a civilian, then switch to Buildings tab to assign. C / ESC to close.';
     this.el.appendChild(this.hintEl);
 
     document.getElementById('overlay')!.appendChild(this.el);
+  }
+
+  private createTabBtn(label: string, tab: Tab): HTMLElement {
+    const btn = document.createElement('div');
+    btn.style.cssText = [
+      'flex: 1',
+      'text-align: center',
+      'padding: 6px 0',
+      `font-family: ${THEME.fontUI}`,
+      'font-size: 11px',
+      'font-weight: bold',
+      'letter-spacing: 1px',
+      'cursor: pointer',
+      'transition: color 0.15s, border-color 0.15s',
+      'border-bottom: 2px solid transparent',
+      `color: ${THEME.textMuted}`,
+    ].join('; ');
+    btn.textContent = label;
+    btn.addEventListener('click', () => {
+      this.activeTab = tab;
+      this.updateTabStyles();
+      this.rebuild();
+    });
+    return btn;
+  }
+
+  private updateTabStyles(): void {
+    const active = (btn: HTMLElement, isActive: boolean) => {
+      btn.style.color = isActive ? THEME.accent : THEME.textMuted;
+      btn.style.borderBottomColor = isActive ? THEME.accent : 'transparent';
+    };
+    active(this.tabBtnCiv, this.activeTab === 'civilians');
+    active(this.tabBtnBuild, this.activeTab === 'buildings');
   }
 
   get isVisible(): boolean { return this.visible; }
@@ -110,7 +160,9 @@ export class CivilianPanelOverlay {
     this.civilians = civilians;
     this.buildings = buildings;
     this.selectedCivilianId = null;
-    this.popEl.textContent = `Population: ${population} / ${housingCapacity}`;
+    this.activeTab = 'civilians';
+    this.updateTabStyles();
+    this.updatePopText(population, housingCapacity, 0);
     this.el.style.display = 'block';
     this.rebuild();
   }
@@ -128,97 +180,109 @@ export class CivilianPanelOverlay {
     buildings: WorkableBuildingEntry[],
     population: number,
     housingCapacity: number,
+    nextSpawnSeconds = 0,
   ): void {
     this.civilians = civilians;
     this.buildings = buildings;
-    this.popEl.textContent = `Population: ${population} / ${housingCapacity}`;
+    this.updatePopText(population, housingCapacity, nextSpawnSeconds);
     if (this.visible) this.rebuild();
   }
 
-  private rebuild(): void {
-    // ── Civilians list ──────────────────────────────────────────────────
-    this.listEl.innerHTML = '';
+  private updatePopText(population: number, housingCapacity: number, nextSpawnSeconds: number): void {
+    let text = `Population: ${population} / ${housingCapacity}`;
+    if (nextSpawnSeconds > 0) {
+      text += `  |  Next spawn: ${Math.ceil(nextSpawnSeconds)}s`;
+    } else if (population >= housingCapacity) {
+      text += `  |  At capacity`;
+    }
+    this.popEl.textContent = text;
+  }
 
+  private rebuild(): void {
+    this.contentEl.innerHTML = '';
+
+    if (this.activeTab === 'civilians') {
+      this.buildCiviliansList();
+    } else {
+      this.buildBuildingsList();
+    }
+
+    this.updateHint();
+  }
+
+  // ── Civilians Tab ──────────────────────────────────────────────────────────
+
+  private buildCiviliansList(): void {
     if (this.civilians.length === 0) {
-      const empty = document.createElement('div');
-      empty.style.cssText = `text-align: center; color: ${THEME.textMuted}; padding: 8px;`;
-      empty.textContent = 'No civilians yet.';
-      this.listEl.appendChild(empty);
+      this.contentEl.appendChild(this.emptyMsg('No civilians yet.'));
+      return;
     }
 
     for (const civ of this.civilians) {
-      const row = document.createElement('div');
       const isSelected = this.selectedCivilianId === civ.entityId;
+      const row = document.createElement('div');
       const borderColor = isSelected ? THEME.accentRgba(0.6) : THEME.borderSubtle;
-      row.style.cssText = `display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: ${THEME.surfaceBg}; border: 1px solid ${borderColor}; border-radius: ${THEME.radiusSm}; cursor: pointer; transition: border-color ${THEME.transition};`;
+      row.style.cssText = `display: flex; align-items: center; gap: 6px; padding: 5px 8px; background: ${THEME.surfaceBg}; border: 1px solid ${borderColor}; border-radius: ${THEME.radiusSm}; cursor: pointer; transition: border-color 0.1s; font-size: 12px;`;
       row.addEventListener('mouseenter', () => { if (!isSelected) row.style.borderColor = THEME.accentRgba(0.3); });
       row.addEventListener('mouseleave', () => { if (!isSelected) row.style.borderColor = THEME.borderSubtle; });
 
-      // Name + specialty badge
+      // Name + specialty
       const nameEl = document.createElement('span');
-      nameEl.style.cssText = `font-weight: bold; color: ${THEME.accent}; min-width: 80px;`;
+      nameEl.style.cssText = `font-weight: bold; color: ${THEME.accent}; min-width: 75px; font-size: 12px;`;
       if (civ.specialty) {
         const specLabel = BUILDING_LABELS[civ.specialty] ?? civ.specialty;
-        nameEl.innerHTML = `${civ.name} <span style="color:#e8c96a;font-size:10px;font-weight:normal" title="Specialized in ${specLabel}">&#9733; ${specLabel}</span>`;
+        nameEl.innerHTML = `${esc(civ.name)} <span style="color:#e8c96a;font-size:9px;font-weight:normal" title="Specialized: ${specLabel}">&#9733;</span>`;
       } else {
         nameEl.textContent = civ.name;
       }
       row.appendChild(nameEl);
 
-      // State
+      // State badge
       const displayState = civ.downed ? 'downed' : civ.state;
       const stateInfo = STATE_LABELS[displayState] ?? STATE_LABELS.idle;
       const stateEl = document.createElement('span');
-      stateEl.style.cssText = `color: ${stateInfo.color}; min-width: 70px; font-size: 12px;`;
+      stateEl.style.cssText = `color: ${stateInfo.color}; min-width: 60px; font-size: 11px;`;
       stateEl.textContent = stateInfo.label;
       row.appendChild(stateEl);
 
-      // HP
+      // HP compact
       const hpEl = document.createElement('span');
       const hpPct = civ.maxHp > 0 ? civ.hp / civ.maxHp : 0;
       const hpColor = hpPct > 0.5 ? '#44cc44' : hpPct > 0.25 ? '#ddaa22' : '#cc3333';
-      hpEl.style.cssText = `color: ${hpColor}; min-width: 50px; font-size: 12px;`;
+      hpEl.style.cssText = `color: ${hpColor}; min-width: 44px; font-size: 11px;`;
       hpEl.textContent = `${civ.hp}/${civ.maxHp}`;
       row.appendChild(hpEl);
 
-      // Hunger bar with label
-      const hungerWrap = document.createElement('div');
-      hungerWrap.style.cssText = 'display: flex; align-items: center; gap: 4px; min-width: 90px;';
-      const hungerLabel = document.createElement('span');
-      hungerLabel.style.cssText = 'font-size: 10px; color: #777; width: 14px;';
+      // Hunger mini-bar
       const hungerPct = civ.hunger / 100;
       const hungerColor = hungerPct < 0.5 ? '#44aa44' : hungerPct < 0.8 ? '#ddaa22' : '#cc3333';
-      hungerLabel.textContent = 'H';
-      hungerLabel.title = 'Hunger';
-      hungerWrap.appendChild(hungerLabel);
-      const hungerContainer = document.createElement('div');
-      hungerContainer.style.cssText = 'flex: 1; height: 8px; background: #222; border-radius: 3px; overflow: hidden;';
+      const hungerWrap = document.createElement('div');
+      hungerWrap.style.cssText = 'display: flex; align-items: center; gap: 3px; min-width: 60px;';
+      hungerWrap.title = `Hunger: ${Math.round(civ.hunger)}%`;
+      const hungerBar = document.createElement('div');
+      hungerBar.style.cssText = 'flex: 1; height: 6px; background: #222; border-radius: 3px; overflow: hidden;';
       const hungerFill = document.createElement('div');
       hungerFill.style.cssText = `width: ${hungerPct * 100}%; height: 100%; background: ${hungerColor}; border-radius: 3px;`;
-      hungerContainer.appendChild(hungerFill);
-      hungerWrap.appendChild(hungerContainer);
-      const hungerText = document.createElement('span');
-      hungerText.style.cssText = `font-size: 10px; color: ${hungerColor}; min-width: 28px; text-align: right;`;
-      hungerText.textContent = `${Math.round(civ.hunger)}%`;
-      hungerWrap.appendChild(hungerText);
-      hungerWrap.title = `Hunger: ${Math.round(civ.hunger)}%`;
+      hungerBar.appendChild(hungerFill);
+      hungerWrap.appendChild(hungerBar);
+      const hungerNum = document.createElement('span');
+      hungerNum.style.cssText = `font-size: 9px; color: ${hungerColor}; min-width: 22px; text-align: right;`;
+      hungerNum.textContent = `${Math.round(civ.hunger)}%`;
+      hungerWrap.appendChild(hungerNum);
       row.appendChild(hungerWrap);
 
       // Assignment
       const assignEl = document.createElement('span');
-      assignEl.style.cssText = `flex: 1; text-align: right; font-size: 11px; color: ${THEME.textSecondary};`;
-      if (civ.assignedBuildingType) {
-        assignEl.textContent = BUILDING_LABELS[civ.assignedBuildingType] ?? civ.assignedBuildingType;
-        assignEl.style.color = '#7ac';
-      } else {
-        assignEl.textContent = 'Unassigned';
-      }
+      assignEl.style.cssText = `flex: 1; text-align: right; font-size: 10px; color: ${civ.assignedBuildingType ? '#7ac' : THEME.textMuted};`;
+      assignEl.textContent = civ.assignedBuildingType
+        ? (BUILDING_LABELS[civ.assignedBuildingType] ?? civ.assignedBuildingType)
+        : 'Idle';
       row.appendChild(assignEl);
 
-      // Unassign button (if assigned)
+      // Unassign button
       if (civ.assignedBuildingId !== null && !civ.downed) {
         const unBtn = document.createElement('button');
-        unBtn.style.cssText = 'background: rgba(200,50,50,0.3); border: 1px solid rgba(200,50,50,0.5); color: #e88; border-radius: 3px; padding: 2px 6px; font-size: 10px; cursor: pointer;';
+        unBtn.style.cssText = 'background: rgba(200,50,50,0.25); border: 1px solid rgba(200,50,50,0.4); color: #e88; border-radius: 3px; padding: 1px 5px; font-size: 9px; cursor: pointer; line-height: 1.2;';
         unBtn.textContent = 'X';
         unBtn.title = 'Unassign';
         unBtn.addEventListener('click', (e) => {
@@ -228,7 +292,7 @@ export class CivilianPanelOverlay {
         row.appendChild(unBtn);
       }
 
-      // Click to select civilian for assignment
+      // Click to select
       if (!civ.downed) {
         row.addEventListener('click', () => {
           this.selectedCivilianId = this.selectedCivilianId === civ.entityId ? null : civ.entityId;
@@ -236,26 +300,25 @@ export class CivilianPanelOverlay {
         });
       }
 
-      this.listEl.appendChild(row);
+      this.contentEl.appendChild(row);
     }
+  }
 
-    // ── Buildings list ───────────────────────────────────────────────────
-    this.buildingsEl.innerHTML = '';
+  // ── Buildings Tab ──────────────────────────────────────────────────────────
 
+  private buildBuildingsList(): void {
     if (this.buildings.length === 0) {
-      const empty = document.createElement('div');
-      empty.style.cssText = `text-align: center; color: ${THEME.textMuted}; padding: 4px; font-size: 12px;`;
-      empty.textContent = 'No production buildings placed.';
-      this.buildingsEl.appendChild(empty);
+      this.contentEl.appendChild(this.emptyMsg('No production buildings placed.'));
+      return;
     }
 
     for (const bldg of this.buildings) {
-      const row = document.createElement('div');
       const canAssign = this.selectedCivilianId !== null && bldg.workerName === null;
-      row.style.cssText = `display: flex; align-items: center; gap: 8px; padding: 4px 10px; background: ${THEME.surfaceBg}; border: 1px solid ${THEME.borderSubtle}; border-radius: ${THEME.radiusSm}; font-size: 12px;${canAssign ? ' cursor: pointer;' : ''}`;
+      const row = document.createElement('div');
+      row.style.cssText = `display: flex; align-items: center; gap: 8px; padding: 5px 8px; background: ${THEME.surfaceBg}; border: 1px solid ${THEME.borderSubtle}; border-radius: ${THEME.radiusSm}; font-size: 12px;${canAssign ? ' cursor: pointer;' : ''}`;
 
       if (canAssign) {
-        row.addEventListener('mouseenter', () => { row.style.borderColor = 'rgba(68, 204, 68, 0.4)'; row.style.background = 'rgba(68, 204, 68, 0.08)'; });
+        row.addEventListener('mouseenter', () => { row.style.borderColor = 'rgba(68, 204, 68, 0.4)'; row.style.background = 'rgba(68, 204, 68, 0.06)'; });
         row.addEventListener('mouseleave', () => { row.style.borderColor = THEME.borderSubtle; row.style.background = THEME.surfaceBg; });
         row.addEventListener('click', () => {
           if (this.selectedCivilianId !== null) {
@@ -265,9 +328,15 @@ export class CivilianPanelOverlay {
         });
       }
 
+      // Building icon dot
+      const dot = document.createElement('span');
+      dot.style.cssText = 'width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;';
+      dot.style.background = bldg.workerName ? '#44cc44' : '#555';
+      row.appendChild(dot);
+
       // Building type
       const typeEl = document.createElement('span');
-      typeEl.style.cssText = 'min-width: 90px; color: #aac;';
+      typeEl.style.cssText = 'min-width: 90px; color: #aac; font-weight: bold;';
       typeEl.textContent = BUILDING_LABELS[bldg.buildingType] ?? bldg.buildingType;
       row.appendChild(typeEl);
 
@@ -278,22 +347,40 @@ export class CivilianPanelOverlay {
         workerEl.style.color = THEME.accent;
         workerEl.textContent = bldg.workerName;
       } else {
-        workerEl.style.color = THEME.textMuted;
+        workerEl.style.color = canAssign ? '#44cc44' : THEME.textMuted;
         workerEl.textContent = canAssign ? 'Click to assign' : 'No worker';
       }
       row.appendChild(workerEl);
 
-      this.buildingsEl.appendChild(row);
+      this.contentEl.appendChild(row);
     }
+  }
 
-    // Update hint
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
+  private updateHint(): void {
     if (this.selectedCivilianId !== null) {
       const civ = this.civilians.find(c => c.entityId === this.selectedCivilianId);
-      this.hintEl.textContent = civ ? `Selected: ${civ.name} - click a building to assign` : '';
+      if (this.activeTab === 'civilians') {
+        this.hintEl.textContent = civ ? `Selected: ${civ.name} - switch to Buildings tab to assign` : '';
+      } else {
+        this.hintEl.textContent = civ ? `Selected: ${civ.name} - click a building to assign` : '';
+      }
       this.hintEl.style.color = THEME.accent;
     } else {
-      this.hintEl.textContent = 'Click a civilian, then a building to assign. Press C or ESC to close.';
+      this.hintEl.textContent = 'Click a civilian, then a building to assign. C / ESC to close.';
       this.hintEl.style.color = THEME.textMuted;
     }
   }
+
+  private emptyMsg(text: string): HTMLElement {
+    const el = document.createElement('div');
+    el.style.cssText = `text-align: center; color: ${THEME.textMuted}; padding: 20px 8px; font-size: 12px;`;
+    el.textContent = text;
+    return el;
+  }
+}
+
+function esc(str: string): string {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

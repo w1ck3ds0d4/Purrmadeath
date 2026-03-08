@@ -319,6 +319,10 @@ export class GameSession {
       world: this.world,
       players: this.players,
       generator: this.generator,
+      getCardMaxHpMod: (clientId) => {
+        const buffs = this.cards.getBuffs(clientId);
+        return buffs.maxHpBonus - (this.cards.debuffs.playerMaxHpPenalty ?? 0);
+      },
     });
 
     this.buildings = createBuildingSystem({
@@ -463,6 +467,7 @@ export class GameSession {
       offerTimeout: GameSession.CARD_OFFER_TIMEOUT,
       setPaused: (v) => this.setPaused(v),
       creditResources: (eid, res, amt, send) => this.creditResources(eid, res, amt, send),
+      getSkillMaxHpBonus: (clientId) => this.skills.getSkillBuffs(clientId).maxHpBonus,
     });
 
     this.saveManager = createSaveManager({
@@ -683,7 +688,10 @@ export class GameSession {
    * - Finds one canonical spawn point and places all players offset from it.
    * - Broadcasts SESSION_STARTING then SNAPSHOT to all clients.
    */
-  start(send: (client: ConnectedClient, msg: object) => void): void {
+  start(
+    send: (client: ConnectedClient, msg: object) => void,
+    playerBuffs?: Map<string, { displayName: string; reward: string; medalColor: string }[]>,
+  ): void {
     if (this.phase !== 'lobby') return;
     this.phase = 'playing';
     const save = this.loadedSave;
@@ -719,6 +727,12 @@ export class GameSession {
         { hp: cs.hp, speed: cs.speed, defense: cs.defense, stamina: cs.stamina, classType: player.playerClass },
       );
       this.playerEntityIds.add(player.entityId);
+
+      // Apply permanent achievement buff bonuses to entity stats
+      const buffs = playerBuffs?.get(player.client.id);
+      if (buffs && player.entityId !== null) {
+        this.applyBuffBonuses(player.entityId, buffs);
+      }
     }
 
     // Spawn campfire at the centre of the spawn area
@@ -914,6 +928,11 @@ export class GameSession {
           // Restore card buffs
           if (savedP.cardBuffs) {
             this.cards.restore(p.client.id, savedP.cardBuffs, savedP.pickedCards ?? []);
+            // Recalculate hp.max now that card bonuses are available
+            this.skills.applyPassivesToEntity(p.client.id);
+            // Restore saved current HP (applyPassivesToEntity may have clamped it)
+            const hpAfter = this.world.getComponent<HealthComponent>(p.entityId, C.Health);
+            if (hpAfter) hpAfter.current = Math.min(savedP.hp, hpAfter.max);
           }
           // Restore potion state
           if (savedP.potionState) {
@@ -1195,6 +1214,32 @@ export class GameSession {
       }
     }
     return true;
+  }
+
+  /** Apply permanent achievement buff bonuses (from meta progression) to a player entity. */
+  private applyBuffBonuses(entityId: number, buffs: { reward: string }[]): void {
+    for (const buff of buffs) {
+      const match = buff.reward.match(/^([+-]?\d+)(%?)\s+(.+)$/);
+      if (!match) continue;
+      const value = parseInt(match[1], 10);
+      const isPercent = match[2] === '%';
+      const stat = match[3];
+
+      if (stat === 'Max HP') {
+        const hp = this.world.getComponent<HealthComponent>(entityId, C.Health);
+        if (hp) { hp.max += value; hp.current += value; }
+      } else if (stat === 'Defense') {
+        const def = this.world.getComponent<{ flat: number; percent: number }>(entityId, C.Defense);
+        if (def) def.flat += value;
+      } else if (stat === 'Speed' && isPercent) {
+        const spd = this.world.getComponent<{ base: number; multiplier: number }>(entityId, C.Speed);
+        if (spd) spd.multiplier += value / 100;
+      } else if (stat === 'Max Stamina') {
+        const stam = this.world.getComponent<{ current: number; max: number }>(entityId, C.Stamina);
+        if (stam) { stam.max += value; stam.current += value; }
+      }
+      // Crit Chance, Gather Speed, Attack Speed stored in card system buffs (applied at use time)
+    }
   }
 
   /** Create a building entity at (x, y). Returns the entity ID. */
@@ -1509,7 +1554,12 @@ export class GameSession {
           if (spd) spd.multiplier = buffs.speedMultiplier;
         } else if (e.type === 'stat_buff' && e.stat === 'maxHp') {
           const hp = this.world.getComponent<import('@shared/components').HealthComponent>(recipient!.entityId!, C.Health);
-          if (hp) { hp.max = PLAYER_MAX_HEALTH + buffs.maxHpBonus; hp.current = Math.min(hp.current + e.value, hp.max); }
+          if (hp) {
+            const baseHp = CLASS_STATS[recipient!.playerClass].hp;
+            const skillMod = this.skills.getSkillBuffs(recipient!.client.id).maxHpBonus;
+            hp.max = Math.max(1, baseHp + skillMod + buffs.maxHpBonus - this.cards.debuffs.playerMaxHpPenalty);
+            hp.current = Math.min(hp.current + e.value, hp.max);
+          }
         } else if (e.type === 'resource') {
           this.creditResources(recipient!.entityId!, e.resource, e.amount, send);
         } else if (e.type === 'multi') {
@@ -1580,9 +1630,10 @@ export class GameSession {
       const lastNotif = this.inventoryFullNotifTime.get(target.client.id) ?? 0;
       if (now - lastNotif > 3000) {
         this.inventoryFullNotifTime.set(target.client.id, now);
+        const label = itemType.charAt(0).toUpperCase() + itemType.slice(1);
         send(target.client, {
           type: MessageType.NOTIFICATION,
-          text: 'Inventory full!',
+          text: `${label} inventory full!`,
           level: 'warning',
         });
       }
@@ -1918,6 +1969,20 @@ export class GameSession {
         this.heroes.sendTavernState(bid, clientId, send);
         return;
       }
+    }
+
+    // Check for nearby warehouse (E-key deposits resources)
+    if (this.buildings.depositPlayerToWarehouse(player.entityId, send)) {
+      const res = this.world.getComponent<ResourcesComponent>(player.entityId, C.Resources);
+      if (res) {
+        send(player.client, {
+          type: MessageType.RESOURCE_UPDATE,
+          wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold, food: res.food, weapons: res.weapons,
+        });
+        this.buildings.broadcastWarehouseUpdate(send);
+        send(player.client, { type: MessageType.NOTIFICATION, text: 'Resources stored!', level: 'info' });
+      }
+      return;
     }
 
     // Find nearest non-auto-pickup ItemDrop within interact radius
@@ -2479,8 +2544,9 @@ export class GameSession {
     // Civilian spawn on wave clear
     this.civilians.onWaveCleared(wave, send);
 
-    // Auto-save after wave clear
+    // Auto-save after wave clear (flush run stats first for crash safety)
     if (this.onSave) {
+      this.flushRunStats();
       const saveData = this.serializeSave();
       this.onSave(saveData);
       const savedMsg: import('@shared/protocol').GameSavedMessage = {
@@ -2651,7 +2717,12 @@ export class GameSession {
         if (spd) spd.multiplier = buffs.speedMultiplier;
       } else if (e.type === 'stat_buff' && e.stat === 'maxHp') {
         const hp = this.world.getComponent<import('@shared/components').HealthComponent>(player.entityId!, C.Health);
-        if (hp) { hp.max = PLAYER_MAX_HEALTH + buffs.maxHpBonus; hp.current = Math.min(hp.current + e.value, hp.max); }
+        if (hp) {
+          const baseHp = CLASS_STATS[player.playerClass].hp;
+          const skillMod = this.skills.getSkillBuffs(clientId).maxHpBonus;
+          hp.max = Math.max(1, baseHp + skillMod + buffs.maxHpBonus - this.cards.debuffs.playerMaxHpPenalty);
+          hp.current = Math.min(hp.current + e.value, hp.max);
+        }
       } else if (e.type === 'resource') {
         this.creditResources(player.entityId!, e.resource, e.amount, send);
       } else if (e.type === 'trap_player' && e.stat === 'speed') {
@@ -2769,6 +2840,7 @@ export class GameSession {
       };
       for (const p of this.players.values()) send(p.client, stateMsg);
     } else {
+      // Always broadcast tally (even at 0 votes) so clients can hide the banner
       this.broadcastVoteTally(send);
     }
   }

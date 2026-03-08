@@ -39,6 +39,31 @@ export interface RunStats {
   buildingsBuilt: number;
 }
 
+/**
+ * Merge two MetaStats objects together (e.g. syncing local singleplayer stats
+ * with remote server stats). Uses max for cumulative counters to avoid
+ * double-counting, and union for unlocked classes.
+ */
+export function mergeMetaStats(target: MetaStats, source: MetaStats): void {
+  target.totalDamageDealt = Math.max(target.totalDamageDealt, source.totalDamageDealt);
+  target.resourcesGathered.wood = Math.max(target.resourcesGathered.wood, source.resourcesGathered.wood);
+  target.resourcesGathered.stone = Math.max(target.resourcesGathered.stone, source.resourcesGathered.stone);
+  target.resourcesGathered.iron = Math.max(target.resourcesGathered.iron, source.resourcesGathered.iron);
+  target.resourcesGathered.diamond = Math.max(target.resourcesGathered.diamond, source.resourcesGathered.diamond);
+  target.totalEnemiesKilled = Math.max(target.totalEnemiesKilled, source.totalEnemiesKilled);
+  for (const [type, count] of Object.entries(source.killsByType)) {
+    target.killsByType[type] = Math.max(target.killsByType[type] ?? 0, count);
+  }
+  target.totalWavesSurvived = Math.max(target.totalWavesSurvived, source.totalWavesSurvived);
+  target.highestWaveSurvived = Math.max(target.highestWaveSurvived, source.highestWaveSurvived);
+  target.totalTimePlayed = Math.max(target.totalTimePlayed, source.totalTimePlayed);
+  target.totalBuildingsBuilt = Math.max(target.totalBuildingsBuilt, source.totalBuildingsBuilt);
+  target.totalRuns = Math.max(target.totalRuns, source.totalRuns);
+  // Union unlocked classes
+  const allClasses = new Set([...target.unlockedClasses, ...source.unlockedClasses]);
+  target.unlockedClasses = [...allClasses];
+}
+
 /** Merge a single run's stats into the persistent MetaStats. */
 export function mergeRunStats(meta: MetaStats, run: RunStats): void {
   meta.totalDamageDealt += run.damageDealt;

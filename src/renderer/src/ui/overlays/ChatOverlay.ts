@@ -1,9 +1,9 @@
 import { PLAYER_COLORS } from '@shared/constants';
 import { THEME } from '../theme';
 
-const IDLE_DELAY_MS = 4_000;
-const FADE_MS = 1_500;
-const MIN_OPACITY = 0.12;
+const IDLE_DELAY_MS = 2_000;
+const FADE_MS = 800;
+const MIN_OPACITY = 0.08;
 const MAX_HISTORY = 50;
 
 type SendHandler = (text: string) => void;
@@ -155,6 +155,10 @@ export class ChatOverlay {
       'outline: none',
     ].join('; ');
 
+    this.inputEl.addEventListener('blur', () => {
+      if (this.active) this.hide();
+    });
+
     this.inputEl.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
@@ -220,16 +224,24 @@ export class ChatOverlay {
     this.panelEl.style.opacity = '1';
     this.inputRowEl.style.display = 'flex';
     this.inputEl.value = '';
-    this.inputEl.focus();
+    this.inputEl.disabled = false;
+    this.inputEl.placeholder = 'Type a message...';
+    this.inputEl.style.opacity = '1';
+    // Delay focus to next frame so the DOM has fully updated
+    requestAnimationFrame(() => this.inputEl.focus());
     this.feedEl.scrollTop = this.feedEl.scrollHeight;
   }
 
   hide(): void {
     if (!this.active) return;
     this.active = false;
-    this.inputRowEl.style.display = 'none';
     this.inputEl.value = '';
     this.inputEl.blur();
+    this.inputEl.disabled = true;
+    this.inputEl.placeholder = 'Press Enter to chat...';
+    this.inputEl.style.opacity = '0.4';
+    // Keep input row visible but disabled
+    this.inputRowEl.style.display = 'flex';
     // Reset idle timer so panel stays visible briefly after closing
     this.idleAge = 0;
     this.panelEl.style.opacity = '1';
@@ -246,6 +258,12 @@ export class ChatOverlay {
       this.history.length = 0;
       this.feedEl.innerHTML = '';
       this.idleAge = 0;
+    } else {
+      // Show input row in disabled state
+      this.inputRowEl.style.display = 'flex';
+      this.inputEl.disabled = true;
+      this.inputEl.placeholder = 'Press Enter to chat...';
+      this.inputEl.style.opacity = '0.4';
     }
   }
 
@@ -267,15 +285,13 @@ export class ChatOverlay {
     }
   }
 
-  /** Tick each frame with dt in seconds. Fades the panel when idle. */
+  /** Tick each frame with dt in seconds. Hides the panel after idle delay. */
   update(dt: number): void {
     if (this.active) return;
 
     this.idleAge += dt * 1000;
     if (this.idleAge > IDLE_DELAY_MS) {
-      const fadeProgress = Math.min(1, (this.idleAge - IDLE_DELAY_MS) / FADE_MS);
-      const opacity = 1 - fadeProgress * (1 - MIN_OPACITY);
-      this.panelEl.style.opacity = opacity.toFixed(2);
+      this.panelEl.style.opacity = String(MIN_OPACITY);
     }
   }
 

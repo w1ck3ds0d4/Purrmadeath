@@ -46,6 +46,8 @@ export interface SkillSystemDeps {
   world: World;
   players: Map<string, SessionPlayer>;
   generator: WorldGenerator;
+  /** Returns card-based maxHp bonus and penalty for a player. */
+  getCardMaxHpMod?: (clientId: string) => number;
 }
 
 export function createSkillSystem(deps: SkillSystemDeps) {
@@ -293,12 +295,13 @@ export function createSkillSystem(deps: SkillSystemDeps) {
       def.flat = baseDef + buffs.defenseBonus;
     }
 
-    // Max HP
+    // Max HP (class base + skill bonus + card bonus)
     const hp = deps.world.getComponent<HealthComponent>(eid, C.Health);
     if (hp) {
       const baseHp = CLASS_STATS[player.playerClass].hp;
+      const cardMod = deps.getCardMaxHpMod?.(clientId) ?? 0;
       const oldMax = hp.max;
-      hp.max = baseHp + buffs.maxHpBonus;
+      hp.max = Math.max(1, baseHp + buffs.maxHpBonus + cardMod);
       // Heal proportionally if max increased
       if (hp.max > oldMax) hp.current = Math.min(hp.max, hp.current + (hp.max - oldMax));
     }

@@ -73,7 +73,7 @@ const BUILD_CATEGORIES: BuildCategory[] = [
   { name: 'Production', accent: '#44aa44', buildings: ['lumbermill', 'quarry', 'mine', 'farm', 'workshop'] },
   { name: 'Military',   accent: '#cc8844', buildings: ['training_center'] },
   { name: 'Housing',    accent: '#cc88cc', buildings: ['cat_house'] },
-  { name: 'Utility',    accent: '#4488cc', buildings: ['warehouse', 'storage_shed', 'bridge', 'light_tower', 'healing_shrine', 'repair_station', 'teleporter_pad'] },
+  { name: 'Utility',    accent: '#4488cc', buildings: ['warehouse', 'bridge', 'light_tower', 'healing_shrine', 'repair_station', 'teleporter_pad'] },
   { name: 'Shops',      accent: '#aa66ff', buildings: ['potion_shop', 'tavern'] },
 ];
 
@@ -95,7 +95,6 @@ function injectScrollbarStyles(): void {
 export interface BuildMenuCallbacks {
   onSelect: (buildingType: string) => void;
   onClose: () => void;
-  onSelectMode: () => void;
 }
 
 function titleCase(s: string): string {
@@ -220,33 +219,9 @@ export class BuildMenuOverlay {
     const footer = document.createElement('div');
     footer.style.cssText = `border-top: 1px solid ${THEME.borderSubtle}; padding: 8px 16px 6px; flex-shrink: 0;`;
 
-    const btnRow = document.createElement('div');
-    btnRow.style.cssText = 'display: flex; justify-content: center; margin-bottom: 4px;';
-
-    const selectBtn = document.createElement('div');
-    selectBtn.style.cssText = [
-      'padding: 5px 18px',
-      'font-family: monospace',
-      'font-size: 13px',
-      'font-weight: bold',
-      'cursor: pointer',
-      `border-radius: ${THEME.radiusSm}`,
-      `border: 1px solid ${THEME.accent}66`,
-      `color: ${THEME.accent}`,
-      `background: ${THEME.surfaceBg}`,
-      `transition: background ${THEME.transition}, box-shadow ${THEME.transition}`,
-      'letter-spacing: 0.5px',
-    ].join('; ');
-    selectBtn.textContent = 'Select Building';
-    selectBtn.addEventListener('mouseenter', () => { selectBtn.style.background = THEME.surfaceHover; selectBtn.style.boxShadow = `0 0 10px ${THEME.accentRgba(0.3)}`; });
-    selectBtn.addEventListener('mouseleave', () => { selectBtn.style.background = THEME.surfaceBg; selectBtn.style.boxShadow = 'none'; });
-    selectBtn.addEventListener('click', () => this.callbacks?.onSelectMode());
-    btnRow.appendChild(selectBtn);
-    footer.appendChild(btnRow);
-
     const hint = document.createElement('div');
     hint.style.cssText = `font-family:${THEME.fontMono};font-size:11px;color:${THEME.textDim};text-align:center;`;
-    hint.textContent = 'F upgrade \u00B7 R repair \u00B7 X demolish \u00B7 Scroll rotate \u00B7 B / ESC to close';
+    hint.textContent = 'RMB select building \u00B7 E upgrade \u00B7 R repair \u00B7 X demolish \u00B7 Scroll rotate \u00B7 Q / ESC close';
     footer.appendChild(hint);
 
     panel.appendChild(footer);

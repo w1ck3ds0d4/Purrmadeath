@@ -37,7 +37,7 @@ import { PLAYER_CLASSES, BASE_CLASSES } from '@shared/definitions/ClassDefinitio
 import type { PlayerClass } from '@shared/definitions/ClassDefinitions';
 import { GAME_VERSION, RECONNECT_GRACE_MS } from '@shared/constants';
 import type { MetaStats } from '@shared/definitions/MetaStats';
-import { emptyMetaStats, mergeRunStats } from '@shared/definitions/MetaStats';
+import { emptyMetaStats, mergeMetaStats, mergeRunStats } from '@shared/definitions/MetaStats';
 import { computeUnlockedClasses } from '@shared/definitions/MilestoneDefinitions';
 import { computeCompletedBuffs } from '@shared/definitions/ProgressionDefinitions';
 import type { MetaStatsRequestMessage, CardPickMessage } from '@shared/protocol';
@@ -46,8 +46,8 @@ import type { MetaStatsRequestMessage, CardPickMessage } from '@shared/protocol'
 const SESSION_ACTION_COOLDOWN_MS = 2_000;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const SAVES_DIR = path.join(process.cwd(), 'saves');
-const META_DIR = path.join(process.cwd(), 'metastats');
+const SAVES_DIR = process.env.SAVES_DIR ?? path.join(process.cwd(), 'saves');
+const META_DIR = process.env.METASTATS_DIR ?? path.join(process.cwd(), 'metastats');
 
 /** Pending reconnection: player disconnected mid-game, slot held for a grace period. */
 interface PendingReconnect {
@@ -127,6 +127,7 @@ export class SessionManager {
     socket.on(MessageType.SAVE_SLOTS_REQUEST,    (c) => this.onSaveSlotsRequest(c));
     socket.on(MessageType.SAVE_DELETE,             (c, m) => this.onSaveDelete(c, m as import('@shared/protocol').SaveDeleteMessage));
     socket.on(MessageType.META_STATS_REQUEST,      (c) => this.onMetaStatsRequest(c));
+    socket.on(MessageType.META_STATS_UPLOAD,       (c, m) => this.onMetaStatsUpload(c, m as import('@shared/protocol').MetaStatsUploadMessage));
     socket.on(MessageType.CARD_PICK,               (c, m) => this.session?.handleCardPick(c.id, m as CardPickMessage, (cl, msg) => this.socket.send(cl, msg)));
     socket.on(MessageType.SKILL_ALLOCATE,          (c, m) => this.session?.handleSkillAllocate(c.id, m as SkillAllocateMessage, (cl, msg) => this.socket.send(cl, msg)));
     socket.on(MessageType.ABILITY_SLOT_ASSIGN,     (c, m) => this.session?.handleSlotAssign(c.id, m as import('@shared/protocol').AbilitySlotAssignMessage, (cl, msg) => this.socket.send(cl, msg)));
@@ -501,7 +502,12 @@ export class SessionManager {
     }
 
     console.log(`[Session] Game starting - ${this.session.playerCount} player(s)`);
-    this.session.start((c, msg) => this.socket.send(c, msg));
+    // Collect buff data for each player to apply at spawn
+    const playerBuffs = new Map<string, { displayName: string; reward: string; medalColor: string }[]>();
+    for (const player of this.session.getPlayers()) {
+      playerBuffs.set(player.client.id, this.getCompletedBuffs(player.client.id));
+    }
+    this.session.start((c, msg) => this.socket.send(c, msg), playerBuffs);
   }
 
   private onInput(client: ConnectedClient, msg: InputMessage): void {
@@ -674,6 +680,18 @@ export class SessionManager {
       type: MessageType.META_STATS_RESPONSE,
       stats,
     });
+  }
+
+  private onMetaStatsUpload(client: ConnectedClient, msg: import('@shared/protocol').MetaStatsUploadMessage): void {
+    const playerId = this.clientPlayerIds.get(client.id);
+    if (!playerId) return;
+    const existing = this.metaStats.get(playerId) ?? emptyMetaStats();
+    mergeMetaStats(existing, msg.stats);
+    this.metaStats.set(playerId, existing);
+    this.writeMetaStatsToDisk(playerId, existing);
+    console.log(`[SessionManager] Synced uploaded meta stats for ${playerId}`);
+    // Send back the merged result so the client has the authoritative copy
+    this.socket.send(client, { type: MessageType.META_STATS_RESPONSE, stats: existing });
   }
 
   private onSaveDelete(client: ConnectedClient, msg: import('@shared/protocol').SaveDeleteMessage): void {

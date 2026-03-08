@@ -27,32 +27,32 @@ export interface WorldEventDef {
 export const WORLD_EVENTS: Record<WorldEventId, WorldEventDef> = {
   meteor_shower: {
     id: 'meteor_shower', name: 'Meteor Shower', description: 'Random AOE damage zones',
-    duration: 999, minWave: 5, weight: 1.0,
+    duration: 150, minWave: 5, weight: 1.0,
     banner: 'METEOR SHOWER INCOMING',
   },
   blood_moon: {
     id: 'blood_moon', name: 'Blood Moon', description: 'Enemies deal +25% damage',
-    duration: 999, minWave: 6, weight: 0.8,
+    duration: 150, minWave: 6, weight: 0.8,
     banner: 'BLOOD MOON RISES',
   },
   earthquake: {
     id: 'earthquake', name: 'Earthquake', description: 'Quakes every 30s, damages buildings',
-    duration: 999, minWave: 7, weight: 0.7,
+    duration: 150, minWave: 7, weight: 0.7,
     banner: 'EARTHQUAKE!',
   },
   resource_boom: {
     id: 'resource_boom', name: 'Resource Boom', description: '3x production all day',
-    duration: 999, minWave: 2, weight: 1.0,
+    duration: 150, minWave: 2, weight: 1.0,
     banner: 'RESOURCE BOOM!',
   },
   portal_surge: {
     id: 'portal_surge', name: 'Portal Surge', description: 'Portals keep spawning through the day',
-    duration: 999, minWave: 5, weight: 0.6,
+    duration: 150, minWave: 5, weight: 0.6,
     banner: 'PORTAL SURGE!',
   },
   solar_eclipse: {
     id: 'solar_eclipse', name: 'Solar Eclipse', description: 'Darkness falls, the undead rise',
-    duration: 999, minWave: 4, weight: 0.5,
+    duration: 150, minWave: 4, weight: 0.5,
     banner: 'THE UNDEAD RISE',
   },
 };

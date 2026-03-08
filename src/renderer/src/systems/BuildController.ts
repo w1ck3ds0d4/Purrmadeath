@@ -7,6 +7,7 @@ import {
   BUILDING_SIZES,
   buildingHalfExtent,
   buildingExtent,
+  buildingExclusionExtent,
   snapBuildingPosition,
   PLAYER_RADIUS,
   ENEMY_RADIUS,
@@ -81,7 +82,7 @@ export function createBuildController(deps: BuildControllerDeps) {
     selectedId = null;
     selectMode = true;
     buildGhost.hide();
-    buildOverlay.update('Click a building to select', {});
+    buildOverlay.update('RMB to select a building', {});
     buildOverlay.show();
   }
 
@@ -142,11 +143,12 @@ export function createBuildController(deps: BuildControllerDeps) {
     if (phase !== 'placing') return;
     const { x: wmx, y: wmy } = deps.getMouseWorld();
 
-    // ── Select mode: click any building to select, then V/G/X ──────────────
+    // ── Select mode: click any building to select, then E/R/X ──────────────
     if (selectMode) {
       buildGhost.hide();
 
-      if (input.isJustPressed(Action.Attack)) {
+      // RMB: select building under cursor (LMB is free for attacking)
+      if (input.isJustPressed(Action.Cancel)) {
         const clicked = findBuildingAt(wmx, wmy);
         if (clicked !== null) {
           selectedId = clicked;
@@ -154,10 +156,13 @@ export function createBuildController(deps: BuildControllerDeps) {
           const hp = world.getComponent<HealthComponent>(clicked, C.Health);
           const hi = isHousingBuilding(bComp.buildingType) ? getHousingInfo() : undefined;
           buildOverlay.updateSelection(bComp.buildingType, bComp.upgradeLevel, deps.combinedResources(), hp?.current, hp?.max, hi);
+        } else {
+          // RMB on empty space: exit build mode entirely
+          exitBuildMode();
         }
       }
 
-      // V/G/X on selected building
+      // E/R/X on selected building
       if (selectedId !== null) {
         if (input.isJustPressed(Action.Upgrade)) deps.send({ type: MessageType.BUILD_UPGRADE, entityId: selectedId });
         if (input.isJustPressed(Action.Repair)) deps.send({ type: MessageType.BUILD_REPAIR, entityId: selectedId });
@@ -166,7 +171,7 @@ export function createBuildController(deps: BuildControllerDeps) {
           if (selBldg && !selBldg.permanent) {
             deps.send({ type: MessageType.BUILD_DEMOLISH, entityId: selectedId });
             selectedId = null;
-            buildOverlay.update('Click a building to select', {});
+            buildOverlay.update('RMB to select a building', {});
           }
         }
       }
@@ -174,7 +179,7 @@ export function createBuildController(deps: BuildControllerDeps) {
       // Deselect if building no longer exists
       if (selectedId !== null && !world.hasEntity(selectedId)) {
         selectedId = null;
-        buildOverlay.update('Click a building to select', {});
+        buildOverlay.update('RMB to select a building', {});
       }
 
       // Live HP update
@@ -183,11 +188,9 @@ export function createBuildController(deps: BuildControllerDeps) {
         if (hp) buildOverlay.updateSelectionHp(hp.current, hp.max);
       }
 
-      // Right-click or ESC: exit select mode back to picker
-      if (input.isJustPressed(Action.Cancel) || input.isJustPressed(Action.Pause)) {
-        selectMode = false;
-        selectedId = null;
-        reopenPicker();
+      // ESC: exit build mode entirely
+      if (input.isJustPressed(Action.Pause)) {
+        exitBuildMode();
       }
       return;
     }
@@ -236,14 +239,17 @@ export function createBuildController(deps: BuildControllerDeps) {
     }
 
     // Overlap check against buildings, resources, players, enemies
+    const newExcl = buildingExclusionExtent(placingType, rotation);
     if (ghostValid) {
       for (const eid of world.query(C.Position, C.Faction)) {
         const ef = world.getComponent<FactionComponent>(eid, C.Faction);
         const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
         if (ef?.type === 'building') {
           const bComp = world.getComponent<BuildingComponent>(eid, C.Building);
-          const existExt = bComp ? buildingExtent(bComp.buildingType, bComp.rotation) : { hx: 16, hy: 16 };
-          if (Math.abs(ep.x - snapX) < ext.hx + existExt.hx && Math.abs(ep.y - snapY) < ext.hy + existExt.hy) { ghostValid = false; break; }
+          const bExcl = bComp ? buildingExclusionExtent(bComp.buildingType, bComp.rotation) : { hx: 16, hy: 16 };
+          const exHx = Math.max(newExcl.hx, bExcl.hx);
+          const exHy = Math.max(newExcl.hy, bExcl.hy);
+          if (Math.abs(ep.x - snapX) < exHx + ext.hx && Math.abs(ep.y - snapY) < exHy + ext.hy) { ghostValid = false; break; }
         } else if (ef?.type === 'resource') {
           if (Math.abs(ep.x - snapX) < ext.hx + RESOURCE_NODE_RADIUS && Math.abs(ep.y - snapY) < ext.hy + RESOURCE_NODE_RADIUS) { ghostValid = false; break; }
         } else if (ef?.type === 'player' || ef?.type === 'enemy') {
@@ -255,7 +261,7 @@ export function createBuildController(deps: BuildControllerDeps) {
 
     buildGhost.update(wmx, wmy, ghostValid, placingType, rotation);
 
-    // Click: select existing building or place new one
+    // LMB: place new building or select existing
     if (input.isJustPressed(Action.Attack)) {
       const clicked = findBuildingAt(wmx, wmy);
       if (clicked !== null) {
@@ -267,6 +273,21 @@ export function createBuildController(deps: BuildControllerDeps) {
       } else if (ghostValid) {
         deps.send({ type: MessageType.BUILD_PLACE, buildingType: placingType, x: wmx, y: wmy, rotation });
         selectedId = null;
+      }
+    }
+
+    // RMB: select existing building for upgrade/repair/demolish
+    if (input.isJustPressed(Action.Cancel)) {
+      const clicked = findBuildingAt(wmx, wmy);
+      if (clicked !== null) {
+        selectedId = clicked;
+        const bComp = world.getComponent<BuildingComponent>(clicked, C.Building)!;
+        const hp = world.getComponent<HealthComponent>(clicked, C.Health);
+        const hi = isHousingBuilding(bComp.buildingType) ? getHousingInfo() : undefined;
+        buildOverlay.updateSelection(bComp.buildingType, bComp.upgradeLevel, deps.combinedResources(), hp?.current, hp?.max, hi);
+      } else {
+        // RMB on empty space: reopen picker
+        reopenPicker();
       }
     }
 
@@ -305,6 +326,7 @@ export function createBuildController(deps: BuildControllerDeps) {
 
   return {
     get phase() { return phase; },
+    get isSelectMode() { return selectMode; },
     get placingType() { return placingType; },
     get selectedId() { return selectedId; },
     set selectedId(v: number | null) { selectedId = v; },
@@ -315,6 +337,7 @@ export function createBuildController(deps: BuildControllerDeps) {
     exitBuildMode,
     reset,
     update,
+    findBuildingAt,
   };
 }
 

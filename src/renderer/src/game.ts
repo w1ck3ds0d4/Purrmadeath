@@ -36,7 +36,7 @@ import { registerMessageHandlers, type GameplayState } from './net/NetworkHandle
 import { createBuildController } from './systems/BuildController';
 
 import { World } from '@shared/ecs/World';
-import { C, PositionComponent, FactionComponent, BuildingComponent, DodgeRollComponent, StaminaComponent, PlayerInputComponent, FacingComponent, GhostStateComponent } from '@shared/components';
+import { C, PositionComponent, FactionComponent, BuildingComponent, DodgeRollComponent, StaminaComponent, PlayerInputComponent, FacingComponent, GhostStateComponent, HealthComponent } from '@shared/components';
 import { FACTION_COLORS, type EnemyFaction } from '@shared/definitions/EnemyVariants';
 
 import { InputManager, Action } from './input/InputManager';
@@ -86,9 +86,10 @@ import { Graphics } from 'pixi.js';
 const BG_PAN_X = 0.05;
 const BG_PAN_Y = 0.025;
 
-// ── Environment: production uses VITE_SERVER_IP, dev defaults to localhost ───
-const serverIp = import.meta.env.VITE_SERVER_IP ?? 'localhost';
+// ── Environment ─────────────────────────────────────────────────────────────
+const remoteServerIp = import.meta.env.VITE_SERVER_IP ?? '';
 const isDev = !import.meta.env.VITE_SERVER_IP;
+const hasRemoteServer = !!remoteServerIp;
 
 // ── Version label ────────────────────────────────────────────────────────────
 const versionEl = document.getElementById('version-label');
@@ -287,6 +288,8 @@ async function main(): Promise<void> {
   let warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0 };
   let warehouseExists = false;
   let handshakeSent = false;
+  let civilianPanelRefreshTimer = 0;
+  let pendingSingleplayerAutoStart = false;
 
   /** Warehouse + player inventory combined (for build cost checks). */
   function combinedResources(): Record<string, number> {
@@ -320,23 +323,21 @@ async function main(): Promise<void> {
   const resourceHUD  = new ResourceHUD();
   const warehouseHUD = new WarehouseHUD();
 
-  // Side-by-side flex container for resource accordions
-  const resourceContainer = document.createElement('div');
-  resourceContainer.id = 'resource-container';
-  resourceContainer.style.cssText = [
+  // Left-side sliding inventory drawer (above chat)
+  const inventoryPanel = document.createElement('div');
+  inventoryPanel.id = 'inventory-panel';
+  inventoryPanel.style.cssText = [
     'position: absolute',
-    'top: 16px',
-    'left: 50%',
-    'transform: translateX(-50%)',
+    'bottom: 310px',
+    'left: 0',
     'z-index: 20',
     'display: none',
-    'align-items: flex-start',
-    'gap: 8px',
-    'pointer-events: none',
   ].join('; ');
-  resourceContainer.appendChild(resourceHUD.el);
-  resourceContainer.appendChild(warehouseHUD.el);
-  document.getElementById('overlay')!.appendChild(resourceContainer);
+  inventoryPanel.appendChild(resourceHUD.el);
+  document.getElementById('overlay')!.appendChild(inventoryPanel);
+
+  // Warehouse HUD kept for state tracking but not added to DOM
+  // Warehouse resources are shown in the build menu sidebar instead
 
   const deathOverlay   = new DeathOverlay();
   const gameOverOverlay = new GameOverOverlay();
@@ -346,6 +347,77 @@ async function main(): Promise<void> {
   });
 
   const chatOverlay = new ChatOverlay();
+
+  // Low HP vignette overlay
+  const lowHpVignette = document.createElement('div');
+  lowHpVignette.style.cssText = [
+    'position: absolute',
+    'inset: 0',
+    'z-index: 15',
+    'pointer-events: none',
+    'opacity: 0',
+    'transition: opacity 0.3s',
+    'box-shadow: inset 0 0 80px 30px rgba(200, 0, 0, 0.5)',
+  ].join('; ');
+  document.getElementById('overlay')!.appendChild(lowHpVignette);
+
+  // Interaction prompt (floating above player near interactive buildings)
+  const interactPrompt = document.createElement('div');
+  interactPrompt.style.cssText = [
+    'position: absolute',
+    'z-index: 25',
+    'display: none',
+    'font-family: monospace',
+    'font-size: 13px',
+    'color: #fff',
+    'background: rgba(0,0,0,0.7)',
+    'padding: 4px 10px',
+    'border-radius: 4px',
+    'pointer-events: none',
+    'white-space: nowrap',
+    'text-align: center',
+  ].join('; ');
+  document.getElementById('overlay')!.appendChild(interactPrompt);
+
+  // Keybind tutorial panel (below wave timer/sleep button, right side)
+  const keybindPanel = document.createElement('div');
+  keybindPanel.style.cssText = [
+    'position: absolute',
+    'top: 400px',
+    'right: 12px',
+    'z-index: 15',
+    'display: none',
+    'font-family: monospace',
+    'font-size: 10px',
+    'color: #aab',
+    'background: rgba(0,0,0,0.5)',
+    'padding: 6px 12px',
+    'border-radius: 4px',
+    'pointer-events: none',
+    'line-height: 1.5',
+    'width: 220px',
+    'box-sizing: border-box',
+  ].join('; ');
+  keybindPanel.innerHTML = '<div style="text-align:center;margin-bottom:2px"><b style="color:#ccd;font-size:11px;letter-spacing:2px">CONTROLS</b></div>' +
+    [
+      'WASD - Move',
+      'Q - Build Mode',
+      'E - Interact / Upgrade',
+      'R - Repair',
+      'X - Demolish',
+      'K - Skills',
+      'C - Civilians',
+      'Space - Dodge',
+      'Shift - Sprint',
+      'Enter - Chat',
+      'ESC - Pause / Close',
+      'RMB - Select Building',
+      '1-3 - Abilities',
+      '4 - Potion',
+      'F1 - Toggle Controls',
+    ].join('<br>');
+  document.getElementById('overlay')!.appendChild(keybindPanel);
+
   const buildOverlay = new BuildModeOverlay();
   const buildGhost   = new BuildGhostRenderer(tileRenderer.worldContainer);
   const buildMenu    = new BuildMenuOverlay();
@@ -415,10 +487,6 @@ async function main(): Promise<void> {
     onClose: () => {
       exitBuildModeAndCollapse();
     },
-    onSelectMode: () => {
-      buildMenu.hide();
-      buildCtrl.enterSelectMode();
-    },
   });
 
   // Enter key opens chat during gameplay
@@ -428,6 +496,11 @@ async function main(): Promise<void> {
         && !localDowned && !localDead && !localGameOver) {
       e.preventDefault();
       chatOverlay.show();
+    }
+    // F1 toggles controls panel
+    if (e.key === 'F1' && stateMgr.current === GameState.Playing) {
+      e.preventDefault();
+      keybindPanel.style.display = keybindPanel.style.display === 'none' ? 'block' : 'none';
     }
   });
 
@@ -481,6 +554,8 @@ async function main(): Promise<void> {
     discoverSessions: () => Promise<unknown[]>;
     resolveSessionCode: (code: string) => Promise<{ ip: string; port: number } | null>;
     checkForUpdates?: () => void;
+    isLocalServerReady: () => Promise<boolean>;
+    onLocalServerReady: (cb: () => void) => void;
   } }).electronAPI;
 
   // ── State: Menu ─────────────────────────────────────────────────────────────
@@ -489,6 +564,13 @@ async function main(): Promise<void> {
     nightOverlay.hide();
     cancelTargeting();
     menuOverlay.showMenu();
+    // Restore saved display name so the input is pre-filled when returning to menu
+    const restored = loadSavedDisplayName();
+    if (restored) menuOverlay.displayName = restored;
+    pendingSingleplayerAutoStart = false;
+    // Update button states based on connection
+    menuOverlay.setSingleplayerEnabled(!connectedToRemote && transportReady);
+    menuOverlay.setButtonsEnabled(transportReady);
     lobbyOverlay.hide();
     pauseBanner.hide();
     waveHUD.hide();
@@ -542,6 +624,7 @@ async function main(): Promise<void> {
     gameOverOverlay.hide();
     chatOverlay.setActive(false);
     minimap.setVisible(false);
+    keybindPanel.style.display = 'none';
     debug.hide();
     resourceHUD.setResources(0, 0, 0, 0, 0, 0);
     resourceHUD.hide();
@@ -550,7 +633,8 @@ async function main(): Promise<void> {
     warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0 };
     warehouseExists = false;
     warehouseHUD.hide();
-    resourceContainer.style.display = 'none';
+    inventoryPanel.style.display = 'none';
+    // warehouse container removed
     // Transport stays alive - don't disconnect
     menuOverlay.setButtonsEnabled(transportReady);
     menuOverlay.setConnectionStatus(transportReady ? 'connected' : 'connecting');
@@ -559,6 +643,7 @@ async function main(): Promise<void> {
   // ── State: Lobby ────────────────────────────────────────────────────────────
   stateMgr.onEnter(GameState.Lobby, () => {
     menuOverlay.hide();
+    lobbyOverlay.setSingleplayer(!connectedToRemote);
     lobbyOverlay.show(currentSessionId, currentSessionCode, isHost);
     lobbyOverlay.updatePlayers(lobbyPlayers);
     hud.setVisible(false);
@@ -575,8 +660,9 @@ async function main(): Promise<void> {
     weaponHotbar.setVisible(true);
     waveHUD.setVisible(true);
     resourceHUD.setVisible(true);
-    resourceContainer.style.display = 'flex';
+    inventoryPanel.style.display = 'block';
     minimap.setVisible(true);
+    keybindPanel.style.display = 'block';
     chatOverlay.setActive(true);
 
     // Clear menu background chunks from the tile renderer
@@ -602,7 +688,9 @@ async function main(): Promise<void> {
   // WebSocket lifecycle (connect, reconnect, heartbeat). Session actions (host,
   // join, leave) are sent over this existing connection.
 
-  const net = new NetworkClient(`ws://${serverIp}:${SERVER_PORT}`);
+  // Default to localhost (embedded local server) - switches to remote for multiplayer
+  const net = new NetworkClient(`ws://localhost:${SERVER_PORT}`);
+  let connectedToRemote = false;
 
   // ── Build controller ──────────────────────────────────────────────────────
   const buildCtrl = createBuildController({
@@ -625,11 +713,9 @@ async function main(): Promise<void> {
   function exitBuildModeAndCollapse(): void {
     buildMenu.hide();
     buildCtrl.exitBuildMode();
-    if (!resourceHUD.isManuallyToggled) {
-      resourceHUD.collapse();
-      warehouseHUD.collapse();
-    }
-    resourceHUD.resetManualToggle();
+    // Warehouse collapses when leaving build mode, but inventory stays as-is
+    warehouseHUD.collapse();
+    warehouseHUD.hide();
   }
 
   // ── Handler state bridge (maps handler reads/writes to local variables) ────
@@ -679,6 +765,7 @@ async function main(): Promise<void> {
     get potionCooldownMax() { return potionCooldownMax; }, set potionCooldownMax(v) { potionCooldownMax = v; },
     get completedBuffs() { return completedBuffs; }, set completedBuffs(v) { completedBuffs = v; },
     get eventVisionMult() { return eventVisionMult; }, set eventVisionMult(v) { eventVisionMult = v; },
+    get pendingSingleplayerAutoStart() { return pendingSingleplayerAutoStart; }, set pendingSingleplayerAutoStart(v) { pendingSingleplayerAutoStart = v; },
   };
 
   registerMessageHandlers(net, handlerState, {
@@ -698,7 +785,7 @@ async function main(): Promise<void> {
   // ── Session action helper ─────────────────────────────────────────────────
 
   function sendHandshakeIfNeeded(displayName: string): void {
-    if (handshakeSent) return;
+    // Always re-send: the eager connect handshake may have used 'Player' before the user typed their name
     net.send({ type: MessageType.HANDSHAKE, displayName, version: GAME_VERSION, playerId: localPlayerId });
     handshakeSent = true;
   }
@@ -720,9 +807,38 @@ async function main(): Promise<void> {
 
   // ── Menu callbacks ────────────────────────────────────────────────────────
   menuOverlay.setCallbacks({
+    onSingleplayer: () => {
+      if (!transportReady) { console.warn('[Game] Local server not ready'); return; }
+      // Ensure we're connected to localhost for singleplayer
+      if (connectedToRemote) {
+        net.reconnectTo(`ws://localhost:${SERVER_PORT}`);
+        return; // Will retry after reconnect
+      }
+      sendHandshakeIfNeeded(menuOverlay.displayName);
+      saveDisplayName(menuOverlay.displayName);
+      saveSlotRequestId++;
+      net.send({ type: MessageType.SAVE_SLOTS_REQUEST });
+      menuOverlay.showSaveSlotPicker(
+        (slot) => {
+          pendingSingleplayerAutoStart = true;
+          joinSession('host', menuOverlay.displayName, undefined, slot);
+        },
+        (slot) => {
+          net.send({ type: MessageType.SAVE_DELETE, slot });
+        },
+      );
+    },
     onHost: () => {
+      // Switch to remote server for online hosting (if available)
+      if (hasRemoteServer && !connectedToRemote) {
+        menuOverlay.setConnectionStatus('connecting');
+        menuOverlay.setButtonsEnabled(false);
+        net.reconnectTo(`ws://${remoteServerIp}:${SERVER_PORT}`);
+        connectedToRemote = true;
+        // User will need to click Host again after reconnect
+        return;
+      }
       if (!transportReady) { console.warn('[Game] Not connected'); return; }
-      // Send handshake (if not yet sent) + request save slots before showing slot picker
       sendHandshakeIfNeeded(menuOverlay.displayName);
       saveSlotRequestId++;
       net.send({ type: MessageType.SAVE_SLOTS_REQUEST });
@@ -731,7 +847,6 @@ async function main(): Promise<void> {
           joinSession('host', menuOverlay.displayName, undefined, slot);
         },
         (slot) => {
-          // Delete save and refresh slot list
           net.send({ type: MessageType.SAVE_DELETE, slot });
         },
       );
@@ -739,15 +854,16 @@ async function main(): Promise<void> {
     onJoin: (value) => {
       if (!value) { console.warn('[Game] Enter an invite code first'); return; }
 
-      // Dev-mode: if the input looks like an IP, reconnect transport to that IP
-      if (isDev && /[\d.].*:|\d+\.\d+/.test(value)) {
+      // If input looks like an IP, reconnect transport to that IP
+      if (/[\d.].*:|\d+\.\d+/.test(value)) {
         const ip = value.includes(':') ? value.split(':')[0] : value;
         net.reconnectTo(`ws://${ip}:${SERVER_PORT}`);
+        connectedToRemote = true;
         return;
       }
 
-      // LAN code resolution via Electron IPC (dev only)
-      const isLanCode = isDev && electronAPI && /^[A-Za-z]{4}$/.test(value);
+      // LAN code resolution via Electron IPC
+      const isLanCode = electronAPI && /^[A-Za-z]{4}$/.test(value);
       if (isLanCode) {
         void (async () => {
           const resolved = await electronAPI!.resolveSessionCode(value.toUpperCase());
@@ -756,9 +872,17 @@ async function main(): Promise<void> {
             return;
           }
           net.reconnectTo(`ws://${resolved.ip}:${SERVER_PORT}`);
+          connectedToRemote = true;
         })();
       } else {
-        // Production (or non-LAN): send invite code directly to the server
+        // Switch to remote server for joining if needed
+        if (hasRemoteServer && !connectedToRemote) {
+          menuOverlay.setConnectionStatus('connecting');
+          net.reconnectTo(`ws://${remoteServerIp}:${SERVER_PORT}`);
+          connectedToRemote = true;
+          // After reconnect, user retries join
+          return;
+        }
         joinSession('join', menuOverlay.displayName, value.toUpperCase());
       }
     },
@@ -766,6 +890,11 @@ async function main(): Promise<void> {
     onQuitToMenu: () => {
       net.send({ type: MessageType.SESSION_LEAVE });
       stateMgr.transition(GameState.Menu);
+      // Switch back to localhost after leaving multiplayer
+      if (connectedToRemote) {
+        connectedToRemote = false;
+        net.reconnectTo(`ws://localhost:${SERVER_PORT}`);
+      }
     },
     onStats: () => {
       net.send({ type: MessageType.META_STATS_REQUEST });
@@ -790,6 +919,19 @@ async function main(): Promise<void> {
 
   // ── Start transport + show menu ────────────────────────────────────────────
   net.connect();
+  // Singleplayer starts disabled until local server is ready
+  menuOverlay.setSingleplayerEnabled(false);
+  // Host/Join start disabled (need remote connection, which happens on-demand)
+  menuOverlay.setButtonsEnabled(false);
+  // Check if local server is already ready
+  if (electronAPI) {
+    electronAPI.isLocalServerReady().then((ready: boolean) => {
+      if (ready) menuOverlay.setSingleplayerEnabled(true);
+    });
+    electronAPI.onLocalServerReady(() => {
+      menuOverlay.setSingleplayerEnabled(true);
+    });
+  }
   stateMgr.transition(GameState.Menu);
 
   // ── Game loop ──────────────────────────────────────────────────────────────
@@ -797,9 +939,11 @@ async function main(): Promise<void> {
     const dt    = Math.min(ticker.deltaMS / 1000, 0.05); // cap at 50ms to reduce prediction divergence
     const state = stateMgr.current;
 
-    // ESC: close overlays / build mode first, then check targeting/skill tree (in Playing block), otherwise pause
+    // ESC: close chat/overlays first, then build mode, then pause
     if (input.isJustPressed(Action.Pause)) {
-      if (trainingOverlay.isVisible && state === GameState.Playing) {
+      if (chatOverlay.isOpen && state === GameState.Playing) {
+        chatOverlay.hide();
+      } else if (trainingOverlay.isVisible && state === GameState.Playing) {
         trainingOverlay.hide();
       } else if (potionShopOverlay.isVisible && state === GameState.Playing) {
         potionShopOverlay.hide();
@@ -834,7 +978,8 @@ async function main(): Promise<void> {
           hud.setVisible(false);
           waveHUD.setVisible(false);
           minimap.setVisible(false);
-          resourceContainer.style.display = 'none';
+          inventoryPanel.style.display = 'none';
+          // warehouse container removed
           coordsEl.style.display = 'none';
           skillTree.show(selectedClass, skillAllocated, skillPoints, (nodeId) => {
             net.send({ type: MessageType.SKILL_ALLOCATE, nodeId });
@@ -843,7 +988,7 @@ async function main(): Promise<void> {
             hud.setVisible(true);
             waveHUD.setVisible(true);
             minimap.setVisible(true);
-            resourceContainer.style.display = 'flex';
+            inventoryPanel.style.display = 'block';
             coordsEl.style.display = 'block';
           }, slotAssignments, (slot, abilityId) => {
             net.send({ type: MessageType.ABILITY_SLOT_ASSIGN, slot: slot as 0 | 1 | 2, abilityId });
@@ -855,11 +1000,21 @@ async function main(): Promise<void> {
         if (civilianPanel.isVisible) civilianPanel.hide();
         else if (!localDowned && !localDead && !localGameOver && !cardPicker.isVisible) {
           net.send({ type: MessageType.CIVILIAN_PANEL_REQUEST });
+          civilianPanelRefreshTimer = 0;
         }
       }
-      // ESC: cancel targeting first, then close overlays, then pause
+      // Periodic refresh for civilian panel while visible
+      if (civilianPanel.isVisible) {
+        civilianPanelRefreshTimer += dt;
+        if (civilianPanelRefreshTimer >= 1.0) {
+          civilianPanelRefreshTimer = 0;
+          net.send({ type: MessageType.CIVILIAN_PANEL_REQUEST });
+        }
+      }
+      // ESC: close chat first, then cancel targeting, then close overlays, then pause
       if (input.isJustPressed(Action.Pause)) {
-        if (targetingSlot >= 0) cancelTargeting();
+        if (chatOverlay.isOpen) { chatOverlay.hide(); }
+        else if (targetingSlot >= 0) cancelTargeting();
         else if (skillTree.isVisible) skillTree.hide();
         else if (buildMenu.isVisible || buildCtrl.phase !== 'inactive') {
           if (buildCtrl.phase === 'placing') { buildOverlay.hide(); buildGhost.hide(); }
@@ -918,7 +1073,6 @@ async function main(): Promise<void> {
       }
       eventRoulette.update(dt);
       cardToast.update(dt);
-      notificationToast.update(dt);
       chatOverlay.update(dt);
 
       // Tick local dodge roll timer
@@ -954,12 +1108,30 @@ async function main(): Promise<void> {
           if (targetingSlot >= 0) cancelTargeting();
           buildCtrl.openPicker();
           buildMenu.show(combinedResources());
+          // Show warehouse HUD when entering build mode
+          if (warehouseExists) {
+            // warehouse container removed
+            warehouseHUD.show();
+          }
         }
       }
 
-      // Right-click: cancel build placement
-      if (buildCtrl.phase === 'placing' && input.isJustPressed(Action.Cancel)) {
-        exitBuildModeAndCollapse();
+      // RMB: select building from world (works in any build phase or even outside build mode)
+      if (input.isJustPressed(Action.Cancel) && pos && canAct) {
+        if (buildCtrl.phase === 'picker') {
+          // In picker phase: hide menu, enter select mode
+          buildMenu.hide();
+          buildCtrl.enterSelectMode();
+        } else if (buildCtrl.phase === 'inactive') {
+          // Outside build mode: only enter select mode if clicking ON a building
+          const { width, height } = renderer.screen;
+          const wmx = camera.viewX + (mouseX - width / 2) / camera.zoom;
+          const wmy = camera.viewY + (mouseY - height / 2) / camera.zoom;
+          if (buildCtrl.findBuildingAt(wmx, wmy) !== null) {
+            buildCtrl.enterSelectMode();
+            buildOverlay.show();
+          }
+        }
       }
 
       // Build ghost update + placement + selection + demolish + upgrade + repair
@@ -974,7 +1146,7 @@ async function main(): Promise<void> {
       const hasHoldAttack = cardAbilities.includes('hold_attack');
       const holdAttackCooldown = 0.1; // 10 attacks per second when holding
       const attackInput = hasHoldAttack ? input.isHeld(Action.Attack) : input.isJustPressed(Action.Attack);
-      if (canAct && buildCtrl.phase === 'inactive' && targetingSlot < 0 && attackInput && localFacing !== null && pos && attackCooldown <= TICK_MS / 1000) {
+      if (canAct && (buildCtrl.phase === 'inactive' || buildCtrl.isSelectMode) && targetingSlot < 0 && attackInput && localFacing !== null && pos && attackCooldown <= TICK_MS / 1000) {
         attackCooldown = hasHoldAttack ? Math.max(classCooldown, holdAttackCooldown) : classCooldown;
         net.send({ type: MessageType.ATTACK, attackType: classAttackType, facing: localFacing, x: pos.x, y: pos.y, t: performance.now() });
         if (classAttackType === 'melee') {
@@ -1074,7 +1246,7 @@ async function main(): Promise<void> {
       }
 
       // 1/2/3: enter targeting or instant-cast
-      if (canAct && buildCtrl.phase === 'inactive' && localFacing !== null && pos) {
+      if (canAct && (buildCtrl.phase === 'inactive' || buildCtrl.isSelectMode) && localFacing !== null && pos) {
         const abilityKeys = [Action.Skill1, Action.Skill2, Action.Skill3] as const;
         for (let ai = 0; ai < 3; ai++) {
           if (input.isJustPressed(abilityKeys[ai]) && activeAbilities[ai] && abilityCooldowns[ai] <= 0.05) {
@@ -1179,7 +1351,8 @@ async function main(): Promise<void> {
       }
 
       playerRenderer.selectedBuildingId = buildCtrl.selectedId;
-      playerRenderer.update(world, localEntityId, localFacing, dt, reconciler.smoothX, reconciler.smoothY);
+      const { width: _vw, height: _vh } = renderer.screen;
+      playerRenderer.update(world, localEntityId, localFacing, dt, reconciler.smoothX, reconciler.smoothY, camera.viewX, camera.viewY, camera.zoom, _vw, _vh);
       deathOverlay.update(dt);
 
       // 6. Update and render projectiles
@@ -1306,6 +1479,16 @@ async function main(): Promise<void> {
 
     if (state === GameState.Playing) {
       hud.update(world, width, height);
+      // Low HP vignette
+      if (localEntityId !== null) {
+        const lhp = world.getComponent<HealthComponent>(localEntityId, C.Health);
+        if (lhp && lhp.max > 0) {
+          const ratio = lhp.current / lhp.max;
+          lowHpVignette.style.opacity = ratio < 0.25 ? String(1 - ratio / 0.25) : '0';
+        } else {
+          lowHpVignette.style.opacity = '0';
+        }
+      }
       // Build unlocked slots set from active abilities (slots 0-2 for 1/2/3)
       const unlockedSlots = new Set([4]); // build always
       if (potionEquipped) unlockedSlots.add(3); // potion slot
@@ -1319,11 +1502,48 @@ async function main(): Promise<void> {
         }
       }
       weaponHotbar.update(
-        width, height, buildCtrl.phase !== 'inactive',
+        width, height, buildCtrl.phase !== 'inactive' && !buildCtrl.isSelectMode,
         unlockedSlots, abilityNames, abilityCooldowns, abilityCooldownMaxes, targetingSlot,
         potionEquipped, potionCharges, potionMaxCharges, potionCooldown, potionCooldownMax,
       );
       coordsEl.textContent = `X: ${Math.round(camera.x)}  Y: ${Math.round(camera.y)}`;
+
+      // Interaction prompt: show "Press E to store resources" near warehouse
+      {
+        let showPrompt = false;
+        let promptText = '';
+        let promptWorldX = 0, promptWorldY = 0;
+        if (localEntityId !== null && !localDowned && !localDead && !localGameOver) {
+          const pPos = world.getComponent<PositionComponent>(localEntityId, C.Position);
+          if (pPos) {
+            for (const bid of world.query(C.Building, C.Position)) {
+              const b = world.getComponent<BuildingComponent>(bid, C.Building);
+              if (!b) continue;
+              const bp = world.getComponent<PositionComponent>(bid, C.Position)!;
+              const dx = bp.x - pPos.x, dy = bp.y - pPos.y;
+              if (dx * dx + dy * dy > 80 * 80) continue;
+              if (b.buildingType === 'warehouse') {
+                showPrompt = true;
+                promptText = 'Press E to store resources';
+                promptWorldX = bp.x;
+                promptWorldY = bp.y - 40;
+                break;
+              }
+            }
+          }
+        }
+        if (showPrompt) {
+          const sx = (promptWorldX - camera.viewX) * camera.zoom + width / 2;
+          const sy = (promptWorldY - camera.viewY) * camera.zoom + height / 2;
+          interactPrompt.style.display = 'block';
+          interactPrompt.style.left = `${sx}px`;
+          interactPrompt.style.top = `${sy}px`;
+          interactPrompt.style.transform = 'translate(-50%, -100%)';
+          interactPrompt.textContent = promptText;
+        } else {
+          interactPrompt.style.display = 'none';
+        }
+      }
 
       // Night overlay: gather light sources from players + buildings + portals
       const playerLights: { x: number; y: number; radius: number; color?: number }[] = [];
@@ -1372,6 +1592,13 @@ async function main(): Promise<void> {
           const ex = Math.max(pad, Math.min(width - pad, width / 2 + Math.cos(angle) * (width / 2 - pad)));
           const ey = Math.max(pad, Math.min(height - pad, height / 2 + Math.sin(angle) * (height / 2 - pad)));
           const as = 8;
+          // Dark border outline
+          campfireIndicator.moveTo(ex + Math.cos(angle) * (as + 2), ey + Math.sin(angle) * (as + 2));
+          campfireIndicator.lineTo(ex + Math.cos(angle + 2.4) * (as + 2), ey + Math.sin(angle + 2.4) * (as + 2));
+          campfireIndicator.lineTo(ex + Math.cos(angle - 2.4) * (as + 2), ey + Math.sin(angle - 2.4) * (as + 2));
+          campfireIndicator.closePath();
+          campfireIndicator.fill({ color: 0x1a0a0e, alpha: 0.9 });
+          // Arrow fill
           campfireIndicator.moveTo(ex + Math.cos(angle) * as, ey + Math.sin(angle) * as);
           campfireIndicator.lineTo(ex + Math.cos(angle + 2.4) * as, ey + Math.sin(angle + 2.4) * as);
           campfireIndicator.lineTo(ex + Math.cos(angle - 2.4) * as, ey + Math.sin(angle - 2.4) * as);
@@ -1391,12 +1618,40 @@ async function main(): Promise<void> {
     const tileY = Math.floor(camera.y / TILE_SIZE);
     const ag    = (isPlaying ? generator : menuGenerator) ?? menuGenerator;
     const biome = BIOME_DEFS[ag.getBiome(tileX, tileY)].name;
-    debug.update(dt, { camera, loadedChunks: tileRenderer.loadedChunkCount, entityCount: world.allEntities.size, biome, seed, net: net.stats, server: lastServerStats });
+    // Build game stats for debug overlay
+    let gameStats: import('./ui/debug/DebugOverlay').GameStats | undefined;
+    if (localEntityId !== null) {
+      const dhp = world.getComponent<HealthComponent>(localEntityId, C.Health);
+      const dst = world.getComponent<import('@shared/components').StaminaComponent>(localEntityId, C.Stamina);
+      let civCount = 0;
+      let bldgCount = 0;
+      for (const eid of world.query(C.Faction)) {
+        const f = world.getComponent<FactionComponent>(eid, C.Faction);
+        if (f?.type === 'civilian') civCount++;
+        else if (f?.type === 'building') bldgCount++;
+      }
+      gameStats = {
+        class: selectedClass,
+        hp: dhp?.current ?? 0, maxHp: dhp?.max ?? 0,
+        stamina: dst?.current ?? 0, maxStamina: dst?.max ?? 0,
+        kills: 0, // not tracked client-side yet
+        skillPoints,
+        cards: pickedCardIds.length,
+        civilians: civCount,
+        buildings: bldgCount,
+        dayPhase: waveHUD.currentPhase,
+        darkness: nightOverlay.getDarkness(),
+      };
+    }
+    debug.update(dt, { camera, loadedChunks: tileRenderer.loadedChunkCount, entityCount: world.allEntities.size, biome, seed, net: net.stats, server: lastServerStats, game: gameStats });
+
+    // Notification toast ticks in all states (so save toasts fade out on menu)
+    notificationToast.update(dt);
 
     input.flush();
   });
 
-  console.log(`[Game] Ready - auto-connecting to ${serverIp}:${SERVER_PORT}. Press F4 for debug overlay.`);
+  console.log(`[Game] Ready - connecting to localhost:${SERVER_PORT} (local server). Remote: ${remoteServerIp || 'none'}. Press F4 for debug overlay.`);
 }
 
 main().catch((err) => {

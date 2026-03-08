@@ -19,6 +19,21 @@ export interface ServerStats {
   };
 }
 
+export interface GameStats {
+  class: string;
+  hp: number;
+  maxHp: number;
+  stamina: number;
+  maxStamina: number;
+  kills: number;
+  skillPoints: number;
+  cards: number;
+  civilians: number;
+  buildings: number;
+  dayPhase: string;
+  darkness: number;
+}
+
 export interface DebugInfo {
   camera: Camera;
   loadedChunks: number;
@@ -27,6 +42,7 @@ export interface DebugInfo {
   seed: number;
   net?: NetStats;
   server?: ServerStats;
+  game?: GameStats;
 }
 
 type CheatHandler = (cmd: string, args: string[]) => void;
@@ -64,7 +80,7 @@ export class DebugOverlay {
       'z-index: 40',
       'display: none',
       'flex-direction: column',
-      'max-width: 420px',
+      'width: fit-content',
       'max-height: 50vh',
       'pointer-events: auto',
       'user-select: none',
@@ -124,9 +140,17 @@ export class DebugOverlay {
     this.inputEl.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
-        this.executeCommand(this.inputEl.value.trim());
-        this.inputEl.value = '';
-        this.inputEl.blur();
+        const cmd = this.inputEl.value.trim();
+        if (cmd) {
+          this.executeCommand(cmd);
+          this.inputEl.value = '';
+        } else {
+          // Empty Enter closes console
+          this.hide();
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        this.hide();
       }
       // Stop key events from propagating to game input while typing
       e.stopPropagation();
@@ -194,72 +218,28 @@ export class DebugOverlay {
 
     if (!this.visible || this.activeView === null) return;
 
+    // Two-column layout for 'all' view, single column for others
+    if (this.activeView === 'all') {
+      this.renderAllColumns(info);
+      return;
+    }
+
     const lines: string[] = [];
 
-    if (this.activeView === 'core' || this.activeView === 'all') {
-      const { camera, loadedChunks, entityCount, biome, seed } = info;
-      const chunkPixels = CHUNK_SIZE * TILE_SIZE;
-      const cx = Math.floor(camera.x / chunkPixels);
-      const cy = Math.floor(camera.y / chunkPixels);
-      lines.push(
-        '── Core ──',
-        `FPS:      ${this.fps}`,
-        `Entities: ${entityCount}`,
-        `Pos:      (${Math.round(camera.x)}, ${Math.round(camera.y)})`,
-        `Chunk:    (${cx}, ${cy})`,
-        `Biome:    ${biome}`,
-        `Chunks:   ${loadedChunks}`,
-        `Seed:     ${seed}`,
-      );
+    if (this.activeView === 'core') {
+      lines.push(...this.coreLines(info));
     }
 
-    if (this.activeView === 'net' || this.activeView === 'all') {
-      if (lines.length > 0) lines.push('');
-      if (info.net) {
-        const { rtt, packetLoss, msgsPerSec } = info.net;
-        lines.push(
-          '── Network ──',
-          `RTT:       ${rtt} ms`,
-          `Loss:      ${packetLoss}%`,
-          `Svr msg/s: ${msgsPerSec}`,
-          `Tick rate: ${TICK_RATE} Hz`,
-        );
-      } else {
-        lines.push('── Network ──', 'Not connected');
-      }
+    if (this.activeView === 'net') {
+      lines.push(...this.netLines(info));
     }
 
-    if (this.activeView === 'server' || this.activeView === 'all') {
-      if (lines.length > 0) lines.push('');
-      if (info.server) {
-        const { wave, enemyCount, portalCount, playerCount, tickProfile } = info.server;
-        lines.push(
-          '── Server ──',
-          `Wave:     ${wave}`,
-          `Enemies:  ${enemyCount}`,
-          `Portals:  ${portalCount}`,
-          `Players:  ${playerCount}`,
-        );
-        if (tickProfile) {
-          lines.push(
-            '',
-            '── Tick Profile (ms) ──',
-            `Total:      ${tickProfile.total.toFixed(2)}`,
-            `Enemy:      ${tickProfile.enemy.toFixed(2)}`,
-            `Combat:     ${tickProfile.combat.toFixed(2)}`,
-            `Movement:   ${tickProfile.movement.toFixed(2)}`,
-            `Projectile: ${tickProfile.projectile.toFixed(2)}`,
-            `Buildings:  ${tickProfile.buildings.toFixed(2)}`,
-            `Waves:      ${tickProfile.waves.toFixed(2)}`,
-          );
-        }
-      } else {
-        lines.push('── Server ──', 'No active session');
-      }
+    if (this.activeView === 'server') {
+      lines.push(...this.serverLines(info));
     }
 
     if (this.activeView === 'logs') {
-      lines.push('── Logs ──');
+      lines.push('-- Logs --');
       if (this.logEntries.length === 0) {
         lines.push('(no log entries)');
       } else {
@@ -272,11 +252,11 @@ export class DebugOverlay {
 
     if (this.activeView === 'help') {
       lines.push(
-        '── Commands ──',
+        '-- Commands --',
         '/core       Core stats (FPS, pos, biome)',
         '/net        Network stats (RTT, loss)',
         '/server     Server stats (wave, enemies)',
-        '/all        Show everything',
+        '/all        Show everything (2-col)',
         '/logs       Game event log',
         '/spawn [n]  Spawn n enemies (default 5)',
         '/skipwave   Skip wave prep timer',
@@ -285,15 +265,17 @@ export class DebugOverlay {
         '/skipday    Skip to day (end night)',
         '/settime <s> Set day timer (seconds)',
         '/card <id>  Give a card by ID',
-        '/cards [f]  List all card IDs (filter optional)',
+        '/cards [f]  List all card IDs (filter)',
         '/sp [n]     Give n skill points (default 1)',
-        '/modifier <id> Force a wave modifier (swarm,ironhide,fog,frenzy)',
-        '/event <id>   Force a world event (meteor_shower,blood_moon,earthquake,resource_boom,portal_surge,solar_eclipse)',
+        '/modifier <id> Force wave modifier',
+        '/event <id>   Force world event',
         '/clear      Close stats panel',
         '/help       This help text',
       );
     }
 
+    this.statsEl.innerHTML = '';
+    this.statsEl.style.display = 'block';
     this.statsEl.textContent = lines.join('\n');
 
     // Auto-scroll for logs view
@@ -363,5 +345,109 @@ export class DebugOverlay {
         this.activeView = 'logs';
         break;
     }
+  }
+
+  // ── Column data helpers ──────────────────────────────────────────────────
+
+  private coreLines(info: DebugInfo): string[] {
+    const { camera, loadedChunks, entityCount, biome, seed } = info;
+    const chunkPixels = CHUNK_SIZE * TILE_SIZE;
+    const cx = Math.floor(camera.x / chunkPixels);
+    const cy = Math.floor(camera.y / chunkPixels);
+    return [
+      '-- Core --',
+      `FPS:    ${this.fps}`,
+      `Ents:   ${entityCount}`,
+      `Pos:    ${Math.round(camera.x)}, ${Math.round(camera.y)}`,
+      `Chunk:  ${cx}, ${cy}`,
+      `Biome:  ${biome}`,
+      `Chunks: ${loadedChunks}`,
+      `Seed: ${seed}`,
+    ];
+  }
+
+  private netLines(info: DebugInfo): string[] {
+    if (info.net) {
+      const { rtt, packetLoss, msgsPerSec } = info.net;
+      return [
+        '-- Network --',
+        `RTT:    ${rtt} ms`,
+        `Loss:   ${packetLoss}%`,
+        `Msg/s:  ${msgsPerSec}`,
+        `Tick:   ${TICK_RATE} Hz`,
+      ];
+    }
+    return ['-- Network --', 'Not connected'];
+  }
+
+  private serverLines(info: DebugInfo): string[] {
+    if (info.server) {
+      const { wave, enemyCount, portalCount, playerCount, tickProfile } = info.server;
+      const lines = [
+        '-- Server --',
+        `Wave:    ${wave}`,
+        `Enemies: ${enemyCount}`,
+        `Portals: ${portalCount}`,
+        `Players: ${playerCount}`,
+      ];
+      if (tickProfile) {
+        lines.push(
+          '',
+          '-- Tick (ms) --',
+          `Total:  ${tickProfile.total.toFixed(2)}`,
+          `Enemy:  ${tickProfile.enemy.toFixed(2)}`,
+          `Combat: ${tickProfile.combat.toFixed(2)}`,
+          `Move:   ${tickProfile.movement.toFixed(2)}`,
+          `Proj:   ${tickProfile.projectile.toFixed(2)}`,
+          `Build:  ${tickProfile.buildings.toFixed(2)}`,
+          `Waves:  ${tickProfile.waves.toFixed(2)}`,
+        );
+      }
+      return lines;
+    }
+    return ['-- Server --', 'No active session'];
+  }
+
+  private gameLines(info: DebugInfo): string[] {
+    if (!info.game) return ['-- Game --', 'No session'];
+    const g = info.game;
+    const hpPct = g.maxHp > 0 ? Math.round(g.hp / g.maxHp * 100) : 0;
+    return [
+      '-- Game --',
+      `Class:  ${g.class}`,
+      `HP:     ${Math.ceil(g.hp)}/${g.maxHp} (${hpPct}%)`,
+      `Stam:   ${Math.ceil(g.stamina)}/${g.maxStamina}`,
+      `Kills:  ${g.kills}`,
+      `SP:     ${g.skillPoints}`,
+      `Cards:  ${g.cards}`,
+      '',
+      '-- World --',
+      `Phase:  ${g.dayPhase}`,
+      `Dark:   ${(g.darkness * 100).toFixed(0)}%`,
+      `Civs:   ${g.civilians}`,
+      `Bldgs:  ${g.buildings}`,
+    ];
+  }
+
+  private renderAllColumns(info: DebugInfo): void {
+    const col1 = [...this.coreLines(info), '', ...this.netLines(info)];
+    const col2 = this.serverLines(info);
+    const col3 = this.gameLines(info);
+
+    const maxLen = Math.max(col1.length, col2.length, col3.length);
+    while (col1.length < maxLen) col1.push('');
+    while (col2.length < maxLen) col2.push('');
+    while (col3.length < maxLen) col3.push('');
+
+    // Fixed column widths for consistent alignment
+    const w1 = 18;
+    const w2 = 18;
+    const merged = col1.map((l, i) =>
+      l.padEnd(w1) + (col2[i] ?? '').padEnd(w2) + (col3[i] ?? ''),
+    );
+
+    this.statsEl.innerHTML = '';
+    this.statsEl.style.display = 'block';
+    this.statsEl.textContent = merged.join('\n');
   }
 }

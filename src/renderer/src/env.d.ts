@@ -17,6 +17,10 @@ interface Window {
     onUpdateAvailable: (cb: () => void) => void;
     onUpdateDownloaded: (cb: () => void) => void;
     installUpdate: () => Promise<void>;
+    // Local server
+    isLocalServerReady: () => Promise<boolean>;
+    onLocalServerReady: (cb: () => void) => void;
+    checkForUpdates?: () => Promise<void>;
     // Save system
     getSaveSlots: (playerId: string) => Promise<import('@shared/SaveFormat').SaveSlotInfo[]>;
     loadSave: (playerId: string, slot: number) => Promise<import('@shared/SaveFormat').SaveData | null>;

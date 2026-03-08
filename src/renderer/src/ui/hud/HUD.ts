@@ -55,7 +55,7 @@ export class HUD {
     this.healthGfx.clear();
     this.healthGfx.rect(x, hy, barW, BAR_H);
     this.healthGfx.fill({ color: 0x3a0a0a });
-    const hFill = Math.max(0, (hp.current / hp.max) * barW);
+    const hFill = Math.min(barW, Math.max(0, (hp.current / hp.max) * barW));
     this.healthGfx.rect(x, hy, hFill, BAR_H);
     this.healthGfx.fill({ color: 0xd94040 });
     this.healthGfx.rect(x, hy, barW, BAR_H);
@@ -68,7 +68,7 @@ export class HUD {
     this.staminaGfx.clear();
     this.staminaGfx.rect(x, sy, barW, BAR_H);
     this.staminaGfx.fill({ color: 0x071a30 });
-    const sFill = Math.max(0, (st.current / st.max) * barW);
+    const sFill = Math.min(barW, Math.max(0, (st.current / st.max) * barW));
     this.staminaGfx.rect(x, sy, sFill, BAR_H);
     this.staminaGfx.fill({ color: 0x3a80cc });
     this.staminaGfx.rect(x, sy, barW, BAR_H);

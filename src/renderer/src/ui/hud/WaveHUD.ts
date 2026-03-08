@@ -9,6 +9,7 @@
  */
 import type { DayNightPhase } from '@shared/protocol';
 import { THEME } from '../theme';
+import { getSpawnWeights, ENEMY_VARIANT_NAMES } from '@shared/definitions/EnemyVariants';
 
 /** Escape HTML entities to prevent XSS from server-controlled strings. */
 function esc(str: string): string {
@@ -71,6 +72,9 @@ export class WaveHUD {
   /** Subtitle element below banner for event descriptions. */
   private bannerDescEl: HTMLElement;
   private bannerTimer = 0;
+  /** Centered countdown element (5-4-3-2-1 before wave). */
+  private countdownEl: HTMLElement;
+  private duskTimer = 0;
 
   /** Boss HP bar elements (top center). */
   private bossBarContainer: HTMLElement;
@@ -186,6 +190,24 @@ export class WaveHUD {
       'white-space: nowrap',
     ].join('; ');
 
+    // Wave countdown (big centered number during dusk)
+    this.countdownEl = document.createElement('div');
+    this.countdownEl.style.cssText = [
+      'position: absolute',
+      'top: 40%',
+      'left: 50%',
+      'transform: translate(-50%, -50%)',
+      'z-index: 50',
+      "font-family: 'Segoe UI', Impact, monospace",
+      'font-size: 72px',
+      'font-weight: bold',
+      'color: #ff6644',
+      'text-shadow: 0 0 20px rgba(255, 50, 20, 0.6), 0 2px 6px rgba(0,0,0,0.8)',
+      'pointer-events: none',
+      'opacity: 0',
+      'transition: opacity 0.2s',
+    ].join('; ');
+
     // Boss HP bar (top center, hidden by default)
     this.bossBarContainer = document.createElement('div');
     this.bossBarContainer.style.cssText = [
@@ -221,6 +243,7 @@ export class WaveHUD {
     overlay.appendChild(this.voteEl);
     overlay.appendChild(this.bannerEl);
     overlay.appendChild(this.bannerDescEl);
+    overlay.appendChild(this.countdownEl);
     overlay.appendChild(this.bossBarContainer);
   }
 
@@ -286,6 +309,13 @@ export class WaveHUD {
       case 'dusk':
         this.phase = 'dusk';
         this.hasVotedSleep = false;
+        this.duskTimer = 5; // DUSK_DAWN_DURATION
+        // Show wave preview banner
+        {
+          const weights = getSpawnWeights(this.waveNumber);
+          const enemies = weights.map(w => ENEMY_VARIANT_NAMES[w.variant]).join(', ');
+          this.showBanner(`Wave ${this.waveNumber} Incoming!`, enemies);
+        }
         break;
       case 'night':
         this.phase = 'active';
@@ -414,6 +444,25 @@ export class WaveHUD {
       }
     }
 
+    // Dusk countdown (5-4-3-2-1)
+    if (this.phase === 'dusk') {
+      const prevCount = Math.ceil(this.duskTimer);
+      this.duskTimer = Math.max(0, this.duskTimer - dt);
+      const count = Math.ceil(this.duskTimer);
+      if (count !== prevCount || count === 0) {
+        if (count > 0) {
+          this.countdownEl.textContent = String(count);
+          this.countdownEl.style.opacity = '1';
+          this.countdownEl.style.transform = 'translate(-50%, -50%) scale(1.3)';
+          setTimeout(() => { this.countdownEl.style.transform = 'translate(-50%, -50%) scale(1)'; }, 50);
+        } else {
+          this.countdownEl.style.opacity = '0';
+        }
+      }
+    } else if (this.countdownEl.style.opacity !== '0') {
+      this.countdownEl.style.opacity = '0';
+    }
+
     // Banner fade-out
     if (this.bannerTimer > 0) {
       this.bannerTimer -= dt;
@@ -451,6 +500,8 @@ export class WaveHUD {
     this.voteEl.style.display = 'none';
     this.hasVotedSleep = false;
   }
+
+  get currentPhase(): string { return this.phase; }
 
   setPaused(p: boolean): void {
     this.paused = p;
