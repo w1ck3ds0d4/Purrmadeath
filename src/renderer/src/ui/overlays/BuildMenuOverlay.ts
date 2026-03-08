@@ -39,7 +39,7 @@ const BUILDING_DETAILS: Record<string, BuildingDetail> = {
   cannon_turret:    { hp: 200, description: 'Slow but powerful cannon with splash damage.', range: 300, damage: 20, cooldown: 4.0 },
   ballista:         { hp: 120, description: 'Long-range siege weapon. Bolts pierce through enemies.', range: 400, damage: 40, cooldown: 5.0 },
   laser_tower:      { hp: 100, description: 'Continuous beam that deals sustained damage.', range: 250, dps: 15 },
-  tesla_coil:       { hp: 100, description: 'Lightning arcs to nearby enemies, chaining to 2 additional targets.', range: 180, damage: 10, cooldown: 2.5 },
+  tesla_coil:       { hp: 100, description: 'Zaps all enemies in range with chain lightning.', range: 180, damage: 10, cooldown: 2.5 },
   flame_tower:      { hp: 100, description: 'Sprays fire in a cone, scorching all enemies in range.', range: 60, dps: 12 },
   catapult:         { hp: 200, description: 'Hurls boulders in an area, dealing heavy AOE damage.', range: 500, damage: 35, cooldown: 6.0 },
   moat:             { hp: 999, description: 'Indestructible trench that slows enemies by 50%.', special: '50% Slow' },

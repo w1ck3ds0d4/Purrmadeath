@@ -38,17 +38,30 @@ Download the latest installer from the [Releases](https://github.com/WickedSoda/
 
 | Building | Cost | Description |
 |---|---|---|
-| Wall | Wood 5 | Blocks enemies |
-| Warehouse | Wood 15, Stone 10 | Stores resources from production buildings |
+| Wall | Wood 5 | Blocks enemy movement |
+| Gate | Wood 8, Stone 5 | Auto-opens for allies, blocks enemies |
+| Bridge | Wood 5, Stone 2 | Allows walking over water |
+| Moat | Stone 3 | Indestructible trench that slows enemies by 50% |
+| Arrow Turret | Wood 10, Stone 5, Iron 5 | Fires arrows at nearest enemy |
+| Cannon Turret | Wood 15, Stone 15, Iron 10 | Slow cannon with splash damage |
+| Ballista | Stone 8, Iron 8 | Piercing bolts that hit all enemies in a line |
+| Laser Tower | Stone 10, Iron 10, Diamond 1 | Continuous beam DPS |
+| Tesla Coil | Stone 8, Iron 8, Diamond 1 | Zaps all enemies in range with chain lightning |
+| Flame Tower | Stone 6, Iron 6 | Sprays fire in a cone |
+| Catapult | Stone 15, Iron 10, Diamond 3 | Long-range heavy AOE damage |
+| Spike Trap | Wood 5, Stone 5 | Damages enemies that walk over it |
+| Warehouse | Wood 15, Stone 10 | Shared resource storage depot |
 | Lumbermill | Wood 10 | Produces wood over time |
 | Quarry | Wood 10, Stone 10 | Produces stone over time |
-| Mine | Wood 15, Stone 15, Iron 5 | Produces iron (80%) and diamond (20%) |
+| Mine | Wood 15, Stone 15, Iron 5 | Produces iron and diamonds |
 | Farm | Wood 10 | Produces food over time |
-| Arrow Turret | Wood 10, Stone 5, Iron 5 | Shoots nearby enemies |
-| Cannon Turret | Wood 15, Stone 15, Iron 10 | Fires mortar shells at enemies (AOE) |
-| Spike Trap | Wood 5, Stone 5 | Damages enemies that walk over it |
-| Bridge | Wood 5, Stone 2 | Allows walking over water |
-| Campfire | (auto-placed) | Respawn point, upgradeable |
+| Workshop | Wood 15, Iron 10, Diamond 2 | Produces weapons for training guards |
+| Training Center | Wood 20, Iron 15, Diamond 3 | Trains civilians into guards (Warrior/Ranger/Mage) |
+| Light Tower | Stone 8, Iron 3 | Reveals fog of war in a radius |
+| Healing Shrine | Stone 10, Iron 5 | Heals nearby players and allies |
+| Potion Shop | Wood 15, Stone 10, Food 5 | Brew and equip combat potions |
+| Cat House | Wood 10, Stone 5 | Provides housing for additional civilians |
+| Campfire | (auto-placed) | Respawn point, upgradeable, houses civilians |
 
 ---
 
