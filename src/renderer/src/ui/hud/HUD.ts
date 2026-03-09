@@ -37,13 +37,19 @@ export class HUD {
     stage.addChild(this.container);
   }
 
-  update(world: World, screenW: number, screenH: number): void {
-    const players = world.query(C.Health, C.Stamina);
-    if (players.length === 0) return;
-
-    const id = players[0];
-    const hp = world.getComponent<HealthComponent>(id, C.Health)!;
-    const st = world.getComponent<StaminaComponent>(id, C.Stamina)!;
+  update(world: World, screenW: number, screenH: number, localEntityId?: number | null): void {
+    // Use local entity if provided, otherwise fall back to first player
+    let id: number;
+    if (localEntityId != null && world.hasEntity(localEntityId)) {
+      id = localEntityId;
+    } else {
+      const players = world.query(C.Health, C.Stamina);
+      if (players.length === 0) return;
+      id = players[0];
+    }
+    const hp = world.getComponent<HealthComponent>(id, C.Health);
+    const st = world.getComponent<StaminaComponent>(id, C.Stamina);
+    if (!hp || !st) return;
 
     // Bars span the full hotbar width, centered
     const barW = HOTBAR_TOTAL_W;

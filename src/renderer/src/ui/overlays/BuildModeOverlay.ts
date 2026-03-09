@@ -18,6 +18,7 @@ import {
   CATAPULT_DAMAGE, CATAPULT_COOLDOWN, CATAPULT_RANGE,
   UPGRADE_CATAPULT_DMG, UPGRADE_CATAPULT_CD, UPGRADE_CATAPULT_AOE,
   UPGRADE_CANNON_AOE,
+  getUpgradePreview,
 } from '@shared/constants';
 import type { BuildingType } from '@shared/components';
 
@@ -239,28 +240,11 @@ export class BuildModeOverlay {
     let html = '';
     if (stats) html += stats;
 
-    // Next level preview
+    // Next level upgrade preview
     if (level < maxLevel) {
-      // For housing buildings, compute what capacity would be after upgrading
-      let nextHousingInfo = housingInfo;
-      if (housingInfo) {
-        const curCap = buildingType === 'campfire'
-          ? (CAMPFIRE_HOUSING_PER_LEVEL[Math.max(0, Math.min(level - 1, 4))] ?? 2)
-          : buildingType === 'cat_house'
-            ? (CAT_HOUSE_CAPACITY[Math.max(0, Math.min(level - 1, 2))] ?? 2)
-            : 0;
-        const nextCap = buildingType === 'campfire'
-          ? (CAMPFIRE_HOUSING_PER_LEVEL[Math.max(0, Math.min(level, 4))] ?? curCap)
-          : buildingType === 'cat_house'
-            ? (CAT_HOUSE_CAPACITY[Math.max(0, Math.min(level, 2))] ?? curCap)
-            : 0;
-        if (nextCap !== curCap) {
-          nextHousingInfo = { population: housingInfo.population, capacity: housingInfo.capacity - curCap + nextCap };
-        }
-      }
-      const nextStats = this.getStatsForLevel(buildingType, level + 1, nextHousingInfo);
-      if (nextStats && nextStats !== stats) {
-        html += `<br><span style="color: #88cc88; font-size: 11px">Lv.${level + 1}: ${nextStats}</span>`;
+      const preview = getUpgradePreview(buildingType, level);
+      if (preview.length > 0 && preview[0] !== 'Max level') {
+        html += `<br><span style="color: #88cc88; font-size: 11px">Lv.${level + 1}: ${preview.join(' | ')}</span>`;
       }
     }
 

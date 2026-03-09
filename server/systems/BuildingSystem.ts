@@ -25,7 +25,7 @@ import type {
 import {
   TILE_SIZE, PLAYER_RADIUS, ENEMY_RADIUS, RESOURCE_NODE_RADIUS,
   PROJECTILE_RADIUS, RANGED_LIFETIME,
-  BUILDING_COSTS, BUILDING_SIZES, buildingHalfExtent, buildingExtent, buildingExclusionExtent, snapBuildingPosition,
+  BUILDING_COSTS, BUILDING_SIZES, buildingHalfExtent, buildingExtent, buildingExclusionExtent, snapBuildingPosition, EXCLUSION_EXEMPT_BUILDINGS, STACKABLE_BUILDINGS,
   BUILDING_MAX_LEVEL, DEMOLISH_REFUND_PERCENT, RUINS_REPAIR_COST_MULT, RUINS_RESTORE_COST_MULT,
   CAMPFIRE_MAX_HEALTH, WALL_MAX_HEALTH, WAREHOUSE_MAX_HEALTH,
   LUMBERMILL_MAX_HEALTH, QUARRY_MAX_HEALTH, MINE_MAX_HEALTH, FARM_MAX_HEALTH,
@@ -212,9 +212,10 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
   // ── Footprint collision ───────────────────────────────────────────────────
 
   function footprintCollides(cx: number, cy: number, buildingType: string, rotation: number = 0): boolean {
-    // Use exclusion extent for building-vs-building checks (e.g. campfire 5x5 no-build zone)
     const newExcl = buildingExclusionExtent(buildingType, rotation);
     const newExt = buildingExtent(buildingType, rotation);
+    const newExempt = EXCLUSION_EXEMPT_BUILDINGS.has(buildingType);
+    const newStackable = STACKABLE_BUILDINGS.has(buildingType);
     for (const id of world.query(C.Position, C.Faction)) {
       const f = world.getComponent<FactionComponent>(id, C.Faction)!;
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
@@ -222,11 +223,24 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       let exHy: number;
       if (f.type === 'building') {
         const b = world.getComponent<BuildingComponent>(id, C.Building);
-        const bExcl = buildingExclusionExtent(b?.buildingType ?? 'wall', b?.rotation ?? 0);
-        // No-build check: either building's exclusion zone prevents overlap
-        exHx = Math.max(newExcl.hx, bExcl.hx);
-        exHy = Math.max(newExcl.hy, bExcl.hy);
-        if (Math.abs(pos.x - cx) < exHx + newExt.hx && Math.abs(pos.y - cy) < exHy + newExt.hy) return true;
+        const bType = b?.buildingType ?? 'wall';
+        const existingExempt = EXCLUSION_EXEMPT_BUILDINGS.has(bType);
+        const existingStackable = STACKABLE_BUILDINGS.has(bType);
+        const bExt = buildingExtent(bType, b?.rotation ?? 0);
+
+        if (newExempt || existingExempt) {
+          // Fully exempt: only check footprint overlap
+          if (Math.abs(pos.x - cx) < newExt.hx + bExt.hx && Math.abs(pos.y - cy) < newExt.hy + bExt.hy) return true;
+        } else if (newStackable && existingStackable) {
+          // Both stackable (wall+wall, wall+gate, gate+gate): only footprint overlap
+          if (Math.abs(pos.x - cx) < newExt.hx + bExt.hx && Math.abs(pos.y - cy) < newExt.hy + bExt.hy) return true;
+        } else {
+          // Normal: use exclusion zones
+          const bExcl = buildingExclusionExtent(bType, b?.rotation ?? 0);
+          exHx = Math.max(newExcl.hx, bExcl.hx);
+          exHy = Math.max(newExcl.hy, bExcl.hy);
+          if (Math.abs(pos.x - cx) < exHx + newExt.hx && Math.abs(pos.y - cy) < exHy + newExt.hy) return true;
+        }
         continue;
       } else if (f.type === 'resource') {
         exHx = RESOURCE_NODE_RADIUS;

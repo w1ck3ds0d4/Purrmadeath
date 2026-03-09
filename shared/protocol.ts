@@ -178,6 +178,8 @@ export enum MessageType {
   META_STATS_RESPONSE = 'META_STATS_RESPONSE',
   /** Client → Server: upload local meta stats for sync. */
   META_STATS_UPLOAD = 'META_STATS_UPLOAD',
+  /** Client → Server: reset all meta stats to zero. */
+  META_STATS_RESET = 'META_STATS_RESET',
 
   CARD_OFFER   = 'CARD_OFFER',
   CARD_PICK    = 'CARD_PICK',
@@ -504,6 +506,12 @@ export interface DeltaMessage extends BaseMessage {
   serverStats?: {
     wave: number; enemyCount: number; portalCount: number; playerCount: number;
     tickProfile?: { combat: number; enemy: number; movement: number; projectile: number; buildings: number; waves: number; total: number };
+  };
+  /** Civilian spawn timer info for in-world building tags. */
+  civilianSpawn?: {
+    nextSpawnSeconds: number;
+    population: number;
+    capacity: number;
   };
 }
 
@@ -1140,6 +1148,14 @@ export interface WorkableBuildingEntry {
   entityId: number;
   buildingType: string;
   workerName: string | null;
+  /** Max worker slots for this building (usually 1). */
+  maxWorkers: number;
+  /** Current production rate (resources per tick, or HP per tick for repair). */
+  productionRate: number;
+  /** Resource type produced (e.g. 'wood', 'stone'), or 'repair' for repair station. */
+  resourceType: string;
+  /** Building upgrade level. */
+  level: number;
 }
 
 /** Server → Client: full civilian panel state. */

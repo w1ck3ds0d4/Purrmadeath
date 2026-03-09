@@ -158,6 +158,8 @@ export class PlayerRendererSystem {
   private healthBarGfx: Graphics;
   /** Production building resource tags (Text objects managed per-entity). */
   private productionTags = new Map<EntityId, { bg: Graphics; text: Text }>();
+  private housingTags = new Map<EntityId, { bg: Graphics; text: Text }>();
+  civilianSpawn?: { nextSpawnSeconds: number; population: number; capacity: number };
   private civilianTags = new Map<EntityId, { bg: Graphics; text: Text }>();
   private speechBubbles = new Map<EntityId, { bg: Graphics; text: Text }>();
   private tagContainer: Container;
@@ -257,8 +259,8 @@ export class PlayerRendererSystem {
     screenH = 1080,
   ): void {
     // Viewport culling bounds (world-space)
-    const cullHalfW = screenW / (2 * zoom) + 100; // 100px margin
-    const cullHalfH = screenH / (2 * zoom) + 100;
+    const cullHalfW = screenW / (2 * zoom) + 200; // 200px margin for large entities
+    const cullHalfH = screenH / (2 * zoom) + 200;
     // Collect all renderable entities: players, enemies, portals, resources, item drops
     // Reuse class-level Sets to avoid per-frame allocations
     const playerIds = this._playerIds;    playerIds.clear();
@@ -353,6 +355,10 @@ export class PlayerRendererSystem {
       if (offScreen) {
         gfx.visible = false;
         continue;
+      }
+      // Force redraw if entity was hidden (off-screen) and is now visible
+      if (!gfx.visible || isNew) {
+        this.dirty.set(id, true);
       }
       gfx.visible = true;
 
@@ -1301,6 +1307,76 @@ export class PlayerRendererSystem {
       }
     }
 
+    // ── Housing building spawn timer (circular ring) ───────────────────────
+    const activeHousingIds = new Set<EntityId>();
+    const SPAWN_INTERVAL = 60; // must match CIVILIAN_SPAWN_TIMER_INTERVAL
+
+    if (this.civilianSpawn) {
+      const spawn = this.civilianSpawn;
+      for (const id of living) {
+        const bldg = world.getComponent<BuildingComponent>(id, C.Building);
+        if (!bldg || (bldg.buildingType !== 'campfire' && bldg.buildingType !== 'cat_house')) continue;
+
+        activeHousingIds.add(id);
+        const pos = world.getComponent<PositionComponent>(id, C.Position)!;
+        const bExt = buildingExtent(bldg.buildingType, bldg.rotation);
+
+        let tag = this.housingTags.get(id);
+        if (!tag) {
+          const bg = new Graphics();
+          const text = new Text({ text: '', style: { fontSize: 0, fill: 0 } }); // unused but kept for type compat
+          this.tagContainer.addChild(bg);
+          tag = { bg, text };
+          this.housingTags.set(id, tag);
+        }
+
+        const cx = pos.x;
+        const cy = pos.y - (bExt.hy + 14);
+        const r = 6;
+
+        tag.bg.clear();
+
+        if (spawn.population >= spawn.capacity) {
+          // At capacity - red filled circle
+          tag.bg.circle(cx, cy, r);
+          tag.bg.fill({ color: 0xcc4444, alpha: 0.6 });
+          tag.bg.circle(cx, cy, r);
+          tag.bg.stroke({ color: 0xcc4444, alpha: 0.8, width: 1.5 });
+        } else if (spawn.nextSpawnSeconds > 0) {
+          // Spawning - circular progress using two fills
+          const progress = 1 - (spawn.nextSpawnSeconds / SPAWN_INTERVAL);
+          // Dark background circle
+          tag.bg.circle(cx, cy, r);
+          tag.bg.fill({ color: 0x222222, alpha: 0.7 });
+          // Green progress pie slice (filled arc from top)
+          if (progress > 0.01) {
+            const startAngle = -Math.PI / 2;
+            const endAngle = startAngle + progress * Math.PI * 2;
+            tag.bg.moveTo(cx, cy);
+            tag.bg.arc(cx, cy, r, startAngle, endAngle);
+            tag.bg.closePath();
+            tag.bg.fill({ color: 0x44cc44, alpha: 0.8 });
+          }
+          // Outline ring
+          tag.bg.circle(cx, cy, r);
+          tag.bg.stroke({ color: 0x44cc44, alpha: 0.5, width: 1 });
+        } else {
+          // Ready / idle - green circle
+          tag.bg.circle(cx, cy, r);
+          tag.bg.fill({ color: 0x44cc44, alpha: 0.5 });
+        }
+      }
+    }
+
+    // Remove housing tags for entities that no longer exist
+    for (const [id, tag] of this.housingTags) {
+      if (!activeHousingIds.has(id)) {
+        this.tagContainer.removeChild(tag.bg);
+        tag.bg.destroy();
+        this.housingTags.delete(id);
+      }
+    }
+
     // ── Civilian name tags ──────────────────────────────────────────────────
     const activeCivilianIds = new Set<EntityId>();
     for (const id of civilianIds) {
@@ -1441,6 +1517,11 @@ export class PlayerRendererSystem {
       tag.text.destroy();
     }
     this.productionTags.clear();
+    for (const [, tag] of this.housingTags) {
+      this.tagContainer.removeChild(tag.bg);
+      tag.bg.destroy();
+    }
+    this.housingTags.clear();
     for (const [, tag] of this.civilianTags) {
       this.tagContainer.removeChild(tag.bg);
       this.tagContainer.removeChild(tag.text);

@@ -545,22 +545,19 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
   // ── Main tick ───────────────────────────────────────────────────────────
 
   function tick(dt: number, send: SendFn): void {
-    // Remove dead civilians
-    const dead: number[] = [];
+    // Clean up civilians whose entities no longer exist (destroyed by RespawnManager after bleed-out)
+    const gone: number[] = [];
     for (const id of civilianIds) {
       if (!world.hasEntity(id)) {
-        dead.push(id);
-        continue;
-      }
-      const hp = world.getComponent<HealthComponent>(id, C.Health);
-      if (hp && hp.current <= 0) {
-        dead.push(id);
+        gone.push(id);
       }
     }
-    for (const id of dead) {
+    for (const id of gone) {
       handleCivilianDeath(id, send);
-      if (world.hasEntity(id)) world.destroyEntity(id);
     }
+    // Note: civilians with HP <= 0 are NOT killed here.
+    // RespawnManager.destroyDeadEntities() adds the Downed component (30s bleed timer).
+    // When the bleed timer expires, RespawnManager calls onCivilianDeath and destroys the entity.
 
     // Note: auto-reassignment removed from periodic tick to avoid overriding manual assignments.
     // Workers are auto-assigned only on civilian spawn, building placed/destroyed, and restore.
@@ -744,10 +741,26 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
         const civ = world.getComponent<CivilianComponent>(ws.workerId, C.Civilian);
         workerName = civ?.name ?? null;
       }
+      const bType = bldg?.buildingType ?? 'unknown';
+      const prod = world.getComponent<ProductionComponent>(bid, C.Production);
+      let productionRate = 0;
+      let resourceType = '';
+      if (prod) {
+        // Rate = amount per interval, adjusted if worker assigned
+        productionRate = ws.workerId !== null ? prod.amount / prod.interval : 0;
+        resourceType = prod.resourceType ?? '';
+      } else if (bType === 'repair_station') {
+        resourceType = 'repair';
+        productionRate = ws.workerId !== null ? 10 : 0; // 10 HP per repair tick
+      }
       bldgEntries.push({
         entityId: bid,
-        buildingType: bldg?.buildingType ?? 'unknown',
+        buildingType: bType,
         workerName,
+        maxWorkers: 1, // All worker buildings currently have 1 slot
+        productionRate,
+        resourceType,
+        level: bldg?.upgradeLevel ?? 1,
       });
     }
 
@@ -848,6 +861,17 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
     reassignWorkers();
   }
 
+  function getSpawnInfo(): { nextSpawnSeconds: number; population: number; capacity: number } {
+    const pop = getCivilianCount();
+    const cap = getHousingCapacity();
+    const atCap = pop >= cap || pop >= CIVILIAN_MAX_POPULATION;
+    return {
+      nextSpawnSeconds: atCap ? 0 : Math.max(0, CIVILIAN_SPAWN_TIMER_INTERVAL - civilianSpawnTimer),
+      population: pop,
+      capacity: cap,
+    };
+  }
+
   return {
     spawnCivilian,
     spawnInitialCivilians,
@@ -858,6 +882,7 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
     handleCivilianDeath,
     getCivilianCount,
     getHousingCapacity,
+    getSpawnInfo,
     reassignWorkers,
     serialize,
     restore,

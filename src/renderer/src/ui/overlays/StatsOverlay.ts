@@ -19,7 +19,9 @@ export class StatsOverlay {
   private leftCol: HTMLElement;
   private rightCol: HTMLElement;
   private tooltip: HTMLElement;
+  private confirmDialog: HTMLElement;
   private onBack: (() => void) | null = null;
+  private onReset: (() => void) | null = null;
 
   constructor() {
     this.screen = document.createElement('div');
@@ -80,16 +82,89 @@ export class StatsOverlay {
     ].join(';');
     this.rightCol.appendChild(this.tooltip);
 
-    // Back button (bottom of left sidebar)
+    // Bottom buttons container (pushed to bottom of left sidebar)
+    const bottomBtns = document.createElement('div');
+    bottomBtns.style.cssText = 'margin-top:auto;display:flex;flex-direction:column;gap:6px;';
+
+    // Reset Progress button
+    const resetBtn = document.createElement('button');
+    resetBtn.className = 'menu-btn';
+    resetBtn.style.cssText = `width:100%;background:rgba(200,50,50,0.15);border:1px solid rgba(200,50,50,0.3);color:#e88;font-size:11px;`;
+    resetBtn.textContent = 'Reset Progress';
+    resetBtn.addEventListener('click', () => {
+      this.confirmDialog.style.display = 'flex';
+    });
+    bottomBtns.appendChild(resetBtn);
+
+    // Back button
     const backBtn = document.createElement('button');
     backBtn.className = 'menu-btn muted';
-    backBtn.style.cssText = 'margin-top:auto;width:100%;';
+    backBtn.style.cssText = 'width:100%;';
     backBtn.textContent = 'Back';
     backBtn.addEventListener('click', () => {
       this.hide();
       this.onBack?.();
     });
-    this.leftCol.appendChild(backBtn);
+    bottomBtns.appendChild(backBtn);
+    this.leftCol.appendChild(bottomBtns);
+
+    // Confirmation dialog (centered overlay)
+    this.confirmDialog = document.createElement('div');
+    this.confirmDialog.style.cssText = [
+      'display:none',
+      'position:fixed',
+      'inset:0',
+      'z-index:9999',
+      'justify-content:center',
+      'align-items:center',
+      'background:rgba(0,0,0,0.6)',
+    ].join(';');
+
+    const dialogBox = document.createElement('div');
+    dialogBox.style.cssText = [
+      `background:${THEME.panelBg}`,
+      `border:1px solid ${THEME.borderAccent}`,
+      `border-radius:${THEME.radiusMd}`,
+      'padding:24px 32px',
+      'text-align:center',
+      'min-width:300px',
+    ].join(';');
+
+    const dialogTitle = document.createElement('div');
+    dialogTitle.style.cssText = `font-size:16px;font-weight:bold;color:#e88;margin-bottom:12px;font-family:${THEME.fontUI};`;
+    dialogTitle.textContent = 'Reset Progress?';
+    dialogBox.appendChild(dialogTitle);
+
+    const dialogText = document.createElement('div');
+    dialogText.style.cssText = `font-size:12px;color:${THEME.textSecondary};margin-bottom:20px;line-height:1.5;`;
+    dialogText.textContent = 'This will permanently reset all stats, achievements, and unlocks. This cannot be undone.';
+    dialogBox.appendChild(dialogText);
+
+    const dialogBtns = document.createElement('div');
+    dialogBtns.style.cssText = 'display:flex;gap:12px;justify-content:center;';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'menu-btn muted';
+    cancelBtn.style.cssText = 'min-width:100px;';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => { this.confirmDialog.style.display = 'none'; });
+    dialogBtns.appendChild(cancelBtn);
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.className = 'menu-btn';
+    confirmBtn.style.cssText = 'min-width:100px;background:rgba(200,50,50,0.3);border:1px solid rgba(200,50,50,0.5);color:#f66;';
+    confirmBtn.textContent = 'Reset';
+    confirmBtn.addEventListener('click', () => {
+      this.confirmDialog.style.display = 'none';
+      this.onReset?.();
+      this.hide();
+      this.onBack?.();
+    });
+    dialogBtns.appendChild(confirmBtn);
+
+    dialogBox.appendChild(dialogBtns);
+    this.confirmDialog.appendChild(dialogBox);
+    document.body.appendChild(this.confirmDialog);
 
     this.screen.appendChild(layout);
     document.getElementById('overlay')!.appendChild(this.screen);
@@ -104,8 +179,9 @@ export class StatsOverlay {
     });
   }
 
-  show(stats: MetaStats, onBack: () => void): void {
+  show(stats: MetaStats, onBack: () => void, onReset?: () => void): void {
     this.onBack = onBack;
+    this.onReset = onReset ?? null;
     this.renderStats(stats);
     this.renderMedals(stats);
     this.screen.style.display = 'flex';
@@ -114,12 +190,13 @@ export class StatsOverlay {
   hide(): void {
     this.screen.style.display = 'none';
     this.tooltip.style.display = 'none';
+    this.confirmDialog.style.display = 'none';
   }
 
   // ── Left column: stats ─────────────────────────────────────────────────
 
   private renderStats(stats: MetaStats): void {
-    // Keep the back button (last child), remove everything else
+    // Keep the bottom buttons container (last child), remove everything else
     while (this.leftCol.children.length > 1) {
       this.leftCol.removeChild(this.leftCol.firstChild!);
     }

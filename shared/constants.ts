@@ -380,12 +380,27 @@ export const BUILDING_SIZES: Record<string, { w: number; h: number }> = {
 
 /**
  * Exclusion zone sizes (in tiles) - no other buildings can be placed within this zone.
- * Buildings not listed here default to their footprint size (no extra padding).
+ * Auto-generated: footprint + 1 tile padding on each side (footprint + 2).
  * Players, civilians, and enemies can still walk through exclusion zones.
  */
-export const BUILDING_EXCLUSION_SIZES: Record<string, { w: number; h: number }> = {
-  campfire: { w: 5, h: 5 },
-};
+export const BUILDING_EXCLUSION_SIZES: Record<string, { w: number; h: number }> = (() => {
+  const sizes: Record<string, { w: number; h: number }> = {};
+  for (const [type, size] of Object.entries(BUILDING_SIZES)) {
+    sizes[type] = { w: size.w + 2, h: size.h + 2 };
+  }
+  // Campfire keeps its 5x5 (3x3 footprint + 1 padding = 5x5, same result)
+  return sizes;
+})();
+
+/** Buildings that can be placed inside ANY building's exclusion zone. */
+export const EXCLUSION_EXEMPT_BUILDINGS = new Set(['bridge', 'moat', 'spike_trap']);
+
+/**
+ * Buildings that ignore exclusion zones only when placed near OTHER buildings
+ * of the same group. They still respect exclusion zones of non-stackable buildings.
+ * e.g. walls can be placed adjacent to walls/gates, but not inside a turret's zone.
+ */
+export const STACKABLE_BUILDINGS = new Set(['wall', 'gate']);
 
 /**
  * Exclusion extent (half-width, half-height) for placement checks.
@@ -937,3 +952,106 @@ export const TAVERN_ROSTER_SIZE = 4;
 // ── Civilian Specialization ───────────────────────────────────────────────
 export const CIVILIAN_SPECIALIZATION_THRESHOLD = 5;
 export const CIVILIAN_SPECIALTY_BONUS = 0.75;
+
+// ── Upgrade Preview ──────────────────────────────────────────────────────
+
+/** Returns human-readable stat changes for upgrading from `level` to `level+1`. */
+export function getUpgradePreview(type: string, level: number): string[] {
+  const maxLvl = (BUILDING_MAX_LEVEL as Record<string, number>)[type] ?? 1;
+  if (level >= maxLvl) return ['Max level'];
+  const next = level; // index into arrays (level 1 = index 0, so next level = index `level`)
+  const lines: string[] = [];
+
+  // HP (all buildings)
+  const hpBase = ({
+    wall: WALL_MAX_HEALTH, campfire: CAMPFIRE_MAX_HEALTH, warehouse: WAREHOUSE_MAX_HEALTH,
+    arrow_turret: ARROW_TURRET_MAX_HEALTH, cannon_turret: CANNON_TURRET_MAX_HEALTH,
+    ballista: BALLISTA_MAX_HEALTH, laser_tower: LASER_TOWER_MAX_HEALTH,
+    lumbermill: LUMBERMILL_MAX_HEALTH, quarry: QUARRY_MAX_HEALTH, mine: MINE_MAX_HEALTH,
+    farm: FARM_MAX_HEALTH, workshop: WORKSHOP_MAX_HEALTH, training_center: TRAINING_CENTER_MAX_HEALTH,
+    light_tower: LIGHT_TOWER_MAX_HEALTH, healing_shrine: HEALING_SHRINE_MAX_HEALTH,
+    cat_house: CAT_HOUSE_MAX_HEALTH, gate: GATE_MAX_HEALTH, potion_shop: POTION_SHOP_MAX_HEALTH,
+    tesla_coil: TESLA_COIL_MAX_HEALTH, flame_tower: FLAME_TOWER_MAX_HEALTH,
+    catapult: CATAPULT_MAX_HEALTH, repair_station: REPAIR_STATION_MAX_HEALTH,
+    tavern: TAVERN_MAX_HEALTH, spike_trap: SPIKE_TRAP_MAX_HEALTH,
+  } as Record<string, number>)[type];
+  if (hpBase && UPGRADE_HP_MULT[next]) {
+    const curHp = Math.round(hpBase * (UPGRADE_HP_MULT[level - 1] ?? 1));
+    const nextHp = Math.round(hpBase * UPGRADE_HP_MULT[next]);
+    if (nextHp > curHp) lines.push(`HP: ${curHp} -> ${nextHp}`);
+  }
+
+  // Per-building stats
+  switch (type) {
+    case 'arrow_turret':
+      if (UPGRADE_ARROW_DMG[next]) lines.push(`Damage: x${UPGRADE_ARROW_DMG[level - 1]} -> x${UPGRADE_ARROW_DMG[next]}`);
+      if (UPGRADE_ARROW_CD[next]) lines.push(`Cooldown: x${UPGRADE_ARROW_CD[level - 1]} -> x${UPGRADE_ARROW_CD[next]}`);
+      break;
+    case 'cannon_turret':
+      if (UPGRADE_CANNON_DMG[next]) lines.push(`Damage: x${UPGRADE_CANNON_DMG[level - 1]} -> x${UPGRADE_CANNON_DMG[next]}`);
+      if (UPGRADE_CANNON_CD[next]) lines.push(`Cooldown: x${UPGRADE_CANNON_CD[level - 1]} -> x${UPGRADE_CANNON_CD[next]}`);
+      if (UPGRADE_CANNON_AOE[next]) lines.push(`AOE: ${UPGRADE_CANNON_AOE[level - 1]}px -> ${UPGRADE_CANNON_AOE[next]}px`);
+      break;
+    case 'ballista':
+      if (UPGRADE_BALLISTA_DMG[next]) lines.push(`Damage: x${UPGRADE_BALLISTA_DMG[level - 1]} -> x${UPGRADE_BALLISTA_DMG[next]}`);
+      if (UPGRADE_BALLISTA_CD[next]) lines.push(`Cooldown: x${UPGRADE_BALLISTA_CD[level - 1]} -> x${UPGRADE_BALLISTA_CD[next]}`);
+      if (UPGRADE_BALLISTA_AOE[next]) lines.push(`AOE: ${UPGRADE_BALLISTA_AOE[level - 1]}px -> ${UPGRADE_BALLISTA_AOE[next]}px`);
+      break;
+    case 'laser_tower':
+      if (UPGRADE_LASER_DPS[next]) lines.push(`DPS: ${UPGRADE_LASER_DPS[level - 1]} -> ${UPGRADE_LASER_DPS[next]}`);
+      if (UPGRADE_LASER_RANGE[next]) lines.push(`Range: ${UPGRADE_LASER_RANGE[level - 1]}px -> ${UPGRADE_LASER_RANGE[next]}px`);
+      break;
+    case 'tesla_coil':
+      if (UPGRADE_TESLA_DAMAGE[next]) lines.push(`Damage: ${UPGRADE_TESLA_DAMAGE[level - 1]} -> ${UPGRADE_TESLA_DAMAGE[next]}`);
+      if (UPGRADE_TESLA_CHAIN[next]) lines.push(`Chains: ${UPGRADE_TESLA_CHAIN[level - 1]} -> ${UPGRADE_TESLA_CHAIN[next]}`);
+      if (UPGRADE_TESLA_CD[next]) lines.push(`Cooldown: x${UPGRADE_TESLA_CD[level - 1]} -> x${UPGRADE_TESLA_CD[next]}`);
+      break;
+    case 'flame_tower':
+      if (UPGRADE_FLAME_DPS[next]) lines.push(`DPS: ${UPGRADE_FLAME_DPS[level - 1]} -> ${UPGRADE_FLAME_DPS[next]}`);
+      if (UPGRADE_FLAME_RANGE[next]) lines.push(`Range: ${UPGRADE_FLAME_RANGE[level - 1]}px -> ${UPGRADE_FLAME_RANGE[next]}px`);
+      break;
+    case 'catapult':
+      if (UPGRADE_CATAPULT_DMG[next]) lines.push(`Damage: x${UPGRADE_CATAPULT_DMG[level - 1]} -> x${UPGRADE_CATAPULT_DMG[next]}`);
+      if (UPGRADE_CATAPULT_CD[next]) lines.push(`Cooldown: x${UPGRADE_CATAPULT_CD[level - 1]} -> x${UPGRADE_CATAPULT_CD[next]}`);
+      if (UPGRADE_CATAPULT_AOE[next]) lines.push(`AOE: ${UPGRADE_CATAPULT_AOE[level - 1]}px -> ${UPGRADE_CATAPULT_AOE[next]}px`);
+      break;
+    case 'spike_trap':
+      if (UPGRADE_TRAP_DMG[next]) lines.push(`Damage: x${UPGRADE_TRAP_DMG[level - 1]} -> x${UPGRADE_TRAP_DMG[next]}`);
+      break;
+    case 'light_tower':
+      if (UPGRADE_LIGHT_RANGE[next]) lines.push(`Range: ${UPGRADE_LIGHT_RANGE[level - 1]}px -> ${UPGRADE_LIGHT_RANGE[next]}px`);
+      break;
+    case 'healing_shrine':
+      if (UPGRADE_HEAL_RATE[next]) lines.push(`Heal: ${UPGRADE_HEAL_RATE[level - 1]} HP/s -> ${UPGRADE_HEAL_RATE[next]} HP/s`);
+      if (UPGRADE_HEAL_RANGE[next]) lines.push(`Range: ${UPGRADE_HEAL_RANGE[level - 1]}px -> ${UPGRADE_HEAL_RANGE[next]}px`);
+      break;
+    case 'lumbermill': case 'quarry': case 'mine': case 'farm':
+      if (UPGRADE_PROD_INTERVAL[next]) lines.push(`Speed: x${(1 / UPGRADE_PROD_INTERVAL[level - 1]).toFixed(1)} -> x${(1 / UPGRADE_PROD_INTERVAL[next]).toFixed(1)}`);
+      if (UPGRADE_PROD_MAX[next]) lines.push(`Storage: x${UPGRADE_PROD_MAX[level - 1]} -> x${UPGRADE_PROD_MAX[next]}`);
+      break;
+    case 'workshop':
+      if (WORKSHOP_PROD_INTERVAL[next]) lines.push(`Interval: ${WORKSHOP_PROD_INTERVAL[level - 1]}s -> ${WORKSHOP_PROD_INTERVAL[next]}s`);
+      break;
+    case 'barracks':
+      if (BARRACKS_MAX_GUARDS[next]) lines.push(`Max guards: ${BARRACKS_MAX_GUARDS[level - 1]} -> ${BARRACKS_MAX_GUARDS[next]}`);
+      break;
+    case 'training_center':
+      if (TRAINING_CENTER_MAX_GUARDS[next]) lines.push(`Max guards: ${TRAINING_CENTER_MAX_GUARDS[level - 1]} -> ${TRAINING_CENTER_MAX_GUARDS[next]}`);
+      break;
+    case 'cat_house':
+      if (CAT_HOUSE_CAPACITY[next]) lines.push(`Housing: ${CAT_HOUSE_CAPACITY[level - 1]} -> ${CAT_HOUSE_CAPACITY[next]}`);
+      break;
+    case 'campfire':
+      if (CAMPFIRE_HOUSING_PER_LEVEL[next]) lines.push(`Housing: ${CAMPFIRE_HOUSING_PER_LEVEL[level - 1]} -> ${CAMPFIRE_HOUSING_PER_LEVEL[next]}`);
+      break;
+    case 'repair_station':
+      if (REPAIR_STATION_HP_PER_TICK[next]) lines.push(`Repair: ${REPAIR_STATION_HP_PER_TICK[level - 1]} HP -> ${REPAIR_STATION_HP_PER_TICK[next]} HP`);
+      if (REPAIR_STATION_INTERVAL[next]) lines.push(`Interval: ${REPAIR_STATION_INTERVAL[level - 1]}s -> ${REPAIR_STATION_INTERVAL[next]}s`);
+      break;
+    case 'tavern':
+      if (TAVERN_MAX_HEROES[next]) lines.push(`Max heroes: ${TAVERN_MAX_HEROES[level - 1]} -> ${TAVERN_MAX_HEROES[next]}`);
+      break;
+  }
+
+  return lines.length > 0 ? lines : ['Increased HP'];
+}

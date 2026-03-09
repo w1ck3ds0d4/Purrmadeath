@@ -145,6 +145,7 @@ export interface GameplayState {
     wave: number; enemyCount: number; portalCount: number; playerCount: number;
     tickProfile?: { combat: number; enemy: number; movement: number; projectile: number; buildings: number; waves: number; total: number };
   };
+  civilianSpawn?: { nextSpawnSeconds: number; population: number; capacity: number };
   handshakeSent: boolean;
   localPlayerId: string;
   seed: number;
@@ -342,6 +343,7 @@ export function registerMessageHandlers(
     const delta = msg as DeltaMessage;
 
     if (delta.serverStats) s.lastServerStats = delta.serverStats;
+    if (delta.civilianSpawn) s.civilianSpawn = delta.civilianSpawn;
 
     d.reconciler.applyDelta(d.world, delta, (replayDt) => {
       d.getMovementSystem()?.update(d.world, replayDt, s.localEntityId ?? undefined);
@@ -796,7 +798,11 @@ export function registerMessageHandlers(
     try { localStorage.setItem('purrmadeath_metastats', JSON.stringify(resp.stats)); } catch { /* ignore */ }
     // Only show stats overlay if not in game over (auto-request after game over just caches)
     if (!s.localGameOver) {
-      d.statsOverlay.show(resp.stats, () => d.menuOverlay.showMenu());
+      d.statsOverlay.show(resp.stats, () => d.menuOverlay.showMenu(), () => {
+        net.send({ type: MessageType.META_STATS_RESET });
+        // Also clear local cache
+        try { localStorage.removeItem('purrmadeath_metastats'); } catch { /* ignore */ }
+      });
     }
   });
 

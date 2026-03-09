@@ -1351,6 +1351,7 @@ async function main(): Promise<void> {
       }
 
       playerRenderer.selectedBuildingId = buildCtrl.selectedId;
+      playerRenderer.civilianSpawn = handlerState.civilianSpawn;
       const { width: _vw, height: _vh } = renderer.screen;
       playerRenderer.update(world, localEntityId, localFacing, dt, reconciler.smoothX, reconciler.smoothY, camera.viewX, camera.viewY, camera.zoom, _vw, _vh);
       deathOverlay.update(dt);
@@ -1478,7 +1479,7 @@ async function main(): Promise<void> {
     tileRenderer.applyCamera(camera.viewX, camera.viewY, camera.zoom, width, height);
 
     if (state === GameState.Playing) {
-      hud.update(world, width, height);
+      hud.update(world, width, height, localEntityId);
       // Low HP vignette
       if (localEntityId !== null) {
         const lhp = world.getComponent<HealthComponent>(localEntityId, C.Health);

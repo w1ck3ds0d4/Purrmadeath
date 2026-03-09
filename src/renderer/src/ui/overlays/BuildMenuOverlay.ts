@@ -1,4 +1,4 @@
-import { BUILDING_COSTS, BUILDING_SIZES, PLACEABLE_BUILDINGS } from '@shared/constants';
+import { BUILDING_COSTS, BUILDING_SIZES, PLACEABLE_BUILDINGS, getUpgradePreview } from '@shared/constants';
 import { THEME } from '../theme';
 
 const RES_COLORS: Record<string, string> = {
@@ -358,6 +358,14 @@ export class BuildMenuOverlay {
 
     // Description
     html += `<div style="font-size:11px;color:${dimColor};line-height:1.4;border-top:1px solid ${THEME.borderSubtle};padding-top:6px;">${detail.description}</div>`;
+
+    // Upgrade preview (Lv.1 -> Lv.2)
+    const upgPreview = getUpgradePreview(type, 1);
+    if (upgPreview.length > 0 && upgPreview[0] !== 'Max level') {
+      html += `<div style="font-size:10px;color:#88cc88;line-height:1.5;border-top:1px solid ${THEME.borderSubtle};padding-top:4px;margin-top:4px;">`;
+      html += `<span style="color:#6a6;font-weight:bold">Lv.2:</span> ${upgPreview.join(' | ')}`;
+      html += '</div>';
+    }
 
     this.tooltipEl.innerHTML = html;
     this.tooltipEl.style.display = 'block';

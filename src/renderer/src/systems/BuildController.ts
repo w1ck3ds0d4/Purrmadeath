@@ -8,6 +8,8 @@ import {
   buildingHalfExtent,
   buildingExtent,
   buildingExclusionExtent,
+  EXCLUSION_EXEMPT_BUILDINGS,
+  STACKABLE_BUILDINGS,
   snapBuildingPosition,
   PLAYER_RADIUS,
   ENEMY_RADIUS,
@@ -240,16 +242,31 @@ export function createBuildController(deps: BuildControllerDeps) {
 
     // Overlap check against buildings, resources, players, enemies
     const newExcl = buildingExclusionExtent(placingType, rotation);
+    const newExempt = EXCLUSION_EXEMPT_BUILDINGS.has(placingType);
+    const newStackable = STACKABLE_BUILDINGS.has(placingType);
     if (ghostValid) {
       for (const eid of world.query(C.Position, C.Faction)) {
         const ef = world.getComponent<FactionComponent>(eid, C.Faction);
         const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
         if (ef?.type === 'building') {
           const bComp = world.getComponent<BuildingComponent>(eid, C.Building);
-          const bExcl = bComp ? buildingExclusionExtent(bComp.buildingType, bComp.rotation) : { hx: 16, hy: 16 };
-          const exHx = Math.max(newExcl.hx, bExcl.hx);
-          const exHy = Math.max(newExcl.hy, bExcl.hy);
-          if (Math.abs(ep.x - snapX) < exHx + ext.hx && Math.abs(ep.y - snapY) < exHy + ext.hy) { ghostValid = false; break; }
+          const bType = bComp?.buildingType ?? 'wall';
+          const existingExempt = EXCLUSION_EXEMPT_BUILDINGS.has(bType);
+          const existingStackable = STACKABLE_BUILDINGS.has(bType);
+          const bExt = bComp ? buildingExtent(bType, bComp.rotation) : { hx: 16, hy: 16 };
+          if (newExempt || existingExempt) {
+            // Fully exempt: only footprint overlap
+            if (Math.abs(ep.x - snapX) < ext.hx + bExt.hx && Math.abs(ep.y - snapY) < ext.hy + bExt.hy) { ghostValid = false; break; }
+          } else if (newStackable && existingStackable) {
+            // Both stackable (wall+wall, wall+gate, gate+gate): only footprint overlap
+            if (Math.abs(ep.x - snapX) < ext.hx + bExt.hx && Math.abs(ep.y - snapY) < ext.hy + bExt.hy) { ghostValid = false; break; }
+          } else {
+            // Normal: use exclusion zones
+            const bExcl = bComp ? buildingExclusionExtent(bType, bComp.rotation) : { hx: 16, hy: 16 };
+            const exHx = Math.max(newExcl.hx, bExcl.hx);
+            const exHy = Math.max(newExcl.hy, bExcl.hy);
+            if (Math.abs(ep.x - snapX) < exHx + ext.hx && Math.abs(ep.y - snapY) < exHy + ext.hy) { ghostValid = false; break; }
+          }
         } else if (ef?.type === 'resource') {
           if (Math.abs(ep.x - snapX) < ext.hx + RESOURCE_NODE_RADIUS && Math.abs(ep.y - snapY) < ext.hy + RESOURCE_NODE_RADIUS) { ghostValid = false; break; }
         } else if (ef?.type === 'player' || ef?.type === 'enemy') {

@@ -199,6 +199,7 @@ export class GameSession {
   private stats!: StatsCollector;
   private civilians!: CivilianSystem;
   private heroes!: HeroSystem;
+  private playerBuffs?: Map<string, { displayName: string; reward: string; medalColor: string }[]>;
 
   private players = new Map<string, SessionPlayer>(); // keyed by clientId
   /** Fast lookup: entity IDs that belong to players (updated on spawn/despawn). */
@@ -694,6 +695,7 @@ export class GameSession {
   ): void {
     if (this.phase !== 'lobby') return;
     this.phase = 'playing';
+    this.playerBuffs = playerBuffs;
     const save = this.loadedSave;
     const hasSave = save !== null;
     this.startTime = Date.now() - (save?.elapsedTime ?? 0) * 1000;
@@ -937,6 +939,19 @@ export class GameSession {
           // Restore potion state
           if (savedP.potionState) {
             this.potions.restore(p.client.id, savedP.potionState);
+          }
+        }
+      }
+
+      // Recalculate all player stats after restore to ensure buffs are correct
+      for (const p of this.players.values()) {
+        this.recalculatePlayerStats(p);
+        // Restore saved current HP (don't let recalculate override saved HP)
+        if (p.entityId !== null) {
+          const savedP = save.players.find(sp => sp.playerId === p.playerId);
+          if (savedP) {
+            const hp = this.world.getComponent<HealthComponent>(p.entityId, C.Health);
+            if (hp) hp.current = Math.min(savedP.hp, hp.max);
           }
         }
       }
@@ -1214,6 +1229,77 @@ export class GameSession {
       }
     }
     return true;
+  }
+
+  /**
+   * Recalculate a player's hp.max and stamina.max from all sources:
+   * base class stats + skill bonuses + card bonuses + achievement buffs.
+   * Safe to call at any time - always produces the correct total.
+   */
+  /**
+   * Recalculate a player's hp.max from all sources:
+   * base class stats + skill bonuses + card bonuses + achievement buffs.
+   * Safe to call at any time - always produces the correct total.
+   */
+  private recalculatePlayerStats(player: SessionPlayer): void {
+    if (player.entityId === null) return;
+    const cs = CLASS_STATS[player.playerClass];
+    const skillBuffs = this.skills.getSkillBuffs(player.client.id);
+    const cardBuffs = this.cards.getBuffs(player.client.id);
+    const achieveBuffs = this.getAchievementBonuses(player.client.id);
+
+    // HP: base + skills + cards + achievements - debuffs
+    const hp = this.world.getComponent<HealthComponent>(player.entityId, C.Health);
+    if (hp) {
+      const correctMax = Math.max(1, cs.hp + skillBuffs.maxHpBonus + cardBuffs.maxHpBonus + achieveBuffs.maxHp - this.cards.debuffs.playerMaxHpPenalty);
+      if (hp.max !== correctMax) {
+        const ratio = hp.max > 0 ? hp.current / hp.max : 1;
+        hp.max = correctMax;
+        hp.current = Math.min(Math.round(ratio * hp.max), hp.max);
+      }
+    }
+
+    // Stamina: base + achievements
+    const stam = this.world.getComponent<{ current: number; max: number }>(player.entityId, C.Stamina);
+    if (stam) {
+      const correctMax = (cs.stamina ?? 100) + achieveBuffs.maxStamina;
+      if (stam.max !== correctMax) {
+        const ratio = stam.max > 0 ? stam.current / stam.max : 1;
+        stam.max = correctMax;
+        stam.current = Math.min(Math.round(ratio * stam.max), stam.max);
+      }
+    }
+
+    // Defense: base + skills + achievements
+    const def = this.world.getComponent<{ flat: number; percent: number }>(player.entityId, C.Defense);
+    if (def) {
+      def.flat = (cs.defense ?? 0) + skillBuffs.defenseBonus + achieveBuffs.defense;
+    }
+
+    // Speed multiplier: 1 + achievement %
+    const spd = this.world.getComponent<{ base: number; multiplier: number }>(player.entityId, C.Speed);
+    if (spd) {
+      spd.multiplier = 1 + achieveBuffs.speedPercent / 100;
+    }
+  }
+
+  /** Extract numeric achievement buff values for a player. */
+  private getAchievementBonuses(clientId: string): { maxHp: number; maxStamina: number; defense: number; speedPercent: number } {
+    const result = { maxHp: 0, maxStamina: 0, defense: 0, speedPercent: 0 };
+    const buffs = this.playerBuffs?.get(clientId);
+    if (!buffs) return result;
+    for (const buff of buffs) {
+      const match = buff.reward.match(/^([+-]?\d+)(%?)\s+(.+)$/);
+      if (!match) continue;
+      const value = parseInt(match[1], 10);
+      const isPercent = match[2] === '%';
+      const stat = match[3];
+      if (stat === 'Max HP') result.maxHp += value;
+      else if (stat === 'Max Stamina') result.maxStamina += value;
+      else if (stat === 'Defense') result.defense += value;
+      else if (stat === 'Speed' && isPercent) result.speedPercent += value;
+    }
+    return result;
   }
 
   /** Apply permanent achievement buff bonuses (from meta progression) to a player entity. */
@@ -3184,6 +3270,7 @@ export class GameSession {
           total:      +this.tickProfile.total.toFixed(2),
         },
       },
+      civilianSpawn: this.civilians.getSpawnInfo(),
     };
   }
 

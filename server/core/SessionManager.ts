@@ -128,6 +128,7 @@ export class SessionManager {
     socket.on(MessageType.SAVE_DELETE,             (c, m) => this.onSaveDelete(c, m as import('@shared/protocol').SaveDeleteMessage));
     socket.on(MessageType.META_STATS_REQUEST,      (c) => this.onMetaStatsRequest(c));
     socket.on(MessageType.META_STATS_UPLOAD,       (c, m) => this.onMetaStatsUpload(c, m as import('@shared/protocol').MetaStatsUploadMessage));
+    socket.on(MessageType.META_STATS_RESET,        (c) => this.onMetaStatsReset(c));
     socket.on(MessageType.CARD_PICK,               (c, m) => this.session?.handleCardPick(c.id, m as CardPickMessage, (cl, msg) => this.socket.send(cl, msg)));
     socket.on(MessageType.SKILL_ALLOCATE,          (c, m) => this.session?.handleSkillAllocate(c.id, m as SkillAllocateMessage, (cl, msg) => this.socket.send(cl, msg)));
     socket.on(MessageType.ABILITY_SLOT_ASSIGN,     (c, m) => this.session?.handleSlotAssign(c.id, m as import('@shared/protocol').AbilitySlotAssignMessage, (cl, msg) => this.socket.send(cl, msg)));
@@ -692,6 +693,16 @@ export class SessionManager {
     console.log(`[SessionManager] Synced uploaded meta stats for ${playerId}`);
     // Send back the merged result so the client has the authoritative copy
     this.socket.send(client, { type: MessageType.META_STATS_RESPONSE, stats: existing });
+  }
+
+  private onMetaStatsReset(client: ConnectedClient): void {
+    const playerId = this.clientPlayerIds.get(client.id);
+    if (!playerId) return;
+    const fresh = emptyMetaStats();
+    this.metaStats.set(playerId, fresh);
+    this.writeMetaStatsToDisk(playerId, fresh);
+    console.log(`[SessionManager] Reset meta stats for ${playerId}`);
+    this.socket.send(client, { type: MessageType.META_STATS_RESPONSE, stats: fresh });
   }
 
   private onSaveDelete(client: ConnectedClient, msg: import('@shared/protocol').SaveDeleteMessage): void {
