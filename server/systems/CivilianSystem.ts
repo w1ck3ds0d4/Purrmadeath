@@ -566,6 +566,7 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
     tickHunger(dt, send);
     tickSpeech(dt);
     tickSpeechTriggers(dt, send);
+    tickCivilianSpawn(dt, send);
   }
 
   /** Accumulator for periodic worker reassignment checks. */
@@ -602,7 +603,11 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
       }
     }
 
-    // Timer-based civilian spawning: 2 every 60 seconds while housing available
+  }
+
+  // ── Civilian spawn timer (runs every frame to accumulate dt correctly) ──
+
+  function tickCivilianSpawn(dt: number, send: SendFn): void {
     civilianSpawnTimer += dt;
     if (civilianSpawnTimer >= CIVILIAN_SPAWN_TIMER_INTERVAL) {
       civilianSpawnTimer = 0;

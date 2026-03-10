@@ -1,6 +1,6 @@
 import { THEME } from '../theme';
-import type { PlayerClass } from '@shared/definitions/ClassDefinitions';
-import { CLASS_STATS, CLASS_DISPLAY_NAMES } from '@shared/definitions/ClassDefinitions';
+import type { PlayerClass, ClassPassive } from '@shared/definitions/ClassDefinitions';
+import { CLASS_STATS, CLASS_DISPLAY_NAMES, CLASS_COLORS } from '@shared/definitions/ClassDefinitions';
 import {
   SKILL_BRANCHES,
   type SkillBranch,
@@ -209,7 +209,7 @@ export class SkillTreeOverlay {
   private screen: HTMLElement;
   private tabBar: HTMLElement;
   private tabContent: HTMLElement;
-  private closeBtn: HTMLElement;
+  private skillPointsEl!: HTMLElement;
   private nodeEls = new Map<SkillNodeId, HTMLElement>();
   private onAllocate: ((nodeId: string) => void) | null = null;
   private onHide: (() => void) | null = null;
@@ -228,39 +228,40 @@ export class SkillTreeOverlay {
     this.screen.className = 'screen';
     this.screen.id = 'skill-tree-screen';
     this.screen.style.display = 'none';
+    this.screen.style.alignItems = 'stretch';
+    this.screen.style.justifyContent = 'stretch';
 
-    // Header bar with tabs + close
+    // Header bar: title left, tabs center, skill points right
     const header = document.createElement('div');
     header.style.cssText = `
-      display:flex;align-items:center;justify-content:space-between;
+      display:flex;align-items:center;
       padding:12px 24px;flex-shrink:0;
       border-bottom:1px solid ${THEME.borderSubtle};
     `;
 
-    // Tab bar
+    // Left: title
+    const titleEl = document.createElement('div');
+    titleEl.style.cssText = `font-family:${THEME.fontUI};font-size:18px;font-weight:700;color:${THEME.textBright};letter-spacing:2px;min-width:160px;`;
+    titleEl.textContent = 'SKILL TREE';
+    header.appendChild(titleEl);
+
+    // Center: tabs
+    const tabWrapper = document.createElement('div');
+    tabWrapper.style.cssText = 'flex:1;display:flex;justify-content:center;';
     this.tabBar = document.createElement('div');
     this.tabBar.style.cssText = 'display:flex;gap:4px;';
-    header.appendChild(this.tabBar);
+    tabWrapper.appendChild(this.tabBar);
+    header.appendChild(tabWrapper);
 
-    // Spacer to push close button to the right
-    const spacer = document.createElement('div');
-    spacer.style.cssText = 'flex:1;';
-    header.appendChild(spacer);
-
-    // Close button
-    this.closeBtn = document.createElement('button');
-    this.closeBtn.textContent = 'X';
-    this.closeBtn.style.cssText = `
-      background:none;border:1px solid #4a4a5a;color:${THEME.textSecondary};
-      font-family:${THEME.fontMono};font-size:16px;cursor:pointer;
-      padding:4px 10px;border-radius:${THEME.radiusSm};
-    `;
-    this.closeBtn.addEventListener('click', () => this.hide());
-    header.appendChild(this.closeBtn);
+    // Right: skill points counter
+    this.skillPointsEl = document.createElement('div');
+    this.skillPointsEl.style.cssText = `font-family:${THEME.fontMono};font-size:14px;color:${THEME.accent};min-width:160px;text-align:right;`;
+    this.skillPointsEl.textContent = 'Skill Points: 0';
+    header.appendChild(this.skillPointsEl);
 
     // Tab content area
     this.tabContent = document.createElement('div');
-    this.tabContent.style.cssText = 'flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;';
+    this.tabContent.style.cssText = 'flex:1;min-height:0;display:flex;flex-direction:column;';
 
     this.screen.appendChild(header);
     this.screen.appendChild(this.tabContent);
@@ -309,6 +310,8 @@ export class SkillTreeOverlay {
   private rebuild(): void {
     this.rebuildTabBar();
     this.rebuildActiveTab();
+    this.skillPointsEl.textContent = `Skill Points: ${this.skillPoints}`;
+    this.skillPointsEl.style.color = this.skillPoints > 0 ? '#ffcc44' : THEME.textDim;
   }
 
   // -- Tab bar -----------------------------------------------------------------
@@ -376,7 +379,7 @@ export class SkillTreeOverlay {
   private buildCharacterTab(): void {
     const container = document.createElement('div');
     container.style.cssText = `
-      display:flex;gap:32px;padding:24px 32px;flex:1;min-height:0;
+      display:flex;gap:32px;padding:24px 32px;flex:1;min-height:0;overflow-y:auto;
     `;
 
     // Left: Stats panel
@@ -460,6 +463,44 @@ export class SkillTreeOverlay {
     }
 
     statsPanel.appendChild(table);
+
+    // Class passive section
+    const passive: ClassPassive = CLASS_STATS[this.playerClass].passive;
+    const classColor = '#' + CLASS_COLORS[this.playerClass].toString(16).padStart(6, '0');
+
+    const passiveSection = document.createElement('div');
+    passiveSection.style.cssText = `
+      margin-top:20px;padding:12px 14px;border-radius:6px;
+      background:${classColor}12;border:1px solid ${classColor}44;
+      border-left:3px solid ${classColor};
+    `;
+
+    const passiveLabel = document.createElement('div');
+    passiveLabel.style.cssText = `
+      font-family:${THEME.fontUI};font-size:11px;font-weight:700;
+      color:${classColor};letter-spacing:2px;margin-bottom:8px;
+      text-transform:uppercase;
+    `;
+    passiveLabel.textContent = 'CLASS PASSIVE';
+    passiveSection.appendChild(passiveLabel);
+
+    const passiveName = document.createElement('div');
+    passiveName.style.cssText = `
+      font-family:${THEME.fontUI};font-size:14px;font-weight:700;
+      color:${THEME.textBright};margin-bottom:4px;
+    `;
+    passiveName.textContent = passive.name;
+    passiveSection.appendChild(passiveName);
+
+    const passiveDesc = document.createElement('div');
+    passiveDesc.style.cssText = `
+      font-family:${THEME.fontMono};font-size:12px;
+      color:${THEME.textSecondary};line-height:1.4;
+    `;
+    passiveDesc.textContent = passive.description;
+    passiveSection.appendChild(passiveDesc);
+
+    statsPanel.appendChild(passiveSection);
 
     // Special effects section (from skills)
     const specials = this.collectSpecialEffects();
@@ -616,65 +657,57 @@ export class SkillTreeOverlay {
   // == SKILLS TAB ==============================================================
 
   private buildSkillsTab(): void {
-    const container = document.createElement('div');
-    container.style.cssText = `
-      flex:1;display:flex;flex-direction:column;align-items:center;
-      padding:16px 12px;overflow-y:auto;min-width:0;
-    `;
-
-    // Header row
-    const header = document.createElement('div');
-    header.style.cssText = `
-      display:flex;align-items:center;justify-content:space-between;
-      width:100%;max-width:${BRANCH_COUNT * NODE_W + (BRANCH_COUNT - 1) * BRANCH_GAP_X}px;
-      margin-bottom:20px;flex-shrink:0;
-    `;
-
-    const title = document.createElement('h2');
-    title.style.cssText = `font-family:${THEME.fontUI};font-size:22px;font-weight:700;color:${THEME.textBright};letter-spacing:3px;margin:0;user-select:none;`;
-    title.textContent = 'SKILL TREE';
-
-    const pointsEl = document.createElement('div');
-    pointsEl.style.cssText = `font-family:${THEME.fontMono};font-size:14px;color:${THEME.accent};user-select:none;`;
-    pointsEl.textContent = `Skill Points: ${this.skillPoints}`;
-
-    header.appendChild(title);
-    header.appendChild(pointsEl);
-    container.appendChild(header);
-
-    // Branch columns
-    const branchRow = document.createElement('div');
-    branchRow.style.cssText = `display:flex;gap:${BRANCH_GAP_X}px;justify-content:center;`;
-    container.appendChild(branchRow);
-
     const branches = Object.values(SKILL_BRANCHES).filter(
       (b) => b.playerClass === this.playerClass,
     ) as SkillBranch[];
+
+    // Branch name sub-header (locked at top, outside scroll)
+    const branchNamesBar = document.createElement('div');
+    branchNamesBar.style.cssText = `
+      display:flex;gap:12px;flex-shrink:0;
+      padding:8px 24px;
+      border-bottom:1px solid ${THEME.borderSubtle};
+    `;
+    for (let bi = 0; bi < BRANCH_COUNT; bi++) {
+      const branch = branches[bi];
+      const nameEl = document.createElement('div');
+      nameEl.style.cssText = `
+        flex:1;text-align:center;
+        font-family:${THEME.fontUI};font-size:13px;font-weight:700;
+        color:${branch ? hexColor(branch.color) : THEME.textDim};
+        letter-spacing:1px;user-select:none;
+      `;
+      nameEl.textContent = branch ? branch.name.toUpperCase() : '';
+      branchNamesBar.appendChild(nameEl);
+    }
+    this.tabContent.appendChild(branchNamesBar);
+
+    // Scrollable grid area
+    const container = document.createElement('div');
+    container.style.cssText = `
+      flex:1;display:flex;flex-direction:column;align-items:stretch;
+      padding:12px 24px;overflow-y:auto;overflow-x:hidden;min-width:0;
+    `;
+
+    const branchRow = document.createElement('div');
+    branchRow.style.cssText = `display:flex;gap:12px;`;
+    container.appendChild(branchRow);
 
     const alloc = { allocated: this.allocated, skillPoints: this.skillPoints, slotAssignments: this.slotAssignments };
 
     for (let bi = 0; bi < BRANCH_COUNT; bi++) {
       const col = document.createElement('div');
-      col.style.cssText = `display:flex;flex-direction:column;align-items:center;width:${NODE_W}px;`;
+      col.style.cssText = `display:flex;flex-direction:column;align-items:center;flex:1;min-width:0;`;
       branchRow.appendChild(col);
 
       const branch = branches[bi];
       if (!branch) continue;
 
-      // Branch header
-      const branchHeader = document.createElement('div');
-      branchHeader.style.cssText = `
-        font-family:${THEME.fontUI};font-size:15px;font-weight:700;
-        color:${hexColor(branch.color)};text-align:center;
-        user-select:none;letter-spacing:1px;height:${HEADER_H}px;
-        display:flex;align-items:center;justify-content:center;
-      `;
-      branchHeader.textContent = branch.name.toUpperCase();
-      col.appendChild(branchHeader);
-
       // Nodes
       for (let ni = 0; ni < branch.nodes.length; ni++) {
         const node = branch.nodes[ni];
+        const prevNode = ni > 0 ? branch.nodes[ni - 1] : null;
+
         const isAllocated = this.allocated.has(node.id);
         const isAvailable = !isAllocated && canAllocate(alloc, node.id, this.playerClass);
 
@@ -682,6 +715,30 @@ export class SkillTreeOverlay {
         el.className = 'skill-node';
         el.style.cssText = this.nodeStyle(node, branch, isAllocated, isAvailable);
         el.innerHTML = this.nodeContent(node, isAllocated, isAvailable);
+
+        // Position tooltip dynamically on hover (fixed positioning)
+        el.addEventListener('mouseenter', (e) => {
+          const tt = el.querySelector('.skill-tooltip') as HTMLElement;
+          if (!tt) return;
+          const rect = el.getBoundingClientRect();
+          tt.style.display = 'block';
+          // Position below the node by default
+          let top = rect.bottom + 6;
+          let left = rect.left + rect.width / 2 - tt.offsetWidth / 2;
+          // If below viewport, show above
+          if (top + tt.offsetHeight > window.innerHeight - 8) {
+            top = rect.top - tt.offsetHeight - 6;
+          }
+          // Clamp horizontally
+          if (left < 8) left = 8;
+          if (left + tt.offsetWidth > window.innerWidth - 8) left = window.innerWidth - tt.offsetWidth - 8;
+          tt.style.top = `${top}px`;
+          tt.style.left = `${left}px`;
+        });
+        el.addEventListener('mouseleave', () => {
+          const tt = el.querySelector('.skill-tooltip') as HTMLElement;
+          if (tt) tt.style.display = 'none';
+        });
 
         if (isAvailable) {
           el.style.cursor = 'pointer';
@@ -720,30 +777,35 @@ export class SkillTreeOverlay {
       el.addEventListener('dragend', () => { el.style.opacity = '1'; });
     }
 
-    // Ability assignment bar
+    this.tabContent.appendChild(container);
+
+    // Ability assignment bar (fixed at bottom, outside scrollable area)
+    const footer = document.createElement('div');
+    footer.style.cssText = `
+      flex-shrink:0;padding:10px 0 6px;
+      border-top:1px solid ${THEME.borderSubtle};
+      background:rgba(10,4,6,0.9);
+      display:flex;flex-direction:column;align-items:center;
+    `;
     const abilityBar = document.createElement('div');
     abilityBar.style.cssText = `
       display:flex;gap:16px;justify-content:center;align-items:center;
-      margin-top:20px;padding:12px 0;flex-shrink:0;
-      border-top:1px solid ${THEME.borderSubtle};
-      width:100%;max-width:${BRANCH_COUNT * NODE_W + (BRANCH_COUNT - 1) * BRANCH_GAP_X}px;
     `;
     this.buildAbilityBar(abilityBar);
-    container.appendChild(abilityBar);
+    footer.appendChild(abilityBar);
 
-    // Hint
     const hint = document.createElement('div');
-    hint.style.cssText = `font-family:${THEME.fontMono};font-size:11px;color:${THEME.textDim};margin-top:auto;padding-top:16px;user-select:none;flex-shrink:0;`;
+    hint.style.cssText = `font-family:${THEME.fontMono};font-size:11px;color:${THEME.textDim};padding-top:6px;user-select:none;`;
     hint.textContent = 'Drag capstone abilities to slots below - Press K or ESC to close';
-    container.appendChild(hint);
+    footer.appendChild(hint);
 
-    this.tabContent.appendChild(container);
+    this.tabContent.appendChild(footer);
   }
 
   private buildAbilityBar(bar: HTMLElement): void {
     const alloc = { allocated: this.allocated, skillPoints: this.skillPoints, slotAssignments: this.slotAssignments };
     const unlocked = getUnlockedAbilities(alloc);
-    const slotKeys = ['Q', 'E', 'R'];
+    const slotKeys = ['1', '2', '3'];
 
     const label = document.createElement('div');
     label.style.cssText = `font-family:${THEME.fontUI};font-size:13px;font-weight:600;color:${THEME.textSecondary};user-select:none;margin-right:8px;`;
@@ -874,13 +936,13 @@ export class SkillTreeOverlay {
       container.appendChild(catHeader);
 
       const grid = document.createElement('div');
-      grid.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;';
+      grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill, minmax(280px, 1fr));gap:8px;';
 
       for (const card of catCards) {
         const catHex = '#' + CATEGORY_COLORS[card.category].toString(16).padStart(6, '0');
         const el = document.createElement('div');
         el.style.cssText = `
-          width:200px;padding:10px 12px;border-radius:6px;
+          padding:10px 12px;border-radius:6px;
           background:${catHex}18;border:1px solid ${RARITY_BORDER_COLORS[card.rarity]};
           user-select:none;box-sizing:border-box;
         `;
@@ -919,30 +981,39 @@ export class SkillTreeOverlay {
 
   private nodeStyle(node: SkillNode, branch: SkillBranch, allocated: boolean, available: boolean): string {
     const color = hexColor(branch.color);
-    const isCapstone = node.tier === 5;
+    const isCapstone = !!node.active;
+    const isCombatMod = !!node.combatMod;
+    const isUltimate = node.tier === 10;
     let bg = LOCKED_COLOR;
     let border = LOCKED_BORDER;
     let shadow = 'none';
 
+    // Combat mod / ultimate border color override
+    const effectiveBorderColor = isUltimate ? '#ffcc00' : (isCombatMod ? '#cc8833' : color);
+
     if (allocated) {
-      bg = color + '33';
-      border = color;
-      shadow = `0 0 8px ${color}66`;
+      bg = (isCombatMod ? effectiveBorderColor : color) + '33';
+      border = effectiveBorderColor;
+      shadow = `0 0 8px ${effectiveBorderColor}66`;
     } else if (available) {
       bg = '#1a1a2e';
-      border = isCapstone ? THEME.accent : AVAILABLE_GLOW;
+      border = isCapstone ? THEME.accent : (isCombatMod ? '#cc8833' : AVAILABLE_GLOW);
       shadow = isCapstone ? `0 0 14px ${THEME.accent}80` : `0 0 12px ${AVAILABLE_GLOW}`;
     } else if (isCapstone) {
       border = THEME.accent + '44';
+    } else if (isUltimate) {
+      border = '#ffcc0044';
+    } else if (isCombatMod) {
+      border = '#cc883344';
     }
 
-    const borderWidth = isCapstone ? '2px' : '1px';
-    const h = isCapstone ? CAPSTONE_H : NODE_H;
+    const borderWidth = (isCapstone || isUltimate) ? '2px' : (isCombatMod ? '2px' : '1px');
+    const h = isUltimate ? CAPSTONE_H + 8 : (isCapstone ? CAPSTONE_H : NODE_H);
 
     return `
-      width:${NODE_W}px;height:${h}px;
+      width:90%;max-width:200px;height:${h}px;
       background:${bg};border:${borderWidth} solid ${border};
-      border-radius:${isCapstone ? '8px' : '4px'};
+      border-radius:${(isCapstone || isUltimate) ? '8px' : '4px'};
       box-shadow:${shadow};
       display:flex;flex-direction:column;justify-content:center;align-items:center;
       padding:4px 8px;box-sizing:border-box;
@@ -953,16 +1024,35 @@ export class SkillTreeOverlay {
 
   private nodeContent(node: SkillNode, allocated: boolean, available: boolean): string {
     const nameColor = allocated ? ALLOCATED_TEXT : (available ? '#dde4ef' : '#9a9aaa');
-    const tierLabel = node.tier === 5 ? 'CAPSTONE' : `Tier ${node.tier}`;
-    const tierColor = allocated ? '#a0b0c0' : (available ? THEME.textSecondary : THEME.textDim);
+    const isCombatMod = !!node.combatMod;
+    const isUltimate = node.tier === 10;
+
+    // Tier label logic
+    let tierLabel: string;
+    if (isUltimate) tierLabel = 'ULTIMATE';
+    else if (node.tier === 7 || node.tier === 9) tierLabel = 'COMBAT MOD';
+    else if (node.tier === 5) tierLabel = 'CAPSTONE';
+    else tierLabel = `Tier ${node.tier}`;
+
+    // Tier label color
+    let tierColor: string;
+    if (isUltimate) tierColor = allocated ? '#ffcc00' : (available ? '#ffcc00' : '#aa8800');
+    else if (isCombatMod) tierColor = allocated ? '#cc8833' : (available ? '#cc8833' : '#885522');
+    else tierColor = allocated ? '#a0b0c0' : (available ? THEME.textSecondary : THEME.textDim);
 
     const cdLine = node.active
       ? `<div style="font-family:${THEME.fontMono};font-size:11px;color:${THEME.accent};margin-top:2px;">${node.active.cooldown}s cooldown</div>`
       : '';
 
+    // Combat mod type label above the name
+    const combatLabel = isCombatMod
+      ? `<div style="font-family:${THEME.fontUI};font-size:9px;font-weight:700;color:${isUltimate ? '#ffcc00' : '#cc8833'};letter-spacing:1px;">${isUltimate ? 'ULTIMATE' : 'COMBAT'}</div>`
+      : '';
+
     return `
       <div class="skill-tooltip">${node.description}</div>
       <div style="font-family:${THEME.fontMono};font-size:10px;color:${tierColor};margin-bottom:2px;">${tierLabel}</div>
+      ${combatLabel}
       <div style="font-family:${THEME.fontUI};font-size:14px;font-weight:600;color:${nameColor};">${node.name}</div>
       ${cdLine}
     `;

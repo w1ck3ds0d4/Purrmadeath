@@ -47,23 +47,22 @@
       .skill-node { position: relative; }
       .skill-node .skill-tooltip {
         display: none;
-        position: absolute;
-        bottom: calc(100% + 8px);
-        left: 50%;
-        transform: translateX(-50%);
+        position: fixed;
+        z-index: 9999;
         background: rgba(10, 4, 6, 0.95);
-        border: 1px solid rgba(170, 34, 51, 0.3);
+        border: 1px solid rgba(170, 34, 51, 0.4);
         border-radius: 6px;
         padding: 8px 12px;
         font-family: monospace;
         font-size: 11px;
         color: #d4c4b8;
         white-space: nowrap;
-        z-index: 100;
         pointer-events: none;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+        max-width: 300px;
+        white-space: normal;
       }
-      .skill-node:hover .skill-tooltip { display: block; }
+      /* tooltip display managed by JS mouseenter/mouseleave */
 
       /* ── Main menu ─────────────────────────────────────────────────────── */
       .game-title {

@@ -15,6 +15,18 @@ import {
   NatureBlessingComponent,
   FactionComponent,
   PositionComponent,
+  VelocityComponent,
+  FreezeComponent,
+  RootComponent,
+  FearComponent,
+  DamageMarkComponent,
+  ShieldAbsorbComponent,
+  StealthComponent,
+  ChannelComponent,
+  TransformComponent,
+  PersistentZoneComponent,
+  SummonOwnerComponent,
+  EnemyStatsComponent,
 } from '@shared/components';
 import {
   type SkillAllocation,
@@ -50,9 +62,39 @@ export interface SkillSystemDeps {
   getCardMaxHpMod?: (clientId: string) => number;
 }
 
+// ── Class passive constants ─────────────────────────────────────────────────
+const LAST_STAND_THRESHOLD = 0.25;
+const LAST_STAND_DEFENSE_PERCENT = 0.30;
+const HUNTERS_FOCUS_DELAY = 1.0; // seconds stationary before crit buff
+const HUNTERS_FOCUS_CRIT = 0.15;
+const HOLY_AURA_RADIUS = 100;
+const HOLY_AURA_HPS = 1; // 1 HP/s
+const SOUL_HARVEST_CHANCE = 0.50;
+const SOUL_HARVEST_MAX_SKELETONS = 3;
+const SKELETON_HP = 30;
+const SKELETON_SPEED = 150;
+const SKELETON_DAMAGE = 8;
+const SKELETON_EXPIRE_TIME = 60; // seconds
+const WOLF_HP = 50;
+const WOLF_SPEED = 200;
+const WOLF_DAMAGE = 12;
+const WOLF_RESPAWN_DELAY = 10; // seconds
+const WOLF_EXPIRE_TIME = 9999; // effectively permanent
+
 export function createSkillSystem(deps: SkillSystemDeps) {
   const allocations = new Map<string, SkillAllocation>();
   const buffCache = new Map<string, SkillBuffs>();
+
+  // ── Class passive tracking state ────────────────────────────────────────
+  // Ranger: Hunter's Focus - track last known positions and stationary timers
+  const rangerLastPos = new Map<string, { x: number; y: number }>();
+  const rangerStationaryTimer = new Map<string, number>();
+
+  // Necromancer: Soul Harvest - track skeleton entity IDs per player
+  const necroSkeletons = new Map<string, number[]>();
+
+  // Beastmaster: Companion - track wolf entity ID and respawn timer per player
+  const beastmasterWolf = new Map<string, { entityId: number | null; respawnTimer: number }>();
 
   function getAllocation(clientId: string): SkillAllocation {
     let a = allocations.get(clientId);
@@ -179,6 +221,388 @@ export function createSkillSystem(deps: SkillSystemDeps) {
     sendState(clientId, send);
   }
 
+  // ── Class Passive Logic ─────────────────────────────────────────────────────
+
+  function tickClassPassives(dt: number): void {
+    for (const [clientId, player] of deps.players) {
+      if (player.entityId == null) continue;
+      const eid = player.entityId;
+      const cls = player.playerClass;
+
+      switch (cls) {
+        case 'warrior': tickWarriorPassive(eid); break;
+        case 'ranger': tickRangerPassive(clientId, eid, dt); break;
+        // mage: arcane_surge is handled in onKill()
+        // assassin: backstab is checked in CombatSystem when dealing damage
+        case 'paladin': tickPaladinPassive(eid, dt); break;
+        // necromancer: soul_harvest is handled in onKill()
+        case 'beastmaster': tickBeastmasterPassive(clientId, eid, dt); break;
+      }
+    }
+
+    // Clean up dead necromancer skeletons
+    for (const [clientId, skeletons] of necroSkeletons) {
+      for (let i = skeletons.length - 1; i >= 0; i--) {
+        const hp = deps.world.getComponent<HealthComponent>(skeletons[i], C.Health);
+        if (!hp || hp.current <= 0) {
+          skeletons.splice(i, 1);
+        }
+      }
+    }
+  }
+
+  /** Warrior - Last Stand: +30% defense when HP < 25% */
+  function tickWarriorPassive(eid: number): void {
+    const hp = deps.world.getComponent<HealthComponent>(eid, C.Health);
+    const def = deps.world.getComponent<DefenseComponent>(eid, C.Defense);
+    if (!hp || !def) return;
+
+    let ab = deps.world.getComponent<ActiveBuffsComponent>(eid, C.ActiveBuffs);
+    const isLowHp = hp.current < hp.max * LAST_STAND_THRESHOLD;
+    const hasBuff = ab?.buffs.some(b => b.id === 'last_stand') ?? false;
+
+    if (isLowHp && !hasBuff) {
+      if (!ab) {
+        ab = { buffs: [] };
+        deps.world.addComponent(eid, C.ActiveBuffs, ab);
+      }
+      ab.buffs.push({
+        id: 'last_stand',
+        remaining: 9999, // effectively permanent, removed by logic below
+        effect: { defensePercent: LAST_STAND_DEFENSE_PERCENT },
+      });
+    } else if (!isLowHp && hasBuff && ab) {
+      // Remove the last_stand buff
+      for (let i = ab.buffs.length - 1; i >= 0; i--) {
+        if (ab.buffs[i].id === 'last_stand') ab.buffs.splice(i, 1);
+      }
+    }
+  }
+
+  /** Ranger - Hunter's Focus: +15% crit when stationary for 1s */
+  function tickRangerPassive(clientId: string, eid: number, dt: number): void {
+    const pos = deps.world.getComponent<PositionComponent>(eid, C.Position);
+    if (!pos) return;
+
+    const lastPos = rangerLastPos.get(clientId);
+    const moved = !lastPos || Math.abs(pos.x - lastPos.x) > 0.5 || Math.abs(pos.y - lastPos.y) > 0.5;
+    rangerLastPos.set(clientId, { x: pos.x, y: pos.y });
+
+    if (moved) {
+      rangerStationaryTimer.set(clientId, 0);
+      // Remove crit buff if present
+      const ab = deps.world.getComponent<ActiveBuffsComponent>(eid, C.ActiveBuffs);
+      if (ab) {
+        for (let i = ab.buffs.length - 1; i >= 0; i--) {
+          if (ab.buffs[i].id === 'hunters_focus') ab.buffs.splice(i, 1);
+        }
+      }
+      return;
+    }
+
+    const timer = (rangerStationaryTimer.get(clientId) ?? 0) + dt;
+    rangerStationaryTimer.set(clientId, timer);
+
+    if (timer >= HUNTERS_FOCUS_DELAY) {
+      let ab = deps.world.getComponent<ActiveBuffsComponent>(eid, C.ActiveBuffs);
+      const hasBuff = ab?.buffs.some(b => b.id === 'hunters_focus') ?? false;
+      if (!hasBuff) {
+        if (!ab) {
+          ab = { buffs: [] };
+          deps.world.addComponent(eid, C.ActiveBuffs, ab);
+        }
+        ab.buffs.push({
+          id: 'hunters_focus',
+          remaining: 9999, // removed when player moves
+          effect: { critChance: HUNTERS_FOCUS_CRIT },
+        });
+      }
+    }
+  }
+
+  /** Paladin - Holy Aura: heal allies within 100px by 1 HP/s */
+  function tickPaladinPassive(eid: number, dt: number): void {
+    const pos = deps.world.getComponent<PositionComponent>(eid, C.Position);
+    if (!pos) return;
+
+    const radiusSq = HOLY_AURA_RADIUS * HOLY_AURA_RADIUS;
+    for (const aid of deps.world.query(C.Position, C.Health, C.Faction)) {
+      if (aid === eid) continue; // don't heal self (aura heals allies)
+      const af = deps.world.getComponent<FactionComponent>(aid, C.Faction);
+      if (!af || (af.type !== 'player' && af.type !== 'guard' && af.type !== 'civilian')) continue;
+      const ap = deps.world.getComponent<PositionComponent>(aid, C.Position)!;
+      const dx = ap.x - pos.x, dy = ap.y - pos.y;
+      if (dx * dx + dy * dy <= radiusSq) {
+        const ah = deps.world.getComponent<HealthComponent>(aid, C.Health)!;
+        ah.current = Math.min(ah.max, ah.current + HOLY_AURA_HPS * dt);
+      }
+    }
+  }
+
+  /** Beastmaster - Companion: spawn/respawn wolf pet */
+  function tickBeastmasterPassive(clientId: string, eid: number, dt: number): void {
+    let state = beastmasterWolf.get(clientId);
+    if (!state) {
+      state = { entityId: null, respawnTimer: 0 };
+      beastmasterWolf.set(clientId, state);
+    }
+
+    // Check if wolf is alive
+    if (state.entityId != null) {
+      const hp = deps.world.getComponent<HealthComponent>(state.entityId, C.Health);
+      if (!hp || hp.current <= 0) {
+        // Wolf died - start respawn timer
+        state.entityId = null;
+        state.respawnTimer = WOLF_RESPAWN_DELAY;
+      }
+      return; // wolf is alive, nothing to do
+    }
+
+    // Wolf is dead or never spawned - count down respawn
+    if (state.respawnTimer > 0) {
+      state.respawnTimer -= dt;
+      if (state.respawnTimer > 0) return;
+    }
+
+    // Spawn the wolf near the player
+    const pos = deps.world.getComponent<PositionComponent>(eid, C.Position);
+    if (!pos) return;
+
+    const wolfId = deps.world.createEntity();
+    const offsetX = (Math.random() - 0.5) * 60;
+    const offsetY = (Math.random() - 0.5) * 60;
+    deps.world.addComponent(wolfId, C.Position, { x: pos.x + offsetX, y: pos.y + offsetY });
+    deps.world.addComponent(wolfId, C.Velocity, { vx: 0, vy: 0 });
+    deps.world.addComponent(wolfId, C.Health, { current: WOLF_HP, max: WOLF_HP });
+    deps.world.addComponent(wolfId, C.Speed, { base: WOLF_SPEED, multiplier: 1 });
+    deps.world.addComponent(wolfId, C.PlayerInput, { dx: 0, dy: 0, sprint: false });
+    deps.world.addComponent(wolfId, C.Faction, { type: 'guard' });
+    deps.world.addComponent(wolfId, C.Facing, { angle: 0 });
+    deps.world.addComponent(wolfId, C.AttackCooldown, { remaining: 0, max: 1.0 });
+    deps.world.addComponent(wolfId, C.KnockbackReceiver, { vx: 0, vy: 0 });
+    deps.world.addComponent(wolfId, C.EnemyStats, {
+      damage: WOLF_DAMAGE, range: 30, knockback: 80, radius: 12,
+      rangedRange: 0, projectileSpeed: 0, rangedDamage: 0, rangedCooldown: 0,
+    });
+    deps.world.addComponent(wolfId, C.SummonOwner, {
+      ownerId: eid,
+      expireTime: Date.now() + WOLF_EXPIRE_TIME * 1000,
+    });
+    // Wolf uses Guard component to get AI patrol behavior around the player
+    deps.world.addComponent(wolfId, C.Guard, { barracksId: eid, patrolRadius: 120 });
+
+    state.entityId = wolfId;
+  }
+
+  /**
+   * Mage - Arcane Surge: on kill, reduce all ability cooldowns by 1s.
+   * Necromancer - Soul Harvest: on kill, 50% chance to spawn skeleton (max 3).
+   * Called externally when an entity scores a kill.
+   */
+  function onKill(killerEntityId: number): void {
+    // Find the player that owns this entity
+    for (const [clientId, player] of deps.players) {
+      if (player.entityId !== killerEntityId) continue;
+
+      // Mage - Arcane Surge
+      if (player.playerClass === 'mage') {
+        const sc = deps.world.getComponent<SkillCooldownsComponent>(killerEntityId, C.SkillCooldowns);
+        if (sc) {
+          for (const key of Object.keys(sc.cooldowns)) {
+            sc.cooldowns[key] = Math.max(0, sc.cooldowns[key] - 1.0);
+          }
+        }
+      }
+
+      // Necromancer - Soul Harvest
+      if (player.playerClass === 'necromancer') {
+        let skeletons = necroSkeletons.get(clientId);
+        if (!skeletons) { skeletons = []; necroSkeletons.set(clientId, skeletons); }
+
+        // Prune dead skeletons
+        for (let i = skeletons.length - 1; i >= 0; i--) {
+          const hp = deps.world.getComponent<HealthComponent>(skeletons[i], C.Health);
+          if (!hp || hp.current <= 0) skeletons.splice(i, 1);
+        }
+
+        if (skeletons.length < SOUL_HARVEST_MAX_SKELETONS && Math.random() < SOUL_HARVEST_CHANCE) {
+          const pos = deps.world.getComponent<PositionComponent>(killerEntityId, C.Position);
+          if (pos) {
+            const skelId = spawnSkeleton(killerEntityId, pos.x, pos.y);
+            if (skelId != null) skeletons.push(skelId);
+          }
+        }
+      }
+
+      break;
+    }
+  }
+
+  /** Spawn a skeleton minion for a necromancer. */
+  function spawnSkeleton(ownerId: number, x: number, y: number): number {
+    const id = deps.world.createEntity();
+    const offsetX = (Math.random() - 0.5) * 50;
+    const offsetY = (Math.random() - 0.5) * 50;
+    deps.world.addComponent(id, C.Position, { x: x + offsetX, y: y + offsetY });
+    deps.world.addComponent(id, C.Velocity, { vx: 0, vy: 0 });
+    deps.world.addComponent(id, C.Health, { current: SKELETON_HP, max: SKELETON_HP });
+    deps.world.addComponent(id, C.Speed, { base: SKELETON_SPEED, multiplier: 1 });
+    deps.world.addComponent(id, C.PlayerInput, { dx: 0, dy: 0, sprint: false });
+    deps.world.addComponent(id, C.Faction, { type: 'guard' });
+    deps.world.addComponent(id, C.Facing, { angle: 0 });
+    deps.world.addComponent(id, C.AttackCooldown, { remaining: 0, max: 1.2 });
+    deps.world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
+    deps.world.addComponent(id, C.EnemyStats, {
+      damage: SKELETON_DAMAGE, range: 28, knockback: 60, radius: 10,
+      rangedRange: 0, projectileSpeed: 0, rangedDamage: 0, rangedCooldown: 0,
+    });
+    deps.world.addComponent(id, C.SummonOwner, {
+      ownerId,
+      expireTime: Date.now() + SKELETON_EXPIRE_TIME * 1000,
+    });
+    deps.world.addComponent(id, C.Guard, { barracksId: ownerId, patrolRadius: 100 });
+    return id;
+  }
+
+  // ── New Effect Component Ticking ────────────────────────────────────────────
+
+  function tickNewEffects(dt: number): void {
+    // Freeze: immobilize entity completely
+    for (const id of deps.world.query(C.Freeze)) {
+      const freeze = deps.world.getComponent<FreezeComponent>(id, C.Freeze)!;
+      freeze.remaining -= dt;
+      const vel = deps.world.getComponent<VelocityComponent>(id, C.Velocity);
+      if (vel) { vel.vx = 0; vel.vy = 0; }
+      if (freeze.remaining <= 0) deps.world.removeComponent(id, C.Freeze);
+    }
+
+    // Root: cannot move but can still attack
+    for (const id of deps.world.query(C.Root)) {
+      const root = deps.world.getComponent<RootComponent>(id, C.Root)!;
+      root.remaining -= dt;
+      const vel = deps.world.getComponent<VelocityComponent>(id, C.Velocity);
+      if (vel) { vel.vx = 0; vel.vy = 0; }
+      if (root.remaining <= 0) deps.world.removeComponent(id, C.Root);
+    }
+
+    // Fear: flee away from source position
+    for (const id of deps.world.query(C.Fear, C.Position)) {
+      const fear = deps.world.getComponent<FearComponent>(id, C.Fear)!;
+      fear.remaining -= dt;
+      if (fear.remaining <= 0) {
+        deps.world.removeComponent(id, C.Fear);
+        continue;
+      }
+      const pos = deps.world.getComponent<PositionComponent>(id, C.Position)!;
+      const vel = deps.world.getComponent<VelocityComponent>(id, C.Velocity);
+      const speed = deps.world.getComponent<SpeedComponent>(id, C.Speed);
+      if (vel && speed) {
+        const dx = pos.x - fear.sourceX;
+        const dy = pos.y - fear.sourceY;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const fleeSpeed = speed.base * speed.multiplier;
+        vel.vx = (dx / dist) * fleeSpeed;
+        vel.vy = (dy / dist) * fleeSpeed;
+      }
+    }
+
+    // DamageMark: delayed detonation
+    for (const id of deps.world.query(C.DamageMark, C.Health)) {
+      const mark = deps.world.getComponent<DamageMarkComponent>(id, C.DamageMark)!;
+      mark.remaining -= dt;
+      if (mark.remaining <= 0) {
+        const hp = deps.world.getComponent<HealthComponent>(id, C.Health)!;
+        hp.current = Math.max(0, hp.current - mark.damage);
+        deps.world.removeComponent(id, C.DamageMark);
+      }
+    }
+
+    // ShieldAbsorb: timer-based expiry (actual absorption in CombatSystem)
+    for (const id of deps.world.query(C.ShieldAbsorb)) {
+      const shield = deps.world.getComponent<ShieldAbsorbComponent>(id, C.ShieldAbsorb)!;
+      shield.remaining -= dt;
+      if (shield.remaining <= 0 || shield.amount <= 0) {
+        deps.world.removeComponent(id, C.ShieldAbsorb);
+      }
+    }
+
+    // Stealth: timer-based expiry (invisibility handled by renderer)
+    for (const id of deps.world.query(C.Stealth)) {
+      const stealth = deps.world.getComponent<StealthComponent>(id, C.Stealth)!;
+      stealth.remaining -= dt;
+      if (stealth.remaining <= 0) deps.world.removeComponent(id, C.Stealth);
+    }
+
+    // Channel: deal tick damage to enemies in radius each tick
+    for (const id of deps.world.query(C.Channel, C.Position)) {
+      const channel = deps.world.getComponent<ChannelComponent>(id, C.Channel)!;
+      channel.remaining -= dt;
+      if (channel.remaining <= 0) {
+        deps.world.removeComponent(id, C.Channel);
+        continue;
+      }
+      const pos = deps.world.getComponent<PositionComponent>(id, C.Position)!;
+      const radiusSq = channel.radius * channel.radius;
+      const dmg = channel.tickDamage * dt;
+      for (const eid of deps.world.query(C.Position, C.Health, C.Faction)) {
+        if (eid === id) continue;
+        const ef = deps.world.getComponent<FactionComponent>(eid, C.Faction);
+        if (!ef || ef.type !== 'enemy') continue;
+        const ep = deps.world.getComponent<PositionComponent>(eid, C.Position)!;
+        const dx = ep.x - pos.x, dy = ep.y - pos.y;
+        if (dx * dx + dy * dy <= radiusSq) {
+          const eh = deps.world.getComponent<HealthComponent>(eid, C.Health)!;
+          eh.current = Math.max(0, eh.current - dmg);
+        }
+      }
+    }
+
+    // Transform: timer-based expiry, revert stat changes when done
+    for (const id of deps.world.query(C.Transform)) {
+      const transform = deps.world.getComponent<TransformComponent>(id, C.Transform)!;
+      transform.remaining -= dt;
+      if (transform.remaining <= 0) {
+        // Revert stat changes
+        const speed = deps.world.getComponent<SpeedComponent>(id, C.Speed);
+        if (speed) speed.multiplier = Math.max(0.1, speed.multiplier - transform.speedBonus);
+        const def = deps.world.getComponent<DefenseComponent>(id, C.Defense);
+        if (def) def.flat = Math.max(0, def.flat - transform.defenseBonus);
+        deps.world.removeComponent(id, C.Transform);
+      }
+    }
+
+    // PersistentZone: AOE damage to enemies and heal to allies each tick
+    for (const id of deps.world.query(C.PersistentZone)) {
+      const zone = deps.world.getComponent<PersistentZoneComponent>(id, C.PersistentZone)!;
+      zone.remaining -= dt;
+      if (zone.remaining <= 0) {
+        deps.world.destroyEntity(id);
+        continue;
+      }
+      const radiusSq = zone.radius * zone.radius;
+      for (const eid of deps.world.query(C.Position, C.Health, C.Faction)) {
+        const ep = deps.world.getComponent<PositionComponent>(eid, C.Position)!;
+        const dx = ep.x - zone.x, dy = ep.y - zone.y;
+        if (dx * dx + dy * dy > radiusSq) continue;
+        const ef = deps.world.getComponent<FactionComponent>(eid, C.Faction)!;
+        const eh = deps.world.getComponent<HealthComponent>(eid, C.Health)!;
+        if (ef.type === 'enemy' && zone.dps > 0) {
+          eh.current = Math.max(0, eh.current - zone.dps * dt);
+        } else if ((ef.type === 'player' || ef.type === 'guard' || ef.type === 'civilian') && zone.healPerSec > 0) {
+          eh.current = Math.min(eh.max, eh.current + zone.healPerSec * dt);
+        }
+      }
+    }
+
+    // SummonOwner: check expiry
+    for (const id of deps.world.query(C.SummonOwner)) {
+      const summon = deps.world.getComponent<SummonOwnerComponent>(id, C.SummonOwner)!;
+      if (Date.now() > summon.expireTime) {
+        deps.world.destroyEntity(id);
+      }
+    }
+  }
+
   function tick(dt: number): void {
     // Tick ability cooldowns
     for (const id of deps.world.query(C.SkillCooldowns)) {
@@ -280,6 +704,12 @@ export function createSkillSystem(deps: SkillSystemDeps) {
       holy.remaining -= dt;
       if (holy.remaining <= 0) deps.world.removeComponent(id, C.HolyMark);
     }
+
+    // Tick new ability-system effects (Freeze, Root, Fear, etc.)
+    tickNewEffects(dt);
+
+    // Tick class passive abilities (Last Stand, Hunter's Focus, Holy Aura, etc.)
+    tickClassPassives(dt);
   }
 
   function applyPassivesToEntity(clientId: string): void {
@@ -329,6 +759,10 @@ export function createSkillSystem(deps: SkillSystemDeps) {
   function reset(): void {
     allocations.clear();
     buffCache.clear();
+    rangerLastPos.clear();
+    rangerStationaryTimer.clear();
+    necroSkeletons.clear();
+    beastmasterWolf.clear();
   }
 
   return {
@@ -344,6 +778,7 @@ export function createSkillSystem(deps: SkillSystemDeps) {
     restore,
     reset,
     sendState,
+    onKill,
   };
 }
 

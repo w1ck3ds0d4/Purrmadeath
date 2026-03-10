@@ -236,23 +236,32 @@ async function main(): Promise<void> {
     blizzard:       { fill: 0x66aaff, stroke: 0x99ccff },
     shadow_step:    { fill: 0x6644cc, stroke: 0x8866ff },
     teleport:       { fill: 0xaa66ff, stroke: 0xcc99ff },
+    ice_prison:     { fill: 0x4488cc, stroke: 0x66aaee },
   };
 
   type TargetMode = 'self' | 'ground' | 'direction';
   function getTargetMode(params: AbilityParams): TargetMode {
-    switch (params.type) {
-      case 'whirlwind': case 'shield_wall': case 'war_cry': return 'self';
-      case 'shadow_step': case 'teleport': return 'direction';
-      default: return 'ground';
-    }
+    // Self-cast: buffs, transforms, AOE centered on player
+    const selfTypes = ['ground_slam', 'battle_fury', 'earthquake', 'blade_storm',
+      'fan_of_knives', 'smoke_bomb', 'vanish', 'aegis', 'guardian_angel',
+      'wild_transformation', 'primal_roar', 'multishot',
+      'pyroclasm', 'arrow_volley', 'arcane_barrage'];
+    if (selfTypes.includes(params.type)) return 'self';
+    // Direction: dashes
+    const dirTypes = ['shield_charge', 'phantom_strike', 'stampede', 'grapple_hook'];
+    if (dirTypes.includes(params.type)) return 'direction';
+    // Ground: everything else (targeted AOE, projectiles, zones)
+    return 'ground';
   }
   function getAbilityRadius(params: AbilityParams): number {
     if ('radius' in params) return (params as any).radius;
+    if ('range' in params) return (params as any).range;
     return 60;
   }
   function getAbilityMaxDist(params: AbilityParams): number {
-    if (params.type === 'shadow_step') return params.distance;
-    if (params.type === 'teleport') return params.maxDistance;
+    if ('distance' in params) return (params as any).distance;
+    if ('range' in params) return (params as any).range;
+    if ('radius' in params) return (params as any).radius;
     return 150;
   }
   function cancelTargeting(): void {
@@ -287,6 +296,7 @@ async function main(): Promise<void> {
   let localResources: Record<string, number> = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0 };
   let warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0 };
   let warehouseExists = false;
+  let keybindVisible = true;
   let handshakeSent = false;
   let civilianPanelRefreshTimer = 0;
   let pendingSingleplayerAutoStart = false;
@@ -385,7 +395,7 @@ async function main(): Promise<void> {
     'position: absolute',
     'top: 400px',
     'right: 12px',
-    'z-index: 15',
+    'z-index: 5',
     'display: none',
     'font-family: monospace',
     'font-size: 10px',
@@ -500,7 +510,8 @@ async function main(): Promise<void> {
     // F1 toggles controls panel
     if (e.key === 'F1' && stateMgr.current === GameState.Playing) {
       e.preventDefault();
-      keybindPanel.style.display = keybindPanel.style.display === 'none' ? 'block' : 'none';
+      keybindVisible = !keybindVisible;
+      keybindPanel.style.display = keybindVisible ? 'block' : 'none';
     }
   });
 
@@ -1452,6 +1463,16 @@ async function main(): Promise<void> {
       && !skillTree.isVisible;
     // If look was disabled mid-look, release it so the camera eases back
     if (!camera.lookEnabled) camera.releaseLook();
+
+    // Hide controls panel and chat when any full-screen overlay is open
+    const anyOverlayOpen = skillTree.isVisible || buildMenu.isVisible || civilianPanel.isVisible
+      || potionShopOverlay.isVisible || cardPicker.isPicking;
+    if (keybindPanel.style.display !== 'none') {
+      if (anyOverlayOpen) keybindPanel.style.display = 'none';
+    } else if (state === GameState.Playing && !anyOverlayOpen && keybindVisible) {
+      keybindPanel.style.display = 'block';
+    }
+    chatOverlay.setOverlayHidden(anyOverlayOpen);
 
     camera.update(dt);
 

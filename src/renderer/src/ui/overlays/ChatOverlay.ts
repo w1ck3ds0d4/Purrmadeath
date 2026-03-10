@@ -3,7 +3,7 @@ import { THEME } from '../theme';
 
 const IDLE_DELAY_MS = 2_000;
 const FADE_MS = 800;
-const MIN_OPACITY = 0.08;
+const MIN_OPACITY = 1;
 const MAX_HISTORY = 50;
 
 type SendHandler = (text: string) => void;
@@ -66,7 +66,7 @@ export class ChatOverlay {
       'pointer-events: auto',
       `backdrop-filter: ${THEME.blurHeavy}`,
       `box-shadow: ${THEME.panelGlow}`,
-      `opacity: ${MIN_OPACITY}`,
+      'opacity: 1',
       'transition: opacity 0.3s ease',
     ].join('; ');
 
@@ -267,6 +267,11 @@ export class ChatOverlay {
     }
   }
 
+  /** Hide/show the chat when full-screen overlays are open. */
+  setOverlayHidden(hidden: boolean): void {
+    this.panelEl.style.visibility = hidden ? 'hidden' : 'visible';
+  }
+
   addMessage(displayName: string, slot: number, text: string): void {
     const entry: ChatEntry = { displayName, slot, text, timestamp: timeStamp() };
     this.history.push(entry);
@@ -285,14 +290,10 @@ export class ChatOverlay {
     }
   }
 
-  /** Tick each frame with dt in seconds. Hides the panel after idle delay. */
-  update(dt: number): void {
-    if (this.active) return;
-
-    this.idleAge += dt * 1000;
-    if (this.idleAge > IDLE_DELAY_MS) {
-      this.panelEl.style.opacity = String(MIN_OPACITY);
-    }
+  /** Tick each frame with dt in seconds. Chat panel is always visible. */
+  update(_dt: number): void {
+    // Chat panel stays at full opacity at all times.
+    // Input row only activates when Enter is pressed.
   }
 
   private trySend(): void {

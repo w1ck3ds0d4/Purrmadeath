@@ -28,10 +28,10 @@ describe('SkillDefinitions structure', () => {
     }
   });
 
-  it('each branch has exactly 5 nodes (tiers 1-5)', () => {
+  it('each branch has exactly 10 nodes (tiers 1-10)', () => {
     for (const branch of allBranches) {
-      expect(branch.nodes).toHaveLength(5);
-      for (let i = 0; i < 5; i++) {
+      expect(branch.nodes).toHaveLength(10);
+      for (let i = 0; i < 10; i++) {
         expect(branch.nodes[i].tier).toBe(i + 1);
       }
     }
@@ -152,6 +152,33 @@ describe('canAllocate', () => {
     expect(canAllocate(alloc, 'berserker_t5', 'warrior')).toBe(true);
   });
 
+  it('allows tier 9 and 10 when prerequisites are met', () => {
+    const alloc = makeAlloc({ skillPoints: 20 });
+    // Allocate tiers 1-8
+    for (let t = 1; t <= 8; t++) alloc.allocated.add(`berserker_t${t}`);
+
+    // Tier 9 should be available
+    expect(canAllocate(alloc, 'berserker_t9', 'warrior')).toBe(true);
+
+    // Tier 10 should not be available yet
+    expect(canAllocate(alloc, 'berserker_t10', 'warrior')).toBe(false);
+
+    // Allocate tier 9
+    alloc.allocated.add('berserker_t9');
+    expect(canAllocate(alloc, 'berserker_t10', 'warrior')).toBe(true);
+  });
+
+  it('allows full 1-10 chain for all branches', () => {
+    for (const branch of Object.values(SKILL_BRANCHES)) {
+      const alloc = makeAlloc({ skillPoints: 20 });
+      for (let t = 1; t <= 10; t++) {
+        const nodeId = `${branch.id}_t${t}`;
+        expect(canAllocate(alloc, nodeId, branch.playerClass)).toBe(true);
+        alloc.allocated.add(nodeId);
+      }
+    }
+  });
+
   it('returns false for invalid node ID', () => {
     const alloc = makeAlloc();
     expect(canAllocate(alloc, 'nonexistent_t1', 'warrior')).toBe(false);
@@ -175,7 +202,7 @@ describe('getUnlockedAbilities', () => {
     });
     const abilities = getUnlockedAbilities(alloc);
     expect(abilities).toHaveLength(1);
-    expect(abilities[0].abilityId).toBe('whirlwind');
+    expect(abilities[0].abilityId).toBe('ground_slam');
   });
 
   it('returns multiple abilities from different branches', () => {
@@ -188,7 +215,7 @@ describe('getUnlockedAbilities', () => {
     const abilities = getUnlockedAbilities(alloc);
     expect(abilities).toHaveLength(2);
     const ids = abilities.map(a => a.abilityId);
-    expect(ids).toContain('whirlwind');
-    expect(ids).toContain('shield_wall');
+    expect(ids).toContain('ground_slam');
+    expect(ids).toContain('shield_charge');
   });
 });

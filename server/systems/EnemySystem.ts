@@ -304,31 +304,20 @@ export class EnemySystem {
         return best;
       };
 
-      // Helper: find nearest hostile enemy (different enemyFaction, or guards target all enemies)
+      // Helper: find nearest hostile enemy (guards target all enemies)
       const findNearestHostileEnemy = (maxRange: number) => {
+        // Only guards use this - enemies no longer target other enemies
+        if (!isGuard) return null;
         let best: { pos: PositionComponent; dist: number } | null = null;
         for (const eid of world.query(C.Position, C.Faction)) {
           if (eid === id) continue;
           const ef = world.getComponent<FactionComponent>(eid, C.Faction)!;
-          if (isGuard) {
-            // Guards target all enemies
-            if (ef.type !== 'enemy') continue;
-          } else {
-            // Enemies target enemies of different factions, or guards
-            if (ef.type === 'guard') {
-              // Enemies can target guards
-            } else if (ef.type === 'enemy') {
-              if (!faction.enemyFaction || !ef.enemyFaction || faction.enemyFaction === ef.enemyFaction) continue;
-            } else {
-              continue;
-            }
-          }
+          // Guards target all enemies
+          if (ef.type !== 'enemy') continue;
           if (world.hasComponent(eid, C.Downed)) continue;
           // Guards can't see hidden ghosts
-          if (isGuard) {
-            const egs = world.getComponent<GhostStateComponent>(eid, C.GhostState);
-            if (egs?.hidden) continue;
-          }
+          const egs = world.getComponent<GhostStateComponent>(eid, C.GhostState);
+          if (egs?.hidden) continue;
           const epos = world.getComponent<PositionComponent>(eid, C.Position)!;
           const ddx = epos.x - pos.x, ddy = epos.y - pos.y;
           const dist = distance(ddx, ddy);
@@ -448,17 +437,7 @@ export class EnemySystem {
           }
         }
 
-        // 2b. Hostile enemies of different factions (same priority as players)
-        if (faction.enemyFaction) {
-          const hostileEnemy = findNearestHostileEnemy(ENEMY_AGGRO_RANGE);
-          if (hostileEnemy && (hostileEnemy.dist < PLAYER_DISTRACT_RANGE || !targetPos)) {
-            targetPos = hostileEnemy.pos;
-            navPos = hostileEnemy.pos;
-            targetDist = hostileEnemy.dist;
-            targetHalfExtent = 0;
-            targetEntityId = null;
-          }
-        }
+        // 2b. Enemies no longer target other enemies - removed cross-faction combat
 
         // 3. Walls (only if nothing else found)
         if (!targetPos) {

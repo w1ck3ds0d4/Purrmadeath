@@ -72,6 +72,7 @@ import type {
   HeroDiedMessage,
   HeroAbilityMessage,
   TeslaChainMessage,
+  LaserBeamVFXMessage,
   TeleporterResultMessage,
   LobbySlot,
 } from '@shared/protocol';
@@ -953,6 +954,20 @@ export function registerMessageHandlers(
   net.on(MessageType.HERO_ABILITY, (msg) => {
     const m = msg as HeroAbilityMessage;
     d.abilityVFX.trigger(m.abilityId, m.x, m.y, m.radius, 0.5);
+  });
+
+  // ── Laser Beam VFX ───────────────────────────────────────────────────────
+
+  net.on(MessageType.LASER_BEAM, (msg) => {
+    const m = msg as LaserBeamVFXMessage;
+    d.abilityVFX.triggerLaserBeam(m.sourceX, m.sourceY, m.targetX, m.targetY);
+  });
+
+  // ── Flame Cone VFX ──────────────────────────────────────────────────────
+
+  net.on(MessageType.FLAME_CONE, (msg) => {
+    const m = msg as import('@shared/protocol').FlameConeMessage;
+    d.abilityVFX.triggerFlameCone(m.sourceX, m.sourceY, m.facing, m.range, m.arcRadians);
   });
 
   // ── Tesla Chain VFX ──────────────────────────────────────────────────────

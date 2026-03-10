@@ -271,6 +271,12 @@ export enum MessageType {
   /** Server → Client: teleporter result (success + destination, or fail). */
   TELEPORTER_RESULT = 'TELEPORTER_RESULT',
 
+  // ── Laser Tower ─────────────────────────────────────────────────────────
+  /** Server → all: laser beam VFX (source + target each tick). */
+  LASER_BEAM = 'LASER_BEAM',
+  /** Server → all: flame cone VFX (source position, facing, range). */
+  FLAME_CONE = 'FLAME_CONE',
+
   // ── Tesla Coil ──────────────────────────────────────────────────────────
   /** Server → all: tesla coil chain lightning VFX. */
   TESLA_CHAIN = 'TESLA_CHAIN',
@@ -1209,6 +1215,29 @@ export interface TeleporterResultMessage extends BaseMessage {
   reason?: string;
 }
 
+// ── Laser Beam Messages ────────────────────────────────────────────────────
+
+export interface LaserBeamVFXMessage extends BaseMessage {
+  type: typeof MessageType.LASER_BEAM;
+  /** Laser tower source position. */
+  sourceX: number;
+  sourceY: number;
+  /** Target position. */
+  targetX: number;
+  targetY: number;
+}
+
+// ── Flame Cone Messages ───────────────────────────────────────────────────
+
+export interface FlameConeMessage extends BaseMessage {
+  type: typeof MessageType.FLAME_CONE;
+  sourceX: number;
+  sourceY: number;
+  facing: number;
+  range: number;
+  arcRadians: number;
+}
+
 // ── Tesla Coil Messages ────────────────────────────────────────────────────
 
 export interface TeslaChainMessage extends BaseMessage {
@@ -1466,6 +1495,8 @@ export type AnyMessage =
   | BossPhaseMessage
   | TeleporterUseMessage
   | TeleporterResultMessage
+  | LaserBeamVFXMessage
+  | FlameConeMessage
   | TeslaChainMessage
   | TavernStateMessage
   | HireHeroMessage

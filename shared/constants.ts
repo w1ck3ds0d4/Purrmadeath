@@ -919,12 +919,12 @@ export const UPGRADE_TESLA_CHAIN = [2, 2, 3];
 export const UPGRADE_TESLA_CD = [1, 0.85, 0.7];
 
 // ── Flame Tower ───────────────────────────────────────────────────────────
-export const FLAME_TOWER_RANGE = 60;
+export const FLAME_TOWER_RANGE = 100;
 export const FLAME_TOWER_DPS = 12;
 /** 60-degree cone (30 deg each side). */
 export const FLAME_TOWER_ARC = Math.PI / 3;
 export const UPGRADE_FLAME_DPS = [12, 18, 25];
-export const UPGRADE_FLAME_RANGE = [60, 75, 90];
+export const UPGRADE_FLAME_RANGE = [100, 120, 140];
 
 // ── Catapult ──────────────────────────────────────────────────────────────
 export const CATAPULT_RANGE = 500;

@@ -101,6 +101,14 @@ const BUILDING_COLORS: Record<string, { body: number; border: number }> = {
   gate:           { body: 0x8a7a5a, border: 0xaa9a7a },
   workshop:       { body: 0x7a6a4a, border: 0xaa9a6a },
   training_center:{ body: 0x5a6a8a, border: 0x7a8aaa },
+  tesla_coil:     { body: 0x4488ff, border: 0x66aaff },
+  flame_tower:    { body: 0xff6622, border: 0xff8844 },
+  catapult:       { body: 0x886644, border: 0xaa8866 },
+  moat:           { body: 0x3366aa, border: 0x5588cc },
+  repair_station: { body: 0x44aa44, border: 0x66cc66 },
+  teleporter_pad: { body: 0xaa44ff, border: 0xcc66ff },
+  tavern:         { body: 0xccaa44, border: 0xeecc66 },
+  storage_shed:   { body: 0x8a7a5a, border: 0xaa9a7a },
 };
 // Production resource tag colors
 const PRODUCTION_TAG_COLORS: Record<string, number> = {

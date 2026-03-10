@@ -59,6 +59,8 @@ export class InputManager {
   constructor() {
     document.addEventListener('keydown', (e) => {
       const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      // Prevent browser scrolling for ability/potion/build keys
+      if (['1','2','3','4'].includes(key)) e.preventDefault();
       if (!this.held.has(key)) this.justPressedSet.add(key);
       this.held.add(key);
     });

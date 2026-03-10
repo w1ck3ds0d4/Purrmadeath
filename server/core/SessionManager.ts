@@ -638,6 +638,29 @@ export class SessionManager {
     const text = (msg.text ?? '').trim().slice(0, 200);
     if (!text) return;
 
+    // Handle /pause command - host only
+    if (text === '/pause') {
+      if (!player.isHost) {
+        const deny: ChatMessage = {
+          type: MessageType.CHAT,
+          displayName: 'Server',
+          slot: -1,
+          text: 'Only the host can use /pause.',
+        };
+        this.socket.send(client, deny);
+        return;
+      }
+      const paused = this.session.toggleDayPause();
+      const announcement: ChatMessage = {
+        type: MessageType.CHAT,
+        displayName: 'Server',
+        slot: -1,
+        text: paused ? 'Day timer paused.' : 'Day timer resumed.',
+      };
+      this.broadcastToSession(announcement);
+      return;
+    }
+
     const broadcast: ChatMessage = {
       type: MessageType.CHAT,
       displayName: player.displayName,

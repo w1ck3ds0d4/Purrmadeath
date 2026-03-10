@@ -20,6 +20,13 @@ export interface ClassStats {
   attackType: 'melee' | 'ranged';
   baseDamage: number;
   weaponName: string;
+  passive: ClassPassive;
+}
+
+export interface ClassPassive {
+  id: string;
+  name: string;
+  description: string;
 }
 
 export const CLASS_STATS: Record<PlayerClass, ClassStats> = {
@@ -31,6 +38,7 @@ export const CLASS_STATS: Record<PlayerClass, ClassStats> = {
     attackType: 'melee',
     baseDamage: 18,
     weaponName: 'Sword',
+    passive: { id: 'last_stand', name: 'Last Stand', description: 'Below 25% HP: +30% damage reduction' },
   },
   ranger: {
     hp: 80,
@@ -40,6 +48,7 @@ export const CLASS_STATS: Record<PlayerClass, ClassStats> = {
     attackType: 'ranged',
     baseDamage: 12,
     weaponName: 'Bow',
+    passive: { id: 'hunters_focus', name: "Hunter's Focus", description: '+15% crit chance when stationary for 1s' },
   },
   mage: {
     hp: 70,
@@ -49,6 +58,7 @@ export const CLASS_STATS: Record<PlayerClass, ClassStats> = {
     attackType: 'ranged', // homing added in Phase 7B
     baseDamage: 14,
     weaponName: 'Staff',
+    passive: { id: 'arcane_surge', name: 'Arcane Surge', description: 'Each kill reduces all ability cooldowns by 1s' },
   },
   assassin: {
     hp: 65,
@@ -58,6 +68,7 @@ export const CLASS_STATS: Record<PlayerClass, ClassStats> = {
     attackType: 'melee',
     baseDamage: 22,
     weaponName: 'Daggers',
+    passive: { id: 'backstab', name: 'Backstab', description: '+50% damage when hitting enemies from behind' },
   },
   paladin: {
     hp: 100,
@@ -67,6 +78,7 @@ export const CLASS_STATS: Record<PlayerClass, ClassStats> = {
     attackType: 'melee',
     baseDamage: 15,
     weaponName: 'Mace',
+    passive: { id: 'holy_aura', name: 'Holy Aura', description: 'Nearby allies regen 1 HP/s (100px radius)' },
   },
   necromancer: {
     hp: 60,
@@ -76,6 +88,7 @@ export const CLASS_STATS: Record<PlayerClass, ClassStats> = {
     attackType: 'ranged',
     baseDamage: 16,
     weaponName: 'Tome',
+    passive: { id: 'soul_harvest', name: 'Soul Harvest', description: 'Kills spawn skeleton minions (max 3)' },
   },
   beastmaster: {
     hp: 90,
@@ -85,6 +98,7 @@ export const CLASS_STATS: Record<PlayerClass, ClassStats> = {
     attackType: 'melee',
     baseDamage: 14,
     weaponName: 'Claws',
+    passive: { id: 'companion', name: 'Companion', description: 'A loyal wolf fights alongside you' },
   },
 };
 

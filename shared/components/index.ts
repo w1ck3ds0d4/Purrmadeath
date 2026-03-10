@@ -72,6 +72,19 @@ export const C = {
   Tavern:          'Tavern',
   // ── Heroes ────────────────────────────────────────────────────────────
   Hero:            'Hero',
+  // ── Ability system ───────────────────────────────────────────────────
+  Freeze:          'Freeze',
+  Root:            'Root',
+  Fear:            'Fear',
+  DamageMark:      'DamageMark',
+  ShieldAbsorb:    'ShieldAbsorb',
+  Stealth:         'Stealth',
+  Channel:         'Channel',
+  Transform:       'Transform',
+  PersistentZone:  'PersistentZone',
+  SummonOwner:     'SummonOwner',
+  Bleed:           'Bleed',
+  SoulMark:        'SoulMark',
 } as const;
 
 // ─── Component interfaces ──────────────────────────────────────────────────────
@@ -205,6 +218,16 @@ export interface ProjectileComponent {
   critMultiplier?: number;
   /** Per-projectile knockback multiplier from card buffs. */
   knockbackMult?: number;
+  /** Number of times the projectile can bounce to a new target after hitting. */
+  bounceCount?: number;
+  /** Max range (px) to search for a bounce target. */
+  bounceRange?: number;
+  /** Number of child projectiles spawned on hit. */
+  splitCount?: number;
+  /** Damage dealt by each split child projectile. */
+  splitDamage?: number;
+  /** Max number of enemies this projectile can pierce through (finite pierce). */
+  maxPierces?: number;
 }
 
 // ── Phase 4.8+ components ─────────────────────────────────────────────────────
@@ -677,6 +700,44 @@ export interface TavernComponent {
   /** Available hero definition IDs in this tavern's roster. */
   roster: string[];
 }
+
+// ── Ability System Components ────────────────────────────────────────────────
+
+/** Freeze effect - entity is completely immobilized. */
+export interface FreezeComponent { remaining: number; breaksOnDamage: boolean; }
+
+/** Root effect - entity cannot move but can still attack. */
+export interface RootComponent { remaining: number; }
+
+/** Fear effect - entity flees away from the source position. */
+export interface FearComponent { remaining: number; sourceX: number; sourceY: number; }
+
+/** Damage mark - delayed damage that detonates after a duration. */
+export interface DamageMarkComponent { remaining: number; damage: number; sourceId: number; }
+
+/** Shield absorb - absorbs incoming damage until depleted or expired. */
+export interface ShieldAbsorbComponent { remaining: number; amount: number; }
+
+/** Stealth - entity is invisible; next attack deals bonus damage. */
+export interface StealthComponent { remaining: number; nextAttackMultiplier: number; }
+
+/** Channel - entity is channeling an ability over time. */
+export interface ChannelComponent { abilityId: string; remaining: number; tickDamage: number; radius: number; }
+
+/** Transform - entity is in a transformed state with stat bonuses. */
+export interface TransformComponent { remaining: number; speedBonus: number; damageBonus: number; defenseBonus: number; }
+
+/** Persistent zone - area effect that persists on the ground. */
+export interface PersistentZoneComponent { x: number; y: number; radius: number; remaining: number; dps: number; healPerSec: number; ownerId: number; }
+
+/** Summon owner - tags a summoned entity with its owner and expiry. */
+export interface SummonOwnerComponent { ownerId: number; expireTime: number; }
+
+/** Stacking bleed damage over time. */
+export interface BleedComponent { dps: number; remaining: number; stacks: number; maxStacks: number; sourceId: number; }
+
+/** Damage amplification debuff - target takes bonus damage from all sources. */
+export interface SoulMarkComponent { damageAmp: number; remaining: number; sourceId: number; }
 
 /** Tags an entity as a hired hero NPC. */
 export interface HeroComponent {

@@ -827,6 +827,59 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     }
   }
 
+  /**
+   * Find the best catapult target: prioritize portals/enemy buildings,
+   * then fall back to densest enemy cluster.
+   * Returns { x, y } of the impact point, or null if no targets.
+   */
+  function findCatapultTarget(tpos: PositionComponent, range: number, aoeRadius: number): { x: number; y: number } | null {
+    const rangeSq = range * range;
+
+    // 1. Prioritize portals and enemy buildings
+    let bestStructId = -1;
+    let bestStructDist = rangeSq;
+    for (const eid of world.query(C.Position, C.Faction, C.Health)) {
+      const f = world.getComponent<FactionComponent>(eid, C.Faction)!;
+      if (f.type !== 'portal') continue;
+      const hp = world.getComponent<HealthComponent>(eid, C.Health)!;
+      if (hp.current <= 0) continue;
+      const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
+      const dx = ep.x - tpos.x, dy = ep.y - tpos.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestStructDist) { bestStructDist = d2; bestStructId = eid; }
+    }
+    if (bestStructId >= 0) {
+      const ep = world.getComponent<PositionComponent>(bestStructId, C.Position)!;
+      return { x: ep.x, y: ep.y };
+    }
+
+    // 2. Find densest cluster of enemies within range
+    const enemiesInRange: Array<{ x: number; y: number }> = [];
+    enemyHash.queryRange(tpos.x, tpos.y, range, (entry) => {
+      const ghostSt = world.getComponent<GhostStateComponent>(entry.id, C.GhostState);
+      if (ghostSt?.hidden) return;
+      enemiesInRange.push({ x: entry.x, y: entry.y });
+    });
+    if (enemiesInRange.length === 0) return null;
+    if (enemiesInRange.length === 1) return enemiesInRange[0];
+
+    // Pick the enemy position that has the most neighbors within aoeRadius
+    let bestClusterIdx = 0;
+    let bestClusterCount = 0;
+    const aoeSq = aoeRadius * aoeRadius;
+    for (let i = 0; i < enemiesInRange.length; i++) {
+      let count = 0;
+      for (let j = 0; j < enemiesInRange.length; j++) {
+        if (i === j) continue;
+        const cdx = enemiesInRange[i].x - enemiesInRange[j].x;
+        const cdy = enemiesInRange[i].y - enemiesInRange[j].y;
+        if (cdx * cdx + cdy * cdy <= aoeSq) count++;
+      }
+      if (count > bestClusterCount) { bestClusterCount = count; bestClusterIdx = i; }
+    }
+    return enemiesInRange[bestClusterIdx];
+  }
+
   function tickTurrets(dt: number, send: SendFn): void {
     for (const id of world.query(C.Turret, C.Position)) {
       const turret = world.getComponent<TurretComponent>(id, C.Turret)!;
@@ -836,22 +889,38 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       const tpos = world.getComponent<PositionComponent>(id, C.Position)!;
       const bldg = world.getComponent<BuildingComponent>(id, C.Building);
       const halfExt = buildingHalfExtent(bldg?.buildingType ?? 'arrow_turret');
+      const isCannon = bldg?.buildingType === 'cannon_turret';
+      const isBallista = bldg?.buildingType === 'ballista';
+      const isCatapult = bldg?.buildingType === 'catapult';
 
-      // Use spatial hash for fast neighbor lookup
-      let bestId = -1;
-      let bestDist = turret.range * turret.range;
-      enemyHash.queryRange(tpos.x, tpos.y, turret.range, (entry, dSq) => {
-        // Skip hidden ghosts
-        const ghostSt = world.getComponent<GhostStateComponent>(entry.id, C.GhostState);
-        if (ghostSt?.hidden) return;
-        if (dSq < bestDist) { bestDist = dSq; bestId = entry.id; }
-      });
+      // Catapult uses special targeting (portals first, then densest cluster)
+      let targetX: number;
+      let targetY: number;
+      if (isCatapult) {
+        const lvlIdx = (bldg!.upgradeLevel ?? 1) - 1;
+        const aoeR = UPGRADE_CATAPULT_AOE[lvlIdx] ?? CATAPULT_AOE_RADIUS;
+        const target = findCatapultTarget(tpos, turret.range, aoeR);
+        if (!target) continue;
+        targetX = target.x;
+        targetY = target.y;
+      } else {
+        // Standard turret targeting: nearest enemy via spatial hash
+        let bestId = -1;
+        let bestDist = turret.range * turret.range;
+        enemyHash.queryRange(tpos.x, tpos.y, turret.range, (entry, dSq) => {
+          const ghostSt = world.getComponent<GhostStateComponent>(entry.id, C.GhostState);
+          if (ghostSt?.hidden) return;
+          if (dSq < bestDist) { bestDist = dSq; bestId = entry.id; }
+        });
+        if (bestId < 0) continue;
+        const epos = world.getComponent<PositionComponent>(bestId, C.Position)!;
+        targetX = epos.x;
+        targetY = epos.y;
+      }
 
-      if (bestId < 0) continue;
       turret.cooldownTimer = turret.cooldown * cards.debuffs.turretCooldownMult;
 
-      const epos = world.getComponent<PositionComponent>(bestId, C.Position)!;
-      const dx = epos.x - tpos.x, dy = epos.y - tpos.y;
+      const dx = targetX - tpos.x, dy = targetY - tpos.y;
       const dist = distance(dx, dy);
       if (dist < 0.01) continue;
       const nx = dx / dist, ny = dy / dist;
@@ -863,13 +932,11 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       world.addComponent(projId, C.Position, { x: px, y: py });
       const projComp: any = { ownerId: id, damage: turret.damage, lifetime: RANGED_LIFETIME };
 
-      const isCannon = bldg?.buildingType === 'cannon_turret';
-      const isBallista = bldg?.buildingType === 'ballista';
       if (isCannon) {
         const lvlIdx = (bldg!.upgradeLevel ?? 1) - 1;
         projComp.aoeRadius = UPGRADE_CANNON_AOE[lvlIdx] ?? CANNON_AOE_BASE_RADIUS;
-        projComp.targetX = epos.x;
-        projComp.targetY = epos.y;
+        projComp.targetX = targetX;
+        projComp.targetY = targetY;
         const flightTime = dist / turret.projectileSpeed;
         projComp.flightTime = flightTime;
         projComp.totalFlightTime = flightTime;
@@ -878,17 +945,26 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
         projComp.hitEntities = [];
         const lvlIdx = (bldg!.upgradeLevel ?? 1) - 1;
         projComp.aoeRadius = UPGRADE_BALLISTA_AOE[lvlIdx] ?? UPGRADE_BALLISTA_AOE[0];
+      } else if (isCatapult) {
+        const lvlIdx = (bldg!.upgradeLevel ?? 1) - 1;
+        projComp.aoeRadius = UPGRADE_CATAPULT_AOE[lvlIdx] ?? CATAPULT_AOE_RADIUS;
+        projComp.targetX = targetX;
+        projComp.targetY = targetY;
+        const flightTime = dist / turret.projectileSpeed;
+        projComp.flightTime = flightTime;
+        projComp.totalFlightTime = flightTime;
       }
       world.addComponent(projId, C.Velocity, { vx: nx * turret.projectileSpeed, vy: ny * turret.projectileSpeed });
       world.addComponent(projId, C.Projectile, projComp);
       world.addComponent(projId, C.Faction, { type: 'player' });
 
+      const isMortar = isCannon || isCatapult;
       const spawnMsg: ProjectileSpawnMessage = {
         type: MessageType.PROJECTILE_SPAWN,
         projectileId: projId, x: px, y: py,
         vx: nx * turret.projectileSpeed, vy: ny * turret.projectileSpeed,
         ownerSlot: -1,
-        ...(isCannon ? { targetX: epos.x, targetY: epos.y, totalFlightTime: dist / turret.projectileSpeed } : {}),
+        ...(isMortar ? { targetX, targetY, totalFlightTime: dist / turret.projectileSpeed } : {}),
         ...(isBallista ? { pierce: true, ballista: true } : {}),
       };
       for (const p of players.values()) send(p.client, spawnMsg);
@@ -896,6 +972,7 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
   }
 
   function tickLaserBeams(dt: number, send: SendFn): void {
+    const deaths: number[] = [];
     for (const id of world.query(C.LaserBeam, C.Position)) {
       const laser = world.getComponent<LaserBeamComponent>(id, C.LaserBeam)!;
       const tpos = world.getComponent<PositionComponent>(id, C.Position)!;
@@ -937,23 +1014,36 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       if (laser.targetId !== null) {
         const ehp = world.getComponent<HealthComponent>(laser.targetId, C.Health);
         if (ehp && ehp.current > 0) {
-          const dmg = laser.damagePerSecond * dt;
+          const dmg = Math.max(1, Math.round(laser.damagePerSecond * dt));
           ehp.current = Math.max(0, ehp.current - dmg);
+
+          // Broadcast laser beam VFX (source -> target position)
+          const tgtPos = world.getComponent<PositionComponent>(laser.targetId, C.Position);
+          if (tgtPos) {
+            const beamMsg = {
+              type: MessageType.LASER_BEAM,
+              sourceX: tpos.x, sourceY: tpos.y,
+              targetX: tgtPos.x, targetY: tgtPos.y,
+            };
+            for (const p of players.values()) send(p.client, beamMsg);
+          }
 
           // Send periodic hit messages (every ~0.5s worth of damage) for visual feedback
           const hitMsg: HitMessage = {
             type: MessageType.HIT,
             sourceId: id, targetId: laser.targetId,
-            damage: Math.round(dmg), knockbackVx: 0, knockbackVy: 0,
+            damage: dmg, knockbackVx: 0, knockbackVy: 0,
           };
           for (const p of players.values()) send(p.client, hitMsg);
 
           if (ehp.current <= 0) {
+            deaths.push(laser.targetId);
             laser.targetId = null;
           }
         }
       }
     }
+    if (deaths.length > 0) destroyDeadEntities(deaths, undefined, send);
   }
 
   function tickGhostVisibility(): void {
@@ -1242,6 +1332,7 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
   // ── Tesla Coil tick ──────────────────────────────────────────────────────
 
   function tickTeslaCoils(dt: number, send: SendFn): void {
+    const deaths: number[] = [];
     for (const id of world.query(C.TeslaCoil, C.Position)) {
       const tc = world.getComponent<TeslaCoilComponent>(id, C.TeslaCoil)!;
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
@@ -1255,7 +1346,10 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       enemyHash.queryRange(pos.x, pos.y, tc.range, (entry) => {
         hitIds.add(entry.id);
         const hp = world.getComponent<HealthComponent>(entry.id, C.Health);
-        if (hp) hp.current -= tc.damage;
+        if (hp) {
+          hp.current = Math.max(0, hp.current - tc.damage);
+          if (hp.current <= 0) deaths.push(entry.id);
+        }
         chain.push({ x: entry.x, y: entry.y });
       });
 
@@ -1275,7 +1369,11 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
         if (newHits.length === 0) break;
         for (const nh of newHits) {
           const hp = world.getComponent<HealthComponent>(nh.id, C.Health);
-          if (hp) hp.current -= Math.round(tc.damage * 0.5);
+          if (hp) {
+            const chainDmg = Math.round(tc.damage * 0.5);
+            hp.current = Math.max(0, hp.current - chainDmg);
+            if (hp.current <= 0) deaths.push(nh.id);
+          }
           chain.push({ x: nh.x, y: nh.y });
         }
       }
@@ -1284,21 +1382,25 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       const chainMsg = { type: MessageType.TESLA_CHAIN, sourceX: pos.x, sourceY: pos.y, chain };
       for (const p of players.values()) send(p.client, chainMsg);
     }
+    if (deaths.length > 0) destroyDeadEntities(deaths, undefined, send);
   }
 
   // ── Flame Tower tick ────────────────────────────────────────────────────
 
-  function tickFlameTowers(dt: number): void {
+  function tickFlameTowers(dt: number, send: SendFn): void {
+    const deaths: number[] = [];
     for (const id of world.query(C.FlameAura, C.Position)) {
       const fl = world.getComponent<FlameAuraComponent>(id, C.FlameAura)!;
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
 
       // Auto-rotate to nearest enemy
-      // Find nearest enemy via spatial hash for facing
       const nearest = enemyHash.queryNearest(pos.x, pos.y, fl.range);
-      if (nearest) {
-        fl.facing = Math.atan2(nearest.y - pos.y, nearest.x - pos.x);
-      }
+      if (!nearest) continue; // No enemies in range - idle, no VFX
+      fl.facing = Math.atan2(nearest.y - pos.y, nearest.x - pos.x);
+
+      // Broadcast flame cone VFX only when actively firing
+      const flameMsg = { type: MessageType.FLAME_CONE, sourceX: pos.x, sourceY: pos.y, facing: fl.facing, range: fl.range, arcRadians: fl.arcRadians };
+      for (const p of players.values()) send(p.client, flameMsg);
 
       // Deal DPS to all enemies in cone via spatial hash
       const halfArc = fl.arcRadians / 2;
@@ -1309,9 +1411,14 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
         while (diff < -Math.PI) diff += 2 * Math.PI;
         if (Math.abs(diff) > halfArc) return;
         const hp = world.getComponent<HealthComponent>(entry.id, C.Health);
-        if (hp) hp.current -= fl.dps * dt;
+        if (hp) {
+          const dmg = Math.max(1, Math.round(fl.dps * dt));
+          hp.current = Math.max(0, hp.current - dmg);
+          if (hp.current <= 0) deaths.push(entry.id);
+        }
       });
     }
+    if (deaths.length > 0) destroyDeadEntities(deaths, undefined, send);
   }
 
   // ── Repair Station tick ─────────────────────────────────────────────────
@@ -1516,7 +1623,7 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       tickBuildingRegen(dt);
       tickRuins(dt, send);
       tickTeslaCoils(dt, send);
-      tickFlameTowers(dt);
+      tickFlameTowers(dt, send);
       tickRepairStations(dt);
       tickMoats();
     },

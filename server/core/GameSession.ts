@@ -34,6 +34,7 @@ import type {
   BurnDotComponent, SlowEffectComponent, SpeedComponent,
   PoisonDotComponent, StunEffectComponent, HolyMarkComponent,
   ShadowDrainComponent, ArcaneMarkComponent, NatureBlessingComponent,
+  BleedComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -2170,6 +2171,9 @@ export class GameSession {
     // Apply on-hit special effects (lifesteal, burn, slow, elemental)
     this.applyOnHitEffects(player.client.id, entityId, hits);
 
+    // Apply combat modifiers from skill tree (cleave, stun, bleed, etc.)
+    this.applyCombatMods(player, entityId, hits, deaths, msg.facing, send);
+
     // Build attacker map so destroyDeadEntities can credit resource harvesting
     const attackerMap = new Map<number, number>();
     for (const hit of hits) {
@@ -2238,6 +2242,71 @@ export class GameSession {
     };
     if (player.playerClass === 'ranger') projData.pierce = true;
     if (player.playerClass === 'mage') projData.homing = true;
+
+    // Apply combat mods to projectile data (before adding to entity so modifications take effect)
+    const rCombatMods = rSBuffs.combatMods;
+    for (const mod of rCombatMods) {
+      switch (mod.type) {
+        case 'multishot_passive': {
+          const count = Math.round(mod.value);
+          const spread = mod.params?.spreadAngle ?? 0.15;
+          for (let i = 1; i < count; i++) {
+            const angle = facing + (i % 2 === 0 ? 1 : -1) * Math.ceil(i / 2) * spread;
+            const extraId = this.world.createEntity();
+            const ex = pos.x + Math.cos(angle) * offset;
+            const ey = pos.y + Math.sin(angle) * offset;
+            this.world.addComponent(extraId, C.Position, { x: ex, y: ey });
+            this.world.addComponent(extraId, C.Velocity, { vx: Math.cos(angle) * RANGED_SPEED, vy: Math.sin(angle) * RANGED_SPEED });
+            this.world.addComponent(extraId, C.Projectile, { ...projData });
+            this.world.addComponent(extraId, C.Faction, { type: faction?.type ?? 'player' });
+            const extraSpawn: ProjectileSpawnMessage = { type: MessageType.PROJECTILE_SPAWN, projectileId: extraId, x: ex, y: ey, vx: Math.cos(angle) * RANGED_SPEED, vy: Math.sin(angle) * RANGED_SPEED, ownerSlot: player.slot };
+            for (const p of this.players.values()) send(p.client, extraSpawn);
+          }
+          break;
+        }
+        case 'piercing_plus': {
+          projData.pierce = true;
+          projData.maxPierces = Math.round(mod.value);
+          projData.hitEntities = [];
+          break;
+        }
+        case 'homing_passive':
+        case 'seeking_orbs': {
+          projData.homing = true;
+          break;
+        }
+        case 'explosive_projectile': {
+          projData.aoeRadius = mod.params?.radius ?? 40;
+          break;
+        }
+        case 'bouncing': {
+          projData.bounceCount = Math.round(mod.value);
+          projData.bounceRange = mod.params?.range ?? 120;
+          break;
+        }
+        case 'split_on_hit': {
+          projData.splitCount = Math.round(mod.value);
+          projData.splitDamage = mod.params?.damage ?? 0.5;
+          break;
+        }
+        case 'arcane_echo': {
+          if (Math.random() < mod.value) {
+            // Spawn duplicate projectile with slight delay (offset position)
+            const echoId = this.world.createEntity();
+            const echoOff = 10;
+            this.world.addComponent(echoId, C.Position, { x: spawnX + dirX * echoOff, y: spawnY + dirY * echoOff });
+            this.world.addComponent(echoId, C.Velocity, { vx, vy });
+            this.world.addComponent(echoId, C.Projectile, { ...projData });
+            this.world.addComponent(echoId, C.Faction, { type: faction?.type ?? 'player' });
+            const echoSpawn: ProjectileSpawnMessage = { type: MessageType.PROJECTILE_SPAWN, projectileId: echoId, x: spawnX + dirX * echoOff, y: spawnY + dirY * echoOff, vx, vy, ownerSlot: player.slot };
+            for (const p of this.players.values()) send(p.client, echoSpawn);
+          }
+          break;
+        }
+        default: break;
+      }
+    }
+
     this.world.addComponent(projId, C.Projectile, projData);
     this.world.addComponent(projId, C.Faction,    { type: faction?.type ?? 'player' });
 
@@ -2433,6 +2502,166 @@ export class GameSession {
             healPerSecond: buffs.natureBlessing, radius: 100, remaining: 3, sourceId: attackerEntityId,
           });
         }
+      }
+    }
+  }
+
+  /**
+   * Apply combat modifiers from the skill tree after melee hits.
+   * Handles cleave, stun, bleed, healing strikes, holy splash, chain, poison, etc.
+   */
+  private applyCombatMods(
+    player: SessionPlayer, entityId: number, hits: import('../systems/CombatSystem').HitResult[], deaths: number[],
+    facing: number, send: SendFn,
+  ): void {
+    const sBuffs = this.skills.getSkillBuffs(player.client.id);
+    if (!sBuffs.combatMods.length) return;
+    const pos = this.world.getComponent<PositionComponent>(entityId, C.Position);
+    if (!pos) return;
+
+    for (const mod of sBuffs.combatMods) {
+      switch (mod.type) {
+        case 'cleave': {
+          // Splash damage to nearby enemies (not already hit)
+          const hitIds = new Set(hits.map(h => h.targetId));
+          const radius = mod.params?.radius ?? 40;
+          const r2 = radius * radius;
+          for (const eid of this.world.query(C.Position, C.Health, C.Faction)) {
+            if (hitIds.has(eid)) continue;
+            const ef = this.world.getComponent<FactionComponent>(eid, C.Faction);
+            if (ef?.type !== 'enemy') continue;
+            const ep = this.world.getComponent<PositionComponent>(eid, C.Position)!;
+            const dx = ep.x - pos.x, dy = ep.y - pos.y;
+            if (dx * dx + dy * dy > r2) continue;
+            const hp = this.world.getComponent<HealthComponent>(eid, C.Health)!;
+            const baseDmg = hits[0]?.damage ?? 10;
+            const splashDmg = Math.round(baseDmg * mod.value);
+            hp.current = Math.max(0, hp.current - splashDmg);
+            if (hp.current <= 0) deaths.push(eid);
+          }
+          break;
+        }
+        case 'shield_bash_stun': {
+          // Random chance to stun each hit target
+          const chance = mod.value;
+          const dur = mod.params?.duration ?? 0.5;
+          for (const hit of hits) {
+            if (Math.random() < chance) {
+              const stun = this.world.getComponent<StunEffectComponent>(hit.targetId, C.StunEffect);
+              if (!stun) {
+                this.world.addComponent(hit.targetId, C.StunEffect, { remaining: dur, sourceId: entityId } as StunEffectComponent);
+              } else {
+                stun.remaining = Math.max(stun.remaining, dur);
+              }
+            }
+          }
+          break;
+        }
+        case 'healing_strikes': {
+          // Heal attacker by fraction of total damage dealt
+          let totalDmg = 0;
+          for (const hit of hits) totalDmg += hit.damage;
+          const healAmt = Math.round(totalDmg * mod.value);
+          if (healAmt > 0) {
+            const hp = this.world.getComponent<HealthComponent>(entityId, C.Health);
+            if (hp) hp.current = Math.min(hp.max, hp.current + healAmt);
+          }
+          break;
+        }
+        case 'execute_bonus': {
+          // Already applied to damage - the actual damage boost is applied in meleeOverrides calculation
+          break;
+        }
+        case 'bleed_stacks': {
+          // Apply bleed to all hit targets
+          const bleedDps = mod.value;
+          const maxStacks = mod.params?.maxStacks ?? 3;
+          const dur = mod.params?.duration ?? 4;
+          for (const hit of hits) {
+            const bleed = this.world.getComponent<BleedComponent>(hit.targetId, C.Bleed);
+            if (!bleed) {
+              this.world.addComponent(hit.targetId, C.Bleed, { dps: bleedDps, remaining: dur, stacks: 1, maxStacks, sourceId: entityId } as BleedComponent);
+            } else if (bleed.stacks < maxStacks) {
+              bleed.stacks++;
+              bleed.remaining = dur;
+            } else {
+              bleed.remaining = dur;
+            }
+          }
+          break;
+        }
+        case 'holy_splash': {
+          // Same as cleave but with paladin flavor
+          const hitIds = new Set(hits.map(h => h.targetId));
+          const radius = mod.params?.radius ?? 50;
+          const r2 = radius * radius;
+          for (const eid of this.world.query(C.Position, C.Health, C.Faction)) {
+            if (hitIds.has(eid)) continue;
+            const ef = this.world.getComponent<FactionComponent>(eid, C.Faction);
+            if (ef?.type !== 'enemy') continue;
+            const ep = this.world.getComponent<PositionComponent>(eid, C.Position)!;
+            const dx = ep.x - pos.x, dy = ep.y - pos.y;
+            if (dx * dx + dy * dy > r2) continue;
+            const hp = this.world.getComponent<HealthComponent>(eid, C.Health)!;
+            const baseDmg = hits[0]?.damage ?? 10;
+            hp.current = Math.max(0, hp.current - Math.round(baseDmg * mod.value));
+            if (hp.current <= 0) deaths.push(eid);
+          }
+          break;
+        }
+        case 'smite_chain': {
+          // Arc damage to N nearby enemies from each hit target
+          const chainCount = Math.round(mod.value);
+          const chainRange = mod.params?.range ?? 80;
+          const dmgFrac = mod.params?.damageFraction ?? 0.35;
+          const hitIds = new Set(hits.map(h => h.targetId));
+          for (const hit of hits) {
+            const hitPos = this.world.getComponent<PositionComponent>(hit.targetId, C.Position);
+            if (!hitPos) continue;
+            let chained = 0;
+            const chainTargets: Array<{ x: number; y: number }> = [];
+            for (const eid of this.world.query(C.Position, C.Health, C.Faction)) {
+              if (chained >= chainCount) break;
+              if (hitIds.has(eid)) continue;
+              const ef = this.world.getComponent<FactionComponent>(eid, C.Faction);
+              if (ef?.type !== 'enemy') continue;
+              const ep = this.world.getComponent<PositionComponent>(eid, C.Position)!;
+              const dx = ep.x - hitPos.x, dy = ep.y - hitPos.y;
+              if (dx * dx + dy * dy > chainRange * chainRange) continue;
+              const hp = this.world.getComponent<HealthComponent>(eid, C.Health)!;
+              const chainDmg = Math.round(hit.damage * dmgFrac);
+              hp.current = Math.max(0, hp.current - chainDmg);
+              hitIds.add(eid);
+              chained++;
+              chainTargets.push({ x: ep.x, y: ep.y });
+              if (hp.current <= 0) deaths.push(eid);
+            }
+            // Broadcast chain lightning VFX (reuse tesla chain visual)
+            if (chainTargets.length > 0) {
+              const chainMsg = { type: MessageType.TESLA_CHAIN, sourceX: hitPos.x, sourceY: hitPos.y, chain: chainTargets };
+              for (const p of this.players.values()) send(p.client, chainMsg);
+            }
+          }
+          break;
+        }
+        case 'natures_bite': {
+          // Apply poison DoT to all hit targets
+          const poisonDps = mod.value;
+          const dur = mod.params?.duration ?? 4;
+          for (const hit of hits) {
+            const burn = this.world.getComponent<BurnDotComponent>(hit.targetId, C.BurnDot);
+            if (!burn) {
+              this.world.addComponent(hit.targetId, C.BurnDot, { dps: poisonDps, remaining: dur, sourceId: entityId } as BurnDotComponent);
+            } else {
+              burn.dps = Math.max(burn.dps, poisonDps);
+              burn.remaining = Math.max(burn.remaining, dur);
+            }
+          }
+          break;
+        }
+        // Shockwave, shadow_copies, backstab_crit, feral_swipe, pack_strike, berserker_rush
+        // are handled elsewhere (feral_swipe modifies arc before combat, backstab_crit modifies damage calc)
+        default: break;
       }
     }
   }
@@ -2768,6 +2997,12 @@ export class GameSession {
   debugSetTime(seconds: number, send: (client: ConnectedClient, msg: object) => void): void {
     if (this.phase !== 'playing') return;
     this.dayNight.debugSetTime(seconds, send);
+  }
+
+  /** Toggle day timer pause. Returns the new paused state. */
+  toggleDayPause(): boolean {
+    if (this.phase !== 'playing') return false;
+    return this.dayNight.toggleDayPause();
   }
 
   debugGiveResources(clientId: string, send: (client: ConnectedClient, msg: object) => void): void {

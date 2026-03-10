@@ -26,6 +26,8 @@ export interface DayNightState {
   permanentNight: boolean;
   /** Sync broadcast timer. */
   syncTimer: number;
+  /** When true, the day timer is paused (via /pause command). */
+  dayPaused: boolean;
 }
 
 // ── Dependencies ─────────────────────────────────────────────────────────────
@@ -150,7 +152,7 @@ export function createDayNightController(deps: DayNightControllerDeps) {
   function tick(dt: number, send: SendFn): void {
     switch (s.phase) {
       case 'day': {
-        s.dayTimer -= dt;
+        if (!s.dayPaused) s.dayTimer -= dt;
         updateDarkness(); // re-evaluate eclipse darkness each tick
 
         // Periodic sync
@@ -270,6 +272,12 @@ export function createDayNightController(deps: DayNightControllerDeps) {
     broadcastSync(send);
   }
 
+  /** Toggle day timer pause state. Returns the new paused value. */
+  function toggleDayPause(): boolean {
+    s.dayPaused = !s.dayPaused;
+    return s.dayPaused;
+  }
+
   /** Debug: skip to night immediately. */
   function debugSkipToNight(send: SendFn): void {
     if (s.phase === 'day') {
@@ -312,6 +320,7 @@ export function createDayNightController(deps: DayNightControllerDeps) {
     debugSkipToNight,
     debugSkipToDay,
     debugSetTime,
+    toggleDayPause,
     broadcastSync,
   };
 }
@@ -328,5 +337,6 @@ export function createDayNightState(): DayNightState {
     sleepVotes: new Set(),
     permanentNight: false,
     syncTimer: 0,
+    dayPaused: false,
   };
 }
