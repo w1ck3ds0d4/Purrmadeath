@@ -95,34 +95,6 @@ const ABILITY_COLORS: Record<string, { fill: number; stroke: number }> = {
   arcane_barrage:     { fill: 0x9944dd, stroke: 0xbb66ff },
   lightning_storm:    { fill: 0x4466dd, stroke: 0x6688ff },
   rift_collapse:      { fill: 0x7733cc, stroke: 0x9955ee },
-
-  // Assassin abilities - dark red/shadow tones
-  phantom_strike:     { fill: 0x553366, stroke: 0x775588 },
-  smoke_bomb:         { fill: 0x444444, stroke: 0x666666 },
-  death_mark:         { fill: 0x882233, stroke: 0xaa4455 },
-  fan_of_knives:      { fill: 0x774433, stroke: 0x996655 },
-  vanish:             { fill: 0x332244, stroke: 0x554466 },
-
-  // Paladin abilities - gold/white tones
-  divine_smite:       { fill: 0xddaa22, stroke: 0xffcc44 },
-  aegis:              { fill: 0xccbb44, stroke: 0xeedd66 },
-  judgment_hammer:    { fill: 0xeebb33, stroke: 0xffdd55 },
-  consecration:       { fill: 0xddcc55, stroke: 0xffee77 },
-  guardian_angel:     { fill: 0xeeeeaa, stroke: 0xffffcc },
-
-  // Necromancer abilities - teal/dark green tones
-  raise_dead:         { fill: 0x228866, stroke: 0x44aa88 },
-  soul_drain:         { fill: 0x33aa88, stroke: 0x55ccaa },
-  death_coil:         { fill: 0x227755, stroke: 0x449977 },
-  bone_prison:        { fill: 0x559977, stroke: 0x77bb99 },
-  plague_cloud:       { fill: 0x448844, stroke: 0x66aa66 },
-
-  // Beastmaster abilities - orange/brown tones
-  stampede:           { fill: 0xaa7733, stroke: 0xcc9955 },
-  pack_hunt:          { fill: 0x996633, stroke: 0xbb8855 },
-  primal_roar:        { fill: 0xcc8822, stroke: 0xeeaa44 },
-  natures_wrath:      { fill: 0x77aa33, stroke: 0x99cc55 },
-  wild_transformation:{ fill: 0xbb6622, stroke: 0xdd8844 },
 };
 
 /**

@@ -37,37 +37,10 @@ const CARD_RARITY_WEIGHTS: Record<CardDropSource, Record<CardRarity, number>> = 
  * Excludes already-picked cards.
  */
 export function rollCardDrop(
-  source: CardDropSource,
-  pickedCardIds: Set<string>,
+  _source: CardDropSource,
+  _pickedCardIds: Set<string>,
 ): CardDefinition | null {
-  const weights = CARD_RARITY_WEIGHTS[source];
-
-  // Filter pool
-  let pool = CARD_POOL.filter(c => {
-    if (pickedCardIds.has(c.id)) return false;
-    if (weights[c.rarity] <= 0) return false;
-    return true;
-  });
-
-  if (pool.length === 0) {
-    // Fallback: allow duplicates but still respect rarity weights
-    pool = CARD_POOL.filter(c => {
-      if (weights[c.rarity] <= 0) return false;
-      return true;
-    });
-  }
-
-  if (pool.length === 0) return null;
-
-  // Weighted random by rarity
-  const weighted = pool.map(c => ({ card: c, weight: weights[c.rarity] }));
-  const totalWeight = weighted.reduce((sum, w) => sum + w.weight, 0);
-  let roll = Math.random() * totalWeight;
-  for (const w of weighted) {
-    roll -= w.weight;
-    if (roll <= 0) return w.card;
-  }
-  return weighted[weighted.length - 1].card;
+  return null;
 }
 
 /**
@@ -75,37 +48,10 @@ export function rollCardDrop(
  * 'rare+' = rare/epic/legendary, 'epic+' = epic/legendary, 'legendary' = legendary only.
  */
 export function rollBossLootCard(
-  pool: 'rare+' | 'epic+' | 'legendary',
-  pickedCardIds: Set<string>,
+  _pool: 'rare+' | 'epic+' | 'legendary',
+  _pickedCardIds: Set<string>,
 ): CardDefinition | null {
-  const minRarities: Record<string, CardRarity[]> = {
-    'rare+': ['rare', 'epic', 'legendary'],
-    'epic+': ['epic', 'legendary'],
-    'legendary': ['legendary'],
-  };
-  const allowed = new Set(minRarities[pool] ?? ['rare', 'epic', 'legendary']);
-
-  let candidates = CARD_POOL.filter(c => {
-    if (!allowed.has(c.rarity)) return false;
-    if (pickedCardIds.has(c.id)) return false;
-    return true;
-  });
-
-  if (candidates.length === 0) {
-    candidates = CARD_POOL.filter(c => allowed.has(c.rarity));
-  }
-  if (candidates.length === 0) return null;
-
-  // Weight by rarity (higher = rarer = lower weight for balanced distribution)
-  const rarityWeight: Record<string, number> = { rare: 50, epic: 35, legendary: 15 };
-  const weighted = candidates.map(c => ({ card: c, weight: rarityWeight[c.rarity] ?? 20 }));
-  const totalWeight = weighted.reduce((sum, w) => sum + w.weight, 0);
-  let roll = Math.random() * totalWeight;
-  for (const w of weighted) {
-    roll -= w.weight;
-    if (roll <= 0) return w.card;
-  }
-  return weighted[weighted.length - 1].card;
+  return null;
 }
 
 /**
@@ -113,11 +59,8 @@ export function rollBossLootCard(
  * Returns null if no drop.
  */
 export function rollEnemyCardDrop(
-  variant: EnemyVariantType | 'boss',
-  pickedCardIds: Set<string>,
+  _variant: EnemyVariantType | 'boss',
+  _pickedCardIds: Set<string>,
 ): CardDefinition | null {
-  const chance = CARD_DROP_CHANCES[variant] ?? 0;
-  if (Math.random() > chance) return null;
-  const source: CardDropSource = variant === 'boss' ? 'boss' : 'regular_enemy';
-  return rollCardDrop(source, pickedCardIds);
+  return null;
 }

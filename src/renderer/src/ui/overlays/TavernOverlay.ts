@@ -21,8 +21,6 @@ const HERO_COLORS: Record<string, string> = {
   berserker: '#cc4444',
   wizard:    '#aa44ff',
   scout:     '#88cccc',
-  paladin:   '#ffcc44',
-  assassin:  '#cc44cc',
 };
 
 export class TavernOverlay {

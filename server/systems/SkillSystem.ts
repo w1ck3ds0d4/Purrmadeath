@@ -26,7 +26,6 @@ import {
   TransformComponent,
   PersistentZoneComponent,
   SummonOwnerComponent,
-  EnemyStatsComponent,
 } from '@shared/components';
 import {
   type SkillAllocation,
@@ -67,19 +66,6 @@ const LAST_STAND_THRESHOLD = 0.25;
 const LAST_STAND_DEFENSE_PERCENT = 0.30;
 const HUNTERS_FOCUS_DELAY = 1.0; // seconds stationary before crit buff
 const HUNTERS_FOCUS_CRIT = 0.15;
-const HOLY_AURA_RADIUS = 100;
-const HOLY_AURA_HPS = 1; // 1 HP/s
-const SOUL_HARVEST_CHANCE = 0.50;
-const SOUL_HARVEST_MAX_SKELETONS = 3;
-const SKELETON_HP = 30;
-const SKELETON_SPEED = 150;
-const SKELETON_DAMAGE = 8;
-const SKELETON_EXPIRE_TIME = 60; // seconds
-const WOLF_HP = 50;
-const WOLF_SPEED = 200;
-const WOLF_DAMAGE = 12;
-const WOLF_RESPAWN_DELAY = 10; // seconds
-const WOLF_EXPIRE_TIME = 9999; // effectively permanent
 
 export function createSkillSystem(deps: SkillSystemDeps) {
   const allocations = new Map<string, SkillAllocation>();
@@ -89,12 +75,6 @@ export function createSkillSystem(deps: SkillSystemDeps) {
   // Ranger: Hunter's Focus - track last known positions and stationary timers
   const rangerLastPos = new Map<string, { x: number; y: number }>();
   const rangerStationaryTimer = new Map<string, number>();
-
-  // Necromancer: Soul Harvest - track skeleton entity IDs per player
-  const necroSkeletons = new Map<string, number[]>();
-
-  // Beastmaster: Companion - track wolf entity ID and respawn timer per player
-  const beastmasterWolf = new Map<string, { entityId: number | null; respawnTimer: number }>();
 
   function getAllocation(clientId: string): SkillAllocation {
     let a = allocations.get(clientId);
@@ -233,20 +213,6 @@ export function createSkillSystem(deps: SkillSystemDeps) {
         case 'warrior': tickWarriorPassive(eid); break;
         case 'ranger': tickRangerPassive(clientId, eid, dt); break;
         // mage: arcane_surge is handled in onKill()
-        // assassin: backstab is checked in CombatSystem when dealing damage
-        case 'paladin': tickPaladinPassive(eid, dt); break;
-        // necromancer: soul_harvest is handled in onKill()
-        case 'beastmaster': tickBeastmasterPassive(clientId, eid, dt); break;
-      }
-    }
-
-    // Clean up dead necromancer skeletons
-    for (const [clientId, skeletons] of necroSkeletons) {
-      for (let i = skeletons.length - 1; i >= 0; i--) {
-        const hp = deps.world.getComponent<HealthComponent>(skeletons[i], C.Health);
-        if (!hp || hp.current <= 0) {
-          skeletons.splice(i, 1);
-        }
       }
     }
   }
@@ -320,88 +286,13 @@ export function createSkillSystem(deps: SkillSystemDeps) {
     }
   }
 
-  /** Paladin - Holy Aura: heal allies within 100px by 1 HP/s */
-  function tickPaladinPassive(eid: number, dt: number): void {
-    const pos = deps.world.getComponent<PositionComponent>(eid, C.Position);
-    if (!pos) return;
-
-    const radiusSq = HOLY_AURA_RADIUS * HOLY_AURA_RADIUS;
-    for (const aid of deps.world.query(C.Position, C.Health, C.Faction)) {
-      if (aid === eid) continue; // don't heal self (aura heals allies)
-      const af = deps.world.getComponent<FactionComponent>(aid, C.Faction);
-      if (!af || (af.type !== 'player' && af.type !== 'guard' && af.type !== 'civilian')) continue;
-      const ap = deps.world.getComponent<PositionComponent>(aid, C.Position)!;
-      const dx = ap.x - pos.x, dy = ap.y - pos.y;
-      if (dx * dx + dy * dy <= radiusSq) {
-        const ah = deps.world.getComponent<HealthComponent>(aid, C.Health)!;
-        ah.current = Math.min(ah.max, ah.current + HOLY_AURA_HPS * dt);
-      }
-    }
-  }
-
-  /** Beastmaster - Companion: spawn/respawn wolf pet */
-  function tickBeastmasterPassive(clientId: string, eid: number, dt: number): void {
-    let state = beastmasterWolf.get(clientId);
-    if (!state) {
-      state = { entityId: null, respawnTimer: 0 };
-      beastmasterWolf.set(clientId, state);
-    }
-
-    // Check if wolf is alive
-    if (state.entityId != null) {
-      const hp = deps.world.getComponent<HealthComponent>(state.entityId, C.Health);
-      if (!hp || hp.current <= 0) {
-        // Wolf died - start respawn timer
-        state.entityId = null;
-        state.respawnTimer = WOLF_RESPAWN_DELAY;
-      }
-      return; // wolf is alive, nothing to do
-    }
-
-    // Wolf is dead or never spawned - count down respawn
-    if (state.respawnTimer > 0) {
-      state.respawnTimer -= dt;
-      if (state.respawnTimer > 0) return;
-    }
-
-    // Spawn the wolf near the player
-    const pos = deps.world.getComponent<PositionComponent>(eid, C.Position);
-    if (!pos) return;
-
-    const wolfId = deps.world.createEntity();
-    const offsetX = (Math.random() - 0.5) * 60;
-    const offsetY = (Math.random() - 0.5) * 60;
-    deps.world.addComponent(wolfId, C.Position, { x: pos.x + offsetX, y: pos.y + offsetY });
-    deps.world.addComponent(wolfId, C.Velocity, { vx: 0, vy: 0 });
-    deps.world.addComponent(wolfId, C.Health, { current: WOLF_HP, max: WOLF_HP });
-    deps.world.addComponent(wolfId, C.Speed, { base: WOLF_SPEED, multiplier: 1 });
-    deps.world.addComponent(wolfId, C.PlayerInput, { dx: 0, dy: 0, sprint: false });
-    deps.world.addComponent(wolfId, C.Faction, { type: 'guard' });
-    deps.world.addComponent(wolfId, C.Facing, { angle: 0 });
-    deps.world.addComponent(wolfId, C.AttackCooldown, { remaining: 0, max: 1.0 });
-    deps.world.addComponent(wolfId, C.KnockbackReceiver, { vx: 0, vy: 0 });
-    deps.world.addComponent(wolfId, C.EnemyStats, {
-      damage: WOLF_DAMAGE, range: 30, knockback: 80, radius: 12,
-      rangedRange: 0, projectileSpeed: 0, rangedDamage: 0, rangedCooldown: 0,
-    });
-    deps.world.addComponent(wolfId, C.SummonOwner, {
-      ownerId: eid,
-      expireTime: Date.now() + WOLF_EXPIRE_TIME * 1000,
-    });
-    // Wolf uses Guard component to get AI patrol behavior around the player
-    deps.world.addComponent(wolfId, C.Guard, { barracksId: eid, patrolRadius: 120 });
-
-    state.entityId = wolfId;
-  }
-
   /**
    * Mage - Arcane Surge: on kill, reduce all ability cooldowns by 1s.
-   * Necromancer - Soul Harvest: on kill, 50% chance to spawn skeleton (max 3).
    * Called externally when an entity scores a kill.
    */
   function onKill(killerEntityId: number): void {
     // Find the player that owns this entity
-    for (const [clientId, player] of deps.players) {
+    for (const [, player] of deps.players) {
       if (player.entityId !== killerEntityId) continue;
 
       // Mage - Arcane Surge
@@ -414,54 +305,8 @@ export function createSkillSystem(deps: SkillSystemDeps) {
         }
       }
 
-      // Necromancer - Soul Harvest
-      if (player.playerClass === 'necromancer') {
-        let skeletons = necroSkeletons.get(clientId);
-        if (!skeletons) { skeletons = []; necroSkeletons.set(clientId, skeletons); }
-
-        // Prune dead skeletons
-        for (let i = skeletons.length - 1; i >= 0; i--) {
-          const hp = deps.world.getComponent<HealthComponent>(skeletons[i], C.Health);
-          if (!hp || hp.current <= 0) skeletons.splice(i, 1);
-        }
-
-        if (skeletons.length < SOUL_HARVEST_MAX_SKELETONS && Math.random() < SOUL_HARVEST_CHANCE) {
-          const pos = deps.world.getComponent<PositionComponent>(killerEntityId, C.Position);
-          if (pos) {
-            const skelId = spawnSkeleton(killerEntityId, pos.x, pos.y);
-            if (skelId != null) skeletons.push(skelId);
-          }
-        }
-      }
-
       break;
     }
-  }
-
-  /** Spawn a skeleton minion for a necromancer. */
-  function spawnSkeleton(ownerId: number, x: number, y: number): number {
-    const id = deps.world.createEntity();
-    const offsetX = (Math.random() - 0.5) * 50;
-    const offsetY = (Math.random() - 0.5) * 50;
-    deps.world.addComponent(id, C.Position, { x: x + offsetX, y: y + offsetY });
-    deps.world.addComponent(id, C.Velocity, { vx: 0, vy: 0 });
-    deps.world.addComponent(id, C.Health, { current: SKELETON_HP, max: SKELETON_HP });
-    deps.world.addComponent(id, C.Speed, { base: SKELETON_SPEED, multiplier: 1 });
-    deps.world.addComponent(id, C.PlayerInput, { dx: 0, dy: 0, sprint: false });
-    deps.world.addComponent(id, C.Faction, { type: 'guard' });
-    deps.world.addComponent(id, C.Facing, { angle: 0 });
-    deps.world.addComponent(id, C.AttackCooldown, { remaining: 0, max: 1.2 });
-    deps.world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
-    deps.world.addComponent(id, C.EnemyStats, {
-      damage: SKELETON_DAMAGE, range: 28, knockback: 60, radius: 10,
-      rangedRange: 0, projectileSpeed: 0, rangedDamage: 0, rangedCooldown: 0,
-    });
-    deps.world.addComponent(id, C.SummonOwner, {
-      ownerId,
-      expireTime: Date.now() + SKELETON_EXPIRE_TIME * 1000,
-    });
-    deps.world.addComponent(id, C.Guard, { barracksId: ownerId, patrolRadius: 100 });
-    return id;
   }
 
   // ── New Effect Component Ticking ────────────────────────────────────────────
@@ -708,7 +553,7 @@ export function createSkillSystem(deps: SkillSystemDeps) {
     // Tick new ability-system effects (Freeze, Root, Fear, etc.)
     tickNewEffects(dt);
 
-    // Tick class passive abilities (Last Stand, Hunter's Focus, Holy Aura, etc.)
+    // Tick class passive abilities (Last Stand, Hunter's Focus, etc.)
     tickClassPassives(dt);
   }
 
@@ -761,8 +606,6 @@ export function createSkillSystem(deps: SkillSystemDeps) {
     buffCache.clear();
     rangerLastPos.clear();
     rangerStationaryTimer.clear();
-    necroSkeletons.clear();
-    beastmasterWolf.clear();
   }
 
   return {

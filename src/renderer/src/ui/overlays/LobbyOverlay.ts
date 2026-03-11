@@ -6,10 +6,6 @@ const CLASS_BADGE_COLORS: Record<string, string> = {
   warrior:     '#cc9966',
   ranger:      '#55cc77',
   mage:        '#9966dd',
-  assassin:    '#cc5555',
-  paladin:     '#ccaa44',
-  necromancer: '#55bbaa',
-  beastmaster: '#cc8844',
 };
 
 /**
