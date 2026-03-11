@@ -489,6 +489,8 @@ export class WaveHUD {
       this.waveEl.style.display = 'none';
       this.sleepBtn.style.display = 'none';
       this.voteEl.style.display = 'none';
+      this.countdownEl.style.opacity = '0';
+      this.bannerEl.style.opacity = '0';
     }
   }
 
@@ -498,6 +500,8 @@ export class WaveHUD {
     this.waveEl.style.display = 'none';
     this.sleepBtn.style.display = 'none';
     this.voteEl.style.display = 'none';
+    this.countdownEl.style.opacity = '0';
+    this.bannerEl.style.opacity = '0';
     this.hasVotedSleep = false;
   }
 

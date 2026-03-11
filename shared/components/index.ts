@@ -228,6 +228,10 @@ export interface ProjectileComponent {
   splitDamage?: number;
   /** Max number of enemies this projectile can pierce through (finite pierce). */
   maxPierces?: number;
+  /** Bonus crit damage multiplier vs frozen/slowed targets (frost_crit). */
+  frostCritBonus?: number;
+  /** Elemental colors for rendering (e.g., [0xff4400, 0x44aadd]). Client cycles through them. */
+  colors?: number[];
 }
 
 // ── Phase 4.8+ components ─────────────────────────────────────────────────────

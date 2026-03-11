@@ -222,6 +222,9 @@ export class SkillTreeOverlay {
   private completedBuffs: { displayName: string; reward: string; medalColor: string }[] = [];
   private onSlotAssign: ((slot: number, abilityId: string | null) => void) | null = null;
   private activeTab: TabId = 'character';
+  private lastMouseX = 0;
+  private lastMouseY = 0;
+  private activeTooltipEl: HTMLElement | null = null;
 
   constructor() {
     this.screen = document.createElement('div');
@@ -266,6 +269,12 @@ export class SkillTreeOverlay {
     this.screen.appendChild(header);
     this.screen.appendChild(this.tabContent);
     document.getElementById('overlay')!.appendChild(this.screen);
+
+    // Track mouse position for tooltip re-triggering after rebuild
+    this.screen.addEventListener('mousemove', (e) => {
+      this.lastMouseX = e.clientX;
+      this.lastMouseY = e.clientY;
+    });
   }
 
   get isVisible(): boolean {
@@ -312,6 +321,11 @@ export class SkillTreeOverlay {
     this.rebuildActiveTab();
     this.skillPointsEl.textContent = `Skill Points: ${this.skillPoints}`;
     this.skillPointsEl.style.color = this.skillPoints > 0 ? '#ffcc44' : THEME.textDim;
+    // Re-trigger hover detection after DOM rebuild so tooltips work for the element under cursor
+    requestAnimationFrame(() => {
+      const el = document.elementFromPoint(this.lastMouseX, this.lastMouseY);
+      if (el) el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    });
   }
 
   // -- Tab bar -----------------------------------------------------------------
@@ -716,35 +730,29 @@ export class SkillTreeOverlay {
         el.style.cssText = this.nodeStyle(node, branch, isAllocated, isAvailable);
         el.innerHTML = this.nodeContent(node, isAllocated, isAvailable);
 
-        // Position tooltip dynamically on hover (fixed positioning)
-        el.addEventListener('mouseenter', (e) => {
-          const tt = el.querySelector('.skill-tooltip') as HTMLElement;
-          if (!tt) return;
-          const rect = el.getBoundingClientRect();
-          tt.style.display = 'block';
-          // Position below the node by default
-          let top = rect.bottom + 6;
-          let left = rect.left + rect.width / 2 - tt.offsetWidth / 2;
-          // If below viewport, show above
-          if (top + tt.offsetHeight > window.innerHeight - 8) {
-            top = rect.top - tt.offsetHeight - 6;
+        // Tooltip follows mouse cursor position
+        el.addEventListener('mouseover', () => {
+          if (this.activeTooltipEl && this.activeTooltipEl !== el) {
+            const prevTt = this.activeTooltipEl.querySelector('.skill-tooltip') as HTMLElement;
+            if (prevTt) prevTt.style.display = 'none';
           }
-          // Clamp horizontally
-          if (left < 8) left = 8;
-          if (left + tt.offsetWidth > window.innerWidth - 8) left = window.innerWidth - tt.offsetWidth - 8;
-          tt.style.top = `${top}px`;
-          tt.style.left = `${left}px`;
+          this.activeTooltipEl = el;
+          this.positionTooltip(el);
         });
-        el.addEventListener('mouseleave', () => {
+        el.addEventListener('mousemove', () => {
+          if (this.activeTooltipEl === el) this.positionTooltip(el);
+        });
+        el.addEventListener('mouseout', (e) => {
+          const related = (e as MouseEvent).relatedTarget as Node | null;
+          if (related && el.contains(related)) return;
           const tt = el.querySelector('.skill-tooltip') as HTMLElement;
           if (tt) tt.style.display = 'none';
+          if (this.activeTooltipEl === el) this.activeTooltipEl = null;
         });
 
         if (isAvailable) {
           el.style.cursor = 'pointer';
           el.addEventListener('click', () => { this.onAllocate?.(node.id); });
-          el.addEventListener('mouseenter', () => { el.style.transform = 'scale(1.03)'; });
-          el.addEventListener('mouseleave', () => { el.style.transform = 'scale(1)'; });
         }
 
         col.appendChild(el);
@@ -978,6 +986,29 @@ export class SkillTreeOverlay {
   }
 
   // -- Shared style helpers ----------------------------------------------------
+
+  private positionTooltip(el: HTMLElement): void {
+    const tt = el.querySelector('.skill-tooltip') as HTMLElement;
+    if (!tt) return;
+    tt.style.display = 'block';
+    tt.style.top = '-9999px';
+    tt.style.left = '-9999px';
+    const ttW = tt.offsetWidth;
+    const ttH = tt.offsetHeight;
+    const rect = el.getBoundingClientRect();
+    // Position to the right of the skill node
+    let left = rect.right + 8;
+    let top = rect.top + rect.height / 2 - ttH / 2;
+    // If goes off right, flip to left side
+    if (left + ttW > window.innerWidth - 8) left = rect.left - ttW - 8;
+    // Clamp vertically
+    if (top < 8) top = 8;
+    if (top + ttH > window.innerHeight - 8) top = window.innerHeight - ttH - 8;
+    // Clamp horizontally
+    if (left < 8) left = 8;
+    tt.style.top = `${top}px`;
+    tt.style.left = `${left}px`;
+  }
 
   private nodeStyle(node: SkillNode, branch: SkillBranch, allocated: boolean, available: boolean): string {
     const color = hexColor(branch.color);

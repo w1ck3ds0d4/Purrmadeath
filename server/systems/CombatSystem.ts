@@ -13,6 +13,8 @@ import {
   GhostStateComponent,
   EnemyVariantComponent,
   DodgeRollComponent,
+  SlowEffectComponent,
+  FreezeComponent,
 } from '@shared/components';
 import { MELEE_RANGE, MELEE_ARC, MELEE_DAMAGE, MELEE_KNOCKBACK, TICK_MS, PLAYER_RADIUS, ENEMY_RADIUS, CIVILIAN_RADIUS, buildingHalfExtent, CRIT_CHANCE, CRIT_MULTIPLIER, GATHERING_DAMAGE } from '@shared/constants';
 
@@ -23,6 +25,7 @@ export interface HitResult {
   knockbackVx: number;
   knockbackVy: number;
   crit?: boolean;
+  dodged?: boolean;
 }
 
 /** Optional per-call overrides for enemy melee (or future weapon variants). */
@@ -38,6 +41,8 @@ export interface MeleeOverrides {
   critMultiplier?: number;
   /** Per-player knockback multiplier from card buffs. */
   knockbackMult?: number;
+  /** Bonus crit damage multiplier vs frozen/slowed targets (frost_crit). */
+  frostCritBonus?: number;
 }
 
 /**
@@ -54,6 +59,8 @@ export interface MeleeOverrides {
 export class CombatSystem {
   /** Session-wide building damage multiplier (Thick Walls / Shoddy Construction cards). */
   buildingDamageMult = 1;
+  /** Per-entity dodge chance (0-1). Set externally by GameSession from skill buffs. */
+  dodgeChanceMap = new Map<number, number>();
 
   /** Tick down all attack cooldowns. */
   update(world: World, dt: number): void {
@@ -175,6 +182,13 @@ export class CombatSystem {
         if (diff > halfArc) continue;
       }
 
+      // Dodge check: if target has dodge chance, roll to evade the attack entirely
+      const targetDodge = this.dodgeChanceMap.get(targetId) ?? 0;
+      if (targetDodge > 0 && Math.random() < targetDodge) {
+        hits.push({ sourceId, targetId, damage: 0, knockbackVx: 0, knockbackVy: 0, dodged: true });
+        continue;
+      }
+
       // Damage with defense reduction
       const hp  = world.getComponent<HealthComponent>(targetId, C.Health)!;
       const def = world.getComponent<DefenseComponent>(targetId, C.Defense);
@@ -193,7 +207,12 @@ export class CombatSystem {
       if (srcFaction?.type === 'player') {
         const totalCritChance = CRIT_CHANCE + (overrides?.critChance ?? 0);
         if (Math.random() < totalCritChance) {
-          const totalCritMult = CRIT_MULTIPLIER + (overrides?.critMultiplier ?? 0);
+          let totalCritMult = CRIT_MULTIPLIER + (overrides?.critMultiplier ?? 0);
+          // Frost crit: bonus crit damage vs frozen/slowed targets
+          if (overrides?.frostCritBonus && overrides.frostCritBonus > 0) {
+            const isFrozenOrSlowed = world.hasComponent(targetId, C.SlowEffect) || world.hasComponent(targetId, C.Freeze);
+            if (isFrozenOrSlowed) totalCritMult += overrides.frostCritBonus;
+          }
           dmg = Math.round(dmg * totalCritMult);
           crit = true;
         }

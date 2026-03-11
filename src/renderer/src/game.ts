@@ -236,7 +236,8 @@ async function main(): Promise<void> {
     blizzard:       { fill: 0x66aaff, stroke: 0x99ccff },
     shadow_step:    { fill: 0x6644cc, stroke: 0x8866ff },
     teleport:       { fill: 0xaa66ff, stroke: 0xcc99ff },
-    ice_prison:     { fill: 0x4488cc, stroke: 0x66aaee },
+    meteor_shower:      { fill: 0xff4400, stroke: 0xff7722 },
+    blizzard_freeze:    { fill: 0x66aaff, stroke: 0x99ccff },
   };
 
   type TargetMode = 'self' | 'ground' | 'direction';
@@ -245,7 +246,7 @@ async function main(): Promise<void> {
     const selfTypes = ['ground_slam', 'battle_fury', 'earthquake', 'blade_storm',
       'fan_of_knives', 'smoke_bomb', 'vanish', 'aegis', 'guardian_angel',
       'wild_transformation', 'primal_roar', 'multishot',
-      'pyroclasm', 'arrow_volley', 'arcane_barrage'];
+      'arrow_volley', 'thunderwave'];
     if (selfTypes.includes(params.type)) return 'self';
     // Direction: dashes
     const dirTypes = ['shield_charge', 'phantom_strike', 'stampede', 'grapple_hook'];

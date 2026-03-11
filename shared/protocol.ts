@@ -573,6 +573,8 @@ export interface HitMessage extends BaseMessage {
   crit?: boolean;
   /** Primary element of the attack (for damage number tinting). */
   element?: string;
+  /** True if the target dodged this attack. */
+  dodged?: boolean;
 }
 
 /** Server → all: a new projectile was created (ranged attack). */
@@ -599,6 +601,8 @@ export interface ProjectileSpawnMessage extends BaseMessage {
   homing?: boolean;
   /** True if this is a ballista bolt (bigger arrow visual). */
   ballista?: boolean;
+  /** Elemental projectile colors for cycling. */
+  colors?: number[];
 }
 
 /** Server → all: a projectile was destroyed. */

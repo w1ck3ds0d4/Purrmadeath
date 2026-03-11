@@ -22,6 +22,7 @@ import {
   TransformComponent,
   PersistentZoneComponent,
   SummonOwnerComponent,
+  SoulMarkComponent,
 } from '@shared/components';
 import type { AbilityParams, SkillActiveAbility } from '@shared/definitions/SkillDefinitions';
 import type { AbilityEffectMessage } from '@shared/protocol';
@@ -424,122 +425,99 @@ export function executeAbility(
     // MAGE
     // =====================================================================
 
-    case 'pyroclasm': {
-      // Cone fire damage + burn DOT
-      const halfAngle = params.coneAngle / 2;
-      baseEffect.radius = params.range;
-      for (const eid of world.query(C.Position, C.Health, C.Faction)) {
-        const ef = world.getComponent<FactionComponent>(eid, C.Faction);
-        if (ef?.type !== 'enemy') continue;
-        const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
-        const dx = ep.x - pos.x, dy = ep.y - pos.y;
-        const dist2 = dx * dx + dy * dy;
-        if (dist2 > params.range * params.range) continue;
-        // Check cone angle
-        const angleToEnemy = Math.atan2(dy, dx);
-        let angleDiff = angleToEnemy - msg.facing;
-        // Normalize to [-PI, PI]
-        while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-        while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-        if (Math.abs(angleDiff) > halfAngle) continue;
-        const dmg = applyDamage(world, eid, params.damage);
-        hits.push({ sourceId: entityId, targetId: eid, damage: dmg, knockbackVx: 0, knockbackVy: 0 });
-        const hp = world.getComponent<HealthComponent>(eid, C.Health)!;
-        if (hp.current <= 0) deaths.push(eid);
-        // Apply burn
-        let burn = world.getComponent<BurnDotComponent>(eid, C.BurnDot);
-        if (!burn) {
-          burn = { dps: params.burnDps, remaining: params.burnDuration, sourceId: entityId };
-          world.addComponent(eid, C.BurnDot, burn);
-        } else {
-          burn.dps = Math.max(burn.dps, params.burnDps);
-          burn.remaining = Math.max(burn.remaining, params.burnDuration);
-        }
-      }
-      break;
-    }
-
-    case 'ice_prison': {
-      // Freeze all enemies in radius at target (cursor) position
-      const ipx = msg.targetX ?? pos.x;
-      const ipy = msg.targetY ?? pos.y;
-      baseEffect.x = ipx;
-      baseEffect.y = ipy;
-      baseEffect.radius = params.radius;
-      baseEffect.targetX = ipx;
-      baseEffect.targetY = ipy;
-      for (const e of enemiesInRadius(world, ipx, ipy, params.radius)) {
-        let freeze = world.getComponent<FreezeComponent>(e.eid, C.Freeze);
-        if (!freeze) {
-          freeze = { remaining: params.freezeDuration, breaksOnDamage: true };
-          world.addComponent(e.eid, C.Freeze, freeze);
-        } else {
-          freeze.remaining = Math.max(freeze.remaining, params.freezeDuration);
-        }
-      }
-      break;
-    }
-
-    case 'arcane_barrage': {
-      // Damage N random enemies within 200px
-      const candidates: number[] = [];
-      for (const e of enemiesInRadius(world, pos.x, pos.y, 200)) {
-        candidates.push(e.eid);
-      }
-      // Shuffle and pick up to boltCount
-      for (let i = candidates.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [candidates[i], candidates[j]] = [candidates[j]!, candidates[i]!];
-      }
-      const targets = candidates.slice(0, params.boltCount);
-      for (const eid of targets) {
-        const dmg = applyDamage(world, eid, params.damage);
-        hits.push({ sourceId: entityId, targetId: eid, damage: dmg, knockbackVx: 0, knockbackVy: 0 });
-        const hp = world.getComponent<HealthComponent>(eid, C.Health)!;
-        if (hp.current <= 0) deaths.push(eid);
-      }
-      break;
-    }
-
-    case 'lightning_storm': {
-      // Hit N random enemies in radius
-      baseEffect.radius = params.radius;
-      const candidates: number[] = [];
-      for (const e of enemiesInRadius(world, pos.x, pos.y, params.radius)) {
-        candidates.push(e.eid);
-      }
-      for (let i = candidates.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [candidates[i], candidates[j]] = [candidates[j]!, candidates[i]!];
-      }
-      const targets = candidates.slice(0, params.targetCount);
-      for (const eid of targets) {
-        const dmg = applyDamage(world, eid, params.damage);
-        hits.push({ sourceId: entityId, targetId: eid, damage: dmg, knockbackVx: 0, knockbackVy: 0 });
-        const hp = world.getComponent<HealthComponent>(eid, C.Health)!;
-        if (hp.current <= 0) deaths.push(eid);
-      }
-      break;
-    }
-
-    case 'rift_collapse': {
-      // Pull enemies toward target + damage
+    case 'meteor_shower': {
       const tx = msg.targetX ?? pos.x;
       const ty = msg.targetY ?? pos.y;
       baseEffect.targetX = tx;
       baseEffect.targetY = ty;
       baseEffect.radius = params.radius;
-      for (const e of enemiesInRadius(world, tx, ty, params.radius)) {
-        const dmg = applyDamage(world, e.eid, params.damage);
-        // Pull toward center
-        const dist = Math.sqrt(e.dist2) || 1;
-        const pullX = -(e.dx / dist) * params.pullStrength;
-        const pullY = -(e.dy / dist) * params.pullStrength;
-        const kb = world.getComponent<KnockbackReceiverComponent>(e.eid, C.KnockbackReceiver);
-        if (kb) { kb.vx += pullX; kb.vy += pullY; }
-        hits.push({ sourceId: entityId, targetId: e.eid, damage: dmg, knockbackVx: pullX, knockbackVy: pullY });
-        const hp = world.getComponent<HealthComponent>(e.eid, C.Health)!;
-        if (hp.current <= 0) deaths.push(e.eid);
+      baseEffect.duration = params.duration;
+      const meteorImpactRadius = 60; // Each meteor's splash radius
+      const deathSet = new Set<number>();
+      // Spread meteors across the full 300px area
+      for (let i = 0; i < params.meteorCount; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const dist = Math.random() * params.radius;
+        const mx = tx + Math.cos(angle) * dist;
+        const my = ty + Math.sin(angle) * dist;
+        for (const eid of world.query(C.Position, C.Health, C.Faction)) {
+          if (deathSet.has(eid)) continue; // Already dead from earlier meteor
+          const ef = world.getComponent<FactionComponent>(eid, C.Faction);
+          if (!ef || ef.type === 'player' || ef.type === 'building' || ef.type === 'item' || ef.type === 'guard' || ef.type === 'civilian') continue;
+          const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
+          const dx = ep.x - mx, dy = ep.y - my;
+          if (dx * dx + dy * dy > meteorImpactRadius * meteorImpactRadius) continue;
+          const hp = world.getComponent<HealthComponent>(eid, C.Health)!;
+          if (hp.current <= 0) continue; // Already dead
+          const def = world.getComponent<DefenseComponent>(eid, C.Defense);
+          let dmg = params.damagePerMeteor;
+          if (def) dmg = Math.max(1, Math.round((dmg - def.flat) * (1 - def.percent)));
+          hp.current = Math.max(0, hp.current - dmg);
+          hits.push({ sourceId: entityId, targetId: eid, damage: dmg, knockbackVx: 0, knockbackVy: 0 });
+          if (hp.current <= 0) { deaths.push(eid); deathSet.add(eid); }
+        }
+      }
+      break;
+    }
+
+    case 'blizzard_freeze': {
+      const tx = msg.targetX ?? pos.x;
+      const ty = msg.targetY ?? pos.y;
+      baseEffect.targetX = tx;
+      baseEffect.targetY = ty;
+      baseEffect.radius = params.radius;
+      baseEffect.duration = params.freezeDuration;
+      const r2 = params.radius * params.radius;
+      for (const eid of world.query(C.Position, C.Faction)) {
+        const ef = world.getComponent<FactionComponent>(eid, C.Faction);
+        if (ef?.type !== 'enemy') continue;
+        const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
+        const dx = ep.x - tx, dy = ep.y - ty;
+        if (dx * dx + dy * dy > r2) continue;
+        // Apply freeze
+        let freeze = world.getComponent<FreezeComponent>(eid, C.Freeze);
+        if (!freeze) {
+          world.addComponent(eid, C.Freeze, { remaining: params.freezeDuration, breaksOnDamage: false });
+          freeze = world.getComponent<FreezeComponent>(eid, C.Freeze)!;
+        } else {
+          freeze.remaining = Math.max(freeze.remaining, params.freezeDuration);
+        }
+        // Apply damage amplification via SoulMark component (reuse for damage amp)
+        let mark = world.getComponent<SoulMarkComponent>(eid, C.SoulMark);
+        if (!mark) {
+          world.addComponent(eid, C.SoulMark, { damageAmp: params.damageAmp, remaining: params.freezeDuration, sourceId: entityId });
+          mark = world.getComponent<SoulMarkComponent>(eid, C.SoulMark)!;
+        } else {
+          mark.damageAmp = Math.max(mark.damageAmp, params.damageAmp);
+          mark.remaining = Math.max(mark.remaining, params.freezeDuration);
+        }
+      }
+      break;
+    }
+
+    case 'thunderwave': {
+      baseEffect.radius = params.radius;
+      const r2 = params.radius * params.radius;
+      for (const eid of world.query(C.Position, C.Health, C.Faction)) {
+        const ef = world.getComponent<FactionComponent>(eid, C.Faction);
+        if (ef?.type !== 'enemy') continue;
+        const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
+        const dx = ep.x - pos.x, dy = ep.y - pos.y;
+        if (dx * dx + dy * dy > r2) continue;
+        // Knockback
+        const d = distance(dx, dy) || 1;
+        const kbx = (dx / d) * params.knockback;
+        const kby = (dy / d) * params.knockback;
+        const kb = world.getComponent<KnockbackReceiverComponent>(eid, C.KnockbackReceiver);
+        if (kb) { kb.vx += kbx; kb.vy += kby; }
+        // Stun
+        let stun = world.getComponent<StunEffectComponent>(eid, C.StunEffect);
+        if (!stun) {
+          world.addComponent(eid, C.StunEffect, { remaining: params.stunDuration, sourceId: entityId });
+        } else {
+          stun.remaining = Math.max(stun.remaining, params.stunDuration);
+        }
+        hits.push({ sourceId: entityId, targetId: eid, damage: 0, knockbackVx: kbx, knockbackVy: kby });
       }
       break;
     }

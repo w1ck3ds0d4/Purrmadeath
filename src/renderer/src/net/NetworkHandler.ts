@@ -372,18 +372,22 @@ export function registerMessageHandlers(
 
     const tgtPos = d.world.getComponent<PositionComponent>(hit.targetId, C.Position);
     if (tgtPos) {
-      const faction = d.world.getComponent<FactionComponent>(hit.targetId, C.Faction);
-      // Use element color if present, otherwise faction-based default
-      const elemColor = hit.element ? ELEMENT_COLORS[hit.element] : undefined;
-      const color = elemColor !== undefined ? elemColor
-                  : faction?.type === 'building' ? 0xffa040
-                  : faction?.type === 'resource' ? 0xffffff
-                  : 0xff4444;
-      d.damageNumbers.add(tgtPos.x, tgtPos.y - 10, hit.damage, color, crit);
-      d.hitParticles.burst(tgtPos.x, tgtPos.y, crit ? 8 : 4);
+      // Dodge display
+      if (hit.dodged) {
+        d.damageNumbers.addText(tgtPos.x, tgtPos.y - 10, 'DODGE', 0xffffff);
+      } else {
+        const faction = d.world.getComponent<FactionComponent>(hit.targetId, C.Faction);
+        const elemColor = hit.element ? ELEMENT_COLORS[hit.element] : undefined;
+        const color = elemColor !== undefined ? elemColor
+                    : faction?.type === 'building' ? 0xffa040
+                    : faction?.type === 'resource' ? 0xffffff
+                    : 0xff4444;
+        d.damageNumbers.add(tgtPos.x, tgtPos.y - 10, hit.damage, color, crit);
+        d.hitParticles.burst(tgtPos.x, tgtPos.y, crit ? 8 : 4);
+      }
 
-      // Screen shake when the local player is hit
-      if (hit.targetId === s.localEntityId) {
+      // Screen shake when the local player is hit (not on dodge)
+      if (hit.targetId === s.localEntityId && !hit.dodged) {
         d.camera.shake(crit ? 6 : 3, crit ? 0.15 : 0.1);
       }
 
@@ -397,7 +401,7 @@ export function registerMessageHandlers(
   net.on(MessageType.PROJECTILE_SPAWN, (msg) => {
     const ps = msg as ProjectileSpawnMessage;
     d.projectileRenderer.spawn(ps.projectileId, ps.x, ps.y, ps.vx, ps.vy, ps.ownerSlot,
-      ps.targetX, ps.targetY, ps.totalFlightTime, ps.pierce, ps.homing, ps.ballista);
+      ps.targetX, ps.targetY, ps.totalFlightTime, ps.pierce, ps.homing, ps.ballista, ps.colors);
   });
 
   net.on(MessageType.PROJECTILE_REMOVE, (msg) => {

@@ -89,12 +89,10 @@ const ABILITY_COLORS: Record<string, { fill: number; stroke: number }> = {
   marked_for_death:   { fill: 0x44bb55, stroke: 0x66dd77 },
   multishot:          { fill: 0x33cc55, stroke: 0x55ee77 },
 
-  // Mage abilities - purple/blue tones
-  pyroclasm:          { fill: 0xff4400, stroke: 0xff7722 },
-  ice_prison:         { fill: 0x4488cc, stroke: 0x66aaee },
-  arcane_barrage:     { fill: 0x9944dd, stroke: 0xbb66ff },
-  lightning_storm:    { fill: 0x4466dd, stroke: 0x6688ff },
-  rift_collapse:      { fill: 0x7733cc, stroke: 0x9955ee },
+  // Mage abilities
+  meteor_shower:      { fill: 0xff4400, stroke: 0xff7722 },
+  blizzard_freeze:    { fill: 0x66aaff, stroke: 0x99ccff },
+  thunderwave:        { fill: 0x4466dd, stroke: 0x6688ff },
 };
 
 /**
@@ -220,17 +218,19 @@ export class AbilityVFXSystem {
           break;
         case 'war_cry':
         case 'primal_roar':
-        case 'lightning_storm':
         case 'marked_for_death':
         case 'death_mark':
         case 'bone_prison':
-          this.drawExpandingRing(fx, t, colors);
+        case 'thunderwave':
+          this.drawThunderwave(fx, t);
           break;
         case 'rain_of_arrows':
         case 'judgment_hammer':
         case 'death_coil':
-        case 'arcane_barrage':
           this.drawRainOfArrows(fx, t, colors);
+          break;
+        case 'meteor_shower':
+          this.drawMeteorShower(fx, t, colors);
           break;
         case 'explosive_trap':
         case 'meteor':
@@ -258,17 +258,13 @@ export class AbilityVFXSystem {
           this.drawSummon(fx, t, colors);
           break;
         case 'arrow_volley':
-        case 'pyroclasm':
           this.drawConePyroclasm(fx, t, colors);
-          break;
-        case 'ice_prison':
-          this.drawIcePrison(fx, t, colors);
           break;
         case 'smoke_bomb':
           this.drawSmokeBomb(fx, t, colors);
           break;
-        case 'rift_collapse':
-          this.drawRiftCollapse(fx, t, colors);
+        case 'blizzard_freeze':
+          this.drawBlizzardFreeze(fx, t);
           break;
         case 'blizzard':
         case 'snare_net':
@@ -715,6 +711,238 @@ export class AbilityVFXSystem {
       this.gfx.moveTo(cx + Math.cos(angle) * outerR, cy + Math.sin(angle) * outerR);
       this.gfx.lineTo(cx + Math.cos(angle + 0.3) * innerR, cy + Math.sin(angle + 0.3) * innerR);
       this.gfx.stroke({ color: colors.fill, alpha: alpha * 0.4, width: 1.5 });
+    }
+  }
+
+  private drawMeteorShower(fx: VFXEntry, t: number, _colors: { fill: number; stroke: number }): void {
+    const cx = fx.targetX ?? fx.x;
+    const cy = fx.targetY ?? fx.y;
+    const r = fx.radius;
+
+    // Danger zone ring (faint red circle)
+    const zoneAlpha = t < 0.05 ? t / 0.05 * 0.12 : (t > 0.9 ? (1 - t) / 0.1 * 0.12 : 0.12);
+    this.gfx.circle(cx, cy, r);
+    this.gfx.stroke({ color: 0xff4400, alpha: zoneAlpha, width: 2 });
+    this.gfx.circle(cx, cy, r);
+    this.gfx.fill({ color: 0xff2200, alpha: zoneAlpha * 0.15 });
+
+    // Simulate large meteors falling at staggered phases
+    const meteorCount = 6;
+    for (let i = 0; i < meteorCount; i++) {
+      const phase = ((t * 2.5 + i * 0.42) % 1);
+
+      // Spread across the full area using golden angle distribution (fixed positions)
+      const goldenAngle = 2.399963; // ~137.5 degrees
+      const mAngle = i * goldenAngle;
+      const mDist = r * (0.15 + (i / meteorCount) * 0.75);
+      const mx = cx + Math.cos(mAngle) * mDist;
+      const my = cy + Math.sin(mAngle) * mDist;
+
+      if (phase < 0.35) {
+        // FALLING PHASE - rock drops straight down onto mx, my
+        const fallT = phase / 0.35;
+        const meteorX = mx;
+        const meteorY = my - 100 * (1 - fallT); // falls straight down to my
+        const alpha = 0.3 + fallT * 0.7;
+        const meteorSize = 8 + fallT * 6;
+
+        // White smoke trail behind the meteor (above it)
+        for (let s = 0; s < 4; s++) {
+          const smokeY2 = meteorY - 15 - s * 18;
+          const smokeSize = 5 + s * 3;
+          const smokeAlpha = alpha * (0.25 - s * 0.06);
+          if (smokeAlpha > 0.02) {
+            this.gfx.circle(meteorX + Math.sin(s * 2.5) * 3, smokeY2, smokeSize);
+            this.gfx.fill({ color: 0xddccbb, alpha: smokeAlpha });
+          }
+        }
+
+        // Rock body (dark core + bright edge)
+        this.gfx.circle(meteorX, meteorY, meteorSize);
+        this.gfx.fill({ color: 0x664422, alpha: alpha });
+        this.gfx.circle(meteorX, meteorY, meteorSize * 0.7);
+        this.gfx.fill({ color: 0xff8844, alpha: alpha * 0.6 });
+        // Hot glow
+        this.gfx.circle(meteorX, meteorY, meteorSize * 1.5);
+        this.gfx.fill({ color: 0xff4400, alpha: alpha * 0.15 });
+      } else if (phase < 0.7) {
+        // IMPACT PHASE - large explosion with shockwave
+        const impactT = (phase - 0.35) / 0.35;
+        const alpha = (1 - impactT) * 0.8;
+        const blastR = 15 + impactT * 40;
+
+        // White-hot center flash
+        if (impactT < 0.3) {
+          const flashAlpha = (1 - impactT / 0.3) * 0.7;
+          this.gfx.circle(mx, my, 12);
+          this.gfx.fill({ color: 0xffffcc, alpha: flashAlpha });
+        }
+
+        // Inner fire
+        this.gfx.circle(mx, my, blastR * 0.5);
+        this.gfx.fill({ color: 0xff6622, alpha: alpha * 0.5 });
+
+        // Outer blast
+        this.gfx.circle(mx, my, blastR);
+        this.gfx.fill({ color: 0xff4400, alpha: alpha * 0.2 });
+        this.gfx.circle(mx, my, blastR);
+        this.gfx.stroke({ color: 0xff6622, alpha: alpha * 0.4, width: 2 });
+
+        // Expanding shockwave ring
+        const ringR = blastR * 1.3;
+        this.gfx.circle(mx, my, ringR);
+        this.gfx.stroke({ color: 0xffaa44, alpha: alpha * 0.3, width: 1 });
+
+        // Flying debris rocks
+        for (let d = 0; d < 5; d++) {
+          const dAngle = (d / 5) * Math.PI * 2 + i * 1.3;
+          const dDist = blastR * (0.5 + impactT * 0.8);
+          const dSize = 3 - impactT * 2;
+          if (dSize > 0.5) {
+            this.gfx.circle(mx + Math.cos(dAngle) * dDist, my + Math.sin(dAngle) * dDist, dSize);
+            this.gfx.fill({ color: 0x885533, alpha: alpha * 0.6 });
+          }
+        }
+      }
+      // phase 0.7-1.0: gap before next meteor cycle
+    }
+  }
+
+  private drawThunderwave(fx: VFXEntry, t: number): void {
+    const alpha = (1 - t) * 0.7;
+    const r = fx.radius * t;
+
+    // Yellow shockwave ring (expanding)
+    this.gfx.circle(fx.x, fx.y, r);
+    this.gfx.stroke({ color: 0xffdd44, alpha, width: 4 });
+    // Inner glow ring
+    this.gfx.circle(fx.x, fx.y, r * 0.95);
+    this.gfx.stroke({ color: 0xffffaa, alpha: alpha * 0.4, width: 8 });
+
+    // Yellow fill pulse
+    if (t < 0.3) {
+      const fillAlpha = (1 - t / 0.3) * 0.15;
+      this.gfx.circle(fx.x, fx.y, r);
+      this.gfx.fill({ color: 0xffee66, alpha: fillAlpha });
+    }
+
+    // Lightning bolts radiating outward from center
+    const boltCount = 8;
+    for (let i = 0; i < boltCount; i++) {
+      const angle = (i / boltCount) * Math.PI * 2 + t * 3;
+      const boltLen = r * 0.9;
+      // Jagged bolt from center outward
+      let bx = fx.x, by = fx.y;
+      const segments = 5;
+      this.gfx.moveTo(bx, by);
+      for (let s = 1; s <= segments; s++) {
+        const st = s / segments;
+        const baseX = fx.x + Math.cos(angle) * boltLen * st;
+        const baseY = fx.y + Math.sin(angle) * boltLen * st;
+        // Perpendicular jag
+        const perpX = -Math.sin(angle);
+        const perpY = Math.cos(angle);
+        const jag = (Math.sin(s * 7 + i * 3 + t * 20) * 12) * (1 - st);
+        bx = baseX + perpX * jag;
+        by = baseY + perpY * jag;
+        this.gfx.lineTo(bx, by);
+      }
+      this.gfx.stroke({ color: 0xffee88, alpha: alpha * 0.6, width: 2 });
+      // Glow pass
+      this.gfx.moveTo(fx.x, fx.y);
+      for (let s = 1; s <= segments; s++) {
+        const st = s / segments;
+        const baseX = fx.x + Math.cos(angle) * boltLen * st;
+        const baseY = fx.y + Math.sin(angle) * boltLen * st;
+        const perpX = -Math.sin(angle);
+        const perpY = Math.cos(angle);
+        const jag = (Math.sin(s * 7 + i * 3 + t * 20) * 12) * (1 - st);
+        this.gfx.lineTo(baseX + perpX * jag, baseY + perpY * jag);
+      }
+      this.gfx.stroke({ color: 0xffdd22, alpha: alpha * 0.2, width: 5 });
+    }
+
+    // Center flash
+    if (t < 0.15) {
+      const flashAlpha = (1 - t / 0.15) * 0.6;
+      this.gfx.circle(fx.x, fx.y, 15);
+      this.gfx.fill({ color: 0xffffff, alpha: flashAlpha });
+    }
+
+    // Sparks at the ring edge
+    for (let i = 0; i < 12; i++) {
+      const sparkAngle = (i / 12) * Math.PI * 2 + t * 5;
+      const sparkR = r + (Math.sin(i * 4 + t * 15) * 8);
+      const sx = fx.x + Math.cos(sparkAngle) * sparkR;
+      const sy = fx.y + Math.sin(sparkAngle) * sparkR;
+      this.gfx.circle(sx, sy, 2);
+      this.gfx.fill({ color: 0xffffcc, alpha: alpha * 0.5 });
+    }
+  }
+
+  private drawBlizzardFreeze(fx: VFXEntry, t: number): void {
+    const cx = fx.targetX ?? fx.x;
+    const cy = fx.targetY ?? fx.y;
+    const r = fx.radius;
+    // Steady alpha with fade in/out
+    const alpha = t < 0.1 ? t / 0.1 * 0.5 : (t > 0.85 ? (1 - t) / 0.15 * 0.5 : 0.5);
+
+    // Ice zone fill
+    this.gfx.circle(cx, cy, r);
+    this.gfx.fill({ color: 0x88ccff, alpha: alpha * 0.12 });
+    // Zone border
+    this.gfx.circle(cx, cy, r);
+    this.gfx.stroke({ color: 0x66aaff, alpha: alpha * 0.4, width: 2 });
+
+    // Inner frost ring
+    this.gfx.circle(cx, cy, r * 0.7);
+    this.gfx.stroke({ color: 0xaaddff, alpha: alpha * 0.2, width: 1 });
+
+    // Swirling snowflake particles (many!)
+    const particleCount = 20;
+    for (let i = 0; i < particleCount; i++) {
+      const pAngle = (i / particleCount) * Math.PI * 2 + t * Math.PI * 2 * (i % 2 === 0 ? 1 : -1);
+      const pDist = r * (0.2 + (i % 5) * 0.16);
+      const wobble = Math.sin(t * 8 + i * 1.7) * 10;
+      const px = cx + Math.cos(pAngle) * (pDist + wobble);
+      const py = cy + Math.sin(pAngle) * (pDist + wobble);
+      const size = 2 + (i % 3);
+      this.gfx.circle(px, py, size);
+      this.gfx.fill({ color: 0xffffff, alpha: alpha * (0.4 + (i % 3) * 0.15) });
+    }
+
+    // Floating ice shards (larger, slower)
+    for (let i = 0; i < 6; i++) {
+      const shardAngle = (i / 6) * Math.PI * 2 + t * 1.5;
+      const shardDist = r * (0.3 + 0.3 * Math.sin(t * 3 + i * 2));
+      const sx = cx + Math.cos(shardAngle) * shardDist;
+      const sy = cy + Math.sin(shardAngle) * shardDist;
+      // Diamond shape
+      const shardSize = 5 + Math.sin(t * 4 + i) * 2;
+      this.gfx.moveTo(sx, sy - shardSize);
+      this.gfx.lineTo(sx + shardSize * 0.6, sy);
+      this.gfx.lineTo(sx, sy + shardSize);
+      this.gfx.lineTo(sx - shardSize * 0.6, sy);
+      this.gfx.closePath();
+      this.gfx.fill({ color: 0xccddff, alpha: alpha * 0.4 });
+      this.gfx.moveTo(sx, sy - shardSize);
+      this.gfx.lineTo(sx + shardSize * 0.6, sy);
+      this.gfx.lineTo(sx, sy + shardSize);
+      this.gfx.lineTo(sx - shardSize * 0.6, sy);
+      this.gfx.closePath();
+      this.gfx.stroke({ color: 0xaaccff, alpha: alpha * 0.5, width: 1 });
+    }
+
+    // Ground frost sparkles (random positions, twinkling)
+    for (let i = 0; i < 15; i++) {
+      const sparkSeed = i * 7919;
+      const sparkAngle = ((sparkSeed & 0xffff) / 0xffff) * Math.PI * 2;
+      const sparkDist = ((sparkSeed >> 8 & 0xff) / 0xff) * r * 0.9;
+      const twinkle = Math.sin(t * 12 + i * 2.3) * 0.5 + 0.5;
+      const gx = cx + Math.cos(sparkAngle) * sparkDist;
+      const gy = cy + Math.sin(sparkAngle) * sparkDist;
+      this.gfx.circle(gx, gy, 1.5);
+      this.gfx.fill({ color: 0xffffff, alpha: alpha * twinkle * 0.6 });
     }
   }
 

@@ -21,6 +21,10 @@ interface ProjectileVisual {
   homing?: boolean;
   /** True if this is a ballista bolt (bigger arrow visual). */
   ballista?: boolean;
+  /** Elemental colors for cycling rendering. */
+  colors?: number[];
+  /** Timestamp when the projectile was spawned (for color cycling). */
+  spawnTime?: number;
 }
 
 const TRAIL_LEN = 10; // pixels behind the body
@@ -89,7 +93,7 @@ export class ProjectileRendererSystem {
   }
 
   spawn(id: number, x: number, y: number, vx: number, vy: number, ownerSlot: number,
-        targetX?: number, targetY?: number, totalFlightTime?: number, pierce?: boolean, homing?: boolean, ballista?: boolean): void {
+        targetX?: number, targetY?: number, totalFlightTime?: number, pierce?: boolean, homing?: boolean, ballista?: boolean, colors?: number[]): void {
     const vis: ProjectileVisual = { x, y, vx, vy, ownerSlot };
     if (targetX != null && targetY != null && totalFlightTime != null) {
       vis.targetX = targetX;
@@ -102,6 +106,10 @@ export class ProjectileRendererSystem {
     if (pierce) vis.pierce = true;
     if (homing) vis.homing = true;
     if (ballista) vis.ballista = true;
+    if (colors && colors.length > 0) {
+      vis.colors = colors;
+      vis.spawnTime = performance.now() / 1000;
+    }
     this.projectiles.set(id, vis);
   }
 
@@ -219,6 +227,13 @@ export class ProjectileRendererSystem {
       else if (p.ownerSlot === -2) color = 0xdd7722;
       else color = PLAYER_COLORS[p.ownerSlot] ?? 0xffffff;
 
+      // Elemental color cycling overrides the default color
+      if (p.colors && p.colors.length > 0 && p.spawnTime != null) {
+        const elapsed = performance.now() / 1000 - p.spawnTime;
+        const cycleIndex = Math.floor(elapsed / 0.2) % p.colors.length;
+        color = p.colors[cycleIndex];
+      }
+
       const speed = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
       if (speed === 0) continue;
 
@@ -237,17 +252,17 @@ export class ProjectileRendererSystem {
         this.gfx.circle(p.x, p.y - arcHeight, bodyRadius);
         this.gfx.fill({ color: 0xff6600, alpha: 0.9 });
       } else if (p.homing) {
-        // Mage: glowing orb with outer glow (white base - will be tinted by element later)
+        // Mage: glowing orb with outer glow (uses elemental color if available)
         this.gfx.circle(p.x, p.y, PROJECTILE_RADIUS * 2.5);
-        this.gfx.fill({ color: 0xffffff, alpha: 0.15 });
+        this.gfx.fill({ color, alpha: 0.15 });
         this.gfx.circle(p.x, p.y, PROJECTILE_RADIUS * 1.5);
-        this.gfx.fill({ color: 0xeeeeff, alpha: 0.9 });
+        this.gfx.fill({ color, alpha: 0.9 });
         // Short sparkle trail
         const tailX = p.x - dx * TRAIL_LEN * 0.8;
         const tailY = p.y - dy * TRAIL_LEN * 0.8;
         this.gfx.moveTo(tailX, tailY);
         this.gfx.lineTo(p.x, p.y);
-        this.gfx.stroke({ color: 0xddddff, alpha: 0.5, width: 3 });
+        this.gfx.stroke({ color, alpha: 0.5, width: 3 });
       } else if (p.ballista) {
         // Ballista: large heavy bolt with thick shaft and metallic head
         const nx = -dy, ny = dx; // perpendicular

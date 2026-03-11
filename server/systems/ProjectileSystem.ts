@@ -14,6 +14,8 @@ import {
   GhostStateComponent,
   EnemyVariantComponent,
   DodgeRollComponent,
+  SlowEffectComponent,
+  FreezeComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -69,6 +71,8 @@ function segPointDist2(ax: number, ay: number, bx: number, by: number, px: numbe
 export class ProjectileSystem {
   /** Session-wide building damage multiplier (Thick Walls / Shoddy Construction cards). */
   buildingDamageMult = 1;
+  /** Per-entity dodge chance (0-1). Set externally by GameSession from skill buffs. */
+  dodgeChanceMap = new Map<number, number>();
 
   constructor(private readonly generator: WorldGenerator) {}
 
@@ -324,6 +328,10 @@ export class ProjectileSystem {
         const d2 = segPointDist2(oldX, oldY, pos.x, pos.y, tgtPos.x, tgtPos.y);
         if (d2 > collisionDist * collisionDist) continue;
 
+        // Dodge check: if target has dodge chance, roll to evade the projectile hit
+        const targetDodge = this.dodgeChanceMap.get(targetId) ?? 0;
+        if (targetDodge > 0 && Math.random() < targetDodge) continue;
+
         // Apply damage with defense reduction
         const hp  = world.getComponent<HealthComponent>(targetId, C.Health)!;
         let damage: number;
@@ -342,7 +350,12 @@ export class ProjectileSystem {
         if (projFaction?.type === 'player') {
           const totalCritChance = CRIT_CHANCE + (proj.critChance ?? 0);
           if (Math.random() < totalCritChance) {
-            const totalCritMult = CRIT_MULTIPLIER + (proj.critMultiplier ?? 0);
+            let totalCritMult = CRIT_MULTIPLIER + (proj.critMultiplier ?? 0);
+            // Frost crit: bonus crit damage vs frozen/slowed targets
+            if (proj.frostCritBonus && proj.frostCritBonus > 0) {
+              const isFrozenOrSlowed = world.hasComponent(targetId, C.SlowEffect) || world.hasComponent(targetId, C.Freeze);
+              if (isFrozenOrSlowed) totalCritMult += proj.frostCritBonus;
+            }
             damage = Math.round(damage * totalCritMult);
             crit = true;
           }
@@ -407,6 +420,40 @@ export class ProjectileSystem {
         if (proj.pierce) {
           if (!proj.hitEntities) proj.hitEntities = [];
           proj.hitEntities.push(targetId);
+        } else if (proj.bounceCount && proj.bounceCount > 0) {
+          // Bouncing projectile: find nearest un-hit enemy within bounce range and redirect
+          const bounceRange = proj.bounceRange ?? 120;
+          let bestBounceId = -1;
+          let bestBounceDist = bounceRange + 1;
+          for (const eid of targets) {
+            if (eid === projId || eid === targetId) continue;
+            if (world.getComponent(eid, C.Projectile)) continue;
+            const ef = world.getComponent<FactionComponent>(eid, C.Faction);
+            if (ef?.type !== 'enemy') continue;
+            if (world.hasComponent(eid, C.Downed)) continue;
+            if (proj.hitEntities?.includes(eid)) continue;
+            const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
+            const bdx = ep.x - pos.x, bdy = ep.y - pos.y;
+            const bd = Math.sqrt(bdx * bdx + bdy * bdy);
+            if (bd < bestBounceDist) { bestBounceDist = bd; bestBounceId = eid; }
+          }
+          if (bestBounceId >= 0) {
+            // Redirect projectile toward new target
+            const bTargetPos = world.getComponent<PositionComponent>(bestBounceId, C.Position)!;
+            const bdx = bTargetPos.x - pos.x, bdy = bTargetPos.y - pos.y;
+            const bd = Math.sqrt(bdx * bdx + bdy * bdy) || 1;
+            const speed = Math.sqrt(vel.vx * vel.vx + vel.vy * vel.vy);
+            vel.vx = (bdx / bd) * speed;
+            vel.vy = (bdy / bd) * speed;
+            proj.bounceCount--;
+            if (!proj.hitEntities) proj.hitEntities = [];
+            proj.hitEntities.push(targetId);
+            // Don't destroy - let projectile continue to new target
+          } else {
+            // No valid bounce target - destroy as normal
+            hitSomething = true;
+            break;
+          }
         } else {
           hitSomething = true;
           break;

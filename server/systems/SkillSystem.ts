@@ -471,7 +471,23 @@ export function createSkillSystem(deps: SkillSystemDeps) {
       const burn = deps.world.getComponent<BurnDotComponent>(id, C.BurnDot)!;
       const hp = deps.world.getComponent<HealthComponent>(id, C.Health)!;
       burn.remaining -= dt;
-      hp.current = Math.max(0, hp.current - burn.dps * dt);
+      const burnDmg = burn.dps * dt;
+      hp.current = Math.max(0, hp.current - burnDmg);
+
+      // Burn lifesteal: heal the burn source if their owner has the burn_lifesteal combat mod
+      if (burn.sourceId != null) {
+        for (const [, player] of deps.players) {
+          if (player.entityId !== burn.sourceId) continue;
+          const playerBuffs = getSkillBuffs(player.client.id);
+          const burnLifestealMod = playerBuffs.combatMods.find(m => m.type === 'burn_lifesteal');
+          if (burnLifestealMod) {
+            const srcHp = deps.world.getComponent<HealthComponent>(burn.sourceId, C.Health);
+            if (srcHp) srcHp.current = Math.min(srcHp.max, srcHp.current + burnDmg * burnLifestealMod.value);
+          }
+          break;
+        }
+      }
+
       if (burn.remaining <= 0) deps.world.removeComponent(id, C.BurnDot);
     }
 

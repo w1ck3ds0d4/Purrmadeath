@@ -78,6 +78,26 @@ export class DamageNumberSystem {
     });
   }
 
+  /** Spawn a floating text label (e.g. "DODGE", "IMMUNE") at world coordinates. */
+  addText(worldX: number, worldY: number, label: string, color: number): void {
+    const offsetX = (Math.random() - 0.5) * 20;
+    const offsetY = (Math.random() - 0.5) * 10;
+    const text = new Text({ text: label, style: {
+      fontSize: 14, fontFamily: 'monospace', fontWeight: 'bold',
+      fill: color, stroke: { color: 0x000000, width: 3 },
+    }});
+    text.anchor.set(0.5);
+    if (this.numbers.length >= MAX_NUMBERS) {
+      const oldest = this.numbers[0];
+      this.container.removeChild(oldest.text);
+      oldest.text.destroy();
+      this.numbers[0] = this.numbers[this.numbers.length - 1];
+      this.numbers.pop();
+    }
+    this.container.addChild(text);
+    this.numbers.push({ text, worldX: worldX + offsetX, worldY: worldY + offsetY, age: 0, lifetime: LIFETIME, vy: FLOAT_SPEED });
+  }
+
   /** Spawn a floating resource gain popup at world coordinates. */
   addResource(worldX: number, worldY: number, amount: number, resource: string): void {
     if (amount <= 0) return;

@@ -31,10 +31,10 @@ import {
 import type {
   ResourceType, BuildingType, EnemyVariantType, EnemyStatsComponent, GhostStateComponent,
   LightRevealComponent, HealAuraComponent, BarracksSpawnerComponent, FacingComponent,
-  BurnDotComponent, SlowEffectComponent, SpeedComponent,
+  BurnDotComponent, SlowEffectComponent, SpeedComponent, DefenseComponent,
   PoisonDotComponent, StunEffectComponent, HolyMarkComponent,
   ShadowDrainComponent, ArcaneMarkComponent, NatureBlessingComponent,
-  BleedComponent,
+  BleedComponent, FreezeComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -2137,11 +2137,14 @@ export class GameSession {
       }
     }
 
+    // Check for frost_crit combat mod
+    const frostCritMod = sBuffs.combatMods.find(m => m.type === 'frost_crit');
     const meleeOverrides: import('../systems/CombatSystem').MeleeOverrides = {
       damage: Math.round(classDmg * dmgMult * lastStandMult * coopMult),
       critChance: pBuffs?.critChance ?? 0,
       critMultiplier: pBuffs?.critMultiplier ?? 0,
       knockbackMult: pBuffs?.knockbackMult ?? 1,
+      frostCritBonus: frostCritMod?.value,
     };
 
     const { hits, deaths } = this.combat.processMeleeAttack(
@@ -2243,6 +2246,18 @@ export class GameSession {
     if (player.playerClass === 'ranger') projData.pierce = true;
     if (player.playerClass === 'mage') projData.homing = true;
 
+    // Determine elemental projectile colors from skill allocations
+    const elementColors: number[] = [];
+    const skillAlloc = this.skills.getAllocation(player.client.id);
+    if (skillAlloc) {
+      if (skillAlloc.allocated.has('fire_mage_t2')) elementColors.push(0xff4400);   // Red
+      if (skillAlloc.allocated.has('frost_mage_t2')) elementColors.push(0x44aadd);  // Light blue
+      if (skillAlloc.allocated.has('electric_mage_t2')) elementColors.push(0xddcc22); // Yellow
+    }
+    if (elementColors.length > 0) {
+      projData.colors = elementColors;
+    }
+
     // Apply combat mods to projectile data (before adding to entity so modifications take effect)
     const rCombatMods = rSBuffs.combatMods;
     for (const mod of rCombatMods) {
@@ -2259,7 +2274,7 @@ export class GameSession {
             this.world.addComponent(extraId, C.Velocity, { vx: Math.cos(angle) * RANGED_SPEED, vy: Math.sin(angle) * RANGED_SPEED });
             this.world.addComponent(extraId, C.Projectile, { ...projData });
             this.world.addComponent(extraId, C.Faction, { type: faction?.type ?? 'player' });
-            const extraSpawn: ProjectileSpawnMessage = { type: MessageType.PROJECTILE_SPAWN, projectileId: extraId, x: ex, y: ey, vx: Math.cos(angle) * RANGED_SPEED, vy: Math.sin(angle) * RANGED_SPEED, ownerSlot: player.slot };
+            const extraSpawn: ProjectileSpawnMessage = { type: MessageType.PROJECTILE_SPAWN, projectileId: extraId, x: ex, y: ey, vx: Math.cos(angle) * RANGED_SPEED, vy: Math.sin(angle) * RANGED_SPEED, ownerSlot: player.slot, colors: projData.colors };
             for (const p of this.players.values()) send(p.client, extraSpawn);
           }
           break;
@@ -2270,8 +2285,7 @@ export class GameSession {
           projData.hitEntities = [];
           break;
         }
-        case 'homing_passive':
-        case 'seeking_orbs': {
+        case 'homing_passive': {
           projData.homing = true;
           break;
         }
@@ -2289,18 +2303,8 @@ export class GameSession {
           projData.splitDamage = mod.params?.damage ?? 0.5;
           break;
         }
-        case 'arcane_echo': {
-          if (Math.random() < mod.value) {
-            // Spawn duplicate projectile with slight delay (offset position)
-            const echoId = this.world.createEntity();
-            const echoOff = 10;
-            this.world.addComponent(echoId, C.Position, { x: spawnX + dirX * echoOff, y: spawnY + dirY * echoOff });
-            this.world.addComponent(echoId, C.Velocity, { vx, vy });
-            this.world.addComponent(echoId, C.Projectile, { ...projData });
-            this.world.addComponent(echoId, C.Faction, { type: faction?.type ?? 'player' });
-            const echoSpawn: ProjectileSpawnMessage = { type: MessageType.PROJECTILE_SPAWN, projectileId: echoId, x: spawnX + dirX * echoOff, y: spawnY + dirY * echoOff, vx, vy, ownerSlot: player.slot };
-            for (const p of this.players.values()) send(p.client, echoSpawn);
-          }
+        case 'frost_crit': {
+          projData.frostCritBonus = mod.value;
           break;
         }
         default: break;
@@ -2321,6 +2325,7 @@ export class GameSession {
       ownerSlot: player.slot,
       pierce: projData.pierce || undefined,
       homing: projData.homing || undefined,
+      colors: projData.colors,
     };
     for (const p of this.players.values()) send(p.client, spawn);
   }
@@ -2557,110 +2562,134 @@ export class GameSession {
           }
           break;
         }
-        case 'healing_strikes': {
-          // Heal attacker by fraction of total damage dealt
-          let totalDmg = 0;
-          for (const hit of hits) totalDmg += hit.damage;
-          const healAmt = Math.round(totalDmg * mod.value);
-          if (healAmt > 0) {
-            const hp = this.world.getComponent<HealthComponent>(entityId, C.Health);
-            if (hp) hp.current = Math.min(hp.max, hp.current + healAmt);
-          }
-          break;
-        }
-        case 'execute_bonus': {
-          // Already applied to damage - the actual damage boost is applied in meleeOverrides calculation
-          break;
-        }
-        case 'bleed_stacks': {
-          // Apply bleed to all hit targets
-          const bleedDps = mod.value;
-          const maxStacks = mod.params?.maxStacks ?? 3;
-          const dur = mod.params?.duration ?? 4;
-          for (const hit of hits) {
-            const bleed = this.world.getComponent<BleedComponent>(hit.targetId, C.Bleed);
-            if (!bleed) {
-              this.world.addComponent(hit.targetId, C.Bleed, { dps: bleedDps, remaining: dur, stacks: 1, maxStacks, sourceId: entityId } as BleedComponent);
-            } else if (bleed.stacks < maxStacks) {
-              bleed.stacks++;
-              bleed.remaining = dur;
-            } else {
-              bleed.remaining = dur;
-            }
-          }
-          break;
-        }
-        case 'holy_splash': {
-          // Same as cleave but with paladin flavor
-          const hitIds = new Set(hits.map(h => h.targetId));
-          const radius = mod.params?.radius ?? 50;
+        // Shockwave, shadow_copies, backstab_crit, feral_swipe, pack_strike, berserker_rush
+        // are handled elsewhere (feral_swipe modifies arc before combat, backstab_crit modifies damage calc)
+        default: break;
+      }
+    }
+  }
+
+  /**
+   * Apply projectile-specific combat modifiers from the skill tree after projectile hits.
+   * Handles frost_shatter, explosive_burn, electric_stun.
+   */
+  private applyProjectileCombatMods(
+    player: SessionPlayer,
+    hits: import('../systems/CombatSystem').HitResult[],
+    deaths: number[],
+    send: SendFn,
+  ): void {
+    const sBuffs = this.skills.getSkillBuffs(player.client.id);
+    if (!sBuffs.combatMods.length) return;
+
+    for (const mod of sBuffs.combatMods) {
+      switch (mod.type) {
+        case 'frost_shatter': {
+          // On projectile hit, apply SlowEffect to all enemies within radius of impact
+          const radius = mod.params?.radius ?? 60;
+          const slowFactor = mod.params?.slowFactor ?? 0.40;
+          const slowDuration = mod.params?.slowDuration ?? 8;
           const r2 = radius * radius;
-          for (const eid of this.world.query(C.Position, C.Health, C.Faction)) {
-            if (hitIds.has(eid)) continue;
-            const ef = this.world.getComponent<FactionComponent>(eid, C.Faction);
-            if (ef?.type !== 'enemy') continue;
-            const ep = this.world.getComponent<PositionComponent>(eid, C.Position)!;
-            const dx = ep.x - pos.x, dy = ep.y - pos.y;
-            if (dx * dx + dy * dy > r2) continue;
-            const hp = this.world.getComponent<HealthComponent>(eid, C.Health)!;
-            const baseDmg = hits[0]?.damage ?? 10;
-            hp.current = Math.max(0, hp.current - Math.round(baseDmg * mod.value));
-            if (hp.current <= 0) deaths.push(eid);
-          }
-          break;
-        }
-        case 'smite_chain': {
-          // Arc damage to N nearby enemies from each hit target
-          const chainCount = Math.round(mod.value);
-          const chainRange = mod.params?.range ?? 80;
-          const dmgFrac = mod.params?.damageFraction ?? 0.35;
-          const hitIds = new Set(hits.map(h => h.targetId));
           for (const hit of hits) {
             const hitPos = this.world.getComponent<PositionComponent>(hit.targetId, C.Position);
             if (!hitPos) continue;
-            let chained = 0;
-            const chainTargets: Array<{ x: number; y: number }> = [];
             for (const eid of this.world.query(C.Position, C.Health, C.Faction)) {
-              if (chained >= chainCount) break;
-              if (hitIds.has(eid)) continue;
+              if (eid === hit.targetId) continue;
               const ef = this.world.getComponent<FactionComponent>(eid, C.Faction);
               if (ef?.type !== 'enemy') continue;
+              if (this.world.hasComponent(eid, C.Downed)) continue;
               const ep = this.world.getComponent<PositionComponent>(eid, C.Position)!;
               const dx = ep.x - hitPos.x, dy = ep.y - hitPos.y;
-              if (dx * dx + dy * dy > chainRange * chainRange) continue;
-              const hp = this.world.getComponent<HealthComponent>(eid, C.Health)!;
-              const chainDmg = Math.round(hit.damage * dmgFrac);
-              hp.current = Math.max(0, hp.current - chainDmg);
-              hitIds.add(eid);
-              chained++;
-              chainTargets.push({ x: ep.x, y: ep.y });
-              if (hp.current <= 0) deaths.push(eid);
-            }
-            // Broadcast chain lightning VFX (reuse tesla chain visual)
-            if (chainTargets.length > 0) {
-              const chainMsg = { type: MessageType.TESLA_CHAIN, sourceX: hitPos.x, sourceY: hitPos.y, chain: chainTargets };
-              for (const p of this.players.values()) send(p.client, chainMsg);
+              if (dx * dx + dy * dy > r2) continue;
+              const existing = this.world.getComponent<SlowEffectComponent>(eid, C.SlowEffect);
+              if (!existing) {
+                const speed = this.world.getComponent<SpeedComponent>(eid, C.Speed);
+                if (speed) speed.multiplier *= (1 - slowFactor);
+                this.world.addComponent<SlowEffectComponent>(eid, C.SlowEffect, {
+                  factor: slowFactor, remaining: slowDuration,
+                });
+              }
             }
           }
           break;
         }
-        case 'natures_bite': {
-          // Apply poison DoT to all hit targets
-          const poisonDps = mod.value;
-          const dur = mod.params?.duration ?? 4;
+        case 'explosive_burn': {
+          // On projectile hit, deal AOE damage and apply BurnDot in radius
+          const radius = mod.params?.radius ?? 50;
+          const burnDps = mod.params?.burnDps ?? 5;
+          const burnDuration = mod.params?.burnDuration ?? 10;
+          const r2 = radius * radius;
           for (const hit of hits) {
-            const burn = this.world.getComponent<BurnDotComponent>(hit.targetId, C.BurnDot);
-            if (!burn) {
-              this.world.addComponent(hit.targetId, C.BurnDot, { dps: poisonDps, remaining: dur, sourceId: entityId } as BurnDotComponent);
-            } else {
-              burn.dps = Math.max(burn.dps, poisonDps);
-              burn.remaining = Math.max(burn.remaining, dur);
+            const hitPos = this.world.getComponent<PositionComponent>(hit.targetId, C.Position);
+            if (!hitPos) continue;
+            // Broadcast AOE explosion visual
+            const aoeMsg: AoeExplosionMessage = { type: MessageType.AOE_EXPLOSION, x: hitPos.x, y: hitPos.y, radius };
+            for (const p of this.players.values()) send(p.client, aoeMsg);
+
+            for (const eid of this.world.query(C.Position, C.Health, C.Faction)) {
+              if (eid === hit.targetId) continue; // already hit by the projectile
+              const ef = this.world.getComponent<FactionComponent>(eid, C.Faction);
+              if (ef?.type !== 'enemy') continue;
+              if (this.world.hasComponent(eid, C.Downed)) continue;
+              const ep = this.world.getComponent<PositionComponent>(eid, C.Position)!;
+              const dx = ep.x - hitPos.x, dy = ep.y - hitPos.y;
+              if (dx * dx + dy * dy > r2) continue;
+              // Deal AOE damage (same as projectile damage)
+              const aoeHp = this.world.getComponent<HealthComponent>(eid, C.Health)!;
+              const aoeDef = this.world.getComponent<DefenseComponent>(eid, C.Defense);
+              let aoeDmg = hit.damage;
+              if (aoeDef) aoeDmg = Math.max(0, Math.round((aoeDmg - aoeDef.flat) * (1 - aoeDef.percent)));
+              aoeHp.current = Math.max(0, aoeHp.current - aoeDmg);
+              if (aoeHp.current <= 0) deaths.push(eid);
+              // Apply BurnDot
+              const existingBurn = this.world.getComponent<BurnDotComponent>(eid, C.BurnDot);
+              if (existingBurn) {
+                existingBurn.dps = Math.max(existingBurn.dps, burnDps);
+                existingBurn.remaining = burnDuration;
+              } else {
+                this.world.addComponent<BurnDotComponent>(eid, C.BurnDot, {
+                  dps: burnDps, remaining: burnDuration, sourceId: player.entityId!,
+                });
+              }
+            }
+            // Also apply burn to the direct hit target (if alive)
+            if (this.world.hasComponent(hit.targetId, C.Health)) {
+              const existingBurn = this.world.getComponent<BurnDotComponent>(hit.targetId, C.BurnDot);
+              if (existingBurn) {
+                existingBurn.dps = Math.max(existingBurn.dps, burnDps);
+                existingBurn.remaining = burnDuration;
+              } else {
+                const tgtFaction = this.world.getComponent<FactionComponent>(hit.targetId, C.Faction);
+                if (tgtFaction?.type === 'enemy') {
+                  this.world.addComponent<BurnDotComponent>(hit.targetId, C.BurnDot, {
+                    dps: burnDps, remaining: burnDuration, sourceId: player.entityId!,
+                  });
+                }
+              }
             }
           }
           break;
         }
-        // Shockwave, shadow_copies, backstab_crit, feral_swipe, pack_strike, berserker_rush
-        // are handled elsewhere (feral_swipe modifies arc before combat, backstab_crit modifies damage calc)
+        case 'electric_stun': {
+          // On projectile hit, roll chance to apply stun
+          const chance = mod.value;
+          const dur = mod.params?.duration ?? 1;
+          for (const hit of hits) {
+            const tgtFaction = this.world.getComponent<FactionComponent>(hit.targetId, C.Faction);
+            if (tgtFaction?.type !== 'enemy') continue;
+            if (Math.random() < chance) {
+              const stun = this.world.getComponent<StunEffectComponent>(hit.targetId, C.StunEffect);
+              if (!stun) {
+                this.world.addComponent(hit.targetId, C.StunEffect, {
+                  remaining: dur, sourceId: player.entityId!,
+                } as StunEffectComponent);
+              } else {
+                stun.remaining = Math.max(stun.remaining, dur);
+              }
+            }
+          }
+          break;
+        }
         default: break;
       }
     }
@@ -3223,6 +3252,30 @@ export class GameSession {
     for (const p of this.players.values()) send(p.client, update);
   }
 
+  // ── Death Sweep ─────────────────────────────────────────────────────────────
+
+  /**
+   * End-of-tick sweep: finds all non-player, non-civilian entities at 0 HP
+   * and destroys them. Catches deaths from DOTs (burn, poison, bleed),
+   * channel damage, thorns, DamageMark explosions, and any future tick damage.
+   */
+  private sweepDeadEntities(send: SendFn): void {
+    const deaths: number[] = [];
+    for (const eid of this.world.query(C.Health, C.Faction)) {
+      const hp = this.world.getComponent<HealthComponent>(eid, C.Health)!;
+      if (hp.current > 0) continue;
+      const faction = this.world.getComponent<FactionComponent>(eid, C.Faction);
+      // Skip players - they have their own downed/respawn system
+      if (faction?.type === 'player') continue;
+      // Skip civilians - they have their own downed system
+      if (faction?.type === 'civilian') continue;
+      deaths.push(eid);
+    }
+    if (deaths.length > 0) {
+      this.respawn.destroyDeadEntities(deaths, undefined, send);
+    }
+  }
+
   // ── Tick ────────────────────────────────────────────────────────────────────
 
   /**
@@ -3243,6 +3296,18 @@ export class GameSession {
     // Sync session-wide building damage mult to combat systems
     this.combat.buildingDamageMult = this.cards.debuffs.buildingDamageMult;
     this.projectile.buildingDamageMult = this.cards.debuffs.buildingDamageMult;
+
+    // Sync dodge chance from skill buffs to combat/projectile systems
+    this.combat.dodgeChanceMap.clear();
+    this.projectile.dodgeChanceMap.clear();
+    for (const [clientId, p] of this.players) {
+      if (p.entityId === null) continue;
+      const sBuffs = this.skills.getSkillBuffs(clientId);
+      if (sBuffs.dodgeChance > 0) {
+        this.combat.dodgeChanceMap.set(p.entityId, sBuffs.dodgeChance);
+        this.projectile.dodgeChanceMap.set(p.entityId, sBuffs.dodgeChance);
+      }
+    }
 
     const _t0 = performance.now();
     this.combat.update(this.world, dt);
@@ -3332,7 +3397,10 @@ export class GameSession {
     for (const p of this.players.values()) {
       if (p.entityId === null) continue;
       const playerHits = projResult.hits.filter(h => h.sourceId === p.entityId);
-      if (playerHits.length > 0) this.applyOnHitEffects(p.client.id, p.entityId, playerHits);
+      if (playerHits.length > 0) {
+        this.applyOnHitEffects(p.client.id, p.entityId, playerHits);
+        this.applyProjectileCombatMods(p, playerHits, projResult.deaths, send);
+      }
     }
 
     for (const projId of projResult.destroyed) {
@@ -3416,6 +3484,10 @@ export class GameSession {
     // Tick boss special abilities
     if (!this.gameOver) this.boss.tick(dt, send);
     const _t9 = performance.now();
+
+    // Sweep for any entities at 0 HP that weren't caught by specific death handlers
+    // (e.g. burn DOT, poison DOT, bleed, channel damage, thorns, etc.)
+    if (!this.gameOver) this.sweepDeadEntities(send);
 
     // ── Update tick profiling (exponential moving average) ──────────────────
     const _a = 0.1;
