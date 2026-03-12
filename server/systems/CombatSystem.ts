@@ -22,6 +22,8 @@ export interface HitResult {
   sourceId: number;
   targetId: number;
   damage: number;
+  /** Raw damage before reduction (for charge accumulation). */
+  rawDamage?: number;
   knockbackVx: number;
   knockbackVy: number;
   crit?: boolean;
@@ -61,6 +63,12 @@ export class CombatSystem {
   buildingDamageMult = 1;
   /** Per-entity dodge chance (0-1). Set externally by GameSession from skill buffs. */
   dodgeChanceMap = new Map<number, number>();
+  /** Per-entity damage reduction (0-1). Set externally for Unbreakable Charge etc. */
+  damageReductionMap = new Map<number, number>();
+  /** Entities with an active shield that blocks the next hit completely. */
+  shieldBlockSet = new Set<number>();
+  /** Entities whose shield was consumed this tick (for post-tick cleanup). */
+  shieldConsumed = new Set<number>();
 
   /** Tick down all attack cooldowns. */
   update(world: World, dt: number): void {
@@ -189,6 +197,14 @@ export class CombatSystem {
         continue;
       }
 
+      // Aegis Shield: block the entire hit
+      if (this.shieldBlockSet.has(targetId)) {
+        this.shieldBlockSet.delete(targetId);
+        this.shieldConsumed.add(targetId);
+        hits.push({ sourceId, targetId, damage: 0, knockbackVx: 0, knockbackVy: 0, dodged: true });
+        continue;
+      }
+
       // Damage with defense reduction
       const hp  = world.getComponent<HealthComponent>(targetId, C.Health)!;
       const def = world.getComponent<DefenseComponent>(targetId, C.Defense);
@@ -218,6 +234,10 @@ export class CombatSystem {
         }
       }
 
+      // Apply damage reduction (Unbreakable Charge etc.)
+      const dmgReduction = this.damageReductionMap.get(targetId) ?? 0;
+      const rawDmg = dmg; // Store raw damage before reduction (for charge accumulation)
+      if (dmgReduction > 0) dmg = Math.max(0, Math.round(dmg * (1 - dmgReduction)));
       hp.current = Math.max(0, hp.current - dmg);
 
       // Knockback impulse - direction from attacker to target (giants/titans are immune)
@@ -237,7 +257,7 @@ export class CombatSystem {
         }
       }
 
-      hits.push({ sourceId, targetId, damage: dmg, knockbackVx, knockbackVy, crit: crit || undefined });
+      hits.push({ sourceId, targetId, damage: dmg, rawDamage: dmgReduction > 0 ? rawDmg : undefined, knockbackVx, knockbackVy, crit: crit || undefined });
       if (hp.current <= 0) deaths.push(targetId);
     }
 

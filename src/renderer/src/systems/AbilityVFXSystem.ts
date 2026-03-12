@@ -75,12 +75,10 @@ const ABILITY_COLORS: Record<string, { fill: number; stroke: number }> = {
   blizzard:      { fill: 0x66aaff, stroke: 0x99ccff },
   teleport:      { fill: 0xaa66ff, stroke: 0xcc99ff },
 
-  // Warrior abilities - red/orange tones
-  ground_slam:        { fill: 0xcc4422, stroke: 0xff6633 },
-  shield_charge:      { fill: 0xbb5500, stroke: 0xdd7722 },
-  battle_fury:        { fill: 0xdd3311, stroke: 0xff5533 },
-  earthquake:         { fill: 0xaa3300, stroke: 0xcc5522 },
-  blade_storm:        { fill: 0xdd2222, stroke: 0xff4444 },
+  // Warrior abilities
+  warcry_rage:        { fill: 0xcc2222, stroke: 0xff4444 },
+  unbreakable_charge: { fill: 0x3377cc, stroke: 0x55aaff },
+  blood_drain:        { fill: 0x882233, stroke: 0xaa3344 },
 
   // Ranger abilities - green tones
   arrow_volley:       { fill: 0x33aa44, stroke: 0x55cc66 },
@@ -99,17 +97,86 @@ const ABILITY_COLORS: Record<string, { fill: number; stroke: number }> = {
  * Client-side visual effects for skill abilities.
  * Renders expanding circles, rings, particle bursts, etc.
  */
+/** Persistent aura effect that follows an entity. */
+interface PersistentAura {
+  id: string;
+  color: number;
+  glowColor: number;
+  elapsed: number;
+}
+
 export class AbilityVFXSystem {
   private gfx: Graphics;
   private effects: VFXEntry[] = [];
   private bolts: LightningBolt[] = [];
   private laserBeams: LaserBeamEntry[] = [];
   private flameCones: FlameConeEntry[] = [];
+  private persistentAuras: Map<string, PersistentAura> = new Map();
+  private chargeLabelEl: HTMLElement;
 
   constructor(parent: Container) {
     this.gfx = new Graphics();
     this.gfx.zIndex = 15;
     parent.addChild(this.gfx);
+
+    // HTML label for charge damage counter
+    this.chargeLabelEl = document.createElement('div');
+    this.chargeLabelEl.style.cssText = [
+      'position: fixed',
+      'display: none',
+      'pointer-events: none',
+      'z-index: 10',
+      'font-family: monospace',
+      'font-size: 12px',
+      'font-weight: bold',
+      'color: #ff6644',
+      'text-shadow: 0 0 4px rgba(0,0,0,0.8), 0 1px 2px rgba(0,0,0,0.6)',
+      'text-align: center',
+      'white-space: nowrap',
+    ].join(';');
+    document.body.appendChild(this.chargeLabelEl);
+  }
+
+  /** Check if a persistent aura is currently active. */
+  hasPersistentAura(id: string): boolean {
+    return this.persistentAuras.has(id);
+  }
+
+  /** Add/remove a persistent aura that follows a position each frame. */
+  setPersistentAura(id: string, active: boolean, color = 0xcc2222, glowColor = 0xff4444): void {
+    if (active && !this.persistentAuras.has(id)) {
+      this.persistentAuras.set(id, { id, color, glowColor, elapsed: 0 });
+    } else if (!active) {
+      this.persistentAuras.delete(id);
+    }
+  }
+
+  /** Render all active persistent auras at the given position. */
+  renderPersistentAuras(x: number, y: number, dt: number): void {
+    for (const aura of this.persistentAuras.values()) {
+      aura.elapsed += dt;
+      const t = aura.elapsed;
+      const pulse = 0.85 + 0.15 * Math.sin(t * 4);
+      const r = 18 * pulse;
+
+      // Fire-like aura glow
+      this.gfx.circle(x, y, r + 6);
+      this.gfx.fill({ color: aura.color, alpha: 0.08 });
+      this.gfx.circle(x, y, r);
+      this.gfx.stroke({ color: aura.glowColor, alpha: 0.35, width: 2.5 });
+
+      // Rising flame particles
+      for (let i = 0; i < 5; i++) {
+        const angle = (t * 2.5 + i * 1.256) % (Math.PI * 2);
+        const dist = r * (0.6 + 0.4 * ((i * 0.37 + t * 0.5) % 1));
+        const rise = ((t * 2 + i * 0.7) % 1) * 20;
+        const px = x + Math.cos(angle) * dist;
+        const py = y - rise - 4;
+        const pAlpha = 0.4 * (1 - rise / 20);
+        this.gfx.circle(px, py, 1.5);
+        this.gfx.fill({ color: aura.glowColor, alpha: pAlpha });
+      }
+    }
   }
 
   /** Trigger a VFX for an ability at the given position. */
@@ -185,8 +252,48 @@ export class AbilityVFXSystem {
     }
   }
 
-  render(cameraX: number, cameraY: number, zoom: number, screenW: number, screenH: number): void {
+  render(cameraX: number, cameraY: number, zoom: number, screenW: number, screenH: number, localPlayer?: { x: number; y: number; dt: number; chargeProgress?: number; chargeDamage?: number }): void {
     this.gfx.clear();
+
+    // Draw persistent auras (after clear, before other effects)
+    if (localPlayer) {
+      this.renderPersistentAuras(localPlayer.x, localPlayer.y, localPlayer.dt);
+
+      // Unbreakable Charge progress bar + damage counter
+      if (localPlayer.chargeProgress != null && localPlayer.chargeProgress > 0.001) {
+        const barW = 50, barH = 6;
+        const barX = localPlayer.x - barW / 2;
+        const barY = localPlayer.y + 22;
+
+        // Background
+        this.gfx.rect(barX, barY, barW, barH);
+        this.gfx.fill({ color: 0x0a0a1a, alpha: 0.85 });
+
+        // Fill
+        const progress = Math.min(1, localPlayer.chargeProgress);
+        const fillW = barW * progress;
+        const fillColor = progress > 0.8 ? 0x55ddff : progress > 0.5 ? 0x44aadd : 0x3388bb;
+        this.gfx.rect(barX, barY, fillW, barH);
+        this.gfx.fill({ color: fillColor, alpha: 0.9 });
+
+        // Border
+        this.gfx.rect(barX, barY, barW, barH);
+        this.gfx.stroke({ color: 0x6699dd, alpha: 0.7, width: 1 });
+
+        // Show damage counter as HTML label (positioned in screen space)
+        const dmg = localPlayer.chargeDamage ?? 0;
+        const screenX = (localPlayer.x - cameraX) * zoom + screenW / 2;
+        const screenY = (barY + barH + 4 - cameraY) * zoom + screenH / 2;
+        this.chargeLabelEl.style.display = 'block';
+        this.chargeLabelEl.style.left = `${screenX}px`;
+        this.chargeLabelEl.style.top = `${screenY}px`;
+        this.chargeLabelEl.style.transform = 'translateX(-50%)';
+        const releaseDmg = 75 + Math.round(dmg * 2);
+        this.chargeLabelEl.textContent = `${releaseDmg} DMG`;
+      } else {
+        this.chargeLabelEl.style.display = 'none';
+      }
+    }
 
     const halfW = screenW / (2 * zoom);
     const halfH = screenH / (2 * zoom);
@@ -202,14 +309,14 @@ export class AbilityVFXSystem {
 
       switch (fx.type) {
         case 'whirlwind':
-        case 'blade_storm':
           this.drawWhirlwind(fx, t, colors);
           break;
         case 'shield_wall':
         case 'aegis':
-          this.drawShieldBubble(fx, t, colors);
+        case 'unbreakable_charge':
+          this.drawStaticTauntZone(fx, t, colors);
           break;
-        case 'battle_fury':
+        case 'warcry_rage':
         case 'multishot':
         case 'vanish':
         case 'wild_transformation':
@@ -239,15 +346,10 @@ export class AbilityVFXSystem {
         case 'natures_wrath':
           this.drawExplosion(fx, t, colors);
           break;
-        case 'ground_slam':
-        case 'earthquake':
-          this.drawGroundSlam(fx, t, colors);
-          break;
         case 'shadow_step':
         case 'teleport':
           this.drawTeleport(fx, t, colors);
           break;
-        case 'shield_charge':
         case 'phantom_strike':
         case 'stampede':
         case 'grapple_hook':
@@ -271,6 +373,7 @@ export class AbilityVFXSystem {
         case 'consecration':
         case 'plague_cloud':
         case 'soul_drain':
+        case 'blood_drain':
           this.drawBlizzard(fx, t, colors);
           break;
         default:
@@ -407,6 +510,15 @@ export class AbilityVFXSystem {
     // Outer ring
     this.gfx.circle(fx.x, fx.y, fx.radius * (0.5 + 0.5 * t));
     this.gfx.stroke({ color: colors.stroke, alpha: alpha * 0.5, width: 2 });
+  }
+
+  private drawStaticTauntZone(fx: VFXEntry, t: number, colors: { fill: number; stroke: number }): void {
+    // Static circle showing taunt area - no pulsing, fades in/out
+    const alpha = t < 0.05 ? t / 0.05 * 0.3 : (t > 0.9 ? (1 - t) / 0.1 * 0.3 : 0.3);
+    this.gfx.circle(fx.x, fx.y, fx.radius);
+    this.gfx.fill({ color: colors.fill, alpha: alpha * 0.08 });
+    this.gfx.circle(fx.x, fx.y, fx.radius);
+    this.gfx.stroke({ color: colors.stroke, alpha: alpha * 0.5, width: 1.5 });
   }
 
   private drawShieldBubble(fx: VFXEntry, t: number, colors: { fill: number; stroke: number }): void {
@@ -951,6 +1063,8 @@ export class AbilityVFXSystem {
     this.bolts.length = 0;
     this.laserBeams.length = 0;
     this.flameCones.length = 0;
+    this.persistentAuras.clear();
+    this.chargeLabelEl.style.display = 'none';
     this.gfx.clear();
   }
 }

@@ -188,6 +188,7 @@ async function main(): Promise<void> {
 
   let localSlot        = 0;
   let localEntityId: number | null = null;
+  let localActiveBuffIds: string[] = [];
   let isHost           = false;
   let currentSessionId   = '';
   let currentSessionCode = '';
@@ -243,13 +244,13 @@ async function main(): Promise<void> {
   type TargetMode = 'self' | 'ground' | 'direction';
   function getTargetMode(params: AbilityParams): TargetMode {
     // Self-cast: buffs, transforms, AOE centered on player
-    const selfTypes = ['ground_slam', 'battle_fury', 'earthquake', 'blade_storm',
+    const selfTypes = ['warcry_rage', 'unbreakable_charge', 'blood_drain',
       'fan_of_knives', 'smoke_bomb', 'vanish', 'aegis', 'guardian_angel',
       'wild_transformation', 'primal_roar', 'multishot',
       'arrow_volley', 'thunderwave'];
     if (selfTypes.includes(params.type)) return 'self';
     // Direction: dashes
-    const dirTypes = ['shield_charge', 'phantom_strike', 'stampede', 'grapple_hook'];
+    const dirTypes = ['phantom_strike', 'stampede', 'grapple_hook'];
     if (dirTypes.includes(params.type)) return 'direction';
     // Ground: everything else (targeted AOE, projectiles, zones)
     return 'ground';
@@ -301,6 +302,13 @@ async function main(): Promise<void> {
   let handshakeSent = false;
   let civilianPanelRefreshTimer = 0;
   let pendingSingleplayerAutoStart = false;
+  let localActiveBuffIdsArr: string[] = [];
+  let chargeProgress = 0;
+  let chargeDamage = 0;
+  let selfRootTimer = 0; // Client-side root timer for immediate movement block
+  let localChargeElapsed = 0; // Client-side charge timer for smooth progress interpolation
+  let localChargeDuration = 0;
+  let pendingAbilityCooldowns: Record<string, number> | null = null;
 
   /** Warehouse + player inventory combined (for build cost checks). */
   function combinedResources(): Record<string, number> {
@@ -615,6 +623,14 @@ async function main(): Promise<void> {
     slotAssignments = [null, null, null];
     abilityCooldowns = [0, 0, 0];
     abilityCooldownMaxes = [0, 0, 0];
+    selfRootTimer = 0;
+    localChargeDuration = 0;
+    localChargeElapsed = 0;
+    chargeProgress = 0;
+    chargeDamage = 0;
+    localActiveBuffIdsArr = [];
+    pendingAbilityCooldowns = null;
+    lowHpVignette.style.opacity = '0';
     cardAbilities = [];
     pickedCardIds = [];
     potionEquipped = null;
@@ -693,7 +709,15 @@ async function main(): Promise<void> {
       isMultiplayer ? 'All players must press ESC to resume' : undefined,
       elapsed,
     );
+    // Hide HUD elements during pause (keep chat for multiplayer communication)
+    resourceHUD.setVisible(false);
+    keybindPanel.style.display = 'none';
+    waveHUD.setVisible(false);
+    coordsEl.style.display = 'none';
+    minimap.setVisible(false);
   });
+
+  // Note: pause resume HUD restore is handled in the main onEnter(Playing) callback above
 
   // ─── Persistent Transport Connection ──────────────────────────────────────────
   // Created once at startup and persists across sessions. The transport handles
@@ -766,6 +790,17 @@ async function main(): Promise<void> {
     onSkillStateUpdate: () => {
       // Rebuild active abilities from updated allocation with slot assignments
       activeAbilities = getActiveAbilities({ allocated: skillAllocated, skillPoints, slotAssignments });
+      // Apply any pending ability cooldowns from server (delayed until abilities are available)
+      if (pendingAbilityCooldowns) {
+        for (let i = 0; i < 3; i++) {
+          const ab = activeAbilities[i];
+          if (ab && pendingAbilityCooldowns[ab.abilityId] != null) {
+            abilityCooldowns[i] = pendingAbilityCooldowns[ab.abilityId];
+            abilityCooldownMaxes[i] = Math.max(abilityCooldownMaxes[i], abilityCooldowns[i]);
+          }
+        }
+        pendingAbilityCooldowns = null;
+      }
     },
     get cardAbilities() { return cardAbilities; }, set cardAbilities(v) { cardAbilities = v; },
     get pickedCardIds() { return pickedCardIds; }, set pickedCardIds(v) { pickedCardIds = v; },
@@ -778,6 +813,10 @@ async function main(): Promise<void> {
     get completedBuffs() { return completedBuffs; }, set completedBuffs(v) { completedBuffs = v; },
     get eventVisionMult() { return eventVisionMult; }, set eventVisionMult(v) { eventVisionMult = v; },
     get pendingSingleplayerAutoStart() { return pendingSingleplayerAutoStart; }, set pendingSingleplayerAutoStart(v) { pendingSingleplayerAutoStart = v; },
+    get localActiveBuffIds() { return localActiveBuffIdsArr; }, set localActiveBuffIds(v) { localActiveBuffIdsArr = v; },
+    get chargeProgress() { return chargeProgress; }, set chargeProgress(v) { chargeProgress = v; },
+    get chargeDamage() { return chargeDamage; }, set chargeDamage(v) { chargeDamage = v; },
+    get pendingAbilityCooldowns() { return pendingAbilityCooldowns; }, set pendingAbilityCooldowns(v) { pendingAbilityCooldowns = v; },
   };
 
   registerMessageHandlers(net, handlerState, {
@@ -792,6 +831,13 @@ async function main(): Promise<void> {
     stateMgr, menuOverlay, lobbyOverlay, pauseBanner, waveHUD, resourceHUD,
     deathOverlay, gameOverOverlay, chatOverlay, debug, buildOverlay, buildGhost,
     warehouseHUD, cardPicker, skillTree, statsOverlay, abilityVFX, potionShopOverlay, trainingOverlay, tavernOverlay, buildMenu, civilianPanel, nightOverlay, eventRoulette, cardToast, notificationToast, combinedResources, electronAPI,
+    getActiveAbilities: () => activeAbilities,
+    setAbilityCooldown: (slotIdx: number, remaining: number) => {
+      if (slotIdx >= 0 && slotIdx < 3) {
+        abilityCooldowns[slotIdx] = remaining;
+        abilityCooldownMaxes[slotIdx] = Math.max(abilityCooldownMaxes[slotIdx], remaining);
+      }
+    },
   });
 
   // ── Session action helper ─────────────────────────────────────────────────
@@ -1043,9 +1089,41 @@ async function main(): Promise<void> {
       // 1. Map keyboard → PlayerInput component (only local entity has it)
       if (canAct) inputSystem.update(world);
 
-      // 2. Read current input (zero when incapacitated)
+      // Clear charge state if player died during charge
+      if ((localDowned || localDead) && localChargeDuration > 0) {
+        localChargeDuration = 0;
+        localChargeElapsed = 0;
+        chargeProgress = 0;
+        chargeDamage = 0;
+        selfRootTimer = 0;
+        const cidx = localActiveBuffIdsArr.indexOf('unbreakable_charge');
+        if (cidx >= 0) localActiveBuffIdsArr.splice(cidx, 1);
+      }
+
+      // 2. Read current input (zero when incapacitated or rooted)
+      if (selfRootTimer > 0) selfRootTimer -= dt;
+      if (localChargeDuration > 0 && localChargeElapsed < localChargeDuration) {
+        localChargeElapsed += dt;
+        chargeProgress = localChargeElapsed / localChargeDuration;
+        if (localChargeElapsed >= localChargeDuration) {
+          // Charge complete - trigger shockwave VFX and release
+          const chargePos = localEntityId != null ? world.getComponent<PositionComponent>(localEntityId, C.Position) : null;
+          if (chargePos) abilityVFX.trigger('thunderwave', chargePos.x, chargePos.y, 500, 0.8);
+          localChargeDuration = 0;
+          localChargeElapsed = 0;
+          chargeProgress = 0;
+          selfRootTimer = 0; // Immediately unroot
+          // Force-clear stale buff ID so movement unblocks immediately
+          const idx = localActiveBuffIdsArr.indexOf('unbreakable_charge');
+          if (idx >= 0) localActiveBuffIdsArr.splice(idx, 1);
+          // Reset reconciler smooth offset to prevent teleport-back
+          reconciler.smoothX = 0;
+          reconciler.smoothY = 0;
+        }
+      }
       const inp = world.getComponent<{ dx: number; dy: number; sprint: boolean }>(localEntityId, C.PlayerInput)!;
-      if (!canAct) { inp.dx = 0; inp.dy = 0; inp.sprint = false; }
+      const isRooted = selfRootTimer > 0 || localActiveBuffIdsArr.includes('unbreakable_charge');
+      if (!canAct || isRooted) { inp.dx = 0; inp.dy = 0; inp.sprint = false; }
 
       // 3. Record input every frame for accurate reconciler replay
       const seq = reconciler.recordInput(inp.dx, inp.dy, inp.sprint, dt);
@@ -1162,7 +1240,8 @@ async function main(): Promise<void> {
         attackCooldown = hasHoldAttack ? Math.max(classCooldown, holdAttackCooldown) : classCooldown;
         net.send({ type: MessageType.ATTACK, attackType: classAttackType, facing: localFacing, x: pos.x, y: pos.y, t: performance.now() });
         if (classAttackType === 'melee') {
-          playerRenderer.notifyAttack(localEntityId!, localFacing);
+          const hasTitansReach = skillAllocated.has('berserker_t10');
+          playerRenderer.notifyAttack(localEntityId!, localFacing, hasTitansReach ? MELEE_RANGE * 2 : undefined);
           // Client-side melee hit prediction - flash targets in arc immediately
           const halfArc = MELEE_ARC / 2;
           for (const targetId of world.query(C.Position, C.Health, C.Faction)) {
@@ -1175,7 +1254,8 @@ async function main(): Promise<void> {
             const tdx = tp.x - pos.x;
             const tdy = tp.y - pos.y;
             const dist = distance(tdx, tdy);
-            if (dist > MELEE_RANGE || dist === 0) continue;
+            const effectiveMeleeRange = hasTitansReach ? MELEE_RANGE * 2 : MELEE_RANGE;
+            if (dist > effectiveMeleeRange || dist === 0) continue;
             let diff = Math.abs(Math.atan2(tdy, tdx) - localFacing);
             if (diff > Math.PI) diff = 2 * Math.PI - diff;
             if (diff <= halfArc) playerRenderer.notifyHit(targetId);
@@ -1226,7 +1306,7 @@ async function main(): Promise<void> {
       }
 
       // Space: dodge roll
-      if (canAct && input.isJustPressed(Action.DodgeRoll) && localEntityId !== null) {
+      if (canAct && !isRooted && input.isJustPressed(Action.DodgeRoll) && localEntityId !== null) {
         const stamina = world.getComponent<StaminaComponent>(localEntityId, C.Stamina);
         const existingDodge = world.getComponent<DodgeRollComponent>(localEntityId, C.DodgeRoll);
         if (stamina && stamina.current >= DODGE_ROLL_STAMINA_COST &&
@@ -1269,6 +1349,13 @@ async function main(): Promise<void> {
               // Self-cast: fire immediately
               abilityCooldowns[ai] = ab.cooldown;
               abilityCooldownMaxes[ai] = ab.cooldown;
+              // Immediate client-side root for abilities that root the player
+              if (ab.abilityId === 'unbreakable_charge') {
+                const dur = (ab.params as any)?.chargeDuration ?? 30;
+                selfRootTimer = dur;
+                localChargeElapsed = 0;
+                localChargeDuration = dur;
+              }
               net.send({
                 type: MessageType.ABILITY_USE,
                 abilityId: ab.abilityId,
@@ -1446,7 +1533,23 @@ async function main(): Promise<void> {
       for (const id of projHits) projectileRenderer.remove(id);
 
       projectileRenderer.render(camera.viewX, camera.viewY, camera.zoom, sw, sh);
-      abilityVFX.render(camera.viewX, camera.viewY, camera.zoom, sw, sh);
+
+      // Persistent aura effects (warcry, aegis, charge, etc.) - check snapshot buff IDs
+      if (localEntityId != null && pos) {
+        const hasWarcry = localActiveBuffIdsArr.includes('warcry_rage');
+        const hasAegis = localActiveBuffIdsArr.includes('aegis_shield');
+        const hasCharge = localActiveBuffIdsArr.includes('unbreakable_charge');
+
+        const hasBloodDrain = localActiveBuffIdsArr.includes('blood_drain');
+
+        abilityVFX.setPersistentAura('warcry_rage', hasWarcry, 0xcc2222, 0xff4444);
+        abilityVFX.setPersistentAura('aegis_shield', hasAegis, 0x2255cc, 0x44aaff);
+        abilityVFX.setPersistentAura('unbreakable_charge', hasCharge, 0x3355aa, 0x6699dd);
+        abilityVFX.setPersistentAura('blood_drain', hasBloodDrain, 0x881111, 0xcc2222);
+      }
+
+      // Use raw entity position for auras so they stay perfectly on the player
+      abilityVFX.render(camera.viewX, camera.viewY, camera.zoom, sw, sh, pos ? { x: pos.x, y: pos.y, dt, chargeProgress, chargeDamage } : undefined);
 
       // 7. Camera follows local player (with smooth correction offset)
       reconciler.decaySmooth(dt);

@@ -197,9 +197,12 @@ function computeStats(
     makeStat('Damage', cs.baseDamage, 'damage'),
     makeStat('Speed', cs.speed, 'speed'),
     makeStat('Crit Chance', 0, 'critChance', { isPercent: true }),
+    makeStat('Crit Damage', 0, 'critDamage', { isPercent: true }),
+    makeStat('Dodge', 0, 'dodgeChance', { isPercent: true }),
     makeStat('Attack Speed', 0, 'attackSpeed', { isPercent: true }),
     makeStat('HP Regen', 0, 'hpRegen', { unit: '/s' }),
     makeStat('Stamina', cs.stamina, 'maxStamina'),
+    makeStat('CDR', 0, 'cooldownReduction', { isPercent: true }),
   ];
 }
 

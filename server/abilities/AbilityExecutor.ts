@@ -14,6 +14,7 @@ import {
   StunEffectComponent,
   FreezeComponent,
   RootComponent,
+  TauntComponent,
   FearComponent,
   DamageMarkComponent,
   ShieldAbsorbComponent,
@@ -264,70 +265,62 @@ export function executeAbility(
     // WARRIOR
     // =====================================================================
 
-    case 'ground_slam': {
-      // AOE damage + stun
-      baseEffect.radius = params.radius;
-      aoeDamageEnemies(world, entityId, pos.x, pos.y, params.radius, params.damage * 18, 150, hits, deaths);
-      for (const e of enemiesInRadius(world, pos.x, pos.y, params.radius)) {
-        let stun = world.getComponent<StunEffectComponent>(e.eid, C.StunEffect);
-        if (!stun) {
-          stun = { remaining: params.stunDuration, sourceId: entityId };
-          world.addComponent(e.eid, C.StunEffect, stun);
-        } else {
-          stun.remaining = Math.max(stun.remaining, params.stunDuration);
-        }
-      }
-      break;
-    }
-
-    case 'shield_charge': {
-      // Dash forward, damage + knockback enemies along path
-      const { destX, destY } = dashThroughEnemies(
-        world, entityId, pos, msg.facing, params.distance,
-        params.damage * 18, params.knockback, generator, hits, deaths,
-      );
-      baseEffect.targetX = destX;
-      baseEffect.targetY = destY;
-      break;
-    }
-
-    case 'battle_fury': {
-      // Self buff: damage + attack speed
+    case 'warcry_rage': {
       baseEffect.duration = params.duration;
-      pushBuff(world, entityId, 'battle_fury', params.duration, {
-        damageMultiplier: params.damageBonus,
-        attackSpeedMultiplier: params.attackSpeedBonus,
+      // Check for warcry extension combat mod
+      let duration = params.duration;
+      // Extension will be handled by SkillSystem checking combat mods
+      let ab = world.getComponent<ActiveBuffsComponent>(entityId, C.ActiveBuffs);
+      if (!ab) { ab = { buffs: [] }; world.addComponent(entityId, C.ActiveBuffs, ab); }
+      ab.buffs.push({
+        id: 'warcry_rage',
+        remaining: duration,
+        effect: { speedFlat: params.speedBoost, defensePercent: params.damageResistance, hpRegen: params.hpRegen },
       });
       break;
     }
 
-    case 'earthquake': {
-      // Large AOE damage + slow
-      baseEffect.radius = params.radius;
-      aoeDamageEnemies(world, entityId, pos.x, pos.y, params.radius, params.damage * 18, 0, hits, deaths);
-      for (const e of enemiesInRadius(world, pos.x, pos.y, params.radius)) {
-        let slow = world.getComponent<SlowEffectComponent>(e.eid, C.SlowEffect);
-        if (!slow) {
-          slow = { factor: params.slowFactor, remaining: params.slowDuration };
-          world.addComponent(e.eid, C.SlowEffect, slow);
-        } else {
-          slow.factor = Math.max(slow.factor, params.slowFactor);
-          slow.remaining = Math.max(slow.remaining, params.slowDuration);
-        }
+    case 'unbreakable_charge': {
+      baseEffect.radius = params.tauntRadius;
+      baseEffect.duration = params.chargeDuration;
+      // Root the player
+      world.addComponent(entityId, C.Root, { remaining: params.chargeDuration });
+      // Apply damage reduction buff
+      let ab = world.getComponent<ActiveBuffsComponent>(entityId, C.ActiveBuffs);
+      if (!ab) { ab = { buffs: [] }; world.addComponent(entityId, C.ActiveBuffs, ab); }
+      ab.buffs.push({
+        id: 'unbreakable_charge',
+        remaining: params.chargeDuration,
+        effect: { defensePercent: params.damageReduction, damageStorage: 0, damageMultiplier: params.damageMultiplier, totalDuration: params.chargeDuration },
+      });
+      // Taunt all enemies in radius
+      const r2 = params.tauntRadius * params.tauntRadius;
+      for (const eid of world.query(C.Position, C.Faction)) {
+        const ef = world.getComponent<FactionComponent>(eid, C.Faction);
+        if (ef?.type !== 'enemy') continue;
+        const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
+        const dx = ep.x - pos.x, dy = ep.y - pos.y;
+        if (dx * dx + dy * dy > r2) continue;
+        // Apply taunt - enemy must attack this player
+        world.addComponent(eid, C.Taunt, { sourceId: entityId, remaining: params.chargeDuration });
       }
       break;
     }
 
-    case 'blade_storm': {
-      // Apply channel component - server ticks damage each frame
+    case 'blood_drain': {
       baseEffect.radius = params.radius;
       baseEffect.duration = params.duration;
-      world.addComponent(entityId, C.Channel, {
-        abilityId: 'blade_storm',
+      // Add as ActiveBuff so it follows the player (drains nearby enemies, heals player)
+      let abDrain = world.getComponent<ActiveBuffsComponent>(entityId, C.ActiveBuffs);
+      if (!abDrain) { abDrain = { buffs: [] }; world.addComponent(entityId, C.ActiveBuffs, abDrain); }
+      // Remove existing blood_drain buff if any
+      const existIdx = abDrain.buffs.findIndex(b => b.id === 'blood_drain');
+      if (existIdx >= 0) abDrain.buffs.splice(existIdx, 1);
+      abDrain.buffs.push({
+        id: 'blood_drain',
         remaining: params.duration,
-        tickDamage: params.damage * 18,
-        radius: params.radius,
-      } as ChannelComponent);
+        effect: { drainRadius: params.radius, drainDps: 15, drainHealPerSec: 10 },
+      });
       break;
     }
 
@@ -432,31 +425,20 @@ export function executeAbility(
       baseEffect.targetY = ty;
       baseEffect.radius = params.radius;
       baseEffect.duration = params.duration;
-      const meteorImpactRadius = 60; // Each meteor's splash radius
-      const deathSet = new Set<number>();
-      // Spread meteors across the full 300px area
-      for (let i = 0; i < params.meteorCount; i++) {
-        const angle = Math.random() * Math.PI * 2;
-        const dist = Math.random() * params.radius;
-        const mx = tx + Math.cos(angle) * dist;
-        const my = ty + Math.sin(angle) * dist;
-        for (const eid of world.query(C.Position, C.Health, C.Faction)) {
-          if (deathSet.has(eid)) continue; // Already dead from earlier meteor
-          const ef = world.getComponent<FactionComponent>(eid, C.Faction);
-          if (!ef || ef.type === 'player' || ef.type === 'building' || ef.type === 'item' || ef.type === 'guard' || ef.type === 'civilian') continue;
-          const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
-          const dx = ep.x - mx, dy = ep.y - my;
-          if (dx * dx + dy * dy > meteorImpactRadius * meteorImpactRadius) continue;
-          const hp = world.getComponent<HealthComponent>(eid, C.Health)!;
-          if (hp.current <= 0) continue; // Already dead
-          const def = world.getComponent<DefenseComponent>(eid, C.Defense);
-          let dmg = params.damagePerMeteor;
-          if (def) dmg = Math.max(1, Math.round((dmg - def.flat) * (1 - def.percent)));
-          hp.current = Math.max(0, hp.current - dmg);
-          hits.push({ sourceId: entityId, targetId: eid, damage: dmg, knockbackVx: 0, knockbackVy: 0 });
-          if (hp.current <= 0) { deaths.push(eid); deathSet.add(eid); }
-        }
-      }
+      // Create a meteor shower entity that spawns individual meteor impacts over time
+      const zoneId = world.createEntity();
+      world.addComponent(zoneId, C.Position, { x: tx, y: ty });
+      const meteorInterval = params.duration / params.meteorCount;
+      world.addComponent(zoneId, C.MeteorShower, {
+        x: tx, y: ty,
+        radius: params.radius,
+        remaining: params.duration,
+        meteorTimer: meteorInterval, // Start ready to fire first meteor immediately
+        meteorInterval,
+        damagePerMeteor: params.damagePerMeteor,
+        impactRadius: 100,
+        ownerId: entityId,
+      } as any);
       break;
     }
 

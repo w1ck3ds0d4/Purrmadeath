@@ -85,6 +85,8 @@ export const C = {
   SummonOwner:     'SummonOwner',
   Bleed:           'Bleed',
   SoulMark:        'SoulMark',
+  Taunt:           'Taunt',
+  MeteorShower:    'MeteorShower',
 } as const;
 
 // ─── Component interfaces ──────────────────────────────────────────────────────
@@ -230,6 +232,8 @@ export interface ProjectileComponent {
   maxPierces?: number;
   /** Bonus crit damage multiplier vs frozen/slowed targets (frost_crit). */
   frostCritBonus?: number;
+  /** Percentage of damage dealt healed back to projectile owner (blood arc). */
+  healPercent?: number;
   /** Elemental colors for rendering (e.g., [0xff4400, 0x44aadd]). Client cycles through them. */
   colors?: number[];
 }
@@ -742,6 +746,21 @@ export interface BleedComponent { dps: number; remaining: number; stacks: number
 
 /** Damage amplification debuff - target takes bonus damage from all sources. */
 export interface SoulMarkComponent { damageAmp: number; remaining: number; sourceId: number; }
+
+/** Taunt - forces enemy to attack the source player. */
+export interface TauntComponent { sourceId: number; remaining: number; }
+
+/** Meteor shower zone - spawns individual meteor impacts over time. */
+export interface MeteorShowerComponent {
+  x: number; y: number;
+  radius: number;
+  remaining: number;
+  meteorTimer: number;
+  meteorInterval: number;
+  damagePerMeteor: number;
+  impactRadius: number;
+  ownerId: number;
+}
 
 /** Tags an entity as a hired hero NPC. */
 export interface HeroComponent {

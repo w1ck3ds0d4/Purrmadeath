@@ -156,7 +156,7 @@ function lightenColor(c: number, amount: number): number { return lerpColor(c, 0
 export class PlayerRendererSystem {
   private sprites     = new Map<EntityId, Graphics>();
   private hitTimers   = new Map<EntityId, number>();  // remaining flash seconds
-  private attackArcs  = new Map<EntityId, { facing: number; elapsed: number }>();
+  private attackArcs  = new Map<EntityId, { facing: number; elapsed: number; range?: number }>();
   private downedEntities = new Set<EntityId>();
   private reviveProgress = new Map<EntityId, number>(); // entityId → 0..1
   private bossLabels = new Map<EntityId, Text>();
@@ -212,8 +212,8 @@ export class PlayerRendererSystem {
   }
 
   /** Triggers a sword-arc animation (220ms) originating from the attacker. */
-  notifyAttack(entityId: EntityId, facing: number): void {
-    this.attackArcs.set(entityId, { facing, elapsed: 0 });
+  notifyAttack(entityId: EntityId, facing: number, rangeOverride?: number): void {
+    this.attackArcs.set(entityId, { facing, elapsed: 0, range: rangeOverride });
   }
 
   /** Mark a player entity as downed (dark tint, X overlay). */
@@ -901,7 +901,7 @@ export class PlayerRendererSystem {
           const startA   = arc.facing - halfArc;
           const endA     = arc.facing + halfArc;
           const STEPS    = 10;
-          const arcRange = isEnemy ? ENEMY_MELEE_RANGE : MELEE_RANGE;
+          const arcRange = isEnemy ? ENEMY_MELEE_RANGE : (arc.range ?? MELEE_RANGE);
           const arcColor = isEnemy ? 0xff6666 : 0xffffaa;
 
           const pts: number[] = [0, 0];

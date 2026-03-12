@@ -73,6 +73,14 @@ export class ProjectileSystem {
   buildingDamageMult = 1;
   /** Per-entity dodge chance (0-1). Set externally by GameSession from skill buffs. */
   dodgeChanceMap = new Map<number, number>();
+  /** Per-entity damage reduction (0-1). Set externally for Unbreakable Charge etc. */
+  damageReductionMap = new Map<number, number>();
+  /** Entities with an active aegis shield that blocks one hit. */
+  shieldBlockSet = new Set<number>();
+  /** Track consumed shields this tick (so we don't double-block). */
+  shieldConsumed = new Set<number>();
+  /** Per-entity thorns percentage (0-1). Reflects damage back to attacker. */
+  thornsMap = new Map<number, number>();
 
   constructor(private readonly generator: WorldGenerator) {}
 
@@ -361,7 +369,31 @@ export class ProjectileSystem {
           }
         }
 
+        // Aegis Shield: block one projectile hit entirely (absorb the projectile, deal 0 damage)
+        if (this.shieldBlockSet.has(targetId) && !this.shieldConsumed.has(targetId)) {
+          this.shieldConsumed.add(targetId);
+          // Still register as a hit (0 damage) so projectile is consumed
+          hits.push({ sourceId: proj.ownerId, targetId, damage: 0, knockbackVx: 0, knockbackVy: 0 });
+          if (!proj.pierce) { destroyed.push(projId); break; }
+          if (proj.hitEntities) proj.hitEntities.push(targetId);
+          continue;
+        }
+
+        // Apply damage reduction (Unbreakable Charge etc.)
+        const projDmgReduction = this.damageReductionMap.get(targetId) ?? 0;
+        const rawProjDmg = damage; // Store raw damage before reduction
+        if (projDmgReduction > 0) damage = Math.max(0, Math.round(damage * (1 - projDmgReduction)));
         hp.current = Math.max(0, hp.current - damage);
+
+        // Thorns: reflect damage back to projectile owner
+        const thornsPercent = this.thornsMap.get(targetId) ?? 0;
+        if (thornsPercent > 0 && damage > 0) {
+          const thornsDmg = Math.round(rawProjDmg * thornsPercent);
+          if (thornsDmg > 0) {
+            const ownerHp = world.getComponent<HealthComponent>(proj.ownerId, C.Health);
+            if (ownerHp) ownerHp.current = Math.max(0, ownerHp.current - thornsDmg);
+          }
+        }
 
         // Knockback - direction from projectile to target (giants/titans are immune)
         let knockbackVx = 0;
@@ -383,8 +415,16 @@ export class ProjectileSystem {
           }
         }
 
-        hits.push({ sourceId: proj.ownerId, targetId, damage, knockbackVx, knockbackVy, crit: crit || undefined });
+        hits.push({ sourceId: proj.ownerId, targetId, damage, rawDamage: projDmgReduction > 0 ? rawProjDmg : undefined, knockbackVx, knockbackVy, crit: crit || undefined });
         if (hp.current <= 0) deaths.push(targetId);
+
+        // Blood Arc heal: heal projectile owner for a percentage of damage dealt
+        if (proj.healPercent && proj.healPercent > 0 && damage > 0) {
+          const ownerHp = world.getComponent<HealthComponent>(proj.ownerId, C.Health);
+          if (ownerHp) {
+            ownerHp.current = Math.min(ownerHp.max, ownerHp.current + damage * proj.healPercent);
+          }
+        }
 
         // AOE explosion: damage all enemies within radius (cannon turret)
         if (proj.aoeRadius && proj.aoeRadius > 0) {

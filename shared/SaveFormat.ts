@@ -158,6 +158,8 @@ export interface SavedPlayer {
     charges: number;
     maxCharges: number;
   };
+  /** Ability cooldowns (abilityId -> seconds remaining). */
+  abilityCooldowns?: Record<string, number>;
 }
 
 export interface SavedEnemy {

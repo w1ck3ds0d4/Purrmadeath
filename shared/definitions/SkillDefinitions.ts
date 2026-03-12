@@ -3,7 +3,7 @@ import type { PlayerClass } from './ClassDefinitions';
 // ─── Branch & Node IDs ─────────────────────────────────────────────────────────
 
 export type SkillBranchId =
-  | 'berserker' | 'guardian' | 'warlord' | 'ironclad' | 'juggernaut'          // Warrior
+  | 'berserker' | 'guardian' | 'blood_knight' | 'templar' | 'slayer'           // Warrior
   | 'sharpshooter' | 'trapper' | 'scout' | 'hawkeye' | 'poisoner'            // Ranger
   | 'fire_mage' | 'frost_mage' | 'electric_mage' | 'earth_mage' | 'void_mage'; // Mage
 
@@ -12,7 +12,8 @@ export type SkillNodeId = string;
 
 // ─── Effect Types ──────────────────────────────────────────────────────────────
 
-export type PassiveStat = 'damage' | 'speed' | 'maxHp' | 'defense' | 'critChance' | 'attackSpeed' | 'hpRegen' | 'dodgeChance' | 'cooldownReduction';
+export type PassiveStat = 'damage' | 'speed' | 'maxHp' | 'defense' | 'critChance' | 'attackSpeed' | 'hpRegen'
+  | 'dodgeChance' | 'cooldownReduction' | 'critDamage' | 'flatDamage' | 'flatSpeed' | 'defensePercent';
 
 export interface SkillPassiveEffect {
   stat: PassiveStat;
@@ -22,7 +23,8 @@ export interface SkillPassiveEffect {
 }
 
 export type SpecialEffectType = 'lifesteal' | 'burn_dot' | 'thorns' | 'slow_on_hit'
-  | 'poison_dot' | 'stun_on_hit' | 'holy_mark' | 'shadow_drain' | 'arcane_mark' | 'nature_blessing';
+  | 'poison_dot' | 'stun_on_hit' | 'holy_mark' | 'shadow_drain' | 'arcane_mark' | 'nature_blessing'
+  | 'bloodlust_stack' | 'thorns_percent' | 'armor_break';
 
 export interface SkillSpecialEffect {
   type: SpecialEffectType;
@@ -36,11 +38,9 @@ export interface SkillSpecialEffect {
 
 export type AbilityParams =
   // Warrior
-  | { type: 'ground_slam'; damage: number; radius: number; stunDuration: number }
-  | { type: 'shield_charge'; distance: number; damage: number; knockback: number }
-  | { type: 'battle_fury'; damageBonus: number; attackSpeedBonus: number; duration: number }
-  | { type: 'earthquake'; damage: number; radius: number; slowFactor: number; slowDuration: number }
-  | { type: 'blade_storm'; damage: number; radius: number; duration: number }
+  | { type: 'warcry_rage'; speedBoost: number; damageResistance: number; hpRegen: number; duration: number }
+  | { type: 'unbreakable_charge'; tauntRadius: number; damageReduction: number; chargeDuration: number; damageMultiplier: number }
+  | { type: 'blood_drain'; radius: number; duration: number; drainPercent: number }
   // Ranger
   | { type: 'arrow_volley'; arrowCount: number; damage: number; coneAngle: number }
   | { type: 'snare_net'; radius: number; rootDuration: number; slowFactor: number }
@@ -64,7 +64,7 @@ export interface SkillActiveAbility {
 
 export type CombatModifierType =
   // Warrior
-  | 'cleave' | 'shockwave' | 'berserker_rush' | 'shield_bash_stun'
+  | 'double_range' | 'aegis_shield' | 'blood_arc' | 'warcry_extension'
   // Ranger
   | 'multishot_passive' | 'piercing_plus' | 'bouncing' | 'homing_passive' | 'split_on_hit'
   // Mage - Fire
@@ -112,28 +112,94 @@ export interface SkillBranch {
 export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
   // ── Warrior ────────────────────────────────────────────────────────────────
   berserker: {
-    id: 'berserker', name: 'Berserker', description: 'Damage and attack speed',
+    id: 'berserker', name: 'Berserker', description: 'Sustain through bloodlust and rage',
     playerClass: 'warrior', color: 0xcc3333,
-    nodes: [],
+    nodes: [
+      { id: 'berserker_t1', tier: 1, branch: 'berserker', name: 'Vitality', description: '+40 max HP',
+        passive: [{ stat: 'maxHp', value: 40, mode: 'add' }] },
+      { id: 'berserker_t2', tier: 2, branch: 'berserker', name: 'Bloodlust', description: 'Each hit gives +2 HP/s regen for 20s (stacks, resets on hit)',
+        special: [{ type: 'bloodlust_stack', value: 2 }] },
+      { id: 'berserker_t3', tier: 3, branch: 'berserker', name: 'Ferocity', description: '+15% crit chance',
+        passive: [{ stat: 'critChance', value: 0.15, mode: 'add' }] },
+      { id: 'berserker_t4', tier: 4, branch: 'berserker', name: 'Savage Blows', description: '+40% crit damage',
+        passive: [{ stat: 'critDamage', value: 0.40, mode: 'add' }] },
+      { id: 'berserker_t5', tier: 5, branch: 'berserker', name: 'Warcry Rage', description: 'Red aura: +100 speed, 70% DR, 100 HP/s regen for 45s',
+        active: { abilityId: 'warcry_rage', name: 'Warcry Rage', description: '+100 speed, 70% DR, 100 HP/s for 45s', cooldown: 90,
+          params: { type: 'warcry_rage', speedBoost: 100, damageResistance: 0.70, hpRegen: 100, duration: 45 } } },
+      { id: 'berserker_t6', tier: 6, branch: 'berserker', name: 'Iron Hide', description: '+10% defense',
+        passive: [{ stat: 'defensePercent', value: 0.10, mode: 'add' }] },
+      { id: 'berserker_t7', tier: 7, branch: 'berserker', name: 'Raw Power', description: '+40 flat damage',
+        passive: [{ stat: 'flatDamage', value: 40, mode: 'add' }] },
+      { id: 'berserker_t8', tier: 8, branch: 'berserker', name: 'Eternal Rage', description: 'Warcry Rage duration +20s',
+        combatMod: { type: 'warcry_extension', value: 20 } },
+      { id: 'berserker_t9', tier: 9, branch: 'berserker', name: 'Battle Focus', description: '-20% ability cooldowns',
+        passive: [{ stat: 'cooldownReduction', value: 0.20, mode: 'add' }] },
+      { id: 'berserker_t10', tier: 10, branch: 'berserker', name: "Titan's Reach", description: 'Double melee attack range',
+        combatMod: { type: 'double_range', value: 2 } },
+    ],
   },
   guardian: {
-    id: 'guardian', name: 'Guardian', description: 'Tank and defense',
+    id: 'guardian', name: 'Guardian', description: 'Tanking and damage reflection',
     playerClass: 'warrior', color: 0x3377cc,
+    nodes: [
+      { id: 'guardian_t1', tier: 1, branch: 'guardian', name: 'Fortress', description: '+50 max HP',
+        passive: [{ stat: 'maxHp', value: 50, mode: 'add' }] },
+      { id: 'guardian_t2', tier: 2, branch: 'guardian', name: 'Retaliation', description: 'Enemies take 35% of raw damage dealt to you',
+        special: [{ type: 'thorns_percent', value: 0.35 }] },
+      { id: 'guardian_t3', tier: 3, branch: 'guardian', name: 'Armor Mastery', description: '+10% defense',
+        passive: [{ stat: 'defensePercent', value: 0.10, mode: 'add' }] },
+      { id: 'guardian_t4', tier: 4, branch: 'guardian', name: 'Swift Guard', description: '+20 movement speed',
+        passive: [{ stat: 'flatSpeed', value: 20, mode: 'add' }] },
+      { id: 'guardian_t5', tier: 5, branch: 'guardian', name: 'Unbreakable Charge', description: 'Taunt 500px, 80% DR, store damage for 10s then release 200% AOE',
+        active: { abilityId: 'unbreakable_charge', name: 'Unbreakable Charge', description: 'Taunt + store damage, release 200% AOE', cooldown: 120,
+          params: { type: 'unbreakable_charge', tauntRadius: 500, damageReduction: 1.0, chargeDuration: 10, damageMultiplier: 2.0 } } },
+      { id: 'guardian_t6', tier: 6, branch: 'guardian', name: 'Steel Wall', description: '+20% defense',
+        passive: [{ stat: 'defensePercent', value: 0.20, mode: 'add' }] },
+      { id: 'guardian_t7', tier: 7, branch: 'guardian', name: 'Guardian Strike', description: '+20 flat damage',
+        passive: [{ stat: 'flatDamage', value: 20, mode: 'add' }] },
+      { id: 'guardian_t8', tier: 8, branch: 'guardian', name: 'Regeneration', description: '+5 HP/s regen',
+        passive: [{ stat: 'hpRegen', value: 5, mode: 'add' }] },
+      { id: 'guardian_t9', tier: 9, branch: 'guardian', name: 'Vigilance', description: '-10% ability cooldowns',
+        passive: [{ stat: 'cooldownReduction', value: 0.10, mode: 'add' }] },
+      { id: 'guardian_t10', tier: 10, branch: 'guardian', name: 'Aegis Shield', description: 'Shield blocks all damage, recharges after 30s or 10 kills',
+        combatMod: { type: 'aegis_shield', value: 1, params: { rechargeSec: 30, rechargeKills: 10 } } },
+    ],
+  },
+  blood_knight: {
+    id: 'blood_knight', name: 'Blood Knight', description: 'Lifesteal and blood magic',
+    playerClass: 'warrior', color: 0x882233,
+    nodes: [
+      { id: 'blood_knight_t1', tier: 1, branch: 'blood_knight', name: 'Blood Blade', description: '+50 flat damage',
+        passive: [{ stat: 'flatDamage', value: 50, mode: 'add' }] },
+      { id: 'blood_knight_t2', tier: 2, branch: 'blood_knight', name: 'Armor Break', description: 'Attacks reduce enemy defense',
+        special: [{ type: 'armor_break', value: 0.20 }] },
+      { id: 'blood_knight_t3', tier: 3, branch: 'blood_knight', name: 'Vitae', description: '+5 HP/s regen',
+        passive: [{ stat: 'hpRegen', value: 5, mode: 'add' }] },
+      { id: 'blood_knight_t4', tier: 4, branch: 'blood_knight', name: 'Blood Thorns', description: 'Enemies take 20% of their damage back',
+        special: [{ type: 'thorns_percent', value: 0.20 }] },
+      { id: 'blood_knight_t5', tier: 5, branch: 'blood_knight', name: 'Blood Drain', description: 'Drain HP from enemies in 150px area for 30s',
+        active: { abilityId: 'blood_drain', name: 'Blood Drain', description: 'Drain enemy HP as healing for 30s', cooldown: 60,
+          params: { type: 'blood_drain', radius: 150, duration: 30, drainPercent: 0.15 } } },
+      { id: 'blood_knight_t6', tier: 6, branch: 'blood_knight', name: 'Swiftness', description: '+20 movement speed',
+        passive: [{ stat: 'flatSpeed', value: 20, mode: 'add' }] },
+      { id: 'blood_knight_t7', tier: 7, branch: 'blood_knight', name: 'Crimson Edge', description: '+20 flat damage',
+        passive: [{ stat: 'flatDamage', value: 20, mode: 'add' }] },
+      { id: 'blood_knight_t8', tier: 8, branch: 'blood_knight', name: 'Blood Pool', description: '+30 max HP',
+        passive: [{ stat: 'maxHp', value: 30, mode: 'add' }] },
+      { id: 'blood_knight_t9', tier: 9, branch: 'blood_knight', name: 'Crimson Thorns', description: '+30% thorns (total 50%)',
+        special: [{ type: 'thorns_percent', value: 0.30 }] },
+      { id: 'blood_knight_t10', tier: 10, branch: 'blood_knight', name: 'Blood Arc', description: 'Every 3rd attack fires a penetrating blood projectile, heals 30%',
+        combatMod: { type: 'blood_arc', value: 3, params: { healPercent: 0.30 } } },
+    ],
+  },
+  templar: {
+    id: 'templar', name: 'Templar', description: 'Coming soon...',
+    playerClass: 'warrior', color: 0xccaa44,
     nodes: [],
   },
-  warlord: {
-    id: 'warlord', name: 'Warlord', description: 'Team buffs and control',
-    playerClass: 'warrior', color: 0xccaa33,
-    nodes: [],
-  },
-  ironclad: {
-    id: 'ironclad', name: 'Ironclad', description: 'Thorns and regeneration',
-    playerClass: 'warrior', color: 0x6688aa,
-    nodes: [],
-  },
-  juggernaut: {
-    id: 'juggernaut', name: 'Juggernaut', description: 'Speed and brute force',
-    playerClass: 'warrior', color: 0xdd7722,
+  slayer: {
+    id: 'slayer', name: 'Slayer', description: 'Coming soon...',
+    playerClass: 'warrior', color: 0x993333,
     nodes: [],
   },
 
@@ -179,7 +245,7 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
         special: [{ type: 'burn_dot', value: 7 }] },
       { id: 'fire_mage_t5', tier: 5, branch: 'fire_mage', name: 'Meteor Shower', description: 'Rain meteors in a 300px area dealing massive damage',
         active: { abilityId: 'meteor_shower', name: 'Meteor Shower', description: 'Meteors rain in 300px area', cooldown: 15,
-          params: { type: 'meteor_shower', radius: 300, duration: 4, meteorCount: 15, damagePerMeteor: 50 } } },
+          params: { type: 'meteor_shower', radius: 300, duration: 4, meteorCount: 15, damagePerMeteor: 300 } } },
       { id: 'fire_mage_t6', tier: 6, branch: 'fire_mage', name: 'Evasion', description: '15% chance to dodge attacks',
         passive: [{ stat: 'dodgeChance', value: 0.15, mode: 'add' }] },
       { id: 'fire_mage_t7', tier: 7, branch: 'fire_mage', name: 'Pyromaniac', description: '+15% damage',
@@ -260,7 +326,7 @@ export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
 
 /** Which branches belong to each class (display order: left, center, right). */
 export const CLASS_BRANCHES: Record<PlayerClass, SkillBranchId[]> = {
-  warrior: ['berserker', 'guardian', 'warlord', 'ironclad', 'juggernaut'],
+  warrior: ['berserker', 'guardian', 'blood_knight', 'templar', 'slayer'],
   ranger: ['sharpshooter', 'trapper', 'scout', 'hawkeye', 'poisoner'],
   mage: ['fire_mage', 'frost_mage', 'electric_mage', 'earth_mage', 'void_mage'],
 };
@@ -333,6 +399,16 @@ export interface SkillBuffs {
   natureBlessing: number;
   // Dodge
   dodgeChance: number;
+  // Cooldown reduction
+  cooldownReduction: number;
+  // Warrior passive stats
+  flatDamage: number;
+  critDamageBonus: number;
+  flatSpeed: number;
+  defensePercent: number;
+  thornsPercent: number;
+  bloodlustStack: number;
+  armorBreak: number;
   // Combat modifiers
   combatMods: CombatModifier[];
 }
@@ -344,6 +420,9 @@ export function emptySkillBuffs(): SkillBuffs {
     lifesteal: 0, burnDot: 0, thornsDamage: 0, slowOnHit: 0,
     poisonDot: 0, stunOnHit: 0, holyMark: 0, shadowDrain: 0, arcaneMark: 0, natureBlessing: 0,
     dodgeChance: 0,
+    cooldownReduction: 0,
+    flatDamage: 0, critDamageBonus: 0, flatSpeed: 0, defensePercent: 0,
+    thornsPercent: 0, bloodlustStack: 0, armorBreak: 0,
     combatMods: [],
   };
 }
@@ -365,6 +444,11 @@ export function computeSkillBuffs(alloc: SkillAllocation): SkillBuffs {
           case 'critChance':  buffs.critChanceBonus += p.value; break;
           case 'hpRegen':     buffs.hpRegen += p.value; break;
           case 'dodgeChance': buffs.dodgeChance += p.value; break;
+          case 'cooldownReduction': buffs.cooldownReduction += p.value; break;
+          case 'critDamage':    buffs.critDamageBonus += p.value; break;
+          case 'flatDamage':    buffs.flatDamage += p.value; break;
+          case 'flatSpeed':     buffs.flatSpeed += p.value; break;
+          case 'defensePercent': buffs.defensePercent += p.value; break;
         }
       }
     }
@@ -381,6 +465,9 @@ export function computeSkillBuffs(alloc: SkillAllocation): SkillBuffs {
           case 'shadow_drain':     buffs.shadowDrain = Math.max(buffs.shadowDrain, s.value); break;
           case 'arcane_mark':      buffs.arcaneMark = Math.max(buffs.arcaneMark, s.value); break;
           case 'nature_blessing':  buffs.natureBlessing = Math.max(buffs.natureBlessing, s.value); break;
+          case 'bloodlust_stack':  buffs.bloodlustStack = Math.max(buffs.bloodlustStack, s.value); break;
+          case 'thorns_percent':   buffs.thornsPercent += s.value; break;
+          case 'armor_break':      buffs.armorBreak = Math.max(buffs.armorBreak, s.value); break;
         }
       }
     }

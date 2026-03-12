@@ -263,8 +263,8 @@ export function createDayNightController(deps: DayNightControllerDeps) {
   }
 
   /** Begin the first day (called once when game starts). */
-  function startFirstDay(send: SendFn): void {
-    s.dayTimer = DAY_MAX_DURATION;
+  function startFirstDay(send: SendFn, savedTimer?: number): void {
+    s.dayTimer = (savedTimer != null && savedTimer > 0) ? savedTimer : DAY_MAX_DURATION;
     s.phase = s.permanentNight ? 'night' : 'day';
     s.darkness = s.permanentNight ? 1 : 0;
     s.sleepVotes.clear();

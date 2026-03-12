@@ -115,8 +115,16 @@ export class MovementSystem {
     this.cachePortals(world);
     this.cacheBuildings(world);
     for (const id of world.query(C.Position, C.Velocity, C.Speed, C.PlayerInput)) {
-      // Skip downed entities - they cannot move
+      // Skip downed or rooted entities - they cannot move
       if (world.hasComponent(id, C.Downed)) continue;
+      if (world.hasComponent(id, C.Root)) {
+        // Rooted: zero velocity and knockback - entity cannot move at all
+        const vel = world.getComponent<VelocityComponent>(id, C.Velocity)!;
+        vel.vx = 0; vel.vy = 0;
+        const rkb = world.getComponent<KnockbackReceiverComponent>(id, C.KnockbackReceiver);
+        if (rkb) { rkb.vx = 0; rkb.vy = 0; }
+        continue;
+      }
 
       const pos   = world.getComponent<PositionComponent>(id, C.Position)!;
       const vel   = world.getComponent<VelocityComponent>(id, C.Velocity)!;

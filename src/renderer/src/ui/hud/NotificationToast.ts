@@ -42,8 +42,23 @@ export function createNotificationToast() {
   document.getElementById('overlay')?.appendChild(container);
 
   const toasts: ToastEntry[] = [];
+  const MAX_VISIBLE = 5;
+  let lastMessage = '';
+  let lastMessageTime = 0;
 
   function show(text: string, level: NotifLevel = 'info', subtitle?: string): void {
+    // Dedup: skip if same message within 2 seconds
+    const now = performance.now();
+    if (text === lastMessage && now - lastMessageTime < 2000) return;
+    lastMessage = text;
+    lastMessageTime = now;
+
+    // Cap max visible toasts - remove oldest
+    while (toasts.length >= MAX_VISIBLE) {
+      const old = toasts.shift();
+      if (old) { old.el.remove(); }
+    }
+
     const color = LEVEL_COLORS[level];
 
     const el = document.createElement('div');

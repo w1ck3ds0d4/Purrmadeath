@@ -26,6 +26,7 @@ import {
   TransformComponent,
   PersistentZoneComponent,
   SummonOwnerComponent,
+  MeteorShowerComponent,
 } from '@shared/components';
 import {
   type SkillAllocation,
@@ -162,8 +163,12 @@ export function createSkillSystem(deps: SkillSystemDeps) {
     const sc = deps.world.getComponent<SkillCooldownsComponent>(player.entityId, C.SkillCooldowns);
     if (sc && (sc.cooldowns[ability.abilityId] ?? 0) > 0.05) return { hits: [], deaths: [] };
 
-    // Set cooldown
-    if (sc) sc.cooldowns[ability.abilityId] = ability.cooldown;
+    // Set cooldown (apply cooldown reduction from skill buffs)
+    if (sc) {
+      const sBuffs = getSkillBuffs(player.client.id);
+      const cdReduction = Math.min(sBuffs.cooldownReduction, 0.5); // Cap at 50%
+      sc.cooldowns[ability.abilityId] = ability.cooldown * (1 - cdReduction);
+    }
 
     // Execute
     const result = executeAbility(deps.world, player, ability, msg, deps.generator);
@@ -439,6 +444,40 @@ export function createSkillSystem(deps: SkillSystemDeps) {
       }
     }
 
+    // MeteorShower: spawn individual meteor impacts over time
+    for (const id of deps.world.query(C.MeteorShower)) {
+      const ms = deps.world.getComponent<MeteorShowerComponent>(id, C.MeteorShower)!;
+      ms.remaining -= dt;
+      if (ms.remaining <= 0) {
+        deps.world.destroyEntity(id);
+        continue;
+      }
+      ms.meteorTimer += dt;
+      while (ms.meteorTimer >= ms.meteorInterval) {
+        ms.meteorTimer -= ms.meteorInterval;
+        // Spawn one meteor impact at a random position within the zone
+        const angle = Math.random() * Math.PI * 2;
+        const dist = Math.random() * ms.radius;
+        const mx = ms.x + Math.cos(angle) * dist;
+        const my = ms.y + Math.sin(angle) * dist;
+        const impactR2 = ms.impactRadius * ms.impactRadius;
+        // Deal damage to all enemies in the impact area
+        for (const eid of deps.world.query(C.Position, C.Health, C.Faction)) {
+          const ef = deps.world.getComponent<FactionComponent>(eid, C.Faction);
+          if (!ef || ef.type === 'player' || ef.type === 'building' || ef.type === 'item' || ef.type === 'guard' || ef.type === 'civilian') continue;
+          const ep = deps.world.getComponent<PositionComponent>(eid, C.Position)!;
+          const dx = ep.x - mx, dy = ep.y - my;
+          if (dx * dx + dy * dy > impactR2) continue;
+          const hp = deps.world.getComponent<HealthComponent>(eid, C.Health)!;
+          if (hp.current <= 0) continue;
+          const def = deps.world.getComponent<DefenseComponent>(eid, C.Defense);
+          let dmg = ms.damagePerMeteor;
+          if (def) dmg = Math.max(1, Math.round((dmg - def.flat) * (1 - def.percent)));
+          hp.current = Math.max(0, hp.current - dmg);
+        }
+      }
+    }
+
     // SummonOwner: check expiry
     for (const id of deps.world.query(C.SummonOwner)) {
       const summon = deps.world.getComponent<SummonOwnerComponent>(id, C.SummonOwner)!;
@@ -457,14 +496,8 @@ export function createSkillSystem(deps: SkillSystemDeps) {
       }
     }
 
-    // Tick active buffs (remove expired)
-    for (const id of deps.world.query(C.ActiveBuffs)) {
-      const ab = deps.world.getComponent<ActiveBuffsComponent>(id, C.ActiveBuffs)!;
-      for (let i = ab.buffs.length - 1; i >= 0; i--) {
-        ab.buffs[i].remaining -= dt;
-        if (ab.buffs[i].remaining <= 0) ab.buffs.splice(i, 1);
-      }
-    }
+    // ActiveBuffs are ticked by GameSession.tickActiveBuffs() - do NOT tick here
+    // (double decrement was causing buffs to expire at half their intended duration)
 
     // Tick burn DOT
     for (const id of deps.world.query(C.BurnDot, C.Health)) {
@@ -579,11 +612,12 @@ export function createSkillSystem(deps: SkillSystemDeps) {
     const buffs = getSkillBuffs(clientId);
     const eid = player.entityId;
 
-    // Defense
+    // Defense (flat + percent from skill tree)
     const def = deps.world.getComponent<DefenseComponent>(eid, C.Defense);
     if (def) {
       const baseDef = CLASS_STATS[player.playerClass].defense;
       def.flat = baseDef + buffs.defenseBonus;
+      def.percent = buffs.defensePercent;
     }
 
     // Max HP (class base + skill bonus + card bonus)
@@ -597,9 +631,12 @@ export function createSkillSystem(deps: SkillSystemDeps) {
       if (hp.max > oldMax) hp.current = Math.min(hp.max, hp.current + (hp.max - oldMax));
     }
 
-    // Speed
+    // Speed (multiplicative from skill tree + flat bonus)
     const speed = deps.world.getComponent<SpeedComponent>(eid, C.Speed);
-    if (speed) speed.multiplier = buffs.speedMultiplier;
+    if (speed) {
+      speed.multiplier = buffs.speedMultiplier;
+      speed.base = CLASS_STATS[player.playerClass].speed + buffs.flatSpeed;
+    }
   }
 
   // ── Save/Load ────────────────────────────────────────────────────────────

@@ -238,6 +238,15 @@ export class EnemySystem {
         }
       }
 
+      // Check for Taunt: taunted enemies override all other targeting
+      const taunt = world.getComponent<import('@shared/components').TauntComponent>(id, C.Taunt);
+      if (taunt) {
+        taunt.remaining -= dt;
+        if (taunt.remaining <= 0) {
+          world.removeComponent(id, C.Taunt);
+        }
+      }
+
       // Priority targeting: campfire > players > walls > other buildings
       let targetPos: { x: number; y: number } | null = null;
       let navPos: { x: number; y: number } | null = null;
@@ -409,6 +418,16 @@ export class EnemySystem {
             targetHalfExtent = nearest.half;
             targetEntityId = nearest.id;
           }
+        }
+      } else if (taunt && taunt.remaining > 0) {
+        // Taunted: force target the taunting player, ignore everything else
+        const tauntPos = world.getComponent<PositionComponent>(taunt.sourceId, C.Position);
+        if (tauntPos) {
+          const ddx = tauntPos.x - pos.x, ddy = tauntPos.y - pos.y;
+          targetPos = tauntPos;
+          navPos = tauntPos;
+          targetDist = distance(ddx, ddy);
+          directBeeline = true;
         }
       } else {
         // Standard targeting: campfire > players > walls > other buildings

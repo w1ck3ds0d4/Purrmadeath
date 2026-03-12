@@ -490,6 +490,11 @@ export interface EntitySnapshot {
   isRuins?: boolean;
   /** True if the ruins are still burning (visual fire effect). */
   ruinsBurning?: boolean;
+  /** Active buff IDs on this entity (for client VFX rendering). Only present for player faction. */
+  activeBuffIds?: string[];
+  /** Unbreakable Charge progress (0-1) and damage stored. Only present during charge. */
+  chargeProgress?: number;
+  chargeDamage?: number;
 }
 
 /** Full world snapshot sent on game start or player rejoin. */
@@ -603,6 +608,8 @@ export interface ProjectileSpawnMessage extends BaseMessage {
   ballista?: boolean;
   /** Elemental projectile colors for cycling. */
   colors?: number[];
+  /** Elemental type hint (for VFX color override). */
+  element?: string;
 }
 
 /** Server → all: a projectile was destroyed. */

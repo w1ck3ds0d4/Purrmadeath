@@ -82,6 +82,7 @@ import {
   BOSS_SPAWN_INTERVAL,
   CARD_DROP_LIFETIME,
   MILESTONE_CARD_INTERVAL,
+  MELEE_RANGE,
 } from '@shared/constants';
 import { RESOURCE_STATS, RESOURCE_SPAWN_TABLE, TILE_SPAWN_CHANCE } from '@shared/data/ResourceSpawnTable';
 import { LOOT_TABLES } from '@shared/data/LootTables';
@@ -152,6 +153,8 @@ export interface SessionPlayer {
   playerClass: PlayerClass;
   /** True if class is locked from a loaded save. */
   classLocked: boolean;
+  /** Blood Arc combat mod: melee hit counter for every-Nth-attack projectile. */
+  bloodArcCounter?: number;
 }
 
 export type SessionPhase = 'lobby' | 'playing';
@@ -941,6 +944,20 @@ export class GameSession {
           if (savedP.potionState) {
             this.potions.restore(p.client.id, savedP.potionState);
           }
+          // Restore ability cooldowns
+          if (savedP.abilityCooldowns && p.entityId !== null) {
+            let skillCd = this.world.getComponent<import('@shared/components').SkillCooldownsComponent>(p.entityId, C.SkillCooldowns);
+            if (!skillCd) {
+              skillCd = { cooldowns: {} };
+              this.world.addComponent(p.entityId, C.SkillCooldowns, skillCd);
+            }
+            for (const [abilityId, remaining] of Object.entries(savedP.abilityCooldowns)) {
+              skillCd.cooldowns[abilityId] = remaining;
+            }
+            console.log(`[Restore] Ability cooldowns for ${p.displayName}:`, JSON.stringify(savedP.abilityCooldowns));
+          } else {
+            console.log(`[Restore] No ability cooldowns saved for ${p.displayName} (abilityCooldowns=${JSON.stringify(savedP.abilityCooldowns)}, entityId=${p.entityId})`);
+          }
         }
       }
 
@@ -1056,14 +1073,13 @@ export class GameSession {
     } else {
       // Resume in prep/day phase
       this.waveState.phase = 'prep';
-      // Restore day timer from save or use default
-      if (save?.dayTimeRemaining != null && save.dayTimeRemaining > 0) {
-        this.dayNightState.dayTimer = save.dayTimeRemaining;
-      }
       if (save?.permanentNight) {
         this.dayNightState.permanentNight = true;
       }
-      this.dayNight.startFirstDay(send);
+      // Pass saved day timer so startFirstDay doesn't reset it
+      const savedDayTimer = (save?.dayTimeRemaining != null && save.dayTimeRemaining > 0)
+        ? save.dayTimeRemaining : undefined;
+      this.dayNight.startFirstDay(send, savedDayTimer);
     }
 
     // Spawn / restore civilians
@@ -2139,12 +2155,15 @@ export class GameSession {
 
     // Check for frost_crit combat mod
     const frostCritMod = sBuffs.combatMods.find(m => m.type === 'frost_crit');
+    // Check for double_range combat mod (Titan's Reach)
+    const doubleRangeMod = sBuffs.combatMods.find(m => m.type === 'double_range');
     const meleeOverrides: import('../systems/CombatSystem').MeleeOverrides = {
-      damage: Math.round(classDmg * dmgMult * lastStandMult * coopMult),
-      critChance: pBuffs?.critChance ?? 0,
-      critMultiplier: pBuffs?.critMultiplier ?? 0,
+      damage: Math.round(classDmg * dmgMult * lastStandMult * coopMult) + sBuffs.flatDamage,
+      critChance: (pBuffs?.critChance ?? 0) + sBuffs.critChanceBonus,
+      critMultiplier: (pBuffs?.critMultiplier ?? 0) + sBuffs.critDamageBonus,
       knockbackMult: pBuffs?.knockbackMult ?? 1,
       frostCritBonus: frostCritMod?.value,
+      range: doubleRangeMod ? MELEE_RANGE * (doubleRangeMod.value ?? 2) : undefined,
     };
 
     const { hits, deaths } = this.combat.processMeleeAttack(
@@ -2174,6 +2193,64 @@ export class GameSession {
     // Apply on-hit special effects (lifesteal, burn, slow, elemental)
     this.applyOnHitEffects(player.client.id, entityId, hits);
 
+    // Bloodlust: on hit, gain/refresh HP regen stack
+    if (hits.length > 0 && sBuffs.bloodlustStack > 0) {
+      let abComp = this.world.getComponent<import('@shared/components').ActiveBuffsComponent>(entityId, C.ActiveBuffs);
+      if (!abComp) { abComp = { buffs: [] }; this.world.addComponent(entityId, C.ActiveBuffs, abComp); }
+      const existing = abComp.buffs.find(b => b.id === 'bloodlust');
+      if (existing) {
+        existing.remaining = 20; // reset timer on each hit
+      } else {
+        abComp.buffs.push({ id: 'bloodlust', remaining: 20, effect: { hpRegen: sBuffs.bloodlustStack } });
+      }
+    }
+
+    // Blood Arc: every 3rd melee ATTACK (not hit), fire a penetrating blood projectile
+    const bloodArcMod = sBuffs.combatMods.find(m => m.type === 'blood_arc');
+    if (bloodArcMod) {
+      if (!player.bloodArcCounter) player.bloodArcCounter = 0;
+      player.bloodArcCounter += 1;
+      const interval = bloodArcMod.value ?? 3;
+      while (player.bloodArcCounter >= interval) {
+        player.bloodArcCounter -= interval;
+        // Spawn a penetrating blood projectile in the facing direction
+        const arcSpeed = 350;
+        const arcDmg = Math.round((meleeOverrides.damage ?? 18) * 0.8);
+        const arcId = this.world.createEntity();
+        const pos2 = this.world.getComponent<PositionComponent>(entityId, C.Position)!;
+        const spawnDist = 20;
+        this.world.addComponent(arcId, C.Position, {
+          x: pos2.x + Math.cos(msg.facing) * spawnDist,
+          y: pos2.y + Math.sin(msg.facing) * spawnDist,
+        });
+        this.world.addComponent(arcId, C.Velocity, {
+          vx: Math.cos(msg.facing) * arcSpeed,
+          vy: Math.sin(msg.facing) * arcSpeed,
+        });
+        this.world.addComponent(arcId, C.Projectile, {
+          ownerId: entityId,
+          damage: arcDmg,
+          lifetime: 1.5,
+          pierce: true,
+          healPercent: bloodArcMod.params?.healPercent ?? 0.30,
+        });
+        this.world.addComponent(arcId, C.Faction, { type: 'player' });
+        // Broadcast projectile spawn
+        const spawnMsg: import('@shared/protocol').ProjectileSpawnMessage = {
+          type: MessageType.PROJECTILE_SPAWN,
+          projectileId: arcId,
+          x: pos2.x + Math.cos(msg.facing) * spawnDist,
+          y: pos2.y + Math.sin(msg.facing) * spawnDist,
+          vx: Math.cos(msg.facing) * arcSpeed,
+          vy: Math.sin(msg.facing) * arcSpeed,
+          ownerSlot: player.slot,
+          element: 'blood',
+          pierce: true,
+        };
+        for (const p of this.players.values()) send(p.client, spawnMsg);
+      }
+    }
+
     // Apply combat modifiers from skill tree (cleave, stun, bleed, etc.)
     this.applyCombatMods(player, entityId, hits, deaths, msg.facing, send);
 
@@ -2184,6 +2261,17 @@ export class GameSession {
     }
     // Remove dead non-player entities; player death handled in 4.11
     this.respawn.destroyDeadEntities(deaths, attackerMap, send);
+
+    // Aegis Shield recharge: increment kill counter for each enemy killed
+    if (deaths.length > 0) {
+      const abComp = this.world.getComponent<import('@shared/components').ActiveBuffsComponent>(entityId, C.ActiveBuffs);
+      if (abComp) {
+        const recharge = abComp.buffs.find(b => b.id === 'aegis_recharge');
+        if (recharge) {
+          recharge.effect.killCount = (recharge.effect.killCount ?? 0) + deaths.length;
+        }
+      }
+    }
   }
 
   private handleRangedAttack(
@@ -2236,11 +2324,11 @@ export class GameSession {
       if (rBuffs.abilities.includes('pack_hunter') && rNearby > 0) rCoopMult *= 1 + 0.05 * rNearby;
       if (rBuffs.abilities.includes('lone_wolf') && rNearby === 0) rCoopMult *= 1.15;
     }
-    const projDamage = Math.round(rangedClassDmg * rDmgMult * rLastStandMult * rCoopMult);
+    const projDamage = Math.round(rangedClassDmg * rDmgMult * rLastStandMult * rCoopMult) + rSBuffs.flatDamage;
     const projData: ProjectileComponent = {
       ownerId: entityId, damage: projDamage, lifetime: RANGED_LIFETIME,
-      critChance: rBuffs?.critChance ?? 0,
-      critMultiplier: rBuffs?.critMultiplier ?? 0,
+      critChance: (rBuffs?.critChance ?? 0) + rSBuffs.critChanceBonus,
+      critMultiplier: (rBuffs?.critMultiplier ?? 0) + rSBuffs.critDamageBonus,
       knockbackMult: rBuffs?.knockbackMult ?? 1,
     };
     if (player.playerClass === 'ranger') projData.pierce = true;
@@ -2526,42 +2614,6 @@ export class GameSession {
 
     for (const mod of sBuffs.combatMods) {
       switch (mod.type) {
-        case 'cleave': {
-          // Splash damage to nearby enemies (not already hit)
-          const hitIds = new Set(hits.map(h => h.targetId));
-          const radius = mod.params?.radius ?? 40;
-          const r2 = radius * radius;
-          for (const eid of this.world.query(C.Position, C.Health, C.Faction)) {
-            if (hitIds.has(eid)) continue;
-            const ef = this.world.getComponent<FactionComponent>(eid, C.Faction);
-            if (ef?.type !== 'enemy') continue;
-            const ep = this.world.getComponent<PositionComponent>(eid, C.Position)!;
-            const dx = ep.x - pos.x, dy = ep.y - pos.y;
-            if (dx * dx + dy * dy > r2) continue;
-            const hp = this.world.getComponent<HealthComponent>(eid, C.Health)!;
-            const baseDmg = hits[0]?.damage ?? 10;
-            const splashDmg = Math.round(baseDmg * mod.value);
-            hp.current = Math.max(0, hp.current - splashDmg);
-            if (hp.current <= 0) deaths.push(eid);
-          }
-          break;
-        }
-        case 'shield_bash_stun': {
-          // Random chance to stun each hit target
-          const chance = mod.value;
-          const dur = mod.params?.duration ?? 0.5;
-          for (const hit of hits) {
-            if (Math.random() < chance) {
-              const stun = this.world.getComponent<StunEffectComponent>(hit.targetId, C.StunEffect);
-              if (!stun) {
-                this.world.addComponent(hit.targetId, C.StunEffect, { remaining: dur, sourceId: entityId } as StunEffectComponent);
-              } else {
-                stun.remaining = Math.max(stun.remaining, dur);
-              }
-            }
-          }
-          break;
-        }
         // Shockwave, shadow_copies, backstab_crit, feral_swipe, pack_strike, berserker_rush
         // are handled elsewhere (feral_swipe modifies arc before combat, backstab_crit modifies damage calc)
         default: break;
@@ -2701,12 +2753,18 @@ export class GameSession {
    */
   private applyThorns(
     targetClientId: string,
-    _targetEntityId: number,
+    targetEntityId: number,
     attackerEntityId: number,
+    damageTaken?: number,
   ): void {
     const skillBuffs = this.skills.getSkillBuffs(targetClientId);
     const cardBuffs = this.cards.playerBuffs.get(targetClientId);
-    const totalThorns = skillBuffs.thornsDamage + (cardBuffs?.thornsDamage ?? 0);
+    const flatThorns = skillBuffs.thornsDamage + (cardBuffs?.thornsDamage ?? 0);
+    // Percent thorns: reflect a percentage of damage received back to attacker
+    const percentThorns = skillBuffs.thornsPercent > 0 && damageTaken
+      ? Math.round(damageTaken * skillBuffs.thornsPercent)
+      : 0;
+    const totalThorns = flatThorns + percentThorns;
     if (totalThorns <= 0) return;
 
     const hp = this.world.getComponent<HealthComponent>(attackerEntityId, C.Health);
@@ -2941,6 +2999,17 @@ export class GameSession {
           sp.cardBuffs = cd.buffs;
           sp.pickedCards = cd.pickedCards;
           sp.potionState = this.potions.serialize(p.client.id);
+          // Save ability cooldowns
+          if (p.entityId !== null) {
+            const skillCd = this.world.getComponent<import('@shared/components').SkillCooldownsComponent>(p.entityId, C.SkillCooldowns);
+            if (skillCd) {
+              const cds: Record<string, number> = {};
+              for (const [k, v] of Object.entries(skillCd.cooldowns)) {
+                if (v > 0) cds[k] = v;
+              }
+              if (Object.keys(cds).length > 0) sp.abilityCooldowns = cds;
+            }
+          }
           break;
         }
       }
@@ -3106,7 +3175,7 @@ export class GameSession {
     if (this.phase !== 'playing') return;
     const player = this.players.get(clientId);
     if (!player) return;
-    const n = Math.min(Math.max(1, count), 50);
+    const n = Math.min(Math.max(1, count), 500);
     for (let i = 0; i < n; i++) {
       this.skills.grantSkillPoint(clientId, send);
     }
@@ -3254,6 +3323,134 @@ export class GameSession {
 
   // ── Death Sweep ─────────────────────────────────────────────────────────────
 
+  // ── Active Buff Tick ──────────────────────────────────────────────────────
+  /**
+   * Tick all ActiveBuffs on players: decrement timers, apply per-frame effects
+   * (hpRegen, speedFlat, defensePercent), and remove expired buffs.
+   */
+  private tickActiveBuffs(dt: number): void {
+    for (const [, player] of this.players) {
+      if (player.entityId === null) continue;
+      let ab = this.world.getComponent<import('@shared/components').ActiveBuffsComponent>(player.entityId, C.ActiveBuffs);
+
+      // Ensure ActiveBuffs component exists (needed for aegis shield auto-activation)
+      const sBuffsCheck = this.skills.getSkillBuffs(player.client.id);
+      const needsAb = sBuffsCheck.combatMods.some(m => m.type === 'aegis_shield');
+      if (!ab && needsAb) {
+        ab = { buffs: [] };
+        this.world.addComponent(player.entityId, C.ActiveBuffs, ab);
+      }
+      if (!ab) continue;
+
+      const hp = this.world.getComponent<HealthComponent>(player.entityId, C.Health);
+      const spd = this.world.getComponent<import('@shared/components').SpeedComponent>(player.entityId, C.Speed);
+
+      for (let i = ab.buffs.length - 1; i >= 0; i--) {
+        const buff = ab.buffs[i];
+        buff.remaining -= dt;
+
+        // Apply per-frame effects while active
+        if (buff.remaining > 0) {
+          // HP regen (per second, so multiply by dt)
+          if (buff.effect.hpRegen && hp) {
+            hp.current = Math.min(hp.max, hp.current + buff.effect.hpRegen * dt);
+          }
+          // Prevent death during Unbreakable Charge (catches DOTs, world events, etc.)
+          if (buff.id === 'unbreakable_charge' && hp) {
+            hp.current = Math.max(1, hp.current);
+          }
+          // Blood Drain: damage nearby enemies + heal player (follows player position)
+          if (buff.id === 'blood_drain' && buff.effect.drainRadius) {
+            const drainPos = this.world.getComponent<PositionComponent>(player.entityId!, C.Position);
+            if (drainPos && hp) {
+              const r2 = buff.effect.drainRadius * buff.effect.drainRadius;
+              const dps = buff.effect.drainDps ?? 5;
+              const healPs = buff.effect.drainHealPerSec ?? 5;
+              let totalDrained = 0;
+              for (const eid of this.world.query(C.Position, C.Health, C.Faction)) {
+                const ef = this.world.getComponent<FactionComponent>(eid, C.Faction);
+                if (ef?.type !== 'enemy') continue;
+                const ep = this.world.getComponent<PositionComponent>(eid, C.Position)!;
+                const dx = ep.x - drainPos.x, dy = ep.y - drainPos.y;
+                if (dx * dx + dy * dy > r2) continue;
+                const ehp = this.world.getComponent<HealthComponent>(eid, C.Health);
+                if (ehp && ehp.current > 0) {
+                  const dmg = dps * dt;
+                  ehp.current = Math.max(0, ehp.current - dmg);
+                  totalDrained += dmg;
+                }
+              }
+              // Heal player based on drain amount + base heal
+              hp.current = Math.min(hp.max, hp.current + (healPs * dt) + (totalDrained * 0.3));
+            }
+          }
+        }
+
+        // Remove expired buffs and revert their effects
+        if (buff.remaining <= 0) {
+          // Revert speed flat bonus
+          if (buff.effect.speedFlat && spd) {
+            spd.base = Math.max(0, spd.base - buff.effect.speedFlat);
+          }
+          // Unbreakable Charge: release stored damage as AOE on expiry
+          if (buff.id === 'unbreakable_charge') {
+            const pos = this.world.getComponent<PositionComponent>(player.entityId, C.Position);
+            if (pos) {
+              // Base 75 damage + 200% of stored damage
+              const storedDmg = buff.effect.damageStorage ?? 0;
+              const releaseDmg = 75 + Math.round(storedDmg * (buff.effect.damageMultiplier ?? 2));
+              for (const eid of this.world.query(C.Position, C.Health, C.Faction)) {
+                const ef = this.world.getComponent<FactionComponent>(eid, C.Faction);
+                if (ef?.type !== 'enemy') continue;
+                const ep = this.world.getComponent<PositionComponent>(eid, C.Position)!;
+                const dx = ep.x - pos.x, dy = ep.y - pos.y;
+                if (dx * dx + dy * dy > 250000) continue; // 500px radius
+                const ehp = this.world.getComponent<HealthComponent>(eid, C.Health);
+                if (ehp) ehp.current = Math.max(0, ehp.current - releaseDmg);
+              }
+            }
+          }
+          ab.buffs.splice(i, 1);
+        }
+      }
+
+      // Aegis Shield: manage recharge timer and auto-activate
+      const sBuffs = this.skills.getSkillBuffs(player.client.id);
+      const aegisMod = sBuffs.combatMods.find(m => m.type === 'aegis_shield');
+      if (aegisMod) {
+        const hasShield = ab.buffs.some(b => b.id === 'aegis_shield');
+        const hasRecharge = ab.buffs.some(b => b.id === 'aegis_recharge');
+        if (!hasShield && !hasRecharge) {
+          // Give shield
+          ab.buffs.push({ id: 'aegis_shield', remaining: 9999, effect: {} });
+        }
+        // Tick recharge
+        const rechargeIdx = ab.buffs.findIndex(b => b.id === 'aegis_recharge');
+        if (rechargeIdx >= 0) {
+          const rc = ab.buffs[rechargeIdx];
+          rc.remaining -= dt;
+          if (rc.remaining <= 0 || (rc.effect.killCount ?? 0) >= (aegisMod.params?.rechargeKills ?? 10)) {
+            ab.buffs.splice(rechargeIdx, 1);
+            ab.buffs.push({ id: 'aegis_shield', remaining: 9999, effect: {} });
+          }
+        }
+      }
+
+      // Apply speed flat from active buffs (re-apply each tick for correctness)
+      if (spd) {
+        let totalSpeedFlat = 0;
+        for (const buff of ab.buffs) {
+          if (buff.effect.speedFlat && buff.remaining > 0) {
+            totalSpeedFlat += buff.effect.speedFlat;
+          }
+        }
+        // Store base speed without buff (initial apply)
+        const baseSpeed = CLASS_STATS[player.playerClass].speed + (this.skills.getSkillBuffs(player.client.id).flatSpeed ?? 0);
+        spd.base = baseSpeed + totalSpeedFlat;
+      }
+    }
+  }
+
   /**
    * End-of-tick sweep: finds all non-player, non-civilian entities at 0 HP
    * and destroys them. Catches deaths from DOTs (burn, poison, bleed),
@@ -3261,18 +3458,35 @@ export class GameSession {
    */
   private sweepDeadEntities(send: SendFn): void {
     const deaths: number[] = [];
+    const attackerMap = new Map<number, number>();
     for (const eid of this.world.query(C.Health, C.Faction)) {
       const hp = this.world.getComponent<HealthComponent>(eid, C.Health)!;
       if (hp.current > 0) continue;
       const faction = this.world.getComponent<FactionComponent>(eid, C.Faction);
-      // Skip players - they have their own downed/respawn system
       if (faction?.type === 'player') continue;
-      // Skip civilians - they have their own downed system
       if (faction?.type === 'civilian') continue;
       deaths.push(eid);
+      // For resource/enemy drops, try to find a player to credit
+      // Check if any player is nearby (within 500px) as the attacker
+      if (faction?.type === 'resource' || faction?.type === 'enemy') {
+        const deadPos = this.world.getComponent<PositionComponent>(eid, C.Position);
+        if (deadPos) {
+          let nearestPlayer = -1;
+          let nearestDist = 500 * 500;
+          for (const [, sp] of this.players) {
+            if (sp.entityId === null) continue;
+            const pp = this.world.getComponent<PositionComponent>(sp.entityId, C.Position);
+            if (!pp) continue;
+            const dx = pp.x - deadPos.x, dy = pp.y - deadPos.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < nearestDist) { nearestDist = d2; nearestPlayer = sp.entityId; }
+          }
+          if (nearestPlayer >= 0) attackerMap.set(eid, nearestPlayer);
+        }
+      }
     }
     if (deaths.length > 0) {
-      this.respawn.destroyDeadEntities(deaths, undefined, send);
+      this.respawn.destroyDeadEntities(deaths, attackerMap, send);
     }
   }
 
@@ -3297,15 +3511,39 @@ export class GameSession {
     this.combat.buildingDamageMult = this.cards.debuffs.buildingDamageMult;
     this.projectile.buildingDamageMult = this.cards.debuffs.buildingDamageMult;
 
-    // Sync dodge chance from skill buffs to combat/projectile systems
+    // Sync dodge chance and damage reduction from skill buffs to combat/projectile systems
     this.combat.dodgeChanceMap.clear();
     this.projectile.dodgeChanceMap.clear();
+    this.combat.damageReductionMap.clear();
+    this.projectile.damageReductionMap.clear();
+    this.combat.shieldBlockSet.clear();
+    this.combat.shieldConsumed.clear();
+    this.projectile.shieldBlockSet.clear();
+    this.projectile.shieldConsumed.clear();
+    this.projectile.thornsMap.clear();
     for (const [clientId, p] of this.players) {
       if (p.entityId === null) continue;
       const sBuffs = this.skills.getSkillBuffs(clientId);
       if (sBuffs.dodgeChance > 0) {
         this.combat.dodgeChanceMap.set(p.entityId, sBuffs.dodgeChance);
         this.projectile.dodgeChanceMap.set(p.entityId, sBuffs.dodgeChance);
+      }
+      // Thorns: sync to projectile system (melee thorns handled in CombatSystem)
+      if (sBuffs.thornsPercent > 0) {
+        this.projectile.thornsMap.set(p.entityId, sBuffs.thornsPercent);
+      }
+      // Unbreakable Charge: 100% damage reduction (damage still tracked for explosion)
+      const abCheck = this.world.getComponent<import('@shared/components').ActiveBuffsComponent>(p.entityId, C.ActiveBuffs);
+      const chargeBuff = abCheck?.buffs.find(b => b.id === 'unbreakable_charge' && b.remaining > 0);
+      if (chargeBuff) {
+        this.combat.damageReductionMap.set(p.entityId, chargeBuff.effect.defensePercent ?? 1.0);
+        this.projectile.damageReductionMap.set(p.entityId, chargeBuff.effect.defensePercent ?? 1.0);
+      }
+      // Aegis Shield: add to shield block set for both melee and projectile
+      const hasAegisShield = abCheck?.buffs.some((b: any) => b.id === 'aegis_shield') ?? false;
+      if (hasAegisShield) {
+        this.combat.shieldBlockSet.add(p.entityId);
+        this.projectile.shieldBlockSet.add(p.entityId);
       }
     }
 
@@ -3339,11 +3577,42 @@ export class GameSession {
       const hitMsg: HitMessage = { type: MessageType.HIT, ...hit };
       for (const p of this.players.values()) send(p.client, hitMsg);
     }
+    // Unbreakable Charge: accumulate RAW damage (before reduction) for the release explosion
+    for (const hit of enemyResult.hits) {
+      for (const p of this.players.values()) {
+        if (p.entityId !== hit.targetId) continue;
+        const abCharge = this.world.getComponent<import('@shared/components').ActiveBuffsComponent>(p.entityId, C.ActiveBuffs);
+        if (abCharge) {
+          const charge = abCharge.buffs.find(b => b.id === 'unbreakable_charge');
+          if (charge) {
+            const rawDmg = hit.rawDamage ?? hit.damage;
+            charge.effect.damageStorage = (charge.effect.damageStorage ?? 0) + rawDmg;
+          }
+        }
+        break;
+      }
+    }
+
+    // Aegis Shield: consume shield buff when combat system blocked a hit
+    for (const entityId of this.combat.shieldConsumed) {
+      for (const p of this.players.values()) {
+        if (p.entityId !== entityId) continue;
+        const ab = this.world.getComponent<import('@shared/components').ActiveBuffsComponent>(p.entityId, C.ActiveBuffs);
+        if (!ab) break;
+        const shieldIdx = ab.buffs.findIndex(b => b.id === 'aegis_shield');
+        if (shieldIdx >= 0) {
+          ab.buffs.splice(shieldIdx, 1);
+          ab.buffs.push({ id: 'aegis_recharge', remaining: 20, effect: { killCount: 0 } });
+        }
+        break;
+      }
+    }
+
     // Thorns: if an enemy hit a player with thorns, reflect damage back
     for (const hit of enemyResult.hits) {
       for (const p of this.players.values()) {
         if (p.entityId === hit.targetId) {
-          this.applyThorns(p.client.id, p.entityId, hit.sourceId);
+          this.applyThorns(p.client.id, p.entityId, hit.sourceId, hit.rawDamage ?? hit.damage);
           break;
         }
       }
@@ -3391,6 +3660,22 @@ export class GameSession {
       const hitMsg: HitMessage = { type: MessageType.HIT, ...hit, element: projElement };
       for (const p of this.players.values()) send(p.client, hitMsg);
       this.stats.trackDamage(hit.sourceId, hit.damage);
+    }
+
+    // Unbreakable Charge: accumulate raw projectile damage taken by players
+    for (const hit of projResult.hits) {
+      for (const p of this.players.values()) {
+        if (p.entityId !== hit.targetId) continue;
+        const abCharge = this.world.getComponent<import('@shared/components').ActiveBuffsComponent>(p.entityId, C.ActiveBuffs);
+        if (abCharge) {
+          const charge = abCharge.buffs.find((b: any) => b.id === 'unbreakable_charge');
+          if (charge) {
+            const rawDmg = hit.rawDamage ?? hit.damage;
+            charge.effect.damageStorage = (charge.effect.damageStorage ?? 0) + rawDmg;
+          }
+        }
+        break;
+      }
     }
 
     // Apply on-hit effects for player-owned projectile hits
@@ -3470,6 +3755,9 @@ export class GameSession {
     // ── Skill system (cooldowns, buffs, DOTs) ────────────────────────────────
     if (!this.gameOver) this.skills.tick(dt);
 
+    // ── Active buff tick (warcry, unbreakable charge, etc.) ─────────────────
+    if (!this.gameOver) this.tickActiveBuffs(dt);
+
     // ── Potion system (cooldowns, buff expiry) ──────────────────────────────
     if (!this.gameOver) this.potions.tick(dt, send);
 
@@ -3484,6 +3772,16 @@ export class GameSession {
     // Tick boss special abilities
     if (!this.gameOver) this.boss.tick(dt, send);
     const _t9 = performance.now();
+
+    // Safety: ensure players with Unbreakable Charge active never reach 0 HP
+    for (const [, p] of this.players) {
+      if (p.entityId === null) continue;
+      const abSafe = this.world.getComponent<import('@shared/components').ActiveBuffsComponent>(p.entityId, C.ActiveBuffs);
+      if (abSafe?.buffs.some((b: any) => b.id === 'unbreakable_charge' && b.remaining > 0)) {
+        const hpSafe = this.world.getComponent<HealthComponent>(p.entityId, C.Health);
+        if (hpSafe && hpSafe.current <= 0) hpSafe.current = 1;
+      }
+    }
 
     // Sweep for any entities at 0 HP that weren't caught by specific death handlers
     // (e.g. burn DOT, poison DOT, bleed, channel damage, thorns, etc.)
@@ -3692,6 +3990,21 @@ export class GameSession {
 
       // Player class
       if (playerEntry) snap.playerClass = playerEntry.playerClass;
+
+      // Active buff IDs for client VFX
+      if (playerEntry) {
+        const abComp = this.world.getComponent<import('@shared/components').ActiveBuffsComponent>(id, C.ActiveBuffs);
+        if (abComp && abComp.buffs.length > 0) {
+          snap.activeBuffIds = abComp.buffs.filter(b => b.remaining > 0).map(b => b.id);
+          // Unbreakable Charge progress bar data
+          const chargeBuff = abComp.buffs.find(b => b.id === 'unbreakable_charge' && b.remaining > 0);
+          if (chargeBuff) {
+            const totalDuration = chargeBuff.effect.totalDuration ?? 30;
+            snap.chargeProgress = 1 - (chargeBuff.remaining / totalDuration);
+            snap.chargeDamage = Math.round(chargeBuff.effect.damageStorage ?? 0);
+          }
+        }
+      }
 
       // Civilian metadata
       const civ = this.world.getComponent<import('@shared/components').CivilianComponent>(id, C.Civilian);

@@ -274,6 +274,32 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
     const isSolo = players.size <= 1;
     const bleedTime = isSolo ? 15 : DOWNED_BLEED_TIME;
 
+    // Release Unbreakable Charge explosion before downing
+    const abComp = world.getComponent<import('@shared/components').ActiveBuffsComponent>(entityId, C.ActiveBuffs);
+    if (abComp) {
+      const chargeIdx = abComp.buffs.findIndex(b => b.id === 'unbreakable_charge');
+      if (chargeIdx >= 0) {
+        const charge = abComp.buffs[chargeIdx];
+        const pos = world.getComponent<PositionComponent>(entityId, C.Position);
+        if (pos) {
+          const storedDmg = charge.effect.damageStorage ?? 0;
+          const releaseDmg = 75 + Math.round(storedDmg * (charge.effect.damageMultiplier ?? 2));
+          for (const eid of world.query(C.Position, C.Health, C.Faction)) {
+            const ef = world.getComponent<FactionComponent>(eid, C.Faction);
+            if (ef?.type !== 'enemy') continue;
+            const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
+            const dx = ep.x - pos.x, dy = ep.y - pos.y;
+            if (dx * dx + dy * dy > 250000) continue;
+            const ehp = world.getComponent<HealthComponent>(eid, C.Health);
+            if (ehp) ehp.current = Math.max(0, ehp.current - releaseDmg);
+          }
+        }
+        abComp.buffs.splice(chargeIdx, 1);
+        // Remove root
+        if (world.hasComponent(entityId, C.Root)) world.removeComponent(entityId, C.Root);
+      }
+    }
+
     world.addComponent(entityId, C.Downed, {
       bleedTimer: bleedTime, reviveProgress: 0, reviverId: -1,
     });

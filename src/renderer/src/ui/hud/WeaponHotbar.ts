@@ -12,7 +12,7 @@ const UNSELECTED_BORDER = 0xffffff;
 const SLOT_BG = 0x1a0a0e;
 const SLOT_BG_SELECTED = 0x2a1418;
 const LOCKED_BG = 0x110608;
-const COOLDOWN_OVERLAY = 0x000000;
+const COOLDOWN_OVERLAY = 0x881122;
 
 // Slot 0-2: skill abilities (1/2/3), 3: potion (4), 4: build (Q)
 const SLOT_LABELS = ['Skill', 'Skill', 'Skill', 'Potion', 'Build'];
@@ -49,7 +49,7 @@ export class WeaponHotbar {
       });
       const labelText = new Text({
         text: SLOT_LABELS[i],
-        style: { fontSize: 12, fill: locked ? 0x3a3a4a : 0xd8e2ef, fontFamily: 'monospace' },
+        style: { fontSize: 9, fill: locked ? 0x3a3a4a : 0xd8e2ef, fontFamily: 'monospace', wordWrap: true, wordWrapWidth: SLOT_SIZE - 4, align: 'center' },
       });
       // Small charge counter (used for potion slot)
       const chargeText = new Text({
@@ -96,7 +96,11 @@ export class WeaponHotbar {
     // Update skill slot labels if ability names provided
     if (abilityNames) {
       for (let s = 0; s < 3; s++) {
-        if (abilityNames[s]) this.labelTexts[s].text = abilityNames[s];
+        if (abilityNames[s]) {
+          // Shorten long names to fit in slot
+          const name = abilityNames[s];
+          this.labelTexts[s].text = name.length > 10 ? name.split(' ').map(w => w.slice(0, 5)).join('\n') : name;
+        }
         else this.labelTexts[s].text = SLOT_LABELS[s];
       }
     }

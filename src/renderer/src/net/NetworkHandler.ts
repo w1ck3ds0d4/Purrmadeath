@@ -167,6 +167,14 @@ export interface GameplayState {
   eventVisionMult: number;
   /** When true, auto-send SESSION_START on SESSION_ACK (singleplayer quick-start). */
   pendingSingleplayerAutoStart: boolean;
+  /** Active buff IDs on local player (from snapshot, for VFX rendering). */
+  localActiveBuffIds: string[];
+  /** Unbreakable Charge progress (0-1). */
+  chargeProgress: number;
+  /** Unbreakable Charge accumulated damage. */
+  chargeDamage: number;
+  /** Pending ability cooldowns from server (applied when abilities become available). */
+  pendingAbilityCooldowns: Record<string, number> | null;
 }
 
 // ── Dependencies ────────────────────────────────────────────────────────────
@@ -210,6 +218,8 @@ export interface NetworkHandlerDeps {
   notificationToast: NotificationToast;
   combinedResources: () => Record<string, number>;
   electronAPI?: { checkForUpdates?: () => void };
+  getActiveAbilities?: () => Array<{ abilityId: string; cooldown: number } | null>;
+  setAbilityCooldown: (slotIndex: number, remaining: number) => void;
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
@@ -350,6 +360,17 @@ export function registerMessageHandlers(
       d.getMovementSystem()?.update(d.world, replayDt, s.localEntityId ?? undefined);
     });
 
+    // Extract active buff IDs and charge data for local player (for VFX rendering)
+    if (s.localEntityId != null) {
+      const localSnap = delta.entities.find(e => e.entityId === s.localEntityId);
+      if (localSnap) {
+        // Only update when we have actual data for the local player
+        s.localActiveBuffIds = localSnap.activeBuffIds ?? [];
+        s.chargeProgress = localSnap.chargeProgress ?? 0;
+        s.chargeDamage = localSnap.chargeDamage ?? 0;
+      }
+    }
+
     d.remotePlayerSys.applyDelta(d.world, delta);
   });
 
@@ -401,7 +422,8 @@ export function registerMessageHandlers(
   net.on(MessageType.PROJECTILE_SPAWN, (msg) => {
     const ps = msg as ProjectileSpawnMessage;
     d.projectileRenderer.spawn(ps.projectileId, ps.x, ps.y, ps.vx, ps.vy, ps.ownerSlot,
-      ps.targetX, ps.targetY, ps.totalFlightTime, ps.pierce, ps.homing, ps.ballista, ps.colors);
+      ps.targetX, ps.targetY, ps.totalFlightTime, ps.pierce, ps.homing, ps.ballista,
+      ps.element === 'blood' ? [0xcc1122] : ps.colors);
   });
 
   net.on(MessageType.PROJECTILE_REMOVE, (msg) => {
@@ -571,12 +593,23 @@ export function registerMessageHandlers(
     s.skillAllocated = new Set(ss.allocated);
     s.skillPoints = ss.skillPoints;
     if (ss.slotAssignments) s.slotAssignments = ss.slotAssignments;
-    // Sync ability cooldowns from server
-    if (ss.abilityCooldowns) {
-      // abilityCooldowns are keyed by abilityId - caller maps them to slots
-    }
     s.onSkillStateUpdate?.();
     d.skillTree.updateState(s.skillAllocated, s.skillPoints, s.slotAssignments);
+    // Sync ability cooldowns from server AFTER skill state is updated
+    if (ss.abilityCooldowns) {
+      // Store pending cooldowns - they'll be applied when abilities are available
+      s.pendingAbilityCooldowns = ss.abilityCooldowns;
+      // Try to apply immediately if abilities are already populated
+      if (d.getActiveAbilities) {
+        const abilities = d.getActiveAbilities();
+        for (let i = 0; i < 3; i++) {
+          const ab = abilities[i];
+          if (ab && ss.abilityCooldowns[ab.abilityId] != null) {
+            d.setAbilityCooldown(i, ss.abilityCooldowns[ab.abilityId]);
+          }
+        }
+      }
+    }
   });
 
   net.on(MessageType.ABILITY_EFFECT, (msg) => {

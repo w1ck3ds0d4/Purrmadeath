@@ -290,6 +290,25 @@ export class ProjectileRendererSystem {
         // Metallic glint on head
         this.gfx.circle(p.x + dx * 3, p.y + dy * 3, 1.5);
         this.gfx.fill({ color: 0xddeeff, alpha: 0.7 });
+      } else if (p.pierce && p.colors && p.colors[0] === 0xcc1122) {
+        // Blood Arc: large crescent moon shape (no trail line)
+        const arcR = 14;
+        const angle = Math.atan2(p.vy, p.vx);
+        // Outer glow
+        this.gfx.arc(p.x, p.y, arcR + 3, angle - Math.PI * 0.55, angle + Math.PI * 0.55);
+        this.gfx.arc(p.x + dx * 5, p.y + dy * 5, arcR * 0.4, angle + Math.PI * 0.4, angle - Math.PI * 0.4, true);
+        this.gfx.closePath();
+        this.gfx.fill({ color: 0x660011, alpha: 0.3 });
+        // Main crescent body
+        this.gfx.arc(p.x, p.y, arcR, angle - Math.PI * 0.5, angle + Math.PI * 0.5);
+        this.gfx.arc(p.x + dx * 4, p.y + dy * 4, arcR * 0.5, angle + Math.PI * 0.4, angle - Math.PI * 0.4, true);
+        this.gfx.closePath();
+        this.gfx.fill({ color: 0xcc1122, alpha: 0.9 });
+        // Bright inner edge
+        this.gfx.arc(p.x, p.y, arcR * 0.75, angle - Math.PI * 0.4, angle + Math.PI * 0.4);
+        this.gfx.arc(p.x + dx * 3, p.y + dy * 3, arcR * 0.35, angle + Math.PI * 0.3, angle - Math.PI * 0.3, true);
+        this.gfx.closePath();
+        this.gfx.fill({ color: 0xff4455, alpha: 0.5 });
       } else if (p.pierce) {
         // Ranger: elongated arrow with long trail
         const tailX = p.x - dx * TRAIL_LEN * 2;

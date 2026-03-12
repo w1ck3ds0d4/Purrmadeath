@@ -163,6 +163,15 @@ export function createSaveManager(deps: SaveManagerDeps) {
       const res = world.getComponent<ResourcesComponent>(p.entityId, C.Resources);
       if (!pos || !hp || !res) continue;
 
+      // Save ability cooldowns
+      const skillCd = world.getComponent<import('@shared/components').SkillCooldownsComponent>(p.entityId, C.SkillCooldowns);
+      const abilityCooldowns: Record<string, number> = {};
+      if (skillCd) {
+        for (const [key, val] of Object.entries(skillCd.cooldowns)) {
+          if (val > 0) abilityCooldowns[key] = val;
+        }
+      }
+
       savedPlayers.push({
         playerId: p.playerId,
         displayName: p.displayName,
@@ -173,6 +182,7 @@ export function createSaveManager(deps: SaveManagerDeps) {
         x: pos.x,
         y: pos.y,
         playerClass: p.playerClass,
+        abilityCooldowns: Object.keys(abilityCooldowns).length > 0 ? abilityCooldowns : undefined,
       });
     }
 

@@ -56,6 +56,7 @@ export class WaveHUD {
 
   // Day/night state
   private dayTimeRemaining = 0;
+  private lastDisplayedSecond = -1;
   private sleepVotes = 0;
   private totalPlayers = 0;
   private hasVotedSleep = false;
@@ -289,7 +290,11 @@ export class WaveHUD {
     this.waveNumber = waveNumber;
 
     if (remaining >= 0 && this.phase === 'day') {
-      this.dayTimeRemaining = remaining;
+      // Only snap to server time if drift exceeds 1.5s to prevent oscillation
+      if (Math.abs(this.dayTimeRemaining - remaining) > 1.5) {
+        this.dayTimeRemaining = remaining;
+        this.lastDisplayedSecond = Math.floor(remaining);
+      }
     }
     this.dirty = true;
   }
@@ -297,6 +302,7 @@ export class WaveHUD {
   /** Called when DAY_NIGHT_SYNC arrives from server. */
   onDayNightSync(phase: DayNightPhase, dayTimeRemaining: number, sleepVotes: number, totalPlayers: number): void {
     this.dayTimeRemaining = dayTimeRemaining;
+    this.lastDisplayedSecond = Math.floor(dayTimeRemaining);
     this.sleepVotes = sleepVotes;
     this.totalPlayers = totalPlayers;
 
@@ -432,9 +438,13 @@ export class WaveHUD {
   update(dt: number): void {
     if (this.phase === 'day') {
       if (!this.paused) {
-        const prev = Math.floor(this.dayTimeRemaining);
         this.dayTimeRemaining = Math.max(0, this.dayTimeRemaining - dt);
-        if (Math.floor(this.dayTimeRemaining) !== prev) this.dirty = true;
+        // Only flag dirty when the displayed second changes (using truncated comparison)
+        const sec = Math.floor(this.dayTimeRemaining);
+        if (sec !== this.lastDisplayedSecond) {
+          this.lastDisplayedSecond = sec;
+          this.dirty = true;
+        }
       }
     } else if (this.phase === 'cleared') {
       this.clearedTimer -= dt;
