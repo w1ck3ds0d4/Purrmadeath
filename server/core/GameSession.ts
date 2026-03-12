@@ -1,3 +1,4 @@
+import { GameLogger } from './GameLogger';
 import { World } from '@shared/ecs/World';
 import { distance } from '@shared/math/utils';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
@@ -186,6 +187,9 @@ export class GameSession {
   /** 4-letter code shown in the lobby - used by joiners to find this session. */
   readonly code: string;
 
+  /** Persistent session logger - writes to logs/ directory. */
+  readonly logger: GameLogger;
+
   private world = new World();
   private generator: WorldGenerator;
   private movement: MovementSystem;
@@ -312,6 +316,7 @@ export class GameSession {
     this.id = id;
     this.seed = seed;
     this.code = generateCode();
+    this.logger = new GameLogger(1); // Default slot 1, updated on save/load
     this.generator = new WorldGenerator(seed);
     this.movement = new MovementSystem(this.generator);
     this.combat = new CombatSystem();
@@ -604,12 +609,14 @@ export class GameSession {
       classLocked: lockedClass !== null,
     };
     this.players.set(client.id, player);
+    this.logger.player(`Player joined: ${displayName}`, { slot, class: player.playerClass, isHost, pid });
     return player;
   }
 
   removePlayer(clientId: string, send?: SendFn): SessionPlayer | undefined {
     const player = this.players.get(clientId);
     if (player) {
+      this.logger.player(`Player left: ${player.displayName}`, { slot: player.slot });
       this.players.delete(clientId);
       this.pauseVotes.delete(clientId);
       // Notify day/night controller so sleep votes are re-checked
@@ -2775,6 +2782,8 @@ export class GameSession {
 
   /** Fire onRunEnd with per-player RunStats. Called at game over. */
   private fireRunEnd(): void {
+    this.logger.log('system', 'Game over - run ended');
+    this.logger.close();
     if (!this.onRunEnd) return;
     this.onRunEnd(this.stats.buildRunStats());
     this.onSaveDelete?.();
@@ -2846,7 +2855,18 @@ export class GameSession {
     if (this.world.hasComponent(player.entityId, C.Downed)) return;
     if (this.respawnTimers.has(clientId)) return;
 
+    this.logger.ability(`${player.displayName} used ${msg.abilityId}`, {
+      target: msg.targetX != null && msg.targetY != null ? `${Math.round(msg.targetX)},${Math.round(msg.targetY)}` : 'self',
+      facing: msg.facing != null ? msg.facing.toFixed(2) : '0',
+    });
+
     const { hits, deaths } = this.skills.handleAbilityUse(clientId, msg, send);
+
+    if (hits.length > 0) {
+      this.logger.ability(`${msg.abilityId} hit ${hits.length} targets, killed ${deaths.length}`, {
+        totalDmg: hits.reduce((s, h) => s + h.damage, 0),
+      });
+    }
 
     // Broadcast hits + handle deaths (same pattern as melee/ranged)
     const abilityElement = this.getPrimaryElement(clientId);
@@ -2921,6 +2941,7 @@ export class GameSession {
   }
 
   private onWaveCleared(wave: number, send: SendFn): void {
+    this.logger.wave(`Wave ${wave} cleared`, { enemiesKilled: this.enemiesKilled });
     // Clear wave modifiers (events persist until next day starts)
     this.waveModifiers.clear();
     // Notify day/night controller - begins dawn transition - then day
@@ -2974,6 +2995,7 @@ export class GameSession {
 
     const saveData = this.serializeSave();
     this.onSave(saveData);
+    this.logger.save(`Game saved`, { wave: saveData.currentWave, buildings: saveData.buildings.length, civilians: saveData.civilians?.length ?? 0 });
     console.log(`[GameSession] Manual save: wave ${saveData.currentWave}, ${saveData.buildings.length} buildings`);
     if (send) {
       const savedMsg: import('@shared/protocol').GameSavedMessage = {
@@ -3410,6 +3432,7 @@ export class GameSession {
               }
             }
           }
+          this.logger.buff(`Buff expired: ${buff.id} on ${player.displayName}`, { effect: buff.effect });
           ab.buffs.splice(i, 1);
         }
       }

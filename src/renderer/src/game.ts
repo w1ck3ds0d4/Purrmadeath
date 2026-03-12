@@ -560,7 +560,46 @@ async function main(): Promise<void> {
       case '/event':
         if (args[0]) net.send({ type: MessageType.DEBUG_FORCE_EVENT, eventId: args[0] });
         break;
+      case '/ability':
+        if (args[0]) net.send({ type: MessageType.ABILITY_USE, abilityId: args[0], targetX: 0, targetY: 0, facing: 0 });
+        break;
+      case '/pause':
+        net.send({ type: MessageType.DEBUG_WAVE_PAUSE });
+        break;
     }
+  });
+
+  // Wire debug buffs/stats providers
+  debug.setBuffsProvider(() => {
+    if (localEntityId == null) return [];
+    const ab = world.getComponent<import('@shared/components').ActiveBuffsComponent>(localEntityId, C.ActiveBuffs);
+    return ab?.buffs ?? [];
+  });
+
+  debug.setStatsProvider(() => {
+    const result: Record<string, string> = {};
+    if (localEntityId == null) return result;
+    const hp = world.getComponent<import('@shared/components').HealthComponent>(localEntityId, C.Health);
+    const spd = world.getComponent<import('@shared/components').SpeedComponent>(localEntityId, C.Speed);
+    const def = world.getComponent<import('@shared/components').DefenseComponent>(localEntityId, C.Defense);
+    if (hp) result['HP'] = `${Math.round(hp.current)}/${hp.max}`;
+    if (spd) result['Speed'] = `base=${spd.base} mult=${spd.multiplier.toFixed(2)}`;
+    if (def) result['Defense'] = `${def.flat}`;
+
+    const abilities = activeAbilities;
+    for (let i = 0; i < 3; i++) {
+      const ab = abilities[i];
+      if (ab) {
+        result[`Slot ${i + 1}`] = `${ab.abilityId} (cd: ${abilityCooldowns[i].toFixed(1)}s / ${abilityCooldownMaxes[i].toFixed(1)}s)`;
+      }
+    }
+
+    // Skill buffs summary
+    result['Skill Pts'] = String(skillPoints);
+    result['Allocated'] = String(Object.values(skillAllocated).filter(v => v > 0).length);
+    result['Active Buffs'] = String(localActiveBuffIdsArr.length);
+    if (localActiveBuffIdsArr.length > 0) result['Buff IDs'] = localActiveBuffIdsArr.join(', ');
+    return result;
   });
 
   // Configure dev/prod UI

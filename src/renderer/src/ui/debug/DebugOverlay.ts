@@ -46,7 +46,9 @@ export interface DebugInfo {
 }
 
 type CheatHandler = (cmd: string, args: string[]) => void;
-type ActiveView = 'core' | 'net' | 'server' | 'all' | 'logs' | 'help' | null;
+type BuffsProvider = () => Array<{ id: string; remaining: number; effect: Record<string, unknown> }>;
+type StatsProvider = () => Record<string, string>;
+type ActiveView = 'core' | 'net' | 'server' | 'all' | 'logs' | 'help' | 'buffs' | 'stats' | null;
 
 const MAX_LOG_ENTRIES = 100;
 
@@ -61,6 +63,9 @@ export class DebugOverlay {
   private visible = false;
   private activeView: ActiveView = null;
   private cheatHandler: CheatHandler | null = null;
+  private buffsProvider: BuffsProvider | null = null;
+  private statsProvider: StatsProvider | null = null;
+  dmgLogEnabled = false;
 
   // FPS tracking
   private frameCount = 0;
@@ -180,6 +185,14 @@ export class DebugOverlay {
     this.cheatHandler = handler;
   }
 
+  setBuffsProvider(provider: BuffsProvider): void {
+    this.buffsProvider = provider;
+  }
+
+  setStatsProvider(provider: StatsProvider): void {
+    this.statsProvider = provider;
+  }
+
   log(msg: string): void {
     const time = new Date();
     const ts = `${String(time.getHours()).padStart(2, '0')}:${String(time.getMinutes()).padStart(2, '0')}:${String(time.getSeconds()).padStart(2, '0')}`;
@@ -269,9 +282,41 @@ export class DebugOverlay {
         '/sp [n]     Give n skill points (default 1)',
         '/modifier <id> Force wave modifier',
         '/event <id>   Force world event',
+        '/buffs      Show active buffs + timers',
+        '/stats      Full stat breakdown',
+        '/ability <id> Force activate ability',
+        '/dmglog     Toggle damage logging',
+        '/pause      Pause day timer',
         '/clear      Close stats panel',
         '/help       This help text',
       );
+    }
+
+    if (this.activeView === 'buffs') {
+      lines.push('-- Active Buffs --');
+      const buffs = this.buffsProvider?.() ?? [];
+      if (buffs.length === 0) {
+        lines.push('  (no active buffs)');
+      } else {
+        for (const b of buffs) {
+          lines.push(`  ${b.id}  ${b.remaining.toFixed(1)}s`);
+          for (const [k, v] of Object.entries(b.effect)) {
+            if (v != null && v !== 0) lines.push(`    ${k}: ${typeof v === 'number' ? (v as number).toFixed(2) : v}`);
+          }
+        }
+      }
+    }
+
+    if (this.activeView === 'stats') {
+      lines.push('-- Stat Breakdown --');
+      const stats = this.statsProvider?.() ?? {};
+      if (Object.keys(stats).length === 0) {
+        lines.push('  (no stats available)');
+      } else {
+        for (const [k, v] of Object.entries(stats)) {
+          lines.push(`  ${k}: ${v}`);
+        }
+      }
     }
 
     this.statsEl.innerHTML = '';
@@ -325,8 +370,21 @@ export class DebugOverlay {
       case '/sp':
       case '/modifier':
       case '/event':
+      case '/ability':
+      case '/pause':
         this.cheatHandler?.(cmd, args);
         this.log(`Executed: ${raw}`);
+        break;
+      case '/buffs':
+        this.activeView = 'buffs';
+        break;
+      case '/stats':
+        this.activeView = 'stats';
+        break;
+      case '/dmglog':
+        this.dmgLogEnabled = !this.dmgLogEnabled;
+        this.log(`Damage logging: ${this.dmgLogEnabled ? 'ON' : 'OFF'}`);
+        this.activeView = 'logs';
         break;
       case '/cards': {
         const filter = args[0]?.toLowerCase();

@@ -6,6 +6,7 @@ resources/server/
 # Logs
 *.log
 npm-debug.log*
+logs/
 
 # OS
 .DS_Store
