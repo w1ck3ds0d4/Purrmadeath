@@ -195,13 +195,46 @@ export class ServerSocket {
 
   // ── Rate limiting ───────────────────────────────────────────────────────────
 
+  // Track message rates per client for logging (peak and average over last 10 seconds)
+  private rateLog = new Map<string, { samples: number[]; peak: number; lastLogTime: number }>();
+
   private checkRateLimit(client: ConnectedClient): boolean {
     const now = Date.now();
+    const isLocal = client.ip === '127.0.0.1' || client.ip === '::1' || client.ip === '::ffff:127.0.0.1';
+
+    // Always count messages (for logging purposes)
     if (now - client.rateWindowStart >= 1_000) {
+      // Window just rolled over - log the completed second's count
+      const count = client.rateCount;
+
+      // Update rate tracking for this client
+      let log = this.rateLog.get(client.id);
+      if (!log) {
+        log = { samples: [], peak: 0, lastLogTime: now };
+        this.rateLog.set(client.id, log);
+      }
+      log.samples.push(count);
+      if (count > log.peak) log.peak = count;
+      // Keep only last 10 seconds of samples
+      if (log.samples.length > 10) log.samples.shift();
+
+      // Log every 30 seconds for localhost (so we can monitor average message rates)
+      if (isLocal && now - log.lastLogTime >= 30_000 && log.samples.length > 0) {
+        const avg = Math.round(log.samples.reduce((a, b) => a + b, 0) / log.samples.length);
+        const name = this.nameLookup?.(client.ip) ?? client.id;
+        console.log(`[RateMonitor] ${name}: avg=${avg} msg/s, peak=${log.peak} msg/s (last ${log.samples.length}s)`);
+        log.lastLogTime = now;
+        log.peak = 0; // Reset peak after logging
+      }
+
       client.rateWindowStart = now;
       client.rateCount = 0;
     }
     client.rateCount++;
+
+    // Skip rate limiting for localhost (singleplayer / dev mode)
+    if (isLocal) return true;
+
     return client.rateCount <= MAX_MESSAGES_PER_SECOND;
   }
 

@@ -1246,17 +1246,30 @@ async function main(): Promise<void> {
       }
 
       // RMB: select building from world (works in any build phase or even outside build mode)
+      // RMB: select a building, or exit build mode if clicking empty ground
       if (input.isJustPressed(Action.Cancel) && pos && canAct) {
+        const { width, height } = renderer.screen;
+        const wmx = camera.viewX + (mouseX - width / 2) / camera.zoom;
+        const wmy = camera.viewY + (mouseY - height / 2) / camera.zoom;
+        const clickedBuilding = buildCtrl.findBuildingAt(wmx, wmy);
+
         if (buildCtrl.phase === 'picker') {
-          // In picker phase: hide menu, enter select mode
+          // In picker phase: if clicking a building, select it. Otherwise exit build mode.
           buildMenu.hide();
-          buildCtrl.enterSelectMode();
+          if (clickedBuilding !== null) {
+            buildCtrl.enterSelectMode();
+          } else {
+            exitBuildModeAndCollapse();
+          }
+        } else if (buildCtrl.phase === 'placing' && buildCtrl.isSelectMode) {
+          // In select mode: if clicking empty ground, exit build mode entirely
+          if (clickedBuilding === null) {
+            exitBuildModeAndCollapse();
+          }
+          // If clicking a building, the update() call below handles the selection
         } else if (buildCtrl.phase === 'inactive') {
           // Outside build mode: only enter select mode if clicking ON a building
-          const { width, height } = renderer.screen;
-          const wmx = camera.viewX + (mouseX - width / 2) / camera.zoom;
-          const wmy = camera.viewY + (mouseY - height / 2) / camera.zoom;
-          if (buildCtrl.findBuildingAt(wmx, wmy) !== null) {
+          if (clickedBuilding !== null) {
             buildCtrl.enterSelectMode();
             buildOverlay.show();
           }
