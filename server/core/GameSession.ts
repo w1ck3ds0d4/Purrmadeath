@@ -2345,9 +2345,11 @@ export class GameSession {
     const elementColors: number[] = [];
     const skillAlloc = this.skills.getAllocation(player.client.id);
     if (skillAlloc) {
-      if (skillAlloc.allocated.has('fire_mage_t2')) elementColors.push(0xff4400);   // Red
-      if (skillAlloc.allocated.has('frost_mage_t2')) elementColors.push(0x44aadd);  // Light blue
-      if (skillAlloc.allocated.has('electric_mage_t2')) elementColors.push(0xddcc22); // Yellow
+      if (skillAlloc.allocated.has('fire_mage_t2')) elementColors.push(0xff4400);   // Red (fire)
+      if (skillAlloc.allocated.has('frost_mage_t2')) elementColors.push(0x44aadd);  // Light blue (frost)
+      if (skillAlloc.allocated.has('electric_mage_t2')) elementColors.push(0xddcc22); // Yellow (electric)
+      if (skillAlloc.allocated.has('sharpshooter_t2')) elementColors.push(0x44dd44); // Green (poison)
+      if (skillAlloc.allocated.has('trapper_t2')) elementColors.push(0x44dd44);     // Green (poison)
     }
     if (elementColors.length > 0) {
       projData.colors = elementColors;
@@ -2357,9 +2359,10 @@ export class GameSession {
     const rCombatMods = rSBuffs.combatMods;
     for (const mod of rCombatMods) {
       switch (mod.type) {
-        case 'multishot_passive': {
+        case 'multi_shot': {
+          // Fire extra arrows in a spread pattern
           const count = Math.round(mod.value);
-          const spread = mod.params?.spreadAngle ?? 0.15;
+          const spread = 0.15;
           for (let i = 1; i < count; i++) {
             const angle = facing + (i % 2 === 0 ? 1 : -1) * Math.ceil(i / 2) * spread;
             const extraId = this.world.createEntity();
@@ -2374,14 +2377,20 @@ export class GameSession {
           }
           break;
         }
-        case 'piercing_plus': {
-          projData.pierce = true;
-          projData.maxPierces = Math.round(mod.value);
-          projData.hitEntities = [];
+        case 'headshot_explosion': {
+          // Crits deal 3x damage and explode on impact
+          projData.critMultiplierOverride = mod.value; // 3.0
+          projData.aoeRadius = mod.params?.radius ?? 100;
           break;
         }
-        case 'homing_passive': {
-          projData.homing = true;
+        case 'toxic_spread': {
+          projData.toxicSpread = true;
+          projData.toxicSpreadRadius = mod.params?.radius ?? 100;
+          break;
+        }
+        case 'crippling_slow': {
+          projData.slowOnHit = mod.params?.slowPercent ?? 0.30;
+          projData.slowDuration = mod.params?.duration ?? 5;
           break;
         }
         case 'explosive_projectile': {
@@ -2391,11 +2400,6 @@ export class GameSession {
         case 'bouncing': {
           projData.bounceCount = Math.round(mod.value);
           projData.bounceRange = mod.params?.range ?? 120;
-          break;
-        }
-        case 'split_on_hit': {
-          projData.splitCount = Math.round(mod.value);
-          projData.splitDamage = mod.params?.damage ?? 0.5;
           break;
         }
         case 'frost_crit': {
@@ -2523,6 +2527,19 @@ export class GameSession {
         }
       }
 
+      // Poison DOT: attach/refresh PoisonDot component on target
+      if (buffs.poisonDot > 0 && this.world.getComponent<HealthComponent>(hit.targetId, C.Health)) {
+        const existing = this.world.getComponent<import('@shared/components').PoisonDotComponent>(hit.targetId, C.PoisonDot);
+        if (existing) {
+          existing.dps = Math.max(existing.dps, buffs.poisonDot);
+          existing.remaining = 5; // refresh duration
+        } else {
+          this.world.addComponent(hit.targetId, C.PoisonDot, {
+            dps: buffs.poisonDot, remaining: 5, sourceId: attackerEntityId,
+          } as import('@shared/components').PoisonDotComponent);
+        }
+      }
+
       // Slow on hit: attach/refresh SlowEffect component on target
       if (buffs.slowOnHit > 0) {
         const existing = this.world.getComponent<SlowEffectComponent>(hit.targetId, C.SlowEffect);
@@ -2531,19 +2548,6 @@ export class GameSession {
           if (speed) speed.multiplier *= (1 - buffs.slowOnHit);
           this.world.addComponent<SlowEffectComponent>(hit.targetId, C.SlowEffect, {
             factor: buffs.slowOnHit, remaining: 2,
-          });
-        }
-      }
-
-      // Poison DOT: longer duration, lower dps than burn
-      if (buffs.poisonDot > 0 && this.world.getComponent<HealthComponent>(hit.targetId, C.Health)) {
-        const existing = this.world.getComponent<PoisonDotComponent>(hit.targetId, C.PoisonDot);
-        if (existing) {
-          existing.dps = Math.max(existing.dps, buffs.poisonDot);
-          existing.remaining = 4;
-        } else {
-          this.world.addComponent<PoisonDotComponent>(hit.targetId, C.PoisonDot, {
-            dps: buffs.poisonDot, remaining: 4, sourceId: attackerEntityId,
           });
         }
       }
@@ -3350,7 +3354,7 @@ export class GameSession {
    * Tick all ActiveBuffs on players: decrement timers, apply per-frame effects
    * (hpRegen, speedFlat, defensePercent), and remove expired buffs.
    */
-  private tickActiveBuffs(dt: number): void {
+  private tickActiveBuffs(dt: number, send?: SendFn): void {
     for (const [, player] of this.players) {
       if (player.entityId === null) continue;
       let ab = this.world.getComponent<import('@shared/components').ActiveBuffsComponent>(player.entityId, C.ActiveBuffs);
@@ -3432,6 +3436,37 @@ export class GameSession {
               }
             }
           }
+          // Sniper Shot: fire a massive projectile on charge complete
+          if (buff.id === 'sniper_shot') {
+            const pos = this.world.getComponent<PositionComponent>(player.entityId, C.Position);
+            if (pos) {
+              const facing = buff.effect.facing ?? 0;
+              const dmgMult = buff.effect.damageMultiplier ?? 5;
+              const classStats = CLASS_STATS[player.playerClass];
+              const sBuffs = this.skills.getSkillBuffs(player.client.id);
+              const baseDmg = Math.round(classStats.baseDamage * (sBuffs?.damageMultiplier ?? 1) + (sBuffs?.flatDamage ?? 0));
+              const projId = this.world.createEntity();
+              const speed = 500;
+              const offset = 20;
+              this.world.addComponent(projId, C.Position, { x: pos.x + Math.cos(facing) * offset, y: pos.y + Math.sin(facing) * offset });
+              this.world.addComponent(projId, C.Velocity, { vx: Math.cos(facing) * speed, vy: Math.sin(facing) * speed });
+              this.world.addComponent(projId, C.Projectile, {
+                ownerId: player.entityId,
+                damage: Math.round(baseDmg * dmgMult),
+                lifetime: 3.0,
+                pierce: true,
+              });
+              this.world.addComponent(projId, C.Faction, { type: 'player' });
+              // Broadcast to all clients
+              if (send) {
+                const spawn = { type: MessageType.PROJECTILE_SPAWN, projectileId: projId,
+                  x: pos.x + Math.cos(facing) * offset, y: pos.y + Math.sin(facing) * offset,
+                  vx: Math.cos(facing) * speed, vy: Math.sin(facing) * speed,
+                  ownerSlot: player.slot, colors: [0xffdd44] };
+                for (const p of this.players.values()) send(p.client, spawn);
+              }
+            }
+          }
           this.logger.buff(`Buff expired: ${buff.id} on ${player.displayName}`, { effect: buff.effect });
           ab.buffs.splice(i, 1);
         }
@@ -3508,7 +3543,68 @@ export class GameSession {
         }
       }
     }
+    // ── Toxic Spread: when a poisoned enemy dies, spread poison to nearby enemies ──
+    // This checks all dying enemies for the PoisonDot component. If the attacker
+    // has the 'toxic_spread' combat mod, poison spreads to enemies within radius.
     if (deaths.length > 0) {
+      const deathSet = new Set(deaths);
+      for (const deadId of deaths) {
+        const deadFaction = this.world.getComponent<FactionComponent>(deadId, C.Faction);
+        if (deadFaction?.type !== 'enemy') continue;
+
+        // Check if the dead entity was poisoned
+        const poison = this.world.getComponent<import('@shared/components').PoisonDotComponent>(deadId, C.PoisonDot);
+        if (!poison) continue;
+
+        // Find the attacker player and check if they have toxic_spread combat mod
+        const attackerEid = attackerMap.get(deadId);
+        if (attackerEid == null) continue;
+
+        // Find which player owns this attacker entity
+        let hasToxicSpread = false;
+        let spreadRadius = 100;
+        let spreadDps = 4;
+        let spreadDuration = 5;
+        for (const [, p] of this.players) {
+          if (p.entityId !== attackerEid) continue;
+          const sBuffs = this.skills.getSkillBuffs(p.client.id);
+          if (!sBuffs) break;
+          const toxicMod = sBuffs.combatMods.find(m => m.type === 'toxic_spread');
+          if (toxicMod) {
+            hasToxicSpread = true;
+            spreadRadius = toxicMod.params?.radius ?? 100;
+            spreadDps = toxicMod.params?.poisonDps ?? 4;
+            spreadDuration = toxicMod.params?.poisonDuration ?? 5;
+          }
+          break;
+        }
+
+        if (!hasToxicSpread) continue;
+
+        // Spread poison to nearby alive enemies
+        const deadPos = this.world.getComponent<PositionComponent>(deadId, C.Position);
+        if (!deadPos) continue;
+        const r2 = spreadRadius * spreadRadius;
+        for (const eid of this.world.query(C.Position, C.Health, C.Faction)) {
+          if (deathSet.has(eid)) continue; // Skip other dying entities
+          const ef = this.world.getComponent<FactionComponent>(eid, C.Faction);
+          if (ef?.type !== 'enemy') continue;
+          const ep = this.world.getComponent<PositionComponent>(eid, C.Position)!;
+          const dx = ep.x - deadPos.x, dy = ep.y - deadPos.y;
+          if (dx * dx + dy * dy > r2) continue;
+          // Apply or refresh poison on the nearby enemy
+          const existing = this.world.getComponent<import('@shared/components').PoisonDotComponent>(eid, C.PoisonDot);
+          if (existing) {
+            existing.dps = Math.max(existing.dps, spreadDps);
+            existing.remaining = spreadDuration;
+          } else {
+            this.world.addComponent(eid, C.PoisonDot, {
+              dps: spreadDps, remaining: spreadDuration, sourceId: attackerEid,
+            } as import('@shared/components').PoisonDotComponent);
+          }
+        }
+      }
+
       this.respawn.destroyDeadEntities(deaths, attackerMap, send);
     }
   }
@@ -3779,7 +3875,7 @@ export class GameSession {
     if (!this.gameOver) this.skills.tick(dt);
 
     // ── Active buff tick (warcry, unbreakable charge, etc.) ─────────────────
-    if (!this.gameOver) this.tickActiveBuffs(dt);
+    if (!this.gameOver) this.tickActiveBuffs(dt, send);
 
     // ── Potion system (cooldowns, buff expiry) ──────────────────────────────
     if (!this.gameOver) this.potions.tick(dt, send);

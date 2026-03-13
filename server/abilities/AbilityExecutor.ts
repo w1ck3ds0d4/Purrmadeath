@@ -24,6 +24,7 @@ import {
   PersistentZoneComponent,
   SummonOwnerComponent,
   SoulMarkComponent,
+  GuardComponent,
 } from '@shared/components';
 import type { AbilityParams, SkillActiveAbility } from '@shared/definitions/SkillDefinitions';
 import type { AbilityEffectMessage } from '@shared/protocol';
@@ -328,89 +329,70 @@ export function executeAbility(
     // RANGER
     // =====================================================================
 
-    case 'arrow_volley': {
-      // Cone-shaped rain of arrows in facing direction
-      const halfAngle = params.coneAngle / 2;
-      const coneRange = 160; // range of the cone
-      baseEffect.radius = coneRange;
-      for (let i = 0; i < params.arrowCount; i++) {
-        const angle = msg.facing - halfAngle + Math.random() * params.coneAngle;
-        const dist = 30 + Math.random() * coneRange;
-        const ax = pos.x + Math.cos(angle) * dist;
-        const ay = pos.y + Math.sin(angle) * dist;
-        for (const eid of world.query(C.Position, C.Health, C.Faction)) {
-          const ef = world.getComponent<FactionComponent>(eid, C.Faction);
-          if (ef?.type !== 'enemy') continue;
-          const ep = world.getComponent<PositionComponent>(eid, C.Position)!;
-          const dx = ep.x - ax, dy = ep.y - ay;
-          if (dx * dx + dy * dy > 20 * 20) continue;
-          const dmg = applyDamage(world, eid, params.damage);
-          hits.push({ sourceId: entityId, targetId: eid, damage: dmg, knockbackVx: 0, knockbackVy: 0 });
-          const hp = world.getComponent<HealthComponent>(eid, C.Health)!;
-          if (hp.current <= 0) deaths.push(eid);
-        }
-      }
-      break;
-    }
-
-    case 'snare_net': {
-      // Root + slow enemies at target position
-      const tx = msg.targetX ?? pos.x;
-      const ty = msg.targetY ?? pos.y;
-      baseEffect.targetX = tx;
-      baseEffect.targetY = ty;
-      baseEffect.radius = params.radius;
-      for (const e of enemiesInRadius(world, tx, ty, params.radius)) {
-        // Apply root
-        let root = world.getComponent<RootComponent>(e.eid, C.Root);
-        if (!root) {
-          root = { remaining: params.rootDuration };
-          world.addComponent(e.eid, C.Root, root);
-        } else {
-          root.remaining = Math.max(root.remaining, params.rootDuration);
-        }
-        // Apply slow for after root ends
-        let slow = world.getComponent<SlowEffectComponent>(e.eid, C.SlowEffect);
-        if (!slow) {
-          slow = { factor: params.slowFactor, remaining: params.rootDuration + 2 };
-          world.addComponent(e.eid, C.SlowEffect, slow);
-        } else {
-          slow.factor = Math.max(slow.factor, params.slowFactor);
-        }
-      }
-      break;
-    }
-
-    case 'grapple_hook': {
-      // Teleport to cursor position, clamped to distance
-      const { destX, destY } = teleportToCursor(pos, msg, params.distance, generator);
-      baseEffect.targetX = destX;
-      baseEffect.targetY = destY;
-      break;
-    }
-
-    case 'marked_for_death': {
-      // Apply DamageMark to nearest enemy
-      const target = nearestEnemy(world, pos.x, pos.y, 200);
-      if (target !== null) {
-        world.addComponent(target, C.DamageMark, {
-          remaining: params.duration,
-          damage: params.damageAmp, // stored as amplification factor
-          sourceId: entityId,
-        } as DamageMarkComponent);
-        const ep = world.getComponent<PositionComponent>(target, C.Position)!;
-        baseEffect.targetX = ep.x;
-        baseEffect.targetY = ep.y;
-      }
-      break;
-    }
-
-    case 'multishot': {
-      // Buff that flags multishot mode
-      baseEffect.duration = params.duration;
-      pushBuff(world, entityId, 'multishot', params.duration, {
-        multishot: params.arrowCount,
+    case 'sniper_shot': {
+      // Charge for chargeTime seconds, then fire a massive arrow
+      const chargeTime = params.chargeTime;
+      // Root player during charge
+      world.addComponent(entityId, C.Root, { remaining: chargeTime } as RootComponent);
+      // After charge, fire a projectile with multiplied damage in the facing direction
+      // The actual projectile is spawned by a buff expiry handler
+      pushBuff(world, entityId, 'sniper_shot', chargeTime, {
+        damageMultiplier: params.damageMultiplier,
+        facing: msg.facing,
       });
+      baseEffect.duration = chargeTime;
+      break;
+    }
+
+    case 'pack_call': {
+      // Spawn temporary wolves near the player
+      for (let i = 0; i < params.wolfCount; i++) {
+        const angle = (i / params.wolfCount) * Math.PI * 2;
+        const spawnDist = 40 + Math.random() * 30;
+        const wx = pos.x + Math.cos(angle) * spawnDist;
+        const wy = pos.y + Math.sin(angle) * spawnDist;
+        const wolfId = world.createEntity();
+        world.addComponent(wolfId, C.Position, { x: wx, y: wy });
+        world.addComponent(wolfId, C.Velocity, { vx: 0, vy: 0 });
+        world.addComponent(wolfId, C.Health, { current: params.wolfHp, max: params.wolfHp });
+        world.addComponent(wolfId, C.Faction, { type: 'guard' });
+        world.addComponent(wolfId, C.Speed, { base: 160, multiplier: 1 });
+        world.addComponent(wolfId, C.EnemyStats, { damage: params.wolfDamage, attackCooldown: 1.0, attackTimer: 0, range: 25, xpValue: 0, variant: 'wolf' } as any);
+        world.addComponent(wolfId, C.Guard, {
+          barracksId: entityId, // Owner player entity
+          patrolRadius: 200,
+          followEntityId: entityId, // Follow the player
+          lifetime: params.duration, // Temporary wolf
+          variant: 'wolf',
+        } as GuardComponent);
+      }
+      baseEffect.radius = 100;
+      break;
+    }
+
+    case 'explosive_barrage': {
+      // Fire multiple explosive arrows in a spread arc
+      const spreadAngle = Math.PI / 4; // 45 degree total spread
+      const halfSpread = spreadAngle / 2;
+      for (let i = 0; i < params.arrowCount; i++) {
+        const angle = msg.facing - halfSpread + (i / (params.arrowCount - 1)) * spreadAngle;
+        const speed = 350;
+        const vx = Math.cos(angle) * speed;
+        const vy = Math.sin(angle) * speed;
+        const spawnDist = 20;
+        const sx = pos.x + Math.cos(angle) * spawnDist;
+        const sy = pos.y + Math.sin(angle) * spawnDist;
+        const projId = world.createEntity();
+        world.addComponent(projId, C.Position, { x: sx, y: sy });
+        world.addComponent(projId, C.Velocity, { vx, vy });
+        world.addComponent(projId, C.Projectile, {
+          ownerId: entityId,
+          damage: params.damagePerArrow,
+          lifetime: 2.0,
+          explosionRadius: params.explosionRadius,
+        } as any);
+        world.addComponent(projId, C.Faction, { type: 'player' });
+      }
       break;
     }
 

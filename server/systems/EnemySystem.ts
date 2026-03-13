@@ -337,23 +337,40 @@ export class EnemySystem {
         return best;
       };
 
-      // ── Guard targeting: nearest enemy > patrol to barracks ────────────────
+      // ── Guard targeting: nearest enemy > patrol to barracks/follow player ──
       if (isGuard) {
         const guard = world.getComponent<GuardComponent>(id, C.Guard);
+
+        // Wolf lifetime tick - destroy when expired
+        if (guard?.lifetime != null && guard.lifetime > 0) {
+          guard.lifetime -= dt;
+          if (guard.lifetime <= 0) {
+            const hp = world.getComponent<HealthComponent>(id, C.Health);
+            if (hp) hp.current = 0; // Will be cleaned up by death sweep
+            continue;
+          }
+        }
+
         const hostileEnemy = findNearestHostileEnemy(GUARD_DETECT_RANGE);
         if (hostileEnemy) {
           targetPos = hostileEnemy.pos;
           navPos = hostileEnemy.pos;
           targetDist = hostileEnemy.dist;
         } else if (guard) {
-          // Patrol: return to barracks if too far
-          const bpos = world.getComponent<PositionComponent>(guard.barracksId, C.Position);
-          if (bpos) {
-            const dx = bpos.x - pos.x, dy = bpos.y - pos.y;
+          // Determine patrol center: follow player or return to barracks
+          let centerPos: PositionComponent | undefined;
+          if (guard.followEntityId != null) {
+            centerPos = world.getComponent<PositionComponent>(guard.followEntityId, C.Position);
+          }
+          if (!centerPos) {
+            centerPos = world.getComponent<PositionComponent>(guard.barracksId, C.Position);
+          }
+          if (centerPos) {
+            const dx = centerPos.x - pos.x, dy = centerPos.y - pos.y;
             const dist = distance(dx, dy);
             if (dist > guard.patrolRadius) {
-              targetPos = bpos;
-              navPos = bpos;
+              targetPos = centerPos;
+              navPos = centerPos;
               targetDist = dist;
             }
           }

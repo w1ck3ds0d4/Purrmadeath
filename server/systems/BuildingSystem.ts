@@ -991,23 +991,17 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
         if (!valid) laser.targetId = null;
       }
 
-      // Acquire new target if idle
+      // Acquire new target if idle - use spatial hash instead of full entity query
       if (laser.targetId === null) {
-        let bestId = -1;
-        let bestDist = laser.range * laser.range;
-        for (const eid of world.query(C.Position, C.Faction, C.Health)) {
-          const ef = world.getComponent<FactionComponent>(eid, C.Faction)!;
-          if (ef.type !== 'enemy' && ef.type !== 'portal') continue;
-          const ghostSt = world.getComponent<GhostStateComponent>(eid, C.GhostState);
-          if (ghostSt?.hidden) continue;
-          const ehp = world.getComponent<HealthComponent>(eid, C.Health)!;
-          if (ehp.current <= 0) continue;
-          const epos = world.getComponent<PositionComponent>(eid, C.Position)!;
-          const dx = epos.x - tpos.x, dy = epos.y - tpos.y;
-          const d2 = dx * dx + dy * dy;
-          if (d2 < bestDist) { bestDist = d2; bestId = eid; }
+        const nearest = enemyHash.queryNearest(tpos.x, tpos.y, laser.range);
+        if (nearest) {
+          // Verify the nearest enemy is alive and not hidden
+          const ghostSt = world.getComponent<GhostStateComponent>(nearest.id, C.GhostState);
+          const ehp = world.getComponent<HealthComponent>(nearest.id, C.Health);
+          if ((!ghostSt || !ghostSt.hidden) && ehp && ehp.current > 0) {
+            laser.targetId = nearest.id;
+          }
         }
-        if (bestId >= 0) laser.targetId = bestId;
       }
 
       // Apply continuous damage
@@ -1017,24 +1011,34 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
           const dmg = Math.max(1, Math.round(laser.damagePerSecond * dt));
           ehp.current = Math.max(0, ehp.current - dmg);
 
-          // Broadcast laser beam VFX (source -> target position)
-          const tgtPos = world.getComponent<PositionComponent>(laser.targetId, C.Position);
-          if (tgtPos) {
-            const beamMsg = {
-              type: MessageType.LASER_BEAM,
-              sourceX: tpos.x, sourceY: tpos.y,
-              targetX: tgtPos.x, targetY: tgtPos.y,
-            };
-            for (const p of players.values()) send(p.client, beamMsg);
+          // Throttle beam VFX broadcast: only send every 3rd tick (~10 Hz instead of 30 Hz)
+          // The client interpolates the beam position so it still looks smooth
+          laser.broadcastTimer = (laser.broadcastTimer ?? 0) + 1;
+          if (laser.broadcastTimer >= 3) {
+            laser.broadcastTimer = 0;
+            const tgtPos = world.getComponent<PositionComponent>(laser.targetId, C.Position);
+            if (tgtPos) {
+              const beamMsg = {
+                type: MessageType.LASER_BEAM,
+                sourceX: tpos.x, sourceY: tpos.y,
+                targetX: tgtPos.x, targetY: tgtPos.y,
+              };
+              for (const p of players.values()) send(p.client, beamMsg);
+            }
           }
 
-          // Send periodic hit messages (every ~0.5s worth of damage) for visual feedback
-          const hitMsg: HitMessage = {
-            type: MessageType.HIT,
-            sourceId: id, targetId: laser.targetId,
-            damage: dmg, knockbackVx: 0, knockbackVy: 0,
-          };
-          for (const p of players.values()) send(p.client, hitMsg);
+          // Only send HIT messages every 10th tick (~3 Hz) for damage numbers
+          laser.hitTimer = (laser.hitTimer ?? 0) + 1;
+          if (laser.hitTimer >= 10) {
+            laser.hitTimer = 0;
+            const hitMsg: HitMessage = {
+              type: MessageType.HIT,
+              sourceId: id, targetId: laser.targetId,
+              damage: Math.round(laser.damagePerSecond / 3), // Show ~1/3 second of damage
+              knockbackVx: 0, knockbackVy: 0,
+            };
+            for (const p of players.values()) send(p.client, hitMsg);
+          }
 
           if (ehp.current <= 0) {
             deaths.push(laser.targetId);
@@ -1047,29 +1051,43 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
   }
 
   function tickGhostVisibility(): void {
+    // Pre-cache light reveal positions once per tick (buildings don't move)
+    const cachedLightReveals: Array<{ x: number; y: number; rangeSq: number }> = [];
+    for (const lid of world.query(C.LightReveal, C.Position)) {
+      const lpos = world.getComponent<PositionComponent>(lid, C.Position)!;
+      const lr = world.getComponent<LightRevealComponent>(lid, C.LightReveal)!;
+      cachedLightReveals.push({ x: lpos.x, y: lpos.y, rangeSq: lr.range * lr.range });
+    }
+
+    // Pre-cache player positions with ghost reveal ability
+    const cachedRevealPlayers: Array<{ x: number; y: number }> = [];
+    for (const p of players.values()) {
+      if (!p.entityId) continue;
+      const pBuffs = cards.playerBuffs.get(p.client.id);
+      if (!pBuffs?.abilities.includes('reveal_ghosts')) continue;
+      const ppos = world.getComponent<PositionComponent>(p.entityId, C.Position);
+      if (ppos) cachedRevealPlayers.push({ x: ppos.x, y: ppos.y });
+    }
+
     for (const eid of world.query(C.GhostState, C.Position)) {
       const ghost = world.getComponent<GhostStateComponent>(eid, C.GhostState)!;
       if (!ghost.hidden) continue;
 
+      // Pre-cache ghost position (queried once, used for all checks)
+      const epos = world.getComponent<PositionComponent>(eid, C.Position)!;
       let revealed = false;
-      for (const lid of world.query(C.LightReveal, C.Position)) {
-        const lpos = world.getComponent<PositionComponent>(lid, C.Position)!;
-        const lr = world.getComponent<LightRevealComponent>(lid, C.LightReveal)!;
-        const epos = world.getComponent<PositionComponent>(eid, C.Position)!;
-        const dx = epos.x - lpos.x, dy = epos.y - lpos.y;
-        if (dx * dx + dy * dy <= lr.range * lr.range) { revealed = true; break; }
+
+      // Check light reveal towers (using pre-cached positions for efficiency)
+      for (const lr of cachedLightReveals) {
+        const dx = epos.x - lr.x, dy = epos.y - lr.y;
+        if (dx * dx + dy * dy <= lr.rangeSq) { revealed = true; break; }
       }
 
+      // Check players with ghost reveal ability
       if (!revealed) {
-        const epos = world.getComponent<PositionComponent>(eid, C.Position)!;
-        for (const p of players.values()) {
-          if (!p.entityId) continue;
-          const pBuffs = cards.playerBuffs.get(p.client.id);
-          if (!pBuffs?.abilities.includes('reveal_ghosts')) continue;
-          const ppos = world.getComponent<PositionComponent>(p.entityId, C.Position);
-          if (!ppos) continue;
-          const dx2 = epos.x - ppos.x, dy2 = epos.y - ppos.y;
-          if (dx2 * dx2 + dy2 * dy2 <= 300 * 300) { revealed = true; break; }
+        for (const rp of cachedRevealPlayers) {
+          const dx2 = epos.x - rp.x, dy2 = epos.y - rp.y;
+          if (dx2 * dx2 + dy2 * dy2 <= 90000) { revealed = true; break; } // 300^2 = 90000
         }
       }
 
@@ -1077,25 +1095,38 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     }
   }
 
+  // Pre-cached ally list for heal auras (rebuilt each tick, shared across all shrines)
+  let cachedAllies: Array<{ id: number; x: number; y: number }> = [];
+  let alliesCacheFrame = -1;
+
   function tickHealAuras(dt: number): void {
+    // Rebuild ally cache once per tick (players + civilians + guards are ~20 entities total)
+    const currentFrame = (alliesCacheFrame + 1); // Simple incrementing frame counter
+    if (alliesCacheFrame !== currentFrame) {
+      alliesCacheFrame = currentFrame;
+      cachedAllies = [];
+      for (const pid of world.query(C.Position, C.Health, C.Faction)) {
+        const f = world.getComponent<FactionComponent>(pid, C.Faction)!;
+        if (f.type !== 'player' && f.type !== 'civilian' && f.type !== 'guard') continue;
+        if (world.hasComponent(pid, C.Downed)) continue;
+        const ppos = world.getComponent<PositionComponent>(pid, C.Position)!;
+        cachedAllies.push({ id: pid, x: ppos.x, y: ppos.y });
+      }
+    }
+
+    // Each shrine checks only cached allies (typically 5-20 entities, not 100+)
     for (const sid of world.query(C.HealAura, C.Position)) {
       const aura = world.getComponent<HealAuraComponent>(sid, C.HealAura)!;
       const spos = world.getComponent<PositionComponent>(sid, C.Position)!;
       const rangeSq = aura.range * aura.range;
       const healAmount = aura.healPerSecond * dt;
 
-      // Heal players, civilians, and guards
-      for (const pid of world.query(C.Position, C.Health, C.Faction)) {
-        const f = world.getComponent<FactionComponent>(pid, C.Faction)!;
-        if (f.type !== 'player' && f.type !== 'civilian' && f.type !== 'guard') continue;
-        if (world.hasComponent(pid, C.Downed)) continue;
-        const ppos = world.getComponent<PositionComponent>(pid, C.Position);
-        const php = world.getComponent<HealthComponent>(pid, C.Health);
-        if (!ppos || !php || php.current >= php.max) continue;
-        const dx = ppos.x - spos.x, dy = ppos.y - spos.y;
-        if (dx * dx + dy * dy <= rangeSq) {
-          php.current = Math.min(php.max, php.current + healAmount);
-        }
+      for (const ally of cachedAllies) {
+        const dx = ally.x - spos.x, dy = ally.y - spos.y;
+        if (dx * dx + dy * dy > rangeSq) continue;
+        const php = world.getComponent<HealthComponent>(ally.id, C.Health);
+        if (!php || php.current >= php.max) continue;
+        php.current = Math.min(php.max, php.current + healAmount);
       }
     }
   }
@@ -1182,7 +1213,10 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     const trapDeaths: number[] = [];
     const entityDeaths: number[] = [];
     const attackerMap = new Map<number, number>();
+    const spikeHits: Array<{ sourceId: number; targetId: number; damage: number; knockbackVx: number; knockbackVy: number }> = [];
 
+    // Spike traps: use spatial hash instead of querying all entities.
+    // Only checks enemies within the trap's collision range (much faster with 100+ enemies).
     for (const id of world.query(C.SpikeTrap, C.Position, C.Health)) {
       const trap = world.getComponent<SpikeTrapComponent>(id, C.SpikeTrap)!;
       const tpos = world.getComponent<PositionComponent>(id, C.Position)!;
@@ -1190,54 +1224,81 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       const trapHalf = buildingHalfExtent('spike_trap');
       let trapDestroyed = false;
 
+      // Decrement per-enemy cooldowns
       for (const [eid, remaining] of trap.enemyCooldowns) {
         if (remaining > 0) trap.enemyCooldowns.set(eid, remaining - dt);
       }
 
-      for (const eid of world.query(C.Position, C.Health, C.Faction)) {
-        const ef = world.getComponent<FactionComponent>(eid, C.Faction)!;
-        if (ef.type !== 'enemy' && ef.type !== 'player') continue;
-        if (world.hasComponent(eid, C.Downed)) continue;
+      // Use spatial hash to find nearby enemies (O(1) lookup instead of O(E) full scan)
+      const searchRadius = trapHalf + ENEMY_RADIUS + 5; // Small margin
+      enemyHash.queryRange(tpos.x, tpos.y, searchRadius, (entry) => {
+        if (trapDestroyed) return true; // Early exit if trap broke
+        if (world.hasComponent(entry.id, C.Downed)) return;
 
-        const epos = world.getComponent<PositionComponent>(eid, C.Position)!;
-        const entityRadius = ef.type === 'player' ? PLAYER_RADIUS : ENEMY_RADIUS;
+        // AABB collision check
+        const edx = Math.abs(entry.x - tpos.x);
+        const edy = Math.abs(entry.y - tpos.y);
+        if (edx > trapHalf + ENEMY_RADIUS || edy > trapHalf + ENEMY_RADIUS) return;
 
-        const edx = Math.abs(epos.x - tpos.x);
-        const edy = Math.abs(epos.y - tpos.y);
-        if (edx > trapHalf + entityRadius || edy > trapHalf + entityRadius) continue;
+        // Per-enemy cooldown check
+        const cd = trap.enemyCooldowns.get(entry.id) ?? 0;
+        if (cd > 0) return;
 
-        const cd = trap.enemyCooldowns.get(eid) ?? 0;
-        if (cd > 0) continue;
-
-        const ehp = world.getComponent<HealthComponent>(eid, C.Health);
-        if (!ehp) continue;
+        const ehp = world.getComponent<HealthComponent>(entry.id, C.Health);
+        if (!ehp) return;
         ehp.current = Math.max(0, ehp.current - trap.damage);
-        trap.enemyCooldowns.set(eid, trap.cooldown);
+        trap.enemyCooldowns.set(entry.id, trap.cooldown);
 
-        const hitMsg: HitMessage = {
-          type: MessageType.HIT,
-          sourceId: id, targetId: eid,
-          damage: trap.damage, knockbackVx: 0, knockbackVy: 0,
-        };
-        for (const p of players.values()) send(p.client, hitMsg);
+        // Collect hit for batched broadcast (don't send per-hit)
+        spikeHits.push({ sourceId: id, targetId: entry.id, damage: trap.damage, knockbackVx: 0, knockbackVy: 0 });
 
         if (ehp.current <= 0) {
-          entityDeaths.push(eid);
-          attackerMap.set(eid, id);
+          entityDeaths.push(entry.id);
+          attackerMap.set(entry.id, id);
         }
 
+        // Trap takes self-damage per hit
         thp.current -= trap.selfDamage;
         if (thp.current <= 0) {
           trapDeaths.push(id);
           trapDestroyed = true;
-          break;
+          return true; // Stop iterating
+        }
+      });
+
+      // Also check players (only 1-4 players, cheap direct check)
+      if (!trapDestroyed) {
+        for (const p of players.values()) {
+          if (p.entityId === null) continue;
+          if (world.hasComponent(p.entityId, C.Downed)) continue;
+          const ppos = world.getComponent<PositionComponent>(p.entityId, C.Position);
+          if (!ppos) continue;
+          const edx = Math.abs(ppos.x - tpos.x);
+          const edy = Math.abs(ppos.y - tpos.y);
+          if (edx > trapHalf + PLAYER_RADIUS || edy > trapHalf + PLAYER_RADIUS) continue;
+          const cd = trap.enemyCooldowns.get(p.entityId) ?? 0;
+          if (cd > 0) continue;
+          const php = world.getComponent<HealthComponent>(p.entityId, C.Health);
+          if (!php) continue;
+          php.current = Math.max(0, php.current - trap.damage);
+          trap.enemyCooldowns.set(p.entityId, trap.cooldown);
+          spikeHits.push({ sourceId: id, targetId: p.entityId, damage: trap.damage, knockbackVx: 0, knockbackVy: 0 });
         }
       }
 
-      if (trapDestroyed) continue;
+      // Clean up stale cooldown entries
+      if (!trapDestroyed) {
+        for (const eid of trap.enemyCooldowns.keys()) {
+          if (!world.hasEntity(eid)) trap.enemyCooldowns.delete(eid);
+        }
+      }
+    }
 
-      for (const eid of trap.enemyCooldowns.keys()) {
-        if (!world.hasEntity(eid)) trap.enemyCooldowns.delete(eid);
+    // Batch-broadcast all spike trap hits (single loop over players instead of per-hit)
+    if (spikeHits.length > 0) {
+      for (const hit of spikeHits) {
+        const hitMsg: HitMessage = { type: MessageType.HIT, ...hit };
+        for (const p of players.values()) send(p.client, hitMsg);
       }
     }
 

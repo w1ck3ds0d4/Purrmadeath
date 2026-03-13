@@ -91,6 +91,11 @@ const ABILITY_COLORS: Record<string, { fill: number; stroke: number }> = {
   meteor_shower:      { fill: 0xff4400, stroke: 0xff7722 },
   blizzard_freeze:    { fill: 0x66aaff, stroke: 0x99ccff },
   thunderwave:        { fill: 0x4466dd, stroke: 0x6688ff },
+
+  // Ranger abilities
+  sniper_shot:        { fill: 0xffdd44, stroke: 0xffee88 },
+  pack_call:          { fill: 0x88774d, stroke: 0xbbaa77 },
+  explosive_barrage:  { fill: 0xff6600, stroke: 0xff9944 },
 };
 
 /**
@@ -376,6 +381,21 @@ export class AbilityVFXSystem {
         case 'blood_drain':
           this.drawBlizzard(fx, t, colors);
           break;
+
+        // ── Ranger VFX ──────────────────────────────────────────────────
+        case 'sniper_shot':
+          // Golden charging glow around the player that intensifies over time
+          this.drawShieldBubble(fx, t, colors);
+          break;
+        case 'pack_call':
+          // Poof of brown/nature particles where wolves spawn
+          this.drawExplosion(fx, t, colors);
+          break;
+        case 'explosive_barrage':
+          // Orange explosion at impact point
+          this.drawExplosion(fx, t, colors);
+          break;
+
         default:
           this.drawExpandingRing(fx, t, colors);
           break;

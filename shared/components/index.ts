@@ -236,6 +236,18 @@ export interface ProjectileComponent {
   healPercent?: number;
   /** Elemental colors for rendering (e.g., [0xff4400, 0x44aadd]). Client cycles through them. */
   colors?: number[];
+  /** Override crit multiplier (e.g., 3.0 for headshot). */
+  critMultiplierOverride?: number;
+  /** If true, poisoned enemies spread poison on death. */
+  toxicSpread?: boolean;
+  /** Radius for toxic spread on enemy death. */
+  toxicSpreadRadius?: number;
+  /** Slow factor applied on hit (0-1, e.g., 0.30 = 30% slow). */
+  slowOnHit?: number;
+  /** Duration of slow applied on hit (seconds). */
+  slowDuration?: number;
+  /** Explosion radius for explosive barrage arrows. */
+  explosionRadius?: number;
 }
 
 // ── Phase 4.8+ components ─────────────────────────────────────────────────────
@@ -452,12 +464,18 @@ export interface BarracksSpawnerComponent {
   guardIds: number[];
 }
 
-/** Tags an entity as a barracks/training center guard. */
+/** Tags an entity as a barracks/training center guard or wolf companion. */
 export interface GuardComponent {
   barracksId: number;
   patrolRadius: number;
   /** Guard role for training center guards. undefined = generic barracks guard. */
   guardRole?: 'warrior' | 'ranger' | 'mage';
+  /** If set, this guard follows a player entity instead of patrolling a fixed point. */
+  followEntityId?: number;
+  /** Lifetime in seconds. When <= 0 the entity is destroyed. -1 = permanent. */
+  lifetime?: number;
+  /** Wolf companion variant (for rendering). */
+  variant?: 'wolf';
 }
 
 /** Laser tower continuous-beam component. */
@@ -468,6 +486,10 @@ export interface LaserBeamComponent {
   damagePerSecond: number;
   /** Entity ID of the current target, or null if idle. */
   targetId: number | null;
+  /** Internal counter for throttling beam VFX broadcasts. */
+  broadcastTimer?: number;
+  /** Internal counter for throttling HIT message broadcasts. */
+  hitTimer?: number;
 }
 
 /** Training center component - trains civilians into role-specific guards. */

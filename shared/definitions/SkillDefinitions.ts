@@ -4,7 +4,7 @@ import type { PlayerClass } from './ClassDefinitions';
 
 export type SkillBranchId =
   | 'berserker' | 'guardian' | 'blood_knight' | 'templar' | 'slayer'           // Warrior
-  | 'sharpshooter' | 'trapper' | 'scout' | 'hawkeye' | 'poisoner'            // Ranger
+  | 'sharpshooter' | 'beastmaster' | 'trapper' | 'shadow_hunter' | 'windwalker'  // Ranger
   | 'fire_mage' | 'frost_mage' | 'electric_mage' | 'earth_mage' | 'void_mage'; // Mage
 
 /** Node IDs follow the pattern: branchId_tN (e.g. 'berserker_t1'). */
@@ -42,11 +42,9 @@ export type AbilityParams =
   | { type: 'unbreakable_charge'; tauntRadius: number; damageReduction: number; chargeDuration: number; damageMultiplier: number }
   | { type: 'blood_drain'; radius: number; duration: number; drainPercent: number }
   // Ranger
-  | { type: 'arrow_volley'; arrowCount: number; damage: number; coneAngle: number }
-  | { type: 'snare_net'; radius: number; rootDuration: number; slowFactor: number }
-  | { type: 'grapple_hook'; distance: number }
-  | { type: 'marked_for_death'; damageAmp: number; duration: number }
-  | { type: 'multishot'; arrowCount: number; duration: number }
+  | { type: 'sniper_shot'; chargeTime: number; damageMultiplier: number }
+  | { type: 'pack_call'; wolfCount: number; wolfHp: number; wolfDamage: number; duration: number }
+  | { type: 'explosive_barrage'; arrowCount: number; damagePerArrow: number; explosionRadius: number }
   // Mage
   | { type: 'meteor_shower'; radius: number; duration: number; meteorCount: number; damagePerMeteor: number }
   | { type: 'blizzard_freeze'; radius: number; freezeDuration: number; damageAmp: number }
@@ -66,7 +64,10 @@ export type CombatModifierType =
   // Warrior
   | 'double_range' | 'aegis_shield' | 'blood_arc' | 'warcry_extension'
   // Ranger
-  | 'multishot_passive' | 'piercing_plus' | 'bouncing' | 'homing_passive' | 'split_on_hit'
+  | 'toxic_spread' | 'headshot_explosion' | 'wolf_upgrade' | 'wolf_heal' | 'wolf_poison'
+  | 'alpha_predator' | 'crippling_slow' | 'multi_shot'
+  // Shared
+  | 'bouncing'
   // Mage - Fire
   | 'burn_lifesteal' | 'explosive_burn'
   // Mage - Frost
@@ -107,227 +108,22 @@ export interface SkillBranch {
   nodes: SkillNode[]; // tiers 1-10 (5 base + 5 advanced with combat modifiers)
 }
 
-// ─── Branch Definitions ────────────────────────────────────────────────────────
+// ─── Branch Definitions (imported from per-class files) ───────────────────────
+
+import { WARRIOR_BRANCHES } from './skills/WarriorSkills';
+import { RANGER_BRANCHES } from './skills/RangerSkills';
+import { MAGE_BRANCHES } from './skills/MageSkills';
 
 export const SKILL_BRANCHES: Record<SkillBranchId, SkillBranch> = {
-  // ── Warrior ────────────────────────────────────────────────────────────────
-  berserker: {
-    id: 'berserker', name: 'Berserker', description: 'Sustain through bloodlust and rage',
-    playerClass: 'warrior', color: 0xcc3333,
-    nodes: [
-      { id: 'berserker_t1', tier: 1, branch: 'berserker', name: 'Vitality', description: '+40 max HP',
-        passive: [{ stat: 'maxHp', value: 40, mode: 'add' }] },
-      { id: 'berserker_t2', tier: 2, branch: 'berserker', name: 'Bloodlust', description: 'Each hit gives +2 HP/s regen for 20s (stacks, resets on hit)',
-        special: [{ type: 'bloodlust_stack', value: 2 }] },
-      { id: 'berserker_t3', tier: 3, branch: 'berserker', name: 'Ferocity', description: '+15% crit chance',
-        passive: [{ stat: 'critChance', value: 0.15, mode: 'add' }] },
-      { id: 'berserker_t4', tier: 4, branch: 'berserker', name: 'Savage Blows', description: '+40% crit damage',
-        passive: [{ stat: 'critDamage', value: 0.40, mode: 'add' }] },
-      { id: 'berserker_t5', tier: 5, branch: 'berserker', name: 'Warcry Rage', description: 'Red aura: +100 speed, 70% DR, 100 HP/s regen for 45s',
-        active: { abilityId: 'warcry_rage', name: 'Warcry Rage', description: '+100 speed, 70% DR, 100 HP/s for 45s', cooldown: 90,
-          params: { type: 'warcry_rage', speedBoost: 100, damageResistance: 0.70, hpRegen: 100, duration: 45 } } },
-      { id: 'berserker_t6', tier: 6, branch: 'berserker', name: 'Iron Hide', description: '+10% defense',
-        passive: [{ stat: 'defensePercent', value: 0.10, mode: 'add' }] },
-      { id: 'berserker_t7', tier: 7, branch: 'berserker', name: 'Raw Power', description: '+40 flat damage',
-        passive: [{ stat: 'flatDamage', value: 40, mode: 'add' }] },
-      { id: 'berserker_t8', tier: 8, branch: 'berserker', name: 'Eternal Rage', description: 'Warcry Rage duration +20s',
-        combatMod: { type: 'warcry_extension', value: 20 } },
-      { id: 'berserker_t9', tier: 9, branch: 'berserker', name: 'Battle Focus', description: '-20% ability cooldowns',
-        passive: [{ stat: 'cooldownReduction', value: 0.20, mode: 'add' }] },
-      { id: 'berserker_t10', tier: 10, branch: 'berserker', name: "Titan's Reach", description: 'Double melee attack range',
-        combatMod: { type: 'double_range', value: 2 } },
-    ],
-  },
-  guardian: {
-    id: 'guardian', name: 'Guardian', description: 'Tanking and damage reflection',
-    playerClass: 'warrior', color: 0x3377cc,
-    nodes: [
-      { id: 'guardian_t1', tier: 1, branch: 'guardian', name: 'Fortress', description: '+50 max HP',
-        passive: [{ stat: 'maxHp', value: 50, mode: 'add' }] },
-      { id: 'guardian_t2', tier: 2, branch: 'guardian', name: 'Retaliation', description: 'Enemies take 35% of raw damage dealt to you',
-        special: [{ type: 'thorns_percent', value: 0.35 }] },
-      { id: 'guardian_t3', tier: 3, branch: 'guardian', name: 'Armor Mastery', description: '+10% defense',
-        passive: [{ stat: 'defensePercent', value: 0.10, mode: 'add' }] },
-      { id: 'guardian_t4', tier: 4, branch: 'guardian', name: 'Swift Guard', description: '+20 movement speed',
-        passive: [{ stat: 'flatSpeed', value: 20, mode: 'add' }] },
-      { id: 'guardian_t5', tier: 5, branch: 'guardian', name: 'Unbreakable Charge', description: 'Taunt 500px, 80% DR, store damage for 10s then release 200% AOE',
-        active: { abilityId: 'unbreakable_charge', name: 'Unbreakable Charge', description: 'Taunt + store damage, release 200% AOE', cooldown: 120,
-          params: { type: 'unbreakable_charge', tauntRadius: 500, damageReduction: 1.0, chargeDuration: 10, damageMultiplier: 2.0 } } },
-      { id: 'guardian_t6', tier: 6, branch: 'guardian', name: 'Steel Wall', description: '+20% defense',
-        passive: [{ stat: 'defensePercent', value: 0.20, mode: 'add' }] },
-      { id: 'guardian_t7', tier: 7, branch: 'guardian', name: 'Guardian Strike', description: '+20 flat damage',
-        passive: [{ stat: 'flatDamage', value: 20, mode: 'add' }] },
-      { id: 'guardian_t8', tier: 8, branch: 'guardian', name: 'Regeneration', description: '+5 HP/s regen',
-        passive: [{ stat: 'hpRegen', value: 5, mode: 'add' }] },
-      { id: 'guardian_t9', tier: 9, branch: 'guardian', name: 'Vigilance', description: '-10% ability cooldowns',
-        passive: [{ stat: 'cooldownReduction', value: 0.10, mode: 'add' }] },
-      { id: 'guardian_t10', tier: 10, branch: 'guardian', name: 'Aegis Shield', description: 'Shield blocks all damage, recharges after 30s or 10 kills',
-        combatMod: { type: 'aegis_shield', value: 1, params: { rechargeSec: 30, rechargeKills: 10 } } },
-    ],
-  },
-  blood_knight: {
-    id: 'blood_knight', name: 'Blood Knight', description: 'Lifesteal and blood magic',
-    playerClass: 'warrior', color: 0x882233,
-    nodes: [
-      { id: 'blood_knight_t1', tier: 1, branch: 'blood_knight', name: 'Blood Blade', description: '+50 flat damage',
-        passive: [{ stat: 'flatDamage', value: 50, mode: 'add' }] },
-      { id: 'blood_knight_t2', tier: 2, branch: 'blood_knight', name: 'Armor Break', description: 'Attacks reduce enemy defense',
-        special: [{ type: 'armor_break', value: 0.20 }] },
-      { id: 'blood_knight_t3', tier: 3, branch: 'blood_knight', name: 'Vitae', description: '+5 HP/s regen',
-        passive: [{ stat: 'hpRegen', value: 5, mode: 'add' }] },
-      { id: 'blood_knight_t4', tier: 4, branch: 'blood_knight', name: 'Blood Thorns', description: 'Enemies take 20% of their damage back',
-        special: [{ type: 'thorns_percent', value: 0.20 }] },
-      { id: 'blood_knight_t5', tier: 5, branch: 'blood_knight', name: 'Blood Drain', description: 'Drain HP from enemies in 150px area for 30s',
-        active: { abilityId: 'blood_drain', name: 'Blood Drain', description: 'Drain enemy HP as healing for 30s', cooldown: 60,
-          params: { type: 'blood_drain', radius: 150, duration: 30, drainPercent: 0.15 } } },
-      { id: 'blood_knight_t6', tier: 6, branch: 'blood_knight', name: 'Swiftness', description: '+20 movement speed',
-        passive: [{ stat: 'flatSpeed', value: 20, mode: 'add' }] },
-      { id: 'blood_knight_t7', tier: 7, branch: 'blood_knight', name: 'Crimson Edge', description: '+20 flat damage',
-        passive: [{ stat: 'flatDamage', value: 20, mode: 'add' }] },
-      { id: 'blood_knight_t8', tier: 8, branch: 'blood_knight', name: 'Blood Pool', description: '+30 max HP',
-        passive: [{ stat: 'maxHp', value: 30, mode: 'add' }] },
-      { id: 'blood_knight_t9', tier: 9, branch: 'blood_knight', name: 'Crimson Thorns', description: '+30% thorns (total 50%)',
-        special: [{ type: 'thorns_percent', value: 0.30 }] },
-      { id: 'blood_knight_t10', tier: 10, branch: 'blood_knight', name: 'Blood Arc', description: 'Every 3rd attack fires a penetrating blood projectile, heals 30%',
-        combatMod: { type: 'blood_arc', value: 3, params: { healPercent: 0.30 } } },
-    ],
-  },
-  templar: {
-    id: 'templar', name: 'Templar', description: 'Coming soon...',
-    playerClass: 'warrior', color: 0xccaa44,
-    nodes: [],
-  },
-  slayer: {
-    id: 'slayer', name: 'Slayer', description: 'Coming soon...',
-    playerClass: 'warrior', color: 0x993333,
-    nodes: [],
-  },
+  ...WARRIOR_BRANCHES,
+  ...RANGER_BRANCHES,
+  ...MAGE_BRANCHES,
+} as Record<SkillBranchId, SkillBranch>;
 
-  // ── Ranger ─────────────────────────────────────────────────────────────────
-  sharpshooter: {
-    id: 'sharpshooter', name: 'Sharpshooter', description: 'Ranged damage and crits',
-    playerClass: 'ranger', color: 0x33aa55,
-    nodes: [],
-  },
-  trapper: {
-    id: 'trapper', name: 'Trapper', description: 'Utility and control',
-    playerClass: 'ranger', color: 0x88774d,
-    nodes: [],
-  },
-  scout: {
-    id: 'scout', name: 'Scout', description: 'Mobility and vision',
-    playerClass: 'ranger', color: 0x55bbdd,
-    nodes: [],
-  },
-  hawkeye: {
-    id: 'hawkeye', name: 'Hawkeye', description: 'Crit stacking and burst',
-    playerClass: 'ranger', color: 0xddaa33,
-    nodes: [],
-  },
-  poisoner: {
-    id: 'poisoner', name: 'Poisoner', description: 'DoT and slow attrition',
-    playerClass: 'ranger', color: 0x66aa33,
-    nodes: [],
-  },
-
-  // ── Mage ───────────────────────────────────────────────────────────────────
-  fire_mage: {
-    id: 'fire_mage', name: 'Fire Mage', description: 'Burning damage and explosions',
-    playerClass: 'mage', color: 0xdd5522,
-    nodes: [
-      { id: 'fire_mage_t1', tier: 1, branch: 'fire_mage', name: 'Ignite', description: '+10% damage',
-        passive: [{ stat: 'damage', value: 0.10, mode: 'multiply' }] },
-      { id: 'fire_mage_t2', tier: 2, branch: 'fire_mage', name: 'Searing Bolts', description: 'Projectiles turn red, 3 DPS burn for 15s',
-        special: [{ type: 'burn_dot', value: 3 }] },
-      { id: 'fire_mage_t3', tier: 3, branch: 'fire_mage', name: 'Inner Fire', description: '+15 max HP',
-        passive: [{ stat: 'maxHp', value: 15, mode: 'add' }] },
-      { id: 'fire_mage_t4', tier: 4, branch: 'fire_mage', name: 'Inferno', description: '7 DPS burn for 20s',
-        special: [{ type: 'burn_dot', value: 7 }] },
-      { id: 'fire_mage_t5', tier: 5, branch: 'fire_mage', name: 'Meteor Shower', description: 'Rain meteors in a 300px area dealing massive damage',
-        active: { abilityId: 'meteor_shower', name: 'Meteor Shower', description: 'Meteors rain in 300px area', cooldown: 15,
-          params: { type: 'meteor_shower', radius: 300, duration: 4, meteorCount: 15, damagePerMeteor: 300 } } },
-      { id: 'fire_mage_t6', tier: 6, branch: 'fire_mage', name: 'Evasion', description: '15% chance to dodge attacks',
-        passive: [{ stat: 'dodgeChance', value: 0.15, mode: 'add' }] },
-      { id: 'fire_mage_t7', tier: 7, branch: 'fire_mage', name: 'Pyromaniac', description: '+15% damage',
-        passive: [{ stat: 'damage', value: 0.15, mode: 'multiply' }] },
-      { id: 'fire_mage_t8', tier: 8, branch: 'fire_mage', name: 'Firebrand', description: '+30 max HP',
-        passive: [{ stat: 'maxHp', value: 30, mode: 'add' }] },
-      { id: 'fire_mage_t9', tier: 9, branch: 'fire_mage', name: 'Combustion Heal', description: 'Regen 10% of burn damage dealt as HP',
-        combatMod: { type: 'burn_lifesteal', value: 0.10 } },
-      { id: 'fire_mage_t10', tier: 10, branch: 'fire_mage', name: 'Cataclysm', description: 'Projectiles explode on hit, burning everything in AOE',
-        combatMod: { type: 'explosive_burn', value: 1, params: { radius: 50, burnDps: 5, burnDuration: 10 } } },
-    ],
-  },
-  frost_mage: {
-    id: 'frost_mage', name: 'Frost Mage', description: 'Slowing and freezing enemies',
-    playerClass: 'mage', color: 0x44aadd,
-    nodes: [
-      { id: 'frost_mage_t1', tier: 1, branch: 'frost_mage', name: 'Chill', description: '+10% movement speed',
-        passive: [{ stat: 'speed', value: 0.10, mode: 'multiply' }] },
-      { id: 'frost_mage_t2', tier: 2, branch: 'frost_mage', name: 'Frostbolts', description: 'Projectiles turn blue, slow enemies 20% for 15s',
-        special: [{ type: 'slow_on_hit', value: 0.20 }] },
-      { id: 'frost_mage_t3', tier: 3, branch: 'frost_mage', name: 'Frost Power', description: '+15% damage',
-        passive: [{ stat: 'damage', value: 0.15, mode: 'multiply' }] },
-      { id: 'frost_mage_t4', tier: 4, branch: 'frost_mage', name: 'Deep Chill', description: '+10% slow on enemies (total 30%)',
-        special: [{ type: 'slow_on_hit', value: 0.30 }] },
-      { id: 'frost_mage_t5', tier: 5, branch: 'frost_mage', name: 'Blizzard', description: 'Freeze enemies in 200px area, +50% damage taken',
-        active: { abilityId: 'blizzard_freeze', name: 'Blizzard', description: 'Freeze enemies in 200px, +50% damage', cooldown: 18,
-          params: { type: 'blizzard_freeze', radius: 200, freezeDuration: 4, damageAmp: 0.50 } } },
-      { id: 'frost_mage_t6', tier: 6, branch: 'frost_mage', name: 'Frost Armor', description: '+30 max HP',
-        passive: [{ stat: 'maxHp', value: 30, mode: 'add' }] },
-      { id: 'frost_mage_t7', tier: 7, branch: 'frost_mage', name: 'Regeneration', description: '+5 HP/s regen',
-        passive: [{ stat: 'hpRegen', value: 5, mode: 'add' }] },
-      { id: 'frost_mage_t8', tier: 8, branch: 'frost_mage', name: 'Shatter', description: '+30% crit damage on frozen/slowed enemies',
-        combatMod: { type: 'frost_crit', value: 0.30 } },
-      { id: 'frost_mage_t9', tier: 9, branch: 'frost_mage', name: 'Ice Veins', description: '+15% crit chance',
-        passive: [{ stat: 'critChance', value: 0.15, mode: 'add' }] },
-      { id: 'frost_mage_t10', tier: 10, branch: 'frost_mage', name: 'Frost Nova', description: 'Projectiles explode into shards, freezing nearby enemies',
-        combatMod: { type: 'frost_shatter', value: 1, params: { radius: 60, slowFactor: 0.40, slowDuration: 8 } } },
-    ],
-  },
-  electric_mage: {
-    id: 'electric_mage', name: 'Electric Mage', description: 'Chain lightning and stunning',
-    playerClass: 'mage', color: 0xddcc22,
-    nodes: [
-      { id: 'electric_mage_t1', tier: 1, branch: 'electric_mage', name: 'Static', description: '+15% crit chance',
-        passive: [{ stat: 'critChance', value: 0.15, mode: 'add' }] },
-      { id: 'electric_mage_t2', tier: 2, branch: 'electric_mage', name: 'Chain Bolts', description: 'Projectiles turn yellow, bounce to 2 nearby enemies',
-        combatMod: { type: 'bouncing', value: 2, params: { range: 120, damageFalloff: 0.8 } } },
-      { id: 'electric_mage_t3', tier: 3, branch: 'electric_mage', name: 'Voltage', description: '+10% damage',
-        passive: [{ stat: 'damage', value: 0.10, mode: 'multiply' }] },
-      { id: 'electric_mage_t4', tier: 4, branch: 'electric_mage', name: 'Arc Mastery', description: '+3 bounces (total 5)',
-        combatMod: { type: 'bouncing', value: 5, params: { range: 150, damageFalloff: 0.7 } } },
-      { id: 'electric_mage_t5', tier: 5, branch: 'electric_mage', name: 'Thunderwave', description: 'Shockwave knocks back and stuns enemies in 350px',
-        active: { abilityId: 'thunderwave', name: 'Thunderwave', description: '350px shockwave, knockback + 5s stun', cooldown: 20,
-          params: { type: 'thunderwave', radius: 350, knockback: 400, stunDuration: 5 } } },
-      { id: 'electric_mage_t6', tier: 6, branch: 'electric_mage', name: 'Charged Body', description: '+15 max HP',
-        passive: [{ stat: 'maxHp', value: 15, mode: 'add' }] },
-      { id: 'electric_mage_t7', tier: 7, branch: 'electric_mage', name: 'Overload', description: '+30% crit chance',
-        passive: [{ stat: 'critChance', value: 0.30, mode: 'add' }] },
-      { id: 'electric_mage_t8', tier: 8, branch: 'electric_mage', name: 'Lightning Speed', description: '+30% movement speed',
-        passive: [{ stat: 'speed', value: 0.30, mode: 'multiply' }] },
-      { id: 'electric_mage_t9', tier: 9, branch: 'electric_mage', name: 'Resonance', description: '-20% ability cooldowns',
-        passive: [{ stat: 'cooldownReduction', value: 0.20, mode: 'add' }] },
-      { id: 'electric_mage_t10', tier: 10, branch: 'electric_mage', name: 'Paralysis', description: '50% chance to stun enemy on projectile hit for 1s',
-        combatMod: { type: 'electric_stun', value: 0.50, params: { duration: 1 } } },
-    ],
-  },
-  earth_mage: {
-    id: 'earth_mage', name: 'Earth Mage', description: 'Coming soon...',
-    playerClass: 'mage', color: 0x886633,
-    nodes: [],
-  },
-  void_mage: {
-    id: 'void_mage', name: 'Void Mage', description: 'Coming soon...',
-    playerClass: 'mage', color: 0x6633aa,
-    nodes: [],
-  },
-};
-
-/** Which branches belong to each class (display order: left, center, right). */
+/** Which branches belong to each class (display order). */
 export const CLASS_BRANCHES: Record<PlayerClass, SkillBranchId[]> = {
   warrior: ['berserker', 'guardian', 'blood_knight', 'templar', 'slayer'],
-  ranger: ['sharpshooter', 'trapper', 'scout', 'hawkeye', 'poisoner'],
+  ranger: ['sharpshooter', 'beastmaster', 'trapper', 'shadow_hunter', 'windwalker'],
   mage: ['fire_mage', 'frost_mage', 'electric_mage', 'earth_mage', 'void_mage'],
 };
 
@@ -438,7 +234,7 @@ export function computeSkillBuffs(alloc: SkillAllocation): SkillBuffs {
         switch (p.stat) {
           case 'damage':      if (p.mode === 'multiply') buffs.damageMultiplier *= (1 + p.value); else buffs.damageMultiplier += p.value; break;
           case 'speed':       if (p.mode === 'multiply') buffs.speedMultiplier *= (1 + p.value); break;
-          case 'attackSpeed': if (p.mode === 'multiply') buffs.attackSpeedMultiplier *= (1 + p.value); break;
+          case 'attackSpeed': if (p.mode === 'multiply') buffs.attackSpeedMultiplier *= (1 + p.value); else buffs.attackSpeedMultiplier += p.value; break;
           case 'maxHp':       buffs.maxHpBonus += p.value; break;
           case 'defense':     buffs.defenseBonus += p.value; break;
           case 'critChance':  buffs.critChanceBonus += p.value; break;

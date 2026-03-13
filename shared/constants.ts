@@ -19,8 +19,9 @@ export const HEARTBEAT_TIMEOUT_MS = 60_000;
 export const MAX_MESSAGE_BYTES = 64 * 1024; // 64 KB
 
 /** Maximum messages a single client may send per second before being disconnected.
- *  Clients send one INPUT per render frame; allow headroom for 240 Hz + chat + pings. */
-export const MAX_MESSAGES_PER_SECOND = 300;
+ *  Clients send one INPUT per render frame; at 240+ FPS this needs headroom for
+ *  input + pings + ability uses + build commands + chat. */
+export const MAX_MESSAGES_PER_SECOND = 500;
 
 // ─── Connection ─────────────────────────────────────────────────────────────
 

@@ -191,6 +191,12 @@ function computeStats(
     };
   }
 
+  // Merge flatDamage into damage display, flatSpeed into speed, defensePercent into defense
+  // These are separate PassiveStat types but should show combined in the UI
+  add(flatAdd, 'damage', g(flatAdd, 'flatDamage'));
+  add(flatAdd, 'speed', g(flatAdd, 'flatSpeed'));
+  add(multAdd, 'defense', g(flatAdd, 'defensePercent')); // defensePercent acts as a multiplier on defense
+
   return [
     makeStat('Max HP', cs.hp, 'maxHp'),
     makeStat('Defense', cs.defense, 'defense'),

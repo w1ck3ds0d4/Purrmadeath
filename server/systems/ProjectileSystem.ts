@@ -15,6 +15,7 @@ import {
   EnemyVariantComponent,
   DodgeRollComponent,
   SlowEffectComponent,
+  SpeedComponent,
   FreezeComponent,
 } from '@shared/components';
 import {
@@ -426,7 +427,32 @@ export class ProjectileSystem {
           }
         }
 
-        // AOE explosion: damage all enemies within radius (cannon turret)
+        // Crippling Slow: chance to slow hit enemy (ranger Trapper combat mod)
+        // The slowOnHit field is a probability (0-1). If it triggers, apply a
+        // SlowEffect to the target for slowDuration seconds.
+        if (proj.slowOnHit && proj.slowOnHit > 0 && Math.random() < proj.slowOnHit) {
+          const existing = world.getComponent<SlowEffectComponent>(targetId, C.SlowEffect);
+          if (!existing) {
+            const spd = world.getComponent<SpeedComponent>(targetId, C.Speed);
+            if (spd) {
+              world.addComponent(targetId, C.SlowEffect, {
+                factor: proj.slowOnHit, // Use the slow percentage as factor
+                remaining: proj.slowDuration ?? 5,
+              } as SlowEffectComponent);
+            }
+          } else {
+            existing.remaining = Math.max(existing.remaining, proj.slowDuration ?? 5);
+          }
+        }
+
+        // Explosive Barrage: if the projectile has an explosionRadius, use it for AOE
+        // instead of aoeRadius (which is for cannon turrets). This allows barrage arrows
+        // to explode on impact with the specified radius.
+        if (proj.explosionRadius && proj.explosionRadius > 0 && !proj.aoeRadius) {
+          proj.aoeRadius = proj.explosionRadius;
+        }
+
+        // AOE explosion: damage all enemies within radius (cannon turret, barrage arrows)
         if (proj.aoeRadius && proj.aoeRadius > 0) {
           aoeExplosions.push({ x: pos.x, y: pos.y, radius: proj.aoeRadius });
           const aoeR2 = proj.aoeRadius * proj.aoeRadius;
