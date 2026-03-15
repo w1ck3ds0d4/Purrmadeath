@@ -175,6 +175,10 @@ export interface GameplayState {
   chargeDamage: number;
   /** Pending ability cooldowns from server (applied when abilities become available). */
   pendingAbilityCooldowns: Record<string, number> | null;
+  /** True when user clicked Singleplayer but wasn't connected yet - retries after localhost connect. */
+  pendingSingleplayerRetry: boolean;
+  /** Callback to trigger singleplayer flow after localhost reconnect. */
+  onSingleplayerRetry: (() => void) | null;
 }
 
 // ── Dependencies ────────────────────────────────────────────────────────────
@@ -251,6 +255,13 @@ export function registerMessageHandlers(
     d.menuOverlay.setSingleplayerEnabled(isLocal);
     d.menuOverlay.setButtonsEnabled(true);
     d.menuOverlay.setConnectionStatus('connected');
+
+    // If the user clicked Singleplayer while disconnected, auto-retry now that we're connected
+    if (s.pendingSingleplayerRetry && isLocal) {
+      s.pendingSingleplayerRetry = false;
+      // Trigger the singleplayer flow now that localhost transport is ready
+      s.onSingleplayerRetry?.();
+    }
 
     if (ack.lastDisplayName) {
       d.menuOverlay.displayName = ack.lastDisplayName;

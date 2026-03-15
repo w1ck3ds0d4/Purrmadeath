@@ -302,6 +302,7 @@ async function main(): Promise<void> {
   let handshakeSent = false;
   let civilianPanelRefreshTimer = 0;
   let pendingSingleplayerAutoStart = false;
+  let pendingSingleplayerRetry = false; // Set when SP button clicked but not connected yet
   let localActiveBuffIdsArr: string[] = [];
   let chargeProgress = 0;
   let chargeDamage = 0;
@@ -628,7 +629,10 @@ async function main(): Promise<void> {
     if (restored) menuOverlay.displayName = restored;
     pendingSingleplayerAutoStart = false;
     // Update button states based on connection
-    menuOverlay.setSingleplayerEnabled(!connectedToRemote && transportReady);
+    // Singleplayer is always available if we have a local server (electron or dev mode)
+    // Only disable if we're connected to a REMOTE server (can't run local + remote simultaneously)
+    const localServerAvailable = !electronAPI || true; // In electron, embedded server always runs
+    menuOverlay.setSingleplayerEnabled(!connectedToRemote && (transportReady || localServerAvailable));
     menuOverlay.setButtonsEnabled(transportReady);
     lobbyOverlay.hide();
     pauseBanner.hide();
@@ -856,6 +860,15 @@ async function main(): Promise<void> {
     get chargeProgress() { return chargeProgress; }, set chargeProgress(v) { chargeProgress = v; },
     get chargeDamage() { return chargeDamage; }, set chargeDamage(v) { chargeDamage = v; },
     get pendingAbilityCooldowns() { return pendingAbilityCooldowns; }, set pendingAbilityCooldowns(v) { pendingAbilityCooldowns = v; },
+    get pendingSingleplayerRetry() { return pendingSingleplayerRetry; }, set pendingSingleplayerRetry(v) { pendingSingleplayerRetry = v; },
+    // Called by NetworkHandler after localhost reconnect succeeds - retriggers the singleplayer flow
+    onSingleplayerRetry: null as (() => void) | null,
+  };
+
+  // Wire up singleplayer retry: when NetworkHandler detects localhost connected after a
+  // pending singleplayer request, it calls this to re-invoke the singleplayer flow
+  handlerState.onSingleplayerRetry = () => {
+    menuOverlay.triggerSingleplayer?.();
   };
 
   registerMessageHandlers(net, handlerState, {
@@ -905,11 +918,15 @@ async function main(): Promise<void> {
   // ── Menu callbacks ────────────────────────────────────────────────────────
   menuOverlay.setCallbacks({
     onSingleplayer: () => {
-      if (!transportReady) { console.warn('[Game] Local server not ready'); return; }
-      // Ensure we're connected to localhost for singleplayer
-      if (connectedToRemote) {
+      // Singleplayer always uses the local embedded server.
+      // If not connected or connected to remote, switch to localhost first.
+      if (connectedToRemote || !transportReady) {
+        connectedToRemote = false;
+        menuOverlay.setConnectionStatus('connecting');
         net.reconnectTo(`ws://localhost:${SERVER_PORT}`);
-        return; // Will retry after reconnect
+        // Retry singleplayer after reconnect completes
+        pendingSingleplayerRetry = true;
+        return;
       }
       sendHandshakeIfNeeded(menuOverlay.displayName);
       saveDisplayName(menuOverlay.displayName);
@@ -1022,12 +1039,16 @@ async function main(): Promise<void> {
   menuOverlay.setButtonsEnabled(false);
   // Check if local server is already ready
   if (electronAPI) {
+    // Production: wait for embedded server to signal readiness via IPC
     electronAPI.isLocalServerReady().then((ready: boolean) => {
       if (ready) menuOverlay.setSingleplayerEnabled(true);
     });
     electronAPI.onLocalServerReady(() => {
       menuOverlay.setSingleplayerEnabled(true);
     });
+  } else {
+    // Dev mode: enable singleplayer immediately (dev server assumed running via npm run server:dev)
+    menuOverlay.setSingleplayerEnabled(true);
   }
   stateMgr.transition(GameState.Menu);
 

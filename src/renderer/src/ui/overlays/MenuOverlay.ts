@@ -187,6 +187,11 @@ export class MenuOverlay {
     this.joinBtn.style.pointerEvents = events;
   }
 
+  /** Programmatically trigger the singleplayer flow (used after localhost reconnect). */
+  triggerSingleplayer(): void {
+    this.onSingleplayer?.();
+  }
+
   /** Enable or disable the Singleplayer button (depends on local server readiness). */
   setSingleplayerEnabled(enabled: boolean): void {
     this.singleplayerBtn.style.opacity = enabled ? '1' : '0.4';
