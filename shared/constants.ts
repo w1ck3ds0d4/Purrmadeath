@@ -19,8 +19,7 @@ export const HEARTBEAT_TIMEOUT_MS = 60_000;
 export const MAX_MESSAGE_BYTES = 64 * 1024; // 64 KB
 
 /** Maximum messages a single client may send per second before being disconnected.
- *  Clients send one INPUT per render frame; at 240+ FPS this needs headroom for
- *  input + pings + ability uses + build commands + chat. */
+ *  Clients send one INPUT per render frame; allow headroom for 240 Hz + chat + pings. */
 export const MAX_MESSAGES_PER_SECOND = 500;
 
 // ─── Connection ─────────────────────────────────────────────────────────────
@@ -29,7 +28,7 @@ export const MAX_MESSAGES_PER_SECOND = 500;
 export const MAX_CONNECTIONS = 16;
 
 /** Semantic version string - compared in HANDSHAKE for version gating. */
-export const GAME_VERSION = '1.0.9';
+export const GAME_VERSION = '1.1.0';
 
 /** Milliseconds a disconnected player's slot is held before removal. */
 export const RECONNECT_GRACE_MS = 30_000;
