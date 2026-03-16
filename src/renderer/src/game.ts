@@ -1032,22 +1032,29 @@ async function main(): Promise<void> {
   });
 
   // ── Start transport + show menu ────────────────────────────────────────────
-  net.connect();
   // Singleplayer starts disabled until local server is ready
   menuOverlay.setSingleplayerEnabled(false);
   // Host/Join start disabled (need remote connection, which happens on-demand)
   menuOverlay.setButtonsEnabled(false);
-  // Check if local server is already ready
+
   if (electronAPI) {
-    // Production: wait for embedded server to signal readiness via IPC
+    // Production: don't connect until embedded server is ready.
+    // This prevents the "DISCONNECTED - RETRYING" loop on startup.
+    menuOverlay.setConnectionStatus('starting');
+    const connectWhenReady = () => {
+      net.connect();
+      menuOverlay.setSingleplayerEnabled(true);
+      menuOverlay.setConnectionStatus('connecting');
+    };
     electronAPI.isLocalServerReady().then((ready: boolean) => {
-      if (ready) menuOverlay.setSingleplayerEnabled(true);
+      if (ready) connectWhenReady();
     });
     electronAPI.onLocalServerReady(() => {
-      menuOverlay.setSingleplayerEnabled(true);
+      connectWhenReady();
     });
   } else {
-    // Dev mode: enable singleplayer immediately (dev server assumed running via npm run server:dev)
+    // Dev mode: connect immediately (dev server assumed running via npm run server:dev)
+    net.connect();
     menuOverlay.setSingleplayerEnabled(true);
   }
   stateMgr.transition(GameState.Menu);

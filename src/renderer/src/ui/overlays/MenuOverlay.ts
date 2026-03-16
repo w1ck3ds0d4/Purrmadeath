@@ -159,9 +159,13 @@ export class MenuOverlay {
   }
 
   /** Update the connection status indicator below the subtitle. */
-  setConnectionStatus(status: 'connecting' | 'connected' | 'disconnected'): void {
+  setConnectionStatus(status: 'connecting' | 'connected' | 'disconnected' | 'starting'): void {
     const el = this.connectionStatus;
     switch (status) {
+      case 'starting':
+        el.textContent = 'STARTING SERVER...';
+        el.style.color = '#6a7a8a';
+        break;
       case 'connecting':
         el.textContent = 'CONNECTING...';
         el.style.color = '#6a7a8a';
