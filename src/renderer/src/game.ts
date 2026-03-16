@@ -919,15 +919,25 @@ async function main(): Promise<void> {
   menuOverlay.setCallbacks({
     onSingleplayer: () => {
       // Singleplayer always uses the local embedded server.
-      // If not connected or connected to remote, switch to localhost first.
-      if (connectedToRemote || !transportReady) {
+      // If connected to remote, switch to localhost first.
+      if (connectedToRemote) {
         connectedToRemote = false;
         menuOverlay.setConnectionStatus('connecting');
         net.reconnectTo(`ws://localhost:${SERVER_PORT}`);
-        // Retry singleplayer after reconnect completes
         pendingSingleplayerRetry = true;
         return;
       }
+
+      // If not yet connected to localhost, wait for connection then retry
+      if (!transportReady) {
+        menuOverlay.setConnectionStatus('connecting');
+        // If not even attempting to connect, start now
+        if (!net.isConnecting) net.connect();
+        pendingSingleplayerRetry = true;
+        return;
+      }
+
+      // Connected to local server - proceed with singleplayer flow
       sendHandshakeIfNeeded(menuOverlay.displayName);
       saveDisplayName(menuOverlay.displayName);
       saveSlotRequestId++;

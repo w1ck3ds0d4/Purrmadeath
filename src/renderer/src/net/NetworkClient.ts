@@ -47,6 +47,11 @@ export class NetworkClient {
   /** Current WebSocket URL. */
   get url(): string { return this._url; }
 
+  /** True if a WebSocket connection attempt is in progress. */
+  get isConnecting(): boolean {
+    return this.ws !== null && this.ws.readyState === WebSocket.CONNECTING;
+  }
+
   connect(): void {
     this.ws = new WebSocket(this._url);
 
