@@ -1048,10 +1048,12 @@ async function main(): Promise<void> {
   menuOverlay.setButtonsEnabled(false);
 
   if (electronAPI) {
-    // Production: don't connect until embedded server is ready.
-    // This prevents the "DISCONNECTED - RETRYING" loop on startup.
+    // Production: wait for embedded server, then connect to localhost.
     menuOverlay.setConnectionStatus('starting');
+    let serverConnected = false;
     const connectWhenReady = () => {
+      if (serverConnected) return; // Prevent double-connect
+      serverConnected = true;
       net.connect();
       menuOverlay.setSingleplayerEnabled(true);
       menuOverlay.setConnectionStatus('connecting');
@@ -1062,6 +1064,14 @@ async function main(): Promise<void> {
     electronAPI.onLocalServerReady(() => {
       connectWhenReady();
     });
+    // Fallback: if server doesn't signal ready within 3 seconds,
+    // try connecting anyway (it may have started before the IPC listener registered)
+    setTimeout(() => {
+      if (!serverConnected) {
+        console.warn('[Game] Server ready signal not received after 3s, attempting connection anyway');
+        connectWhenReady();
+      }
+    }, 3000);
   } else {
     // Dev mode: connect immediately (dev server assumed running via npm run server:dev)
     net.connect();
