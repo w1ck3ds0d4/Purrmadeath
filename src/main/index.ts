@@ -72,8 +72,19 @@ function startEmbeddedServer(): void {
   const env = { ...process.env, METASTATS_DIR: metastatsDir, SAVES_DIR: savesDir };
 
   if (app.isPackaged) {
-    // Production: fork the pre-bundled server JS
-    const serverScript = join(process.resourcesPath, 'server', 'server.mjs');
+    // Production: fork the pre-bundled server JS.
+    // Try multiple paths: extraResources location, then asar-bundled location.
+    const candidates = [
+      join(process.resourcesPath, 'server', 'server.cjs'),     // extraResources path
+      join(__dirname, '../server', 'server.cjs'),                // asar-bundled path (out/server/)
+      join(app.getAppPath(), 'server', 'server.cjs'),           // app.asar/server/
+    ];
+    let serverScript = candidates[0];
+    for (const c of candidates) {
+      clog('SERVER', `Checking server path: ${c} -> exists=${fs.existsSync(c)}`);
+      if (fs.existsSync(c)) { serverScript = c; break; }
+    }
+    clog('SERVER', `Using server script: ${serverScript}`);
     serverProcess = fork(serverScript, [], {
       stdio: 'pipe',
       env,
