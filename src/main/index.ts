@@ -12,6 +12,39 @@ if (!app.isPackaged) {
   process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true';
 }
 
+// ─── Client Log File ──────────────────────────────────────────────────────────
+// Writes timestamped logs to {userData}/logs/client_{date}_{time}.log
+// Captures: main process events, embedded server output, renderer messages via IPC.
+
+const logDir = join(app.isPackaged ? app.getPath('userData') : join(__dirname, '../..'), 'logs');
+if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+
+// Clean old logs (keep last 10)
+try {
+  const logFiles = fs.readdirSync(logDir).filter(f => f.startsWith('client_') && f.endsWith('.log')).sort().reverse();
+  for (let i = 10; i < logFiles.length; i++) fs.unlinkSync(join(logDir, logFiles[i]));
+} catch { /* ignore cleanup errors */ }
+
+const logTimestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+const logPath = join(logDir, `client_${logTimestamp}.log`);
+const logStream = fs.createWriteStream(logPath, { flags: 'a' });
+
+function clog(category: string, message: string): void {
+  const time = new Date().toISOString().slice(11, 23); // HH:mm:ss.SSS
+  const line = `[${time}] [${category.padEnd(10)}] ${message}`;
+  logStream.write(line + '\n');
+  console.log(line);
+}
+
+clog('MAIN', `Purrmadeath starting - packaged=${app.isPackaged}`);
+clog('MAIN', `Log file: ${logPath}`);
+clog('MAIN', `User data: ${app.isPackaged ? app.getPath('userData') : 'dev mode'}`);
+
+// IPC handler for renderer to send log messages
+ipcMain.on('client-log', (_event, category: string, message: string) => {
+  clog(category, message);
+});
+
 // ─── Embedded Game Server ─────────────────────────────────────────────────────
 // Always start a local game server so singleplayer works offline.
 // In dev: uses tsx to run TypeScript directly.
@@ -33,7 +66,9 @@ function getServerDataDirs(): { metastatsDir: string; savesDir: string } {
 }
 
 function startEmbeddedServer(): void {
+  clog('SERVER', 'Starting embedded server...');
   const { metastatsDir, savesDir } = getServerDataDirs();
+  clog('SERVER', `Data dirs: metastats=${metastatsDir}, saves=${savesDir}`);
   const env = { ...process.env, METASTATS_DIR: metastatsDir, SAVES_DIR: savesDir };
 
   if (app.isPackaged) {
@@ -56,12 +91,15 @@ function startEmbeddedServer(): void {
 
   serverProcess.stdout?.on('data', (data: Buffer) => {
     const msg = data.toString().trim();
-    console.log(`[EmbeddedServer] ${msg}`);
+    clog('SERVER', msg);
     if (msg.includes('Purrmadeath server started')) {
       localServerReady = true;
-      // Notify all renderer windows that local server is ready
-      for (const win of BrowserWindow.getAllWindows()) {
+      clog('SERVER', 'Server ready! Sending IPC to renderer windows...');
+      const wins = BrowserWindow.getAllWindows();
+      clog('SERVER', `Found ${wins.length} window(s) to notify`);
+      for (const win of wins) {
         win.webContents.send('local-server-ready');
+        clog('SERVER', `Sent local-server-ready to window ${win.id}`);
       }
     }
   });
@@ -69,14 +107,14 @@ function startEmbeddedServer(): void {
   serverProcess.stderr?.on('data', (data: Buffer) => {
     const msg = data.toString().trim();
     if (msg.includes('EADDRINUSE')) {
-      console.log('[Main] Server port already in use, using existing server');
-      localServerReady = true; // Existing server is fine
+      clog('SERVER', 'Port already in use, using existing server');
+      localServerReady = true;
       serverProcess = null;
       for (const win of BrowserWindow.getAllWindows()) {
         win.webContents.send('local-server-ready');
       }
     } else if (msg) {
-      console.error(`[EmbeddedServer] ${msg}`);
+      clog('ERROR', `Server stderr: ${msg}`);
     }
   });
 

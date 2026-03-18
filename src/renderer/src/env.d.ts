@@ -21,6 +21,8 @@ interface Window {
     isLocalServerReady: () => Promise<boolean>;
     onLocalServerReady: (cb: () => void) => void;
     checkForUpdates?: () => Promise<void>;
+    /** Send a log message to the main process log file. */
+    log: (category: string, message: string) => void;
     // Save system
     getSaveSlots: (playerId: string) => Promise<import('@shared/SaveFormat').SaveSlotInfo[]>;
     loadSave: (playerId: string, slot: number) => Promise<import('@shared/SaveFormat').SaveData | null>;

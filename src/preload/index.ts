@@ -40,6 +40,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Trigger an update check manually. */
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
 
+  /** Send a log message to the main process for writing to the log file. */
+  log: (category: string, message: string) => ipcRenderer.send('client-log', category, message),
+
   // ── Save system ──────────────────────────────────────────────────────────
   /** Get save slot info for a player UUID. Returns SaveSlotInfo[]. */
   getSaveSlots: (playerId: string) => ipcRenderer.invoke('get-save-slots', playerId),

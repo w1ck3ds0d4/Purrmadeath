@@ -91,6 +91,13 @@ const remoteServerIp = import.meta.env.VITE_SERVER_IP ?? '';
 const isDev = !import.meta.env.VITE_SERVER_IP;
 const hasRemoteServer = !!remoteServerIp;
 
+// ── Client logger (writes to main process log file via IPC) ─────────────────
+const electronAPI = (window as any).electronAPI;
+function clog(category: string, msg: string): void {
+  if (electronAPI?.log) electronAPI.log(category, msg);
+  console.log(`[${category}] ${msg}`);
+}
+
 // ── Version label ────────────────────────────────────────────────────────────
 const versionEl = document.getElementById('version-label');
 if (versionEl) versionEl.textContent = `v${GAME_VERSION}`;
@@ -918,9 +925,12 @@ async function main(): Promise<void> {
   // ── Menu callbacks ────────────────────────────────────────────────────────
   menuOverlay.setCallbacks({
     onSingleplayer: () => {
+      clog('GAME', `Singleplayer clicked - transportReady=${transportReady}, connectedToRemote=${connectedToRemote}, wsState=${net.isConnecting ? 'connecting' : 'unknown'}`);
+
       // Singleplayer always uses the local embedded server.
       // If connected to remote, switch to localhost first.
       if (connectedToRemote) {
+        clog('GAME', 'Switching from remote to localhost...');
         connectedToRemote = false;
         menuOverlay.setConnectionStatus('connecting');
         net.reconnectTo(`ws://localhost:${SERVER_PORT}`);
@@ -930,9 +940,13 @@ async function main(): Promise<void> {
 
       // If not yet connected to localhost, wait for connection then retry
       if (!transportReady) {
+        clog('GAME', 'Transport not ready - setting pendingSingleplayerRetry');
         menuOverlay.setConnectionStatus('connecting');
         // If not even attempting to connect, start now
-        if (!net.isConnecting) net.connect();
+        if (!net.isConnecting) {
+          clog('GAME', 'Not connecting yet - calling net.connect()');
+          net.connect();
+        }
         pendingSingleplayerRetry = true;
         return;
       }
@@ -1049,31 +1063,36 @@ async function main(): Promise<void> {
 
   if (electronAPI) {
     // Production: wait for embedded server, then connect to localhost.
+    clog('STARTUP', 'Electron detected - waiting for embedded server');
     menuOverlay.setConnectionStatus('starting');
     let serverConnected = false;
-    const connectWhenReady = () => {
-      if (serverConnected) return; // Prevent double-connect
+    const connectWhenReady = (source: string) => {
+      if (serverConnected) { clog('STARTUP', `connectWhenReady skipped (already connected) - source: ${source}`); return; }
       serverConnected = true;
+      clog('STARTUP', `Connecting to localhost - triggered by: ${source}`);
       net.connect();
       menuOverlay.setSingleplayerEnabled(true);
       menuOverlay.setConnectionStatus('connecting');
     };
     electronAPI.isLocalServerReady().then((ready: boolean) => {
-      if (ready) connectWhenReady();
+      clog('STARTUP', `isLocalServerReady resolved: ${ready}`);
+      if (ready) connectWhenReady('isLocalServerReady promise');
     });
     electronAPI.onLocalServerReady(() => {
-      connectWhenReady();
+      clog('STARTUP', 'onLocalServerReady IPC event received');
+      connectWhenReady('onLocalServerReady IPC');
     });
     // Fallback: if server doesn't signal ready within 3 seconds,
     // try connecting anyway (it may have started before the IPC listener registered)
     setTimeout(() => {
       if (!serverConnected) {
-        console.warn('[Game] Server ready signal not received after 3s, attempting connection anyway');
-        connectWhenReady();
+        clog('STARTUP', 'Fallback: 3s timeout - server ready signal not received, connecting anyway');
+        connectWhenReady('3s fallback timeout');
       }
     }, 3000);
   } else {
     // Dev mode: connect immediately (dev server assumed running via npm run server:dev)
+    clog('STARTUP', 'Dev mode - connecting immediately to localhost');
     net.connect();
     menuOverlay.setSingleplayerEnabled(true);
   }
