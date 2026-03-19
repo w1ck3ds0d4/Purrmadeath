@@ -1,6 +1,6 @@
 {
   "name": "purrmadeath",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "2D co-op roguelike - base building, procedural world, up to 4 players",
   "author": "WickedSoda",
   "private": true,
@@ -19,7 +19,7 @@
     "check-version": "node scripts/check-version.cjs",
     "build:server": "npx esbuild server/server.ts --bundle --platform=node --format=cjs --outfile=resources/server/server.cjs --alias:@shared=./shared",
     "build:win": "node scripts/check-version.cjs && npm run build:server && electron-vite build && node -e \"require('fs').mkdirSync('out/server',{recursive:true});require('fs').copyFileSync('resources/server/server.cjs','out/server/server.cjs')\" && electron-builder --win",
-    "publish": "node scripts/check-version.cjs && electron-vite build && electron-builder --win --publish always",
+    "publish": "node scripts/check-version.cjs && npm run build:server && electron-vite build && node -e \"require('fs').mkdirSync('out/server',{recursive:true});require('fs').copyFileSync('resources/server/server.cjs','out/server/server.cjs')\" && electron-builder --win --publish always",
     "aws:start": "node scripts/aws.mjs start",
     "aws:stop": "node scripts/aws.mjs stop",
     "aws:status": "node scripts/aws.mjs status"

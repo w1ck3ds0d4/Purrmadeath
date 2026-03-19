@@ -72,18 +72,35 @@ function startEmbeddedServer(): void {
   const env = { ...process.env, METASTATS_DIR: metastatsDir, SAVES_DIR: savesDir };
 
   if (app.isPackaged) {
-    // Production: fork the pre-bundled server JS.
-    // Try multiple paths: extraResources location, then asar-bundled location.
-    const candidates = [
-      join(process.resourcesPath, 'server', 'server.cjs'),     // extraResources path
-      join(__dirname, '../server', 'server.cjs'),                // asar-bundled path (out/server/)
-      join(app.getAppPath(), 'server', 'server.cjs'),           // app.asar/server/
-    ];
-    let serverScript = candidates[0];
-    for (const c of candidates) {
-      clog('SERVER', `Checking server path: ${c} -> exists=${fs.existsSync(c)}`);
-      if (fs.existsSync(c)) { serverScript = c; break; }
+    // Production: the server bundle is packed inside the asar. Node's fork() can't
+    // execute scripts from inside an asar, so we extract it to userData first.
+    const asarSource = join(__dirname, '../server/server.cjs'); // inside asar: out/main/../server/
+    const extractDir = join(app.getPath('userData'), 'server');
+    const extractPath = join(extractDir, 'server.cjs');
+
+    // Also check extraResources path (in case the NSIS installer does copy it)
+    const extraResPath = join(process.resourcesPath, 'server', 'server.cjs');
+
+    let serverScript: string;
+    if (fs.existsSync(extraResPath)) {
+      // extraResources worked - use that directly
+      clog('SERVER', `Found server at extraResources: ${extraResPath}`);
+      serverScript = extraResPath;
+    } else {
+      // Extract from asar to userData
+      clog('SERVER', `Extracting server from asar to: ${extractPath}`);
+      try {
+        if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
+        const content = fs.readFileSync(asarSource);
+        fs.writeFileSync(extractPath, content);
+        clog('SERVER', `Extracted ${content.length} bytes`);
+        serverScript = extractPath;
+      } catch (err) {
+        clog('ERROR', `Failed to extract server: ${err}`);
+        serverScript = extraResPath; // Fallback, will likely fail
+      }
     }
+
     clog('SERVER', `Using server script: ${serverScript}`);
     serverProcess = fork(serverScript, [], {
       stdio: 'pipe',
