@@ -8,60 +8,53 @@
 
 Download the latest installer from the [Releases](https://github.com/WickedSoda/Purrmadeath/releases) page.
 
-- One player clicks **Host Game** to create a session and receives an invite code
-- Other players enter the invite code and click **Join**
-- The game automatically connects to the production server on launch - no IP entry needed
+### Game Modes
+
+- **Singleplayer** - Play offline with a local embedded server. Saves are stored locally. Works without internet.
+- **Host Game** - Create an online session. Other players join with the invite code.
+- **Join** - Enter an invite code or server IP to join an existing session.
 
 ### Controls
 
 | Action | Key |
 |---|---|
-| Move | W A S D / Arrow keys |
+| Move | W A S D |
 | Attack | Left Mouse Button |
-| Interact / Harvest | E |
+| Interact / Upgrade | E |
 | Sprint | Shift (hold) |
+| Dodge Roll | Space |
 | Ability 1 / 2 / 3 | 1 / 2 / 3 |
-| Use Potion | Q |
-| Build Mode | B |
+| Use Potion | 4 |
+| Build Mode | Q |
 | Rotate building | Scroll wheel (in build mode) |
 | Place building | Left Mouse Button (in build mode) |
-| Upgrade building | F (while selecting building) |
-| Repair building | R (while selecting building) |
-| Demolish building | X (while selecting building) |
+| Select building | Right Mouse Button |
+| Repair building | R |
+| Demolish building | X |
 | Civilian Panel | C |
 | Skill Tree | K |
-| Dodge Roll | Space |
-| Pause / Menu | Escape |
+| Chat | Enter |
+| Pause / Close | Escape |
+| Toggle Controls | F1 |
 | Debug console | F4 |
 
 ### Buildings
 
-| Building | Cost | Description |
-|---|---|---|
-| Wall | Wood 5 | Blocks enemy movement |
-| Gate | Wood 8, Stone 5 | Auto-opens for allies, blocks enemies |
-| Bridge | Wood 5, Stone 2 | Allows walking over water |
-| Moat | Stone 3 | Indestructible trench that slows enemies by 50% |
-| Arrow Turret | Wood 10, Stone 5, Iron 5 | Fires arrows at nearest enemy |
-| Cannon Turret | Wood 15, Stone 15, Iron 10 | Slow cannon with splash damage |
-| Ballista | Stone 8, Iron 8 | Piercing bolts that hit all enemies in a line |
-| Laser Tower | Stone 10, Iron 10, Diamond 1 | Continuous beam DPS |
-| Tesla Coil | Stone 8, Iron 8, Diamond 1 | Zaps all enemies in range with chain lightning |
-| Flame Tower | Stone 6, Iron 6 | Sprays fire in a cone |
-| Catapult | Stone 15, Iron 10, Diamond 3 | Long-range heavy AOE damage |
-| Spike Trap | Wood 5, Stone 5 | Damages enemies that walk over it |
-| Warehouse | Wood 15, Stone 10 | Shared resource storage depot |
-| Lumbermill | Wood 10 | Produces wood over time |
-| Quarry | Wood 10, Stone 10 | Produces stone over time |
-| Mine | Wood 15, Stone 15, Iron 5 | Produces iron and diamonds |
-| Farm | Wood 10 | Produces food over time |
-| Workshop | Wood 15, Iron 10, Diamond 2 | Produces weapons for training guards |
-| Training Center | Wood 20, Iron 15, Diamond 3 | Trains civilians into guards (Warrior/Ranger/Mage) |
-| Light Tower | Stone 8, Iron 3 | Reveals fog of war in a radius |
-| Healing Shrine | Stone 10, Iron 5 | Heals nearby players and allies |
-| Potion Shop | Wood 15, Stone 10, Food 5 | Brew and equip combat potions |
-| Cat House | Wood 10, Stone 5 | Provides housing for additional civilians |
-| Campfire | (auto-placed) | Respawn point, upgradeable, houses civilians |
+Buildings are organized by category in the build menu (Q):
+
+**Defense**: Wall, Gate, Arrow Turret, Cannon Turret, Ballista, Laser Tower, Tesla Coil, Flame Tower, Catapult, Moat, Spike Trap
+
+**Production**: Lumbermill, Quarry, Mine, Farm, Workshop
+
+**Military**: Training Center (trains civilians into Warrior/Ranger/Mage guards)
+
+**Housing**: Cat House (provides housing for additional civilians)
+
+**Utility**: Warehouse, Bridge, Light Tower, Healing Shrine, Repair Station, Teleporter Pad
+
+**Shops**: Potion Shop, Tavern (hire hero NPCs)
+
+Campfire is auto-placed at the start and serves as respawn point + initial housing.
 
 ---
 
@@ -101,9 +94,12 @@ Test files live alongside their source in `server/systems/` (e.g. `Pathfinding.t
 
 ### Debug Tools
 
-- **F4** - Debug console with views: `/core`, `/net`, `/server`, `/all`, `/logs`, `/help`
+- **F4** - Debug console with 3-column stats view: Core (FPS, entities, position), Server (wave, enemies, tick profile), Game (class, HP, kills)
 - **F12** / **Ctrl+Shift+I** - Electron DevTools (dev mode only)
-- **Debug commands** - `/spawn [n]`, `/skipwave`, `/pausewave` (type in debug console)
+- **Debug commands** (type in debug console): `/spawn [n]`, `/skipwave`, `/pause`, `/give`, `/sp [n]`, `/card [id]`, `/night`, `/day`, `/time [s]`, `/mod [id]`, `/event [id]`, `/ability [id]`
+- **Session logs** - Server writes timestamped logs to `logs/` directory (ability activations, damage, buffs, wave events, saves)
+- **Client logs** - Production builds write startup/connection logs to `%AppData%/purrmadeath/logs/`
+- **Rate monitor** - Localhost connections log average/peak message rates every 30 seconds
 
 ---
 
@@ -233,22 +229,31 @@ Player saves are stored on the server at `/opt/purrmadeath/saves/` as JSON files
 ## Project Structure
 
 ```
-server/               Game server (Node.js + ws)
-  GameSession.ts        Session logic, building spawn, waves, saves
-  SessionManager.ts     Session management, reconnection, save persistence
-  systems/              ECS systems (combat, enemies, movement, projectiles)
-shared/                Shared between client and server
-  components/           ECS component definitions
-  constants.ts          Game balance, version, building costs
-  protocol.ts           WebSocket message types
-  world/                Tile registry, world generation
-  SaveFormat.ts         Save file data structures
+server/                    Game server (Node.js + ws)
+  core/                    Core orchestration
+    GameSession.ts           Session logic, tick loop, combat, waves
+    GameLogger.ts            Persistent file-based session logging
+    SessionManager.ts        Session management, reconnection, meta stats
+  systems/                 ECS systems (combat, enemies, movement, projectiles)
+  abilities/               Ability execution (AbilityExecutor.ts)
+shared/                    Shared between client and server
+  components/              ECS component definitions
+  constants.ts             Game balance, version, building costs
+  protocol.ts              WebSocket message types
+  definitions/             Data definitions
+    skills/                Per-class skill trees (WarriorSkills, RangerSkills, MageSkills)
+    SkillDefinitions.ts    Skill types, allocation logic, buff computation
+    ClassDefinitions.ts    Class stats (Warrior, Ranger, Mage)
+  world/                   Tile registry, world generation
+  SaveFormat.ts            Save file data structures
 src/
-  main/                Electron main process
-  renderer/src/        Client (Pixi.js)
-    game.ts              Main game loop, network handlers
-    input/               Input manager, keybindings
-    systems/             Rendering systems (players, projectiles, buildings)
-    ui/                  HUD (minimap, wave timer, menus, debug)
-    render/              Tile renderer, build ghost
+  main/index.ts            Electron main process, embedded server, auto-updater
+  preload/index.ts         Electron preload (IPC bridge)
+  renderer/src/            Client (Pixi.js)
+    game.ts                  Main game loop, state management
+    input/                   Input manager, keybindings
+    net/                     WebSocket client, message handlers, reconciliation
+    systems/                 Rendering systems (players, projectiles, VFX)
+    ui/                      HUD, overlays (build menu, skill tree, civilian panel)
+    render/                  Camera, tile renderer, build ghost
 ```
