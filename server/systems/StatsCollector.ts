@@ -19,6 +19,13 @@ export function createStatsCollector(deps: StatsCollectorDeps) {
   const damageByPlayer = new Map<string, number>();
   const resourcesByPlayer = new Map<string, { wood: number; stone: number; iron: number; diamond: number }>();
   const killsByPlayer = new Map<string, Record<string, number>>();
+  // Achievement tracking counters (per player)
+  const damageTakenByPlayer = new Map<string, number>();
+  const criticalHitsByPlayer = new Map<string, number>();
+  const portalsDestroyedByPlayer = new Map<string, number>();
+  const wolvesSummonedByPlayer = new Map<string, number>();
+  const abilitiesUsedByPlayer = new Map<string, number>();
+  const wallsBuiltByPlayer = new Map<string, number>();
 
   // Tracks what was already merged per player to avoid double-counting
   const mergedSnapshot = new Map<string, RunStats>();
@@ -64,6 +71,12 @@ export function createStatsCollector(deps: StatsCollectorDeps) {
       wavesSurvived: Math.max(0, waveState.currentWave - 1),
       timePlayed,
       buildingsBuilt: buildingsByPlayer.get(pid) ?? 0,
+      damageTaken: damageTakenByPlayer.get(pid) ?? 0,
+      criticalHits: criticalHitsByPlayer.get(pid) ?? 0,
+      portalsDestroyed: portalsDestroyedByPlayer.get(pid) ?? 0,
+      wolvesSummoned: wolvesSummonedByPlayer.get(pid) ?? 0,
+      abilitiesUsed: abilitiesUsedByPlayer.get(pid) ?? 0,
+      wallsBuilt: wallsBuiltByPlayer.get(pid) ?? 0,
     };
   }
 
@@ -96,6 +109,12 @@ export function createStatsCollector(deps: StatsCollectorDeps) {
       wavesSurvived: current.wavesSurvived,
       timePlayed: current.timePlayed - prev.timePlayed,
       buildingsBuilt: current.buildingsBuilt - prev.buildingsBuilt,
+      damageTaken: current.damageTaken - prev.damageTaken,
+      criticalHits: current.criticalHits - prev.criticalHits,
+      portalsDestroyed: current.portalsDestroyed - prev.portalsDestroyed,
+      wolvesSummoned: current.wolvesSummoned - prev.wolvesSummoned,
+      abilitiesUsed: current.abilitiesUsed - prev.abilitiesUsed,
+      wallsBuilt: current.wallsBuilt - prev.wallsBuilt,
     };
   }
 
@@ -132,10 +151,39 @@ export function createStatsCollector(deps: StatsCollectorDeps) {
     return delta;
   }
 
+  // ── Achievement tracking helpers ────────────────────────────────────────────
+  function trackDamageTaken(entityId: number, amount: number): void {
+    const pid = playerIdForEntity(entityId);
+    if (pid) damageTakenByPlayer.set(pid, (damageTakenByPlayer.get(pid) ?? 0) + amount);
+  }
+  function trackCriticalHit(entityId: number): void {
+    const pid = playerIdForEntity(entityId);
+    if (pid) criticalHitsByPlayer.set(pid, (criticalHitsByPlayer.get(pid) ?? 0) + 1);
+  }
+  function trackPortalDestroyed(entityId: number): void {
+    const pid = playerIdForEntity(entityId);
+    if (pid) portalsDestroyedByPlayer.set(pid, (portalsDestroyedByPlayer.get(pid) ?? 0) + 1);
+  }
+  function trackWolfSummoned(playerId: string): void {
+    wolvesSummonedByPlayer.set(playerId, (wolvesSummonedByPlayer.get(playerId) ?? 0) + 1);
+  }
+  function trackAbilityUsed(playerId: string): void {
+    abilitiesUsedByPlayer.set(playerId, (abilitiesUsedByPlayer.get(playerId) ?? 0) + 1);
+  }
+  function trackWallBuilt(playerId: string): void {
+    wallsBuiltByPlayer.set(playerId, (wallsBuiltByPlayer.get(playerId) ?? 0) + 1);
+  }
+
   return {
     trackDamage,
     trackKill,
     trackResources,
+    trackDamageTaken,
+    trackCriticalHit,
+    trackPortalDestroyed,
+    trackWolfSummoned,
+    trackAbilityUsed,
+    trackWallBuilt,
     buildRunStats,
     buildRunStatsForPlayer,
   };

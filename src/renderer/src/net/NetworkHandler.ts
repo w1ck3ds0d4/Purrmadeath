@@ -175,6 +175,8 @@ export interface GameplayState {
   chargeDamage: number;
   /** Pending ability cooldowns from server (applied when abilities become available). */
   pendingAbilityCooldowns: Record<string, number> | null;
+  /** Building types unlocked via achievements (e.g., 'siege_workshop', 'kennel'). */
+  unlockedBuildings: Set<string>;
   /** True when user clicked Singleplayer but wasn't connected yet - retries after localhost connect. */
   pendingSingleplayerRetry: boolean;
   /** Callback to trigger singleplayer flow after localhost reconnect. */
@@ -293,6 +295,7 @@ export function registerMessageHandlers(
     // Apply milestone class unlocks
     d.lobbyOverlay.setUnlockedClasses(ack.unlockedClasses ?? []);
     s.completedBuffs = ack.completedBuffs ?? [];
+    s.unlockedBuildings = new Set(ack.unlockedBuildings ?? []);
 
     // Check if local player's class is locked from a loaded save
     const localSlotData = ack.players.find(p => p.slot === ack.slot);

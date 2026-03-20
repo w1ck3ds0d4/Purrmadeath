@@ -376,6 +376,11 @@ export const BUILDING_SIZES: Record<string, { w: number; h: number }> = {
   repair_station: { w: 2, h: 2 }, storage_shed: { w: 1, h: 1 },
   teleporter_pad: { w: 1, h: 1 },
   tavern: { w: 2, h: 2 },
+  // Achievement-unlocked buildings
+  siege_workshop: { w: 2, h: 2 },
+  kennel: { w: 2, h: 2 },
+  arcane_tower: { w: 1, h: 1 },
+  watchtower: { w: 1, h: 1 },
 };
 
 /**
@@ -517,6 +522,11 @@ export const STORAGE_SHED_MAX_HEALTH = 80;
 export const TELEPORTER_PAD_MAX_HEALTH = 100;
 /** Tavern HP. */
 export const TAVERN_MAX_HEALTH = 200;
+// Achievement-unlocked buildings
+export const SIEGE_WORKSHOP_MAX_HEALTH = 250;
+export const KENNEL_MAX_HEALTH = 200;
+export const ARCANE_TOWER_MAX_HEALTH = 150;
+export const WATCHTOWER_MAX_HEALTH = 120;
 
 /** Radius (px) for auto-depositing player resources into the warehouse. */
 export const WAREHOUSE_DEPOSIT_RADIUS = 80;
@@ -556,6 +566,11 @@ export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'i
   storage_shed:    { wood: 5, stone: 3 },
   teleporter_pad:  { iron: 10, diamond: 5 },
   tavern:          { wood: 20, stone: 15, iron: 10 },
+  // Achievement-unlocked buildings
+  siege_workshop:  { wood: 25, stone: 20, iron: 15, diamond: 5 },
+  kennel:          { wood: 20, stone: 10, iron: 10 },
+  arcane_tower:    { stone: 15, iron: 15, diamond: 8 },
+  watchtower:      { wood: 15, stone: 15, iron: 5 },
 };
 
 /** Ordered list of building types the player can cycle through in build mode. */
@@ -568,6 +583,8 @@ export const PLACEABLE_BUILDINGS: string[] = [
   'tesla_coil', 'flame_tower', 'catapult', 'moat',
   'repair_station', 'teleporter_pad',
   'tavern',
+  // Achievement-unlocked buildings
+  'siege_workshop', 'kennel', 'arcane_tower', 'watchtower',
 ];
 
 // ─── Production Buildings ──────────────────────────────────────────────────
@@ -639,6 +656,11 @@ export const BUILDING_MAX_LEVEL: Record<BuildingType, number> = {
   repair_station: 3, storage_shed: 1,
   teleporter_pad: 1,
   tavern: 3,
+  // Achievement-unlocked buildings
+  siege_workshop: 3,
+  kennel: 3,
+  arcane_tower: 3,
+  watchtower: 3,
 };
 
 /** Cost multiplier for each upgrade level (index 0 = level 2, index 1 = level 3, etc.). */
@@ -974,6 +996,8 @@ export function getUpgradePreview(type: string, level: number): string[] {
     tesla_coil: TESLA_COIL_MAX_HEALTH, flame_tower: FLAME_TOWER_MAX_HEALTH,
     catapult: CATAPULT_MAX_HEALTH, repair_station: REPAIR_STATION_MAX_HEALTH,
     tavern: TAVERN_MAX_HEALTH, spike_trap: SPIKE_TRAP_MAX_HEALTH,
+    siege_workshop: SIEGE_WORKSHOP_MAX_HEALTH, kennel: KENNEL_MAX_HEALTH,
+    arcane_tower: ARCANE_TOWER_MAX_HEALTH, watchtower: WATCHTOWER_MAX_HEALTH,
   } as Record<string, number>)[type];
   if (hpBase && UPGRADE_HP_MULT[next]) {
     const curHp = Math.round(hpBase * (UPGRADE_HP_MULT[level - 1] ?? 1));

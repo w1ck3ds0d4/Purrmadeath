@@ -60,6 +60,11 @@ const BUILDING_DETAILS: Record<string, BuildingDetail> = {
   training_center:  { hp: 220, description: 'Spend 1 weapon + 1 civilian to train a combat guard.' },
   tavern:           { hp: 200, description: 'Hire powerful hero NPCs using gold.' },
   cat_house:        { hp: 100, description: 'Provides housing for 2/3/4 additional civilians.' },
+  // Achievement-unlocked buildings
+  siege_workshop:   { hp: 250, description: 'Boosts all turret damage in a radius. Requires: Siege Master achievement.', range: 200, special: '+25% turret damage' },
+  kennel:           { hp: 200, description: 'Automatically spawns wolf guards on a timer. Requires: Beast Tamer achievement.', special: '1 wolf / 30s' },
+  arcane_tower:     { hp: 150, description: 'Amplifies player ability range when nearby. Requires: Enchanter achievement.', range: 250, special: '+50% ability range' },
+  watchtower:       { hp: 120, description: 'Extends minimap reveal and warns of incoming waves. Requires: Warden achievement.', range: 400, special: 'Wave warning' },
 };
 
 interface BuildCategory {
@@ -69,11 +74,11 @@ interface BuildCategory {
 }
 
 const BUILD_CATEGORIES: BuildCategory[] = [
-  { name: 'Defense',    accent: '#cc4444', buildings: ['wall', 'gate', 'arrow_turret', 'cannon_turret', 'ballista', 'laser_tower', 'tesla_coil', 'flame_tower', 'catapult', 'moat', 'spike_trap'] },
+  { name: 'Defense',    accent: '#cc4444', buildings: ['wall', 'gate', 'arrow_turret', 'cannon_turret', 'ballista', 'laser_tower', 'tesla_coil', 'flame_tower', 'catapult', 'moat', 'spike_trap', 'siege_workshop', 'watchtower'] },
   { name: 'Production', accent: '#44aa44', buildings: ['lumbermill', 'quarry', 'mine', 'farm', 'workshop'] },
-  { name: 'Military',   accent: '#cc8844', buildings: ['training_center'] },
+  { name: 'Military',   accent: '#cc8844', buildings: ['training_center', 'kennel'] },
   { name: 'Housing',    accent: '#cc88cc', buildings: ['cat_house'] },
-  { name: 'Utility',    accent: '#4488cc', buildings: ['warehouse', 'bridge', 'light_tower', 'healing_shrine', 'repair_station', 'teleporter_pad'] },
+  { name: 'Utility',    accent: '#4488cc', buildings: ['warehouse', 'bridge', 'light_tower', 'healing_shrine', 'repair_station', 'teleporter_pad', 'arcane_tower'] },
   { name: 'Shops',      accent: '#aa66ff', buildings: ['potion_shop', 'tavern'] },
 ];
 
@@ -97,6 +102,14 @@ export interface BuildMenuCallbacks {
   onClose: () => void;
 }
 
+/** Buildings that require achievement unlocks. Maps building type to achievement name. */
+const ACHIEVEMENT_LOCKED_BUILDINGS: Record<string, string> = {
+  siege_workshop: 'Siege Master',
+  kennel: 'Beast Tamer',
+  arcane_tower: 'Enchanter',
+  watchtower: 'Warden',
+};
+
 function titleCase(s: string): string {
   return s.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
@@ -115,6 +128,7 @@ export class BuildMenuOverlay {
   private callbacks: BuildMenuCallbacks | null = null;
   private activeTab = 0;
   private lastAvailable: Record<string, number> = {};
+  private unlockedBuildings: Set<string> = new Set();
 
   constructor() {
     injectScrollbarStyles();
@@ -258,9 +272,10 @@ export class BuildMenuOverlay {
     return this.visible;
   }
 
-  show(available: Record<string, number>): void {
+  show(available: Record<string, number>, unlockedBuildings?: Set<string>): void {
     this.visible = true;
     this.lastAvailable = available;
+    if (unlockedBuildings) this.unlockedBuildings = unlockedBuildings;
     this.el.style.display = 'flex';
     this.renderSidebar();
     this.renderTabs();
@@ -406,6 +421,10 @@ export class BuildMenuOverlay {
     grid.style.cssText = 'display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px;';
 
     for (const type of placeable) {
+      // Check if this building requires an achievement unlock
+      const requiredAchievement = ACHIEVEMENT_LOCKED_BUILDINGS[type];
+      const isLocked = requiredAchievement && !this.unlockedBuildings.has(type);
+
       // Outer wrapper to enforce square aspect ratio
       const wrapper = document.createElement('div');
       wrapper.style.cssText = 'position: relative; width: 100%; padding-bottom: 100%;';
@@ -471,6 +490,18 @@ export class BuildMenuOverlay {
         sizeEl.style.cssText = `font-family:${THEME.fontMono};font-size:9px;color:${THEME.textDim};`;
         sizeEl.textContent = `${size.w}x${size.h}`;
         card.appendChild(sizeEl);
+      }
+
+      // If locked, gray out the card and show lock indicator
+      if (isLocked) {
+        card.style.opacity = '0.35';
+        card.style.cursor = 'not-allowed';
+        card.style.pointerEvents = 'none';
+        // Add lock label
+        const lockEl = document.createElement('div');
+        lockEl.style.cssText = `font-family:${THEME.fontMono};font-size:8px;color:#cc8844;margin-top:2px;`;
+        lockEl.textContent = `Locked: ${requiredAchievement}`;
+        card.appendChild(lockEl);
       }
 
       wrapper.appendChild(card);

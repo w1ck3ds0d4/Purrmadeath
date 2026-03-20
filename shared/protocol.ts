@@ -374,6 +374,8 @@ export interface SessionAckMessage extends BaseMessage {
   unlockedClasses?: string[];
   /** Permanent buff achievements this player has completed. */
   completedBuffs?: { displayName: string; reward: string; medalColor: string }[];
+  /** Building types this player has unlocked via achievements. */
+  unlockedBuildings?: string[];
 }
 
 export interface LobbySlot {

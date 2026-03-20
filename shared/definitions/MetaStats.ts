@@ -10,6 +10,13 @@ export interface MetaStats {
   totalBuildingsBuilt: number;
   totalRuns: number;
   unlockedClasses: string[];
+  // Achievement tracking fields
+  totalDamageTaken?: number;
+  totalCriticalHits?: number;
+  totalPortalsDestroyed?: number;
+  totalWolvesSummoned?: number;
+  totalAbilitiesUsed?: number;
+  totalWallsBuilt?: number;
 }
 
 /** Create a blank MetaStats object with all counters at 0. */
@@ -25,6 +32,12 @@ export function emptyMetaStats(): MetaStats {
     totalBuildingsBuilt: 0,
     totalRuns: 0,
     unlockedClasses: [],
+    totalDamageTaken: 0,
+    totalCriticalHits: 0,
+    totalPortalsDestroyed: 0,
+    totalWolvesSummoned: 0,
+    totalAbilitiesUsed: 0,
+    totalWallsBuilt: 0,
   };
 }
 
@@ -37,6 +50,13 @@ export interface RunStats {
   wavesSurvived: number;
   timePlayed: number;
   buildingsBuilt: number;
+  // Achievement tracking
+  damageTaken: number;
+  criticalHits: number;
+  portalsDestroyed: number;
+  wolvesSummoned: number;
+  abilitiesUsed: number;
+  wallsBuilt: number;
 }
 
 /**
@@ -62,6 +82,13 @@ export function mergeMetaStats(target: MetaStats, source: MetaStats): void {
   // Union unlocked classes
   const allClasses = new Set([...target.unlockedClasses, ...source.unlockedClasses]);
   target.unlockedClasses = [...allClasses];
+  // Achievement tracking
+  target.totalDamageTaken = Math.max(target.totalDamageTaken ?? 0, source.totalDamageTaken ?? 0);
+  target.totalCriticalHits = Math.max(target.totalCriticalHits ?? 0, source.totalCriticalHits ?? 0);
+  target.totalPortalsDestroyed = Math.max(target.totalPortalsDestroyed ?? 0, source.totalPortalsDestroyed ?? 0);
+  target.totalWolvesSummoned = Math.max(target.totalWolvesSummoned ?? 0, source.totalWolvesSummoned ?? 0);
+  target.totalAbilitiesUsed = Math.max(target.totalAbilitiesUsed ?? 0, source.totalAbilitiesUsed ?? 0);
+  target.totalWallsBuilt = Math.max(target.totalWallsBuilt ?? 0, source.totalWallsBuilt ?? 0);
 }
 
 /** Merge a single run's stats into the persistent MetaStats. */
@@ -80,4 +107,11 @@ export function mergeRunStats(meta: MetaStats, run: RunStats): void {
   meta.totalTimePlayed += run.timePlayed;
   meta.totalBuildingsBuilt += run.buildingsBuilt;
   meta.totalRuns++;
+  // Achievement tracking
+  meta.totalDamageTaken = (meta.totalDamageTaken ?? 0) + run.damageTaken;
+  meta.totalCriticalHits = (meta.totalCriticalHits ?? 0) + run.criticalHits;
+  meta.totalPortalsDestroyed = (meta.totalPortalsDestroyed ?? 0) + run.portalsDestroyed;
+  meta.totalWolvesSummoned = (meta.totalWolvesSummoned ?? 0) + run.wolvesSummoned;
+  meta.totalAbilitiesUsed = (meta.totalAbilitiesUsed ?? 0) + run.abilitiesUsed;
+  meta.totalWallsBuilt = (meta.totalWallsBuilt ?? 0) + run.wallsBuilt;
 }

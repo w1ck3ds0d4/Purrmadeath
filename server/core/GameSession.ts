@@ -1871,6 +1871,11 @@ export class GameSession {
   handleBuildPlace(clientId: string, msg: BuildPlaceMessage, send: SendFn): void {
     this.buildings.handlePlace(clientId, msg, send);
     this.civilians.onBuildingPlaced();
+    // Track wall placement for Warden achievement
+    const player = this.players.get(clientId);
+    if (player && (msg.buildingType === 'wall' || msg.buildingType === 'gate')) {
+      this.stats.trackWallBuilt(player.playerId);
+    }
   }
 
   handleBuildDemolish(clientId: string, msg: BuildDemolishMessage, send: SendFn): void {
@@ -2195,6 +2200,8 @@ export class GameSession {
       const hitMsg: HitMessage = { type: MessageType.HIT, ...hit, element };
       for (const p of this.players.values()) send(p.client, hitMsg);
       this.stats.trackDamage(hit.sourceId, hit.damage);
+      // Track critical hits for Critical Eye achievement
+      if (hit.crit) this.stats.trackCriticalHit(hit.sourceId);
     }
 
     // Apply on-hit special effects (lifesteal, burn, slow, elemental)
@@ -2863,6 +2870,13 @@ export class GameSession {
       target: msg.targetX != null && msg.targetY != null ? `${Math.round(msg.targetX)},${Math.round(msg.targetY)}` : 'self',
       facing: msg.facing != null ? msg.facing.toFixed(2) : '0',
     });
+
+    // Track ability usage for Enchanter achievement
+    this.stats.trackAbilityUsed(player.playerId);
+    // Track wolf summoning for Beast Tamer achievement
+    if (msg.abilityId === 'pack_call') {
+      for (let i = 0; i < 3; i++) this.stats.trackWolfSummoned(player.playerId);
+    }
 
     const { hits, deaths } = this.skills.handleAbilityUse(clientId, msg, send);
 
@@ -3543,6 +3557,15 @@ export class GameSession {
         }
       }
     }
+    // Track portal destructions for Siege Master achievement
+    for (const deadId of deaths) {
+      const deadFaction = this.world.getComponent<FactionComponent>(deadId, C.Faction);
+      if (deadFaction?.type === 'portal') {
+        const attacker = attackerMap.get(deadId);
+        if (attacker != null) this.stats.trackPortalDestroyed(attacker);
+      }
+    }
+
     // ── Toxic Spread: when a poisoned enemy dies, spread poison to nearby enemies ──
     // This checks all dying enemies for the PoisonDot component. If the attacker
     // has the 'toxic_spread' combat mod, poison spreads to enemies within radius.
@@ -3695,6 +3718,8 @@ export class GameSession {
     for (const hit of enemyResult.hits) {
       const hitMsg: HitMessage = { type: MessageType.HIT, ...hit };
       for (const p of this.players.values()) send(p.client, hitMsg);
+      // Track damage taken by players (for Ironclad achievement)
+      if (hit.damage > 0) this.stats.trackDamageTaken(hit.targetId, hit.damage);
     }
     // Unbreakable Charge: accumulate RAW damage (before reduction) for the release explosion
     for (const hit of enemyResult.hits) {
@@ -3778,6 +3803,8 @@ export class GameSession {
       }
       const hitMsg: HitMessage = { type: MessageType.HIT, ...hit, element: projElement };
       for (const p of this.players.values()) send(p.client, hitMsg);
+      // Track projectile crits for Critical Eye achievement
+      if (hit.crit) this.stats.trackCriticalHit(hit.sourceId);
       this.stats.trackDamage(hit.sourceId, hit.damage);
     }
 

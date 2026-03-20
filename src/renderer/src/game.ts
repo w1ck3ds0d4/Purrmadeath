@@ -291,6 +291,7 @@ async function main(): Promise<void> {
   let potionCooldown = 0;
   let potionCooldownMax = 0;
   let completedBuffs: { displayName: string; reward: string; medalColor: string }[] = [];
+  let unlockedBuildings = new Set<string>(); // Building types unlocked via achievements
   let eventVisionMult = 1.0;
 
   // ── Death / respawn state ──────────────────────────────────────────────────
@@ -861,6 +862,7 @@ async function main(): Promise<void> {
     get potionCooldown() { return potionCooldown; }, set potionCooldown(v) { potionCooldown = v; },
     get potionCooldownMax() { return potionCooldownMax; }, set potionCooldownMax(v) { potionCooldownMax = v; },
     get completedBuffs() { return completedBuffs; }, set completedBuffs(v) { completedBuffs = v; },
+    get unlockedBuildings() { return unlockedBuildings; }, set unlockedBuildings(v) { unlockedBuildings = v; },
     get eventVisionMult() { return eventVisionMult; }, set eventVisionMult(v) { eventVisionMult = v; },
     get pendingSingleplayerAutoStart() { return pendingSingleplayerAutoStart; }, set pendingSingleplayerAutoStart(v) { pendingSingleplayerAutoStart = v; },
     get localActiveBuffIds() { return localActiveBuffIdsArr; }, set localActiveBuffIds(v) { localActiveBuffIdsArr = v; },
@@ -1303,7 +1305,7 @@ async function main(): Promise<void> {
         } else if (canAct) {
           if (targetingSlot >= 0) cancelTargeting();
           buildCtrl.openPicker();
-          buildMenu.show(combinedResources());
+          buildMenu.show(combinedResources(), unlockedBuildings);
           // Show warehouse HUD when entering build mode
           if (warehouseExists) {
             // warehouse container removed

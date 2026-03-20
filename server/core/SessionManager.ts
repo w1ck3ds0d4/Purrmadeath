@@ -39,7 +39,7 @@ import { GAME_VERSION, RECONNECT_GRACE_MS } from '@shared/constants';
 import type { MetaStats } from '@shared/definitions/MetaStats';
 import { emptyMetaStats, mergeMetaStats, mergeRunStats } from '@shared/definitions/MetaStats';
 import { computeUnlockedClasses } from '@shared/definitions/MilestoneDefinitions';
-import { computeCompletedBuffs } from '@shared/definitions/ProgressionDefinitions';
+import { computeCompletedBuffs, computeUnlockedBuildings } from '@shared/definitions/ProgressionDefinitions';
 import type { MetaStatsRequestMessage, CardPickMessage } from '@shared/protocol';
 
 /** Minimum interval (ms) between SESSION_CREATE or SESSION_JOIN per client. */
@@ -260,6 +260,7 @@ export class SessionManager {
           isHost: player.isHost,
           players: this.session.getLobbySlots(),
           completedBuffs: this.getCompletedBuffs(client.id),
+          unlockedBuildings: this.getUnlockedBuildings(client.id),
         };
         this.socket.send(client, ack);
         return;
@@ -609,6 +610,15 @@ export class SessionManager {
     const meta = this.metaStats.get(playerId);
     if (!meta) return [];
     return meta.unlockedClasses ?? computeUnlockedClasses(meta);
+  }
+
+  /** Get the list of buildings a client has unlocked via achievements. */
+  private getUnlockedBuildings(clientId: string): string[] {
+    const playerId = this.clientPlayerIds.get(clientId);
+    if (!playerId) return [];
+    const meta = this.metaStats.get(playerId);
+    if (!meta) return [];
+    return computeUnlockedBuildings(meta);
   }
 
   private validatePlayerClass(raw: unknown, unlockedClasses?: string[]): PlayerClass {
