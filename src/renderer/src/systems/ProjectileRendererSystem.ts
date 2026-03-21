@@ -25,6 +25,8 @@ interface ProjectileVisual {
   colors?: number[];
   /** Timestamp when the projectile was spawned (for color cycling). */
   spawnTime?: number;
+  /** True if this is a sniper shot (massive arrow visual). */
+  sniper?: boolean;
 }
 
 const TRAIL_LEN = 10; // pixels behind the body
@@ -93,7 +95,7 @@ export class ProjectileRendererSystem {
   }
 
   spawn(id: number, x: number, y: number, vx: number, vy: number, ownerSlot: number,
-        targetX?: number, targetY?: number, totalFlightTime?: number, pierce?: boolean, homing?: boolean, ballista?: boolean, colors?: number[]): void {
+        targetX?: number, targetY?: number, totalFlightTime?: number, pierce?: boolean, homing?: boolean, ballista?: boolean, colors?: number[], sniper?: boolean): void {
     const vis: ProjectileVisual = { x, y, vx, vy, ownerSlot };
     if (targetX != null && targetY != null && totalFlightTime != null) {
       vis.targetX = targetX;
@@ -106,6 +108,7 @@ export class ProjectileRendererSystem {
     if (pierce) vis.pierce = true;
     if (homing) vis.homing = true;
     if (ballista) vis.ballista = true;
+    if (sniper) vis.sniper = true;
     if (colors && colors.length > 0) {
       vis.colors = colors;
       vis.spawnTime = performance.now() / 1000;
@@ -290,6 +293,41 @@ export class ProjectileRendererSystem {
         // Metallic glint on head
         this.gfx.circle(p.x + dx * 3, p.y + dy * 3, 1.5);
         this.gfx.fill({ color: 0xddeeff, alpha: 0.7 });
+      } else if (p.sniper) {
+        // Sniper shot: massive glowing arrow with long green trail
+        const shaftLen = TRAIL_LEN * 5;
+        const tailX = p.x - dx * shaftLen;
+        const tailY = p.y - dy * shaftLen;
+        const nx = -dy, ny = dx;
+        // Outer glow trail
+        this.gfx.moveTo(tailX, tailY);
+        this.gfx.lineTo(p.x, p.y);
+        this.gfx.stroke({ color: 0x44dd66, alpha: 0.25, width: 10 });
+        // Inner bright trail
+        this.gfx.moveTo(tailX, tailY);
+        this.gfx.lineTo(p.x, p.y);
+        this.gfx.stroke({ color: 0x88ff88, alpha: 0.6, width: 4 });
+        // Core shaft (white-green)
+        this.gfx.moveTo(tailX, tailY);
+        this.gfx.lineTo(p.x, p.y);
+        this.gfx.stroke({ color: 0xddffdd, alpha: 0.9, width: 2 });
+        // Large arrowhead
+        const headLen = 12;
+        this.gfx.moveTo(p.x + dx * headLen, p.y + dy * headLen);
+        this.gfx.lineTo(p.x + nx * 6, p.y + ny * 6);
+        this.gfx.lineTo(p.x - dx * 3, p.y - dy * 3);
+        this.gfx.lineTo(p.x - nx * 6, p.y - ny * 6);
+        this.gfx.closePath();
+        this.gfx.fill({ color: 0x66ff88, alpha: 0.9 });
+        // Bright tip
+        this.gfx.circle(p.x + dx * headLen * 0.8, p.y + dy * headLen * 0.8, 3);
+        this.gfx.fill({ color: 0xffffff, alpha: 0.8 });
+        // Fletching (tail fins)
+        const finLen = 8;
+        this.gfx.moveTo(tailX + nx * finLen, tailY + ny * finLen);
+        this.gfx.lineTo(tailX + dx * 6, tailY + dy * 6);
+        this.gfx.lineTo(tailX - nx * finLen, tailY - ny * finLen);
+        this.gfx.stroke({ color: 0x44aa55, alpha: 0.5, width: 1.5 });
       } else if (p.pierce && p.colors && p.colors[0] === 0xcc1122) {
         // Blood Arc: large crescent moon shape (no trail line)
         const arcR = 14;

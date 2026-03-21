@@ -299,6 +299,8 @@ export class ProjectileSystem {
         if (projFaction?.type === 'player' && tgtFaction?.type === 'building') continue;
         // Player/guard projectiles don't damage civilians (no friendly fire on NPCs)
         if ((projFaction?.type === 'player' || projFaction?.type === 'guard') && tgtFaction?.type === 'civilian') continue;
+        // Player projectiles don't damage guards/wolves (no friendly fire on allied units)
+        if (projFaction?.type === 'player' && tgtFaction?.type === 'guard') continue;
 
         // Skip the owner entity (can't shoot yourself)
         if (targetId === proj.ownerId) continue;

@@ -467,7 +467,7 @@ export class BuildMenuOverlay {
         this.hideTooltip();
       });
       card.addEventListener('click', () => {
-        this.callbacks?.onSelect(type);
+        if (!isLocked) this.callbacks?.onSelect(type);
       });
 
       // Building name
@@ -492,16 +492,34 @@ export class BuildMenuOverlay {
         card.appendChild(sizeEl);
       }
 
-      // If locked, gray out the card and show lock indicator
+      // If locked, gray out the card with a lock overlay but keep tooltip on hover
       if (isLocked) {
-        card.style.opacity = '0.35';
+        card.style.opacity = '0.4';
         card.style.cursor = 'not-allowed';
-        card.style.pointerEvents = 'none';
-        // Add lock label
-        const lockEl = document.createElement('div');
-        lockEl.style.cssText = `font-family:${THEME.fontMono};font-size:8px;color:#cc8844;margin-top:2px;`;
-        lockEl.textContent = `Locked: ${requiredAchievement}`;
-        card.appendChild(lockEl);
+        // Lock icon overlay
+        const lockOverlay = document.createElement('div');
+        lockOverlay.style.cssText = [
+          'position: absolute',
+          'inset: 0',
+          'display: flex',
+          'flex-direction: column',
+          'align-items: center',
+          'justify-content: center',
+          'pointer-events: none',
+          `background: rgba(0,0,0,0.4)`,
+          `border-radius: ${THEME.radiusSm}`,
+        ].join('; ');
+        // Lock icon (large)
+        const lockIcon = document.createElement('div');
+        lockIcon.style.cssText = 'font-size:22px;color:#cc8844;margin-bottom:2px;';
+        lockIcon.textContent = '\uD83D\uDD12'; // Lock emoji
+        lockOverlay.appendChild(lockIcon);
+        // Achievement name
+        const lockLabel = document.createElement('div');
+        lockLabel.style.cssText = `font-family:${THEME.fontMono};font-size:8px;color:#cc8844;text-align:center;padding:0 4px;`;
+        lockLabel.textContent = requiredAchievement;
+        lockOverlay.appendChild(lockLabel);
+        card.appendChild(lockOverlay);
       }
 
       wrapper.appendChild(card);

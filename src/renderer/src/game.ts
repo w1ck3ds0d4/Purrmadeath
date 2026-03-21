@@ -246,6 +246,8 @@ async function main(): Promise<void> {
     teleport:       { fill: 0xaa66ff, stroke: 0xcc99ff },
     meteor_shower:      { fill: 0xff4400, stroke: 0xff7722 },
     blizzard_freeze:    { fill: 0x66aaff, stroke: 0x99ccff },
+    sniper_shot:        { fill: 0x44dd66, stroke: 0x88ff88 },
+    explosive_barrage:  { fill: 0xff6600, stroke: 0xff9933 },
   };
 
   type TargetMode = 'self' | 'ground' | 'direction';
@@ -254,10 +256,10 @@ async function main(): Promise<void> {
     const selfTypes = ['warcry_rage', 'unbreakable_charge', 'blood_drain',
       'fan_of_knives', 'smoke_bomb', 'vanish', 'aegis', 'guardian_angel',
       'wild_transformation', 'primal_roar', 'multishot',
-      'arrow_volley', 'thunderwave'];
+      'arrow_volley', 'thunderwave', 'pack_call'];
     if (selfTypes.includes(params.type)) return 'self';
-    // Direction: dashes
-    const dirTypes = ['phantom_strike', 'stampede', 'grapple_hook'];
+    // Direction: dashes, sniper shot
+    const dirTypes = ['phantom_strike', 'stampede', 'grapple_hook', 'sniper_shot'];
     if (dirTypes.includes(params.type)) return 'direction';
     // Ground: everything else (targeted AOE, projectiles, zones)
     return 'ground';
@@ -351,18 +353,8 @@ async function main(): Promise<void> {
   const resourceHUD  = new ResourceHUD();
   const warehouseHUD = new WarehouseHUD();
 
-  // Left-side sliding inventory drawer (above chat)
-  const inventoryPanel = document.createElement('div');
-  inventoryPanel.id = 'inventory-panel';
-  inventoryPanel.style.cssText = [
-    'position: absolute',
-    'bottom: 310px',
-    'left: 0',
-    'z-index: 20',
-    'display: none',
-  ].join('; ');
-  inventoryPanel.appendChild(resourceHUD.el);
-  document.getElementById('overlay')!.appendChild(inventoryPanel);
+  // Top-center inventory accordion (open by default)
+  document.getElementById('overlay')!.appendChild(resourceHUD.el);
 
   // Warehouse HUD kept for state tracking but not added to DOM
   // Warehouse resources are shown in the build menu sidebar instead
@@ -712,7 +704,7 @@ async function main(): Promise<void> {
     warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0 };
     warehouseExists = false;
     warehouseHUD.hide();
-    inventoryPanel.style.display = 'none';
+    resourceHUD.hide();
     // warehouse container removed
     // Transport stays alive - don't disconnect
     menuOverlay.setButtonsEnabled(transportReady);
@@ -739,7 +731,7 @@ async function main(): Promise<void> {
     weaponHotbar.setVisible(true);
     waveHUD.setVisible(true);
     resourceHUD.setVisible(true);
-    inventoryPanel.style.display = 'block';
+    resourceHUD.setVisible(true);
     minimap.setVisible(true);
     keybindPanel.style.display = 'block';
     chatOverlay.setActive(true);
@@ -1144,7 +1136,7 @@ async function main(): Promise<void> {
           hud.setVisible(false);
           waveHUD.setVisible(false);
           minimap.setVisible(false);
-          inventoryPanel.style.display = 'none';
+          resourceHUD.hide();
           // warehouse container removed
           coordsEl.style.display = 'none';
           skillTree.show(selectedClass, skillAllocated, skillPoints, (nodeId) => {
@@ -1154,7 +1146,7 @@ async function main(): Promise<void> {
             hud.setVisible(true);
             waveHUD.setVisible(true);
             minimap.setVisible(true);
-            inventoryPanel.style.display = 'block';
+            resourceHUD.setVisible(true);
             coordsEl.style.display = 'block';
           }, slotAssignments, (slot, abilityId) => {
             net.send({ type: MessageType.ABILITY_SLOT_ASSIGN, slot: slot as 0 | 1 | 2, abilityId });

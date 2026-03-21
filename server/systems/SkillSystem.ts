@@ -24,6 +24,12 @@ import {
   StealthComponent,
   ChannelComponent,
   TransformComponent,
+  GuardComponent,
+  AttackCooldownComponent,
+  FacingComponent,
+  KnockbackReceiverComponent,
+  PlayerInputComponent,
+  EnemyStatsComponent,
   PersistentZoneComponent,
   SummonOwnerComponent,
   MeteorShowerComponent,
@@ -49,7 +55,7 @@ import type { SkillStateMessage, AbilityUseMessage, AbilityEffectMessage } from 
 import type { ConnectedClient } from '../net/ServerSocket';
 import type { SessionPlayer } from '../core/GameSession';
 import type { WorldGenerator } from '@shared/world/WorldGenerator';
-import { executeAbility } from '../abilities/AbilityExecutor';
+import { executeAbility, type AbilityResult } from '../abilities/AbilityExecutor';
 import type { HitResult } from './CombatSystem';
 
 type SendFn = (client: ConnectedClient, msg: object) => void;
@@ -150,7 +156,7 @@ export function createSkillSystem(deps: SkillSystemDeps) {
     clientId: string,
     msg: AbilityUseMessage,
     send: SendFn,
-  ): { hits: HitResult[]; deaths: number[] } {
+  ): { hits: HitResult[]; deaths: number[]; projectileSpawns?: AbilityResult['projectileSpawns'] } {
     const player = deps.players.get(clientId);
     if (!player || player.entityId == null) return { hits: [], deaths: [] };
 
@@ -176,7 +182,7 @@ export function createSkillSystem(deps: SkillSystemDeps) {
     // Broadcast effect to all clients
     for (const p of deps.players.values()) send(p.client, result.effect);
 
-    return { hits: result.hits, deaths: result.deaths };
+    return { hits: result.hits, deaths: result.deaths, projectileSpawns: result.projectileSpawns };
   }
 
   function handleSlotAssign(clientId: string, slot: number, abilityId: string | null, send: SendFn): void {
@@ -604,6 +610,107 @@ export function createSkillSystem(deps: SkillSystemDeps) {
 
     // Tick class passive abilities (Last Stand, Hunter's Focus, etc.)
     tickClassPassives(dt);
+
+    // ── Permanent Wolf Companion management ──────────────────────────────────
+    // Beastmaster tier 2 spawns a permanent wolf. Tier 4/7/9/10 upgrade it.
+    tickWolfCompanions(dt);
+  }
+
+  // Track permanent wolf entity per player
+  const permanentWolves = new Map<string, number>(); // clientId -> wolfEntityId
+
+  function tickWolfCompanions(dt: number): void {
+    for (const [clientId, player] of deps.players) {
+      if (player.entityId == null) continue;
+      const sBuffs = getSkillBuffs(clientId);
+      // Check if player has wolf_upgrade combat mod (tier 2 grants value=1)
+      const wolfMod = sBuffs.combatMods.find(m => m.type === 'wolf_upgrade' && m.value === 1);
+      if (!wolfMod) {
+        // No wolf mod - remove existing wolf if any
+        const existingWolf = permanentWolves.get(clientId);
+        if (existingWolf != null && deps.world.hasEntity(existingWolf)) {
+          const hp = deps.world.getComponent<HealthComponent>(existingWolf, C.Health);
+          if (hp) hp.current = 0; // Kill it, death sweep cleans up
+        }
+        permanentWolves.delete(clientId);
+        continue;
+      }
+
+      const existingWolf = permanentWolves.get(clientId);
+      const wolfAlive = existingWolf != null && deps.world.hasEntity(existingWolf)
+        && (deps.world.getComponent<HealthComponent>(existingWolf, C.Health)?.current ?? 0) > 0;
+
+      // Spawn wolf if none exists
+      if (!wolfAlive) {
+        const pos = deps.world.getComponent<PositionComponent>(player.entityId, C.Position);
+        if (!pos) continue;
+
+        // Base wolf stats
+        let wolfHp = (wolfMod as any).params?.wolfHp ?? 50;
+        let wolfDmg = (wolfMod as any).params?.wolfDamage ?? 8;
+
+        // Tier 4: Pack Strength - +50% HP and damage
+        const packStrength = sBuffs.combatMods.find(m => m.type === 'wolf_upgrade' && m.value === 2);
+        if (packStrength) {
+          wolfHp = Math.round(wolfHp * ((packStrength as any).params?.wolfHpMult ?? 1.5));
+          wolfDmg = Math.round(wolfDmg * ((packStrength as any).params?.wolfDamageMult ?? 1.5));
+        }
+
+        // Tier 10: Alpha Predator - 2x damage
+        const alpha = sBuffs.combatMods.find(m => m.type === 'alpha_predator');
+        if (alpha) wolfDmg *= 2;
+
+        const angle = Math.random() * Math.PI * 2;
+        const spawnDist = 40;
+        const wolfId = deps.world.createEntity();
+        deps.world.addComponent(wolfId, C.Position, { x: pos.x + Math.cos(angle) * spawnDist, y: pos.y + Math.sin(angle) * spawnDist });
+        deps.world.addComponent(wolfId, C.Velocity, { vx: 0, vy: 0 });
+        deps.world.addComponent(wolfId, C.Health, { current: wolfHp, max: wolfHp });
+        deps.world.addComponent(wolfId, C.Faction, { type: 'guard' });
+        deps.world.addComponent(wolfId, C.Speed, { base: 180, multiplier: 1 });
+        deps.world.addComponent(wolfId, C.PlayerInput, { dx: 0, dy: 0, sprint: false });
+        deps.world.addComponent(wolfId, C.Facing, { angle: 0 });
+        deps.world.addComponent(wolfId, C.AttackCooldown, { remaining: 0, max: 1.0 });
+        deps.world.addComponent(wolfId, C.KnockbackReceiver, { vx: 0, vy: 0 });
+        deps.world.addComponent(wolfId, C.EnemyStats, {
+          damage: wolfDmg, range: 30, knockback: 50, radius: 10,
+          rangedRange: 0, projectileSpeed: 0, rangedDamage: 0, rangedCooldown: 0,
+        });
+        deps.world.addComponent(wolfId, C.Guard, {
+          barracksId: player.entityId,
+          patrolRadius: 150,
+          followEntityId: player.entityId,
+          variant: 'wolf',
+        } as GuardComponent);
+
+        permanentWolves.set(clientId, wolfId);
+        continue;
+      }
+
+      // ── Wolf buff ticks ──────────────────────────────────────────────
+      const wolfId = existingWolf!;
+
+      // Tier 7: Nature's Bond - wolf heals 5 HP/s when near player
+      const wolfHealMod = sBuffs.combatMods.find(m => m.type === 'wolf_heal');
+      if (wolfHealMod) {
+        const wolfPos = deps.world.getComponent<PositionComponent>(wolfId, C.Position);
+        const playerPos = deps.world.getComponent<PositionComponent>(player.entityId, C.Position);
+        if (wolfPos && playerPos) {
+          const dx = wolfPos.x - playerPos.x, dy = wolfPos.y - playerPos.y;
+          if (dx * dx + dy * dy <= 200 * 200) { // Within 200px
+            const wolfHp = deps.world.getComponent<HealthComponent>(wolfId, C.Health);
+            if (wolfHp) wolfHp.current = Math.min(wolfHp.max, wolfHp.current + wolfHealMod.value * dt);
+          }
+        }
+      }
+
+      // Tier 10: Alpha Predator - wolf is invulnerable (clamp HP to max)
+      const alphaMod = sBuffs.combatMods.find(m => m.type === 'alpha_predator');
+      if (alphaMod) {
+        const wolfHp = deps.world.getComponent<HealthComponent>(wolfId, C.Health);
+        if (wolfHp) wolfHp.current = wolfHp.max;
+      }
+    }
   }
 
   function applyPassivesToEntity(clientId: string): void {

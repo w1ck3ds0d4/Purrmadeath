@@ -392,8 +392,7 @@ export class AbilityVFXSystem {
           this.drawExplosion(fx, t, colors);
           break;
         case 'explosive_barrage':
-          // Orange explosion at impact point
-          this.drawExplosion(fx, t, colors);
+          this.drawArrowBarrage(fx, t, colors);
           break;
 
         default:
@@ -1075,6 +1074,109 @@ export class AbilityVFXSystem {
       const gy = cy + Math.sin(sparkAngle) * sparkDist;
       this.gfx.circle(gx, gy, 1.5);
       this.gfx.fill({ color: 0xffffff, alpha: alpha * twinkle * 0.6 });
+    }
+  }
+
+  /** Renders explosive arrows raining down in a target zone with meteor-like impacts. */
+  private drawArrowBarrage(fx: VFXEntry, t: number, colors: { fill: number; stroke: number }): void {
+    const cx = fx.targetX ?? fx.x;
+    const cy = fx.targetY ?? fx.y;
+    const r = fx.radius;
+    const alpha = t < 0.1 ? t / 0.1 : (t > 0.85 ? (1 - t) / 0.15 : 0.5);
+
+    // Target zone circle (faint danger zone)
+    this.gfx.circle(cx, cy, r);
+    this.gfx.fill({ color: colors.fill, alpha: alpha * 0.06 });
+    this.gfx.circle(cx, cy, r);
+    this.gfx.stroke({ color: colors.stroke, alpha: alpha * 0.25, width: 1.5 });
+
+    // Many arrows falling + meteor-style impacts
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+    const arrowCount = 12; // More arrows for denser visual
+    for (let i = 0; i < arrowCount; i++) {
+      const spawnT = i / arrowCount;
+      if (spawnT > t) break;
+
+      // Each arrow has its own lifecycle within the barrage duration
+      const arrowLifespan = 1 / arrowCount;
+      const localT = Math.min(1, (t - spawnT) / Math.max(arrowLifespan, 0.15));
+      const mAngle = i * goldenAngle;
+      const mDist = r * 0.15 + (r * 0.75) * ((i * 0.618) % 1);
+      const mx = cx + Math.cos(mAngle) * mDist;
+      const my = cy + Math.sin(mAngle) * mDist;
+
+      // Falling arrow phase (first 40% of arrow's life)
+      if (localT < 0.4) {
+        const fallProgress = localT / 0.4;
+        const fallHeight = 80;
+        const arrowX = mx + (1 - fallProgress) * 15; // Slight diagonal approach
+        const arrowY = my - fallHeight * (1 - fallProgress);
+        const arrowAlpha = alpha * (0.5 + 0.5 * fallProgress);
+
+        // Arrow shaft
+        const shaftLen = 14;
+        const dx = -15 * (1 - fallProgress);
+        const dy = fallHeight * (1 - fallProgress);
+        const len = Math.sqrt(dx * dx + dy * dy) || 1;
+        const nx = dx / len, ny = dy / len;
+        this.gfx.moveTo(arrowX - nx * shaftLen, arrowY - ny * shaftLen);
+        this.gfx.lineTo(arrowX, arrowY);
+        this.gfx.stroke({ color: colors.stroke, alpha: arrowAlpha, width: 2 });
+
+        // Arrow head
+        this.gfx.moveTo(arrowX + nx * 4, arrowY + ny * 4);
+        this.gfx.lineTo(arrowX + ny * 3, arrowY - nx * 3);
+        this.gfx.lineTo(arrowX - ny * 3, arrowY + nx * 3);
+        this.gfx.closePath();
+        this.gfx.fill({ color: colors.fill, alpha: arrowAlpha });
+
+        // Trail particles
+        if (fallProgress > 0.2) {
+          this.gfx.circle(arrowX - nx * shaftLen * 0.7, arrowY - ny * shaftLen * 0.7, 2);
+          this.gfx.fill({ color: 0xffcc44, alpha: arrowAlpha * 0.4 });
+        }
+      }
+
+      // Impact explosion phase (after arrow lands - meteor style)
+      if (localT >= 0.35) {
+        const impactT = (localT - 0.35) / 0.65;
+        const impactAlpha = (1 - impactT * impactT) * alpha * 0.7;
+        const maxR = 35;
+        const impactR = maxR * (0.3 + 0.7 * Math.sqrt(impactT));
+
+        // Bright inner flash (white-yellow)
+        if (impactT < 0.3) {
+          const flashAlpha = (1 - impactT / 0.3) * impactAlpha;
+          this.gfx.circle(mx, my, impactR * 0.35);
+          this.gfx.fill({ color: 0xffffcc, alpha: flashAlpha });
+        }
+
+        // Mid-ring (orange)
+        this.gfx.circle(mx, my, impactR * 0.6);
+        this.gfx.fill({ color: colors.fill, alpha: impactAlpha * 0.25 });
+
+        // Outer expanding ring
+        this.gfx.circle(mx, my, impactR);
+        this.gfx.stroke({ color: colors.stroke, alpha: impactAlpha * 0.8, width: 2 });
+
+        // Debris particles
+        if (impactT < 0.5) {
+          for (let p = 0; p < 4; p++) {
+            const pAngle = mAngle + p * Math.PI / 2 + impactT * 2;
+            const pDist = impactR * 0.5 * impactT * 2;
+            const px = mx + Math.cos(pAngle) * pDist;
+            const py = my + Math.sin(pAngle) * pDist;
+            this.gfx.circle(px, py, 2);
+            this.gfx.fill({ color: 0xff8833, alpha: impactAlpha * 0.5 });
+          }
+        }
+
+        // Ground scorch mark (persists longer)
+        if (impactT > 0.2) {
+          this.gfx.circle(mx, my, maxR * 0.4);
+          this.gfx.fill({ color: 0x332200, alpha: (1 - impactT) * 0.15 });
+        }
+      }
     }
   }
 

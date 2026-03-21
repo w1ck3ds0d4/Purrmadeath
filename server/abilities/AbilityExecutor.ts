@@ -41,6 +41,14 @@ export interface AbilityResult {
   effect: AbilityEffectMessage;
   hits: HitResult[];
   deaths: number[];
+  /** Projectile entities spawned by the ability (need broadcast to clients). */
+  projectileSpawns?: Array<{
+    projectileId: number;
+    x: number; y: number;
+    vx: number; vy: number;
+    ownerSlot: number;
+    sniper?: boolean;
+  }>;
 }
 
 /** Check if a world position is walkable. */
@@ -250,6 +258,7 @@ export function executeAbility(
   const pos = world.getComponent<PositionComponent>(entityId, C.Position)!;
   const hits: HitResult[] = [];
   const deaths: number[] = [];
+  const projectileSpawns: AbilityResult['projectileSpawns'] & Array<any> = [];
 
   const baseEffect: AbilityEffectMessage = {
     type: MessageType.ABILITY_EFFECT,
@@ -330,22 +339,37 @@ export function executeAbility(
     // =====================================================================
 
     case 'sniper_shot': {
-      // Charge for chargeTime seconds, then fire a massive arrow
-      const chargeTime = params.chargeTime;
-      // Root player during charge
-      world.addComponent(entityId, C.Root, { remaining: chargeTime } as RootComponent);
-      // After charge, fire a projectile with multiplied damage in the facing direction
-      // The actual projectile is spawned by a buff expiry handler
-      pushBuff(world, entityId, 'sniper_shot', chargeTime, {
-        damageMultiplier: params.damageMultiplier,
-        facing: msg.facing,
+      // Instantly fire a massive piercing arrow in the facing direction
+      const angle = msg.facing;
+      const speed = 600;
+      const spawnDist = 25;
+      const sx = pos.x + Math.cos(angle) * spawnDist;
+      const sy = pos.y + Math.sin(angle) * spawnDist;
+      const projId = world.createEntity();
+      world.addComponent(projId, C.Position, { x: sx, y: sy });
+      world.addComponent(projId, C.Velocity, { vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed });
+      world.addComponent(projId, C.Projectile, {
+        ownerId: entityId,
+        damage: params.damage,
+        lifetime: 3.0,
+        pierce: true, // Pierce through all enemies
+      } as any);
+      world.addComponent(projId, C.Faction, { type: 'player' });
+      // Store spawn data so GameSession can broadcast it
+      projectileSpawns.push({
+        projectileId: projId,
+        x: sx, y: sy,
+        vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+        ownerSlot: player.slot,
+        sniper: true, // Flag for large arrow rendering
       });
-      baseEffect.duration = chargeTime;
+      baseEffect.duration = 0.3;
       break;
     }
 
     case 'pack_call': {
-      // Spawn temporary wolves near the player
+      // Spawn temporary wolves near the player that follow and fight
+      // Wolves need the same components as trained guards to engage in combat
       for (let i = 0; i < params.wolfCount; i++) {
         const angle = (i / params.wolfCount) * Math.PI * 2;
         const spawnDist = 40 + Math.random() * 30;
@@ -356,43 +380,56 @@ export function executeAbility(
         world.addComponent(wolfId, C.Velocity, { vx: 0, vy: 0 });
         world.addComponent(wolfId, C.Health, { current: params.wolfHp, max: params.wolfHp });
         world.addComponent(wolfId, C.Faction, { type: 'guard' });
-        world.addComponent(wolfId, C.Speed, { base: 160, multiplier: 1 });
-        world.addComponent(wolfId, C.EnemyStats, { damage: params.wolfDamage, attackCooldown: 1.0, attackTimer: 0, range: 25, xpValue: 0, variant: 'wolf' } as any);
+        world.addComponent(wolfId, C.Speed, { base: 180, multiplier: 1 });
+        // Required for combat: input, facing, attack cooldown, knockback, enemy stats
+        world.addComponent(wolfId, C.PlayerInput, { dx: 0, dy: 0, sprint: false });
+        world.addComponent(wolfId, C.Facing, { angle: 0 });
+        world.addComponent(wolfId, C.AttackCooldown, { remaining: 0, max: 1.0 });
+        world.addComponent(wolfId, C.KnockbackReceiver, { vx: 0, vy: 0 });
+        world.addComponent(wolfId, C.EnemyStats, {
+          damage: params.wolfDamage, range: 30, knockback: 50, radius: 10,
+          rangedRange: 0, projectileSpeed: 0, rangedDamage: 0, rangedCooldown: 0,
+        });
+        // Guard component: follow the player, patrol nearby, lifetime-limited
         world.addComponent(wolfId, C.Guard, {
-          barracksId: entityId, // Owner player entity
-          patrolRadius: 200,
-          followEntityId: entityId, // Follow the player
-          lifetime: params.duration, // Temporary wolf
+          barracksId: entityId,
+          patrolRadius: 150,
+          followEntityId: entityId,
+          lifetime: params.duration,
           variant: 'wolf',
         } as GuardComponent);
       }
       baseEffect.radius = 100;
+      baseEffect.duration = 0.5;
       break;
     }
 
     case 'explosive_barrage': {
-      // Fire multiple explosive arrows in a spread arc
-      const spreadAngle = Math.PI / 4; // 45 degree total spread
-      const halfSpread = spreadAngle / 2;
-      for (let i = 0; i < params.arrowCount; i++) {
-        const angle = msg.facing - halfSpread + (i / (params.arrowCount - 1)) * spreadAngle;
-        const speed = 350;
-        const vx = Math.cos(angle) * speed;
-        const vy = Math.sin(angle) * speed;
-        const spawnDist = 20;
-        const sx = pos.x + Math.cos(angle) * spawnDist;
-        const sy = pos.y + Math.sin(angle) * spawnDist;
-        const projId = world.createEntity();
-        world.addComponent(projId, C.Position, { x: sx, y: sy });
-        world.addComponent(projId, C.Velocity, { vx, vy });
-        world.addComponent(projId, C.Projectile, {
-          ownerId: entityId,
-          damage: params.damagePerArrow,
-          lifetime: 2.0,
-          explosionRadius: params.explosionRadius,
-        } as any);
-        world.addComponent(projId, C.Faction, { type: 'player' });
-      }
+      // Targeted area barrage: explosive arrows rain down in a zone (like meteor shower but smaller)
+      const tx = msg.targetX ?? pos.x;
+      const ty = msg.targetY ?? pos.y;
+      const radius = params.explosionRadius * 2 || 120; // Area where arrows land
+      baseEffect.targetX = tx;
+      baseEffect.targetY = ty;
+      baseEffect.radius = radius;
+      baseEffect.duration = params.duration ?? 2;
+      // Create a barrage zone entity that spawns arrow impacts over time
+      const zoneId = world.createEntity();
+      world.addComponent(zoneId, C.Position, { x: tx, y: ty });
+      const duration = params.duration ?? 2;
+      const arrowInterval = duration / params.arrowCount;
+      world.addComponent(zoneId, C.MeteorShower, {
+        x: tx, y: ty,
+        radius,
+        remaining: duration,
+        meteorTimer: arrowInterval,
+        meteorInterval: arrowInterval,
+        damagePerMeteor: params.damagePerArrow,
+        meteorCount: params.arrowCount,
+        meteorsSpawned: 0,
+        ownerId: entityId,
+        impactRadius: params.explosionRadius || 60,
+      } as any);
       break;
     }
 
@@ -488,5 +525,5 @@ export function executeAbility(
 
   }
 
-  return { effect: baseEffect, hits, deaths };
+  return { effect: baseEffect, hits, deaths, projectileSpawns: projectileSpawns.length > 0 ? projectileSpawns : undefined };
 }

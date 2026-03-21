@@ -8,13 +8,14 @@ interface SlotDef {
 }
 
 /**
- * Left-side sliding drawer inventory HUD.
- * Slides in from the left edge. Click tab handle to toggle.
+ * Top-center inventory accordion HUD.
+ * Shows player resources in a collapsible panel. Open by default.
  */
 export class ResourceHUD {
   readonly el: HTMLElement;
-  private panelEl: HTMLElement;
-  private handleEl: HTMLElement;
+  private headerEl: HTMLElement;
+  private bodyEl: HTMLElement;
+  private arrowEl: HTMLElement;
 
   private _expanded = true;
   private _manualToggle = false;
@@ -32,58 +33,69 @@ export class ResourceHUD {
   ];
 
   constructor() {
-    // Outer container - handles the sliding transform
+    // Outer container - positioned top center
     this.el = document.createElement('div');
     this.el.id = 'resource-hud';
     this.el.style.cssText = [
-      'display: flex',
-      'align-items: stretch',
+      'position: absolute',
+      'top: 0',
+      'left: 50%',
+      'transform: translateX(-50%)',
+      'z-index: 20',
       'pointer-events: auto',
-      'transition: transform 200ms ease-out',
+      'display: none',
     ].join('; ');
 
-    // Panel with resources
-    this.panelEl = document.createElement('div');
-    this.panelEl.style.cssText = [
+    // Accordion wrapper
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = [
       hudStyle(),
       `border: 1px solid ${THEME.borderDefault}`,
-      'border-left: none',
-      'padding: 6px 14px 8px',
-      'width: 170px',
-      'box-sizing: border-box',
+      'border-top: none',
+      `border-radius: 0 0 ${THEME.radiusMd} ${THEME.radiusMd}`,
+      'min-width: 240px',
+      'overflow: hidden',
     ].join('; ');
 
-    // Title
-    const title = document.createElement('div');
-    title.textContent = 'INVENTORY';
-    title.style.cssText = `font-size:10px;font-weight:bold;color:${THEME.accent};letter-spacing:2px;margin-bottom:4px;text-align:center;`;
-    this.panelEl.appendChild(title);
-
-    this.el.appendChild(this.panelEl);
-
-    // Tab handle (attached to right edge of panel)
-    this.handleEl = document.createElement('div');
-    this.handleEl.style.cssText = [
-      'cursor: pointer',
+    // Clickable header
+    this.headerEl = document.createElement('div');
+    this.headerEl.style.cssText = [
       'display: flex',
       'align-items: center',
-      'justify-content: center',
-      'width: 16px',
-      `background: ${THEME.panelBg}`,
-      `border: 1px solid ${THEME.borderDefault}`,
-      'border-left: none',
-      `border-radius: 0 ${THEME.radiusSm} ${THEME.radiusSm} 0`,
-      `color: ${THEME.textMuted}`,
-      'font-size: 10px',
+      'justify-content: space-between',
+      'padding: 6px 14px',
+      'cursor: pointer',
       'user-select: none',
     ].join('; ');
-    this.handleEl.textContent = '\u25C0';
-    this.handleEl.addEventListener('click', (e) => {
+
+    const titleEl = document.createElement('span');
+    titleEl.style.cssText = `font-size:11px;font-weight:bold;color:${THEME.accent};letter-spacing:2px;`;
+    titleEl.textContent = 'INVENTORY';
+    this.headerEl.appendChild(titleEl);
+
+    this.arrowEl = document.createElement('span');
+    this.arrowEl.style.cssText = `font-size:10px;color:${THEME.textMuted};transition:transform 200ms;`;
+    this.arrowEl.textContent = '\u25BC'; // Down arrow (expanded)
+    this.headerEl.appendChild(this.arrowEl);
+
+    this.headerEl.addEventListener('click', (e) => {
       e.stopPropagation();
       this.toggle();
     });
-    this.el.appendChild(this.handleEl);
+    wrapper.appendChild(this.headerEl);
 
+    // Collapsible body (resource rows)
+    this.bodyEl = document.createElement('div');
+    this.bodyEl.style.cssText = [
+      'padding: 0 14px 8px',
+      'transition: max-height 200ms ease-out, opacity 150ms',
+      'max-height: 200px',
+      'opacity: 1',
+      'overflow: hidden',
+    ].join('; ');
+    wrapper.appendChild(this.bodyEl);
+
+    this.el.appendChild(wrapper);
     this.renderBody();
   }
 
@@ -97,7 +109,7 @@ export class ResourceHUD {
   }
 
   setVisible(visible: boolean): void {
-    this.el.style.display = visible ? 'flex' : 'none';
+    this.el.style.display = visible ? 'block' : 'none';
   }
 
   hide(): void { this.setVisible(false); }
@@ -105,17 +117,18 @@ export class ResourceHUD {
   expand(): void {
     if (this._expanded) return;
     this._expanded = true;
-    this.el.style.transform = 'translateX(0)';
-    this.handleEl.textContent = '\u25C0';
+    this.bodyEl.style.maxHeight = '200px';
+    this.bodyEl.style.opacity = '1';
+    this.arrowEl.textContent = '\u25BC';
     this.onToggle?.(true);
   }
 
   collapse(): void {
     if (!this._expanded) return;
     this._expanded = false;
-    // Slide left by the panel width, keeping the handle visible
-    this.el.style.transform = `translateX(-170px)`;
-    this.handleEl.textContent = '\u25B6';
+    this.bodyEl.style.maxHeight = '0';
+    this.bodyEl.style.opacity = '0';
+    this.arrowEl.textContent = '\u25B6';
     this.onToggle?.(false);
   }
 
@@ -126,10 +139,7 @@ export class ResourceHUD {
   }
 
   private renderBody(): void {
-    // Keep title, rebuild resource rows
-    const title = this.panelEl.firstElementChild;
-    this.panelEl.innerHTML = '';
-    if (title) this.panelEl.appendChild(title);
+    this.bodyEl.innerHTML = '';
 
     for (const item of ResourceHUD.ITEMS) {
       const row = document.createElement('div');
@@ -152,7 +162,7 @@ export class ResourceHUD {
 
       row.appendChild(left);
       row.appendChild(right);
-      this.panelEl.appendChild(row);
+      this.bodyEl.appendChild(row);
     }
   }
 }

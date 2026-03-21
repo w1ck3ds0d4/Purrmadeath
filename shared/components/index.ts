@@ -70,6 +70,11 @@ export const C = {
   RepairAura:      'RepairAura',
   Teleporter:      'Teleporter',
   Tavern:          'Tavern',
+  // ── Achievement buildings ────────────────────────────────────────────
+  SiegeAura:       'SiegeAura',
+  Kennel:          'Kennel',
+  ArcaneAura:      'ArcaneAura',
+  WatchAura:       'WatchAura',
   // ── Heroes ────────────────────────────────────────────────────────────
   Hero:            'Hero',
   // ── Ability system ───────────────────────────────────────────────────
@@ -359,6 +364,8 @@ export interface TurretComponent {
   damage: number;
   /** Projectile speed in px/s. */
   projectileSpeed: number;
+  /** Siege Workshop bonus: extra damage multiplier applied by nearby Siege Workshop. Reset each tick. */
+  siegeBonus?: number;
 }
 
 /** Damages enemies that walk over it; takes self-damage each trigger. */
@@ -731,6 +738,44 @@ export interface TavernComponent {
   heroIds: number[];
   /** Available hero definition IDs in this tavern's roster. */
   roster: string[];
+}
+
+// ── Achievement Building Components ─────────────────────────────────────────
+
+/** Siege Workshop - buffs all turret damage within range. */
+export interface SiegeAuraComponent {
+  /** Buff radius in world pixels. */
+  range: number;
+  /** Damage multiplier applied to turrets in range (e.g., 0.25 = +25%). */
+  damageBonus: number;
+}
+
+/** Kennel - auto-spawns wolf guard entities on a timer. */
+export interface KennelComponent {
+  /** Seconds between wolf spawns. */
+  spawnInterval: number;
+  /** Current spawn timer countdown. */
+  spawnTimer: number;
+  /** Max wolves this kennel can have alive simultaneously. */
+  maxWolves: number;
+  /** Entity IDs of currently alive wolves from this kennel. */
+  wolfIds: number[];
+}
+
+/** Arcane Tower - amplifies player ability range when nearby. */
+export interface ArcaneAuraComponent {
+  /** Buff radius in world pixels. */
+  range: number;
+  /** Ability range multiplier (e.g., 0.50 = +50%). */
+  rangeBonus: number;
+}
+
+/** Watchtower - extends minimap reveal radius and gives early wave warnings. */
+export interface WatchAuraComponent {
+  /** Reveal radius in world pixels (added to base minimap range). */
+  revealRadius: number;
+  /** Seconds of advance warning before wave starts. */
+  warningTime: number;
 }
 
 // ── Ability System Components ────────────────────────────────────────────────

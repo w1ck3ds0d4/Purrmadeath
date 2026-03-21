@@ -465,6 +465,14 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       world.addComponent(id, C.Tavern, {
         maxHeroes: TAVERN_MAX_HEROES[0], heroIds: [], roster,
       } as TavernComponent);
+    } else if (msg.buildingType === 'siege_workshop') {
+      world.addComponent(id, C.SiegeAura, { range: 200, damageBonus: 0.25 } as import('@shared/components').SiegeAuraComponent);
+    } else if (msg.buildingType === 'kennel') {
+      world.addComponent(id, C.Kennel, { spawnInterval: 30, spawnTimer: 30, maxWolves: 2, wolfIds: [] } as import('@shared/components').KennelComponent);
+    } else if (msg.buildingType === 'arcane_tower') {
+      world.addComponent(id, C.ArcaneAura, { range: 250, rangeBonus: 0.50 } as import('@shared/components').ArcaneAuraComponent);
+    } else if (msg.buildingType === 'watchtower') {
+      world.addComponent(id, C.WatchAura, { revealRadius: 400, warningTime: 5 } as import('@shared/components').WatchAuraComponent);
     }
 
     // Attach WorkerSlot to production buildings so civilians can staff them
@@ -936,7 +944,11 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
 
       const projId = world.createEntity();
       world.addComponent(projId, C.Position, { x: px, y: py });
-      const projComp: any = { ownerId: id, damage: turret.damage, lifetime: RANGED_LIFETIME };
+      // Apply Siege Workshop bonus to turret damage (if any workshop is in range)
+      const siegeMultiplier = 1 + (turret.siegeBonus ?? 0);
+      const finalDamage = Math.round(turret.damage * siegeMultiplier);
+      turret.siegeBonus = 0; // Reset for next tick (re-applied by tickSiegeWorkshops)
+      const projComp: any = { ownerId: id, damage: finalDamage, lifetime: RANGED_LIFETIME };
 
       if (isCannon) {
         const lvlIdx = (bldg!.upgradeLevel ?? 1) - 1;
@@ -1550,6 +1562,66 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     }
   }
 
+  // ── Siege Workshop: buff turret damage in radius ──────────────────────────
+  // Collects all turret entities within siege aura range and applies a damage
+  // multiplier. The bonus is re-applied each tick (not stacked) because turrets
+  // read their base damage from EnemyStats/TurretComponent.
+  function tickSiegeWorkshops(): void {
+    for (const sid of world.query(C.SiegeAura, C.Position)) {
+      const aura = world.getComponent<import('@shared/components').SiegeAuraComponent>(sid, C.SiegeAura)!;
+      const spos = world.getComponent<PositionComponent>(sid, C.Position)!;
+      const r2 = aura.range * aura.range;
+
+      // Find turrets within range and tag them with the bonus
+      for (const tid of world.query(C.Turret, C.Position)) {
+        const tpos = world.getComponent<PositionComponent>(tid, C.Position)!;
+        const dx = tpos.x - spos.x, dy = tpos.y - spos.y;
+        if (dx * dx + dy * dy <= r2) {
+          const turret = world.getComponent<TurretComponent>(tid, C.Turret)!;
+          // Apply bonus (multiplicative, clamped to avoid infinite stacking)
+          turret.siegeBonus = Math.max(turret.siegeBonus ?? 0, aura.damageBonus);
+        }
+      }
+    }
+  }
+
+  // ── Kennel: auto-spawn wolf guards ──────────────────────────────────────
+  // Each kennel ticks a spawn timer. When it hits 0, spawns a wolf guard entity
+  // that patrols around the kennel and attacks enemies.
+  function tickKennels(dt: number): void {
+    for (const kid of world.query(C.Kennel, C.Position)) {
+      const kennel = world.getComponent<import('@shared/components').KennelComponent>(kid, C.Kennel)!;
+      const kpos = world.getComponent<PositionComponent>(kid, C.Position)!;
+
+      // Clean up dead wolves
+      kennel.wolfIds = kennel.wolfIds.filter(wid => world.hasEntity(wid));
+
+      // Spawn timer
+      if (kennel.wolfIds.length >= kennel.maxWolves) continue;
+      kennel.spawnTimer -= dt;
+      if (kennel.spawnTimer > 0) continue;
+      kennel.spawnTimer = kennel.spawnInterval;
+
+      // Spawn a wolf guard near the kennel
+      const angle = Math.random() * Math.PI * 2;
+      const dist = 30 + Math.random() * 20;
+      const wx = kpos.x + Math.cos(angle) * dist;
+      const wy = kpos.y + Math.sin(angle) * dist;
+      const wolfId = world.createEntity();
+      world.addComponent(wolfId, C.Position, { x: wx, y: wy });
+      world.addComponent(wolfId, C.Velocity, { vx: 0, vy: 0 });
+      world.addComponent(wolfId, C.Health, { current: 80, max: 80 });
+      world.addComponent(wolfId, C.Faction, { type: 'guard' });
+      world.addComponent(wolfId, C.Speed, { base: 140, multiplier: 1 });
+      world.addComponent(wolfId, C.EnemyStats, { damage: 10, attackCooldown: 1.2, attackTimer: 0, range: 25, xpValue: 0 } as any);
+      world.addComponent(wolfId, C.PlayerInput, { dx: 0, dy: 0, sprint: false });
+      world.addComponent(wolfId, C.Facing, { angle: 0 });
+      world.addComponent(wolfId, C.AttackCooldown, { remaining: 0, duration: 1.2, active: false });
+      world.addComponent(wolfId, C.Guard, { barracksId: kid, patrolRadius: 150, variant: 'wolf' } as any);
+      kennel.wolfIds.push(wolfId);
+    }
+  }
+
   function restoreBuildingComponents(id: number, buildingType: string): void {
     switch (buildingType) {
       case 'lumbermill':
@@ -1632,6 +1704,27 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
         world.addComponent(id, C.Tavern, { maxHeroes: TAVERN_MAX_HEROES[0], heroIds: [], roster } as TavernComponent);
         break;
       }
+      // ── Achievement-unlocked buildings ──────────────────────────────────
+      case 'siege_workshop': {
+        // Buffs turret damage within 200px radius (+25%/+35%/+50% per level)
+        world.addComponent(id, C.SiegeAura, { range: 200, damageBonus: 0.25 } as import('@shared/components').SiegeAuraComponent);
+        break;
+      }
+      case 'kennel': {
+        // Auto-spawns wolf guards every 30s (max 2/3/4 per level)
+        world.addComponent(id, C.Kennel, { spawnInterval: 30, spawnTimer: 30, maxWolves: 2, wolfIds: [] } as import('@shared/components').KennelComponent);
+        break;
+      }
+      case 'arcane_tower': {
+        // Amplifies player ability range within 250px (+50%/+75%/+100% per level)
+        world.addComponent(id, C.ArcaneAura, { range: 250, rangeBonus: 0.50 } as import('@shared/components').ArcaneAuraComponent);
+        break;
+      }
+      case 'watchtower': {
+        // Extends minimap reveal + early wave warning (5s/8s/12s per level)
+        world.addComponent(id, C.WatchAura, { revealRadius: 400, warningTime: 5 } as import('@shared/components').WatchAuraComponent);
+        break;
+      }
     }
   }
 
@@ -1680,6 +1773,7 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     spawnTrainedGuard,
     tick(dt: number, send: SendFn): void {
       rebuildEnemyHash();
+      tickSiegeWorkshops();     // Must run BEFORE turrets so damage bonus is applied this tick
       tickProduction(dt);
       tickTurrets(dt, send);
       tickLaserBeams(dt, send);
@@ -1693,6 +1787,7 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       tickFlameTowers(dt, send);
       tickRepairStations(dt);
       tickMoats();
+      tickKennels(dt);
     },
   };
 }

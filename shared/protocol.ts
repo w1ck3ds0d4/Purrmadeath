@@ -61,6 +61,8 @@ export enum MessageType {
   PROJECTILE_SPAWN = 'PROJECTILE_SPAWN',
   /** Server → all: a projectile was destroyed (hit, wall, or expired). */
   PROJECTILE_REMOVE = 'PROJECTILE_REMOVE',
+  /** Server → all: batch of projectiles destroyed in one tick. */
+  PROJECTILE_REMOVE_BATCH = 'PROJECTILE_REMOVE_BATCH',
 
   // ── Pause ────────────────────────────────────────────────────────────────
   /** Client → Server: player votes to pause or resume (toggle). */
@@ -612,12 +614,20 @@ export interface ProjectileSpawnMessage extends BaseMessage {
   colors?: number[];
   /** Elemental type hint (for VFX color override). */
   element?: string;
+  /** True if this is a sniper shot (massive arrow visual). */
+  sniper?: boolean;
 }
 
 /** Server → all: a projectile was destroyed. */
 export interface ProjectileRemoveMessage extends BaseMessage {
   type: typeof MessageType.PROJECTILE_REMOVE;
   projectileId: number;
+}
+
+/** Server → all: batch of projectiles destroyed in one tick (reduces message count). */
+export interface ProjectileRemoveBatchMessage extends BaseMessage {
+  type: typeof MessageType.PROJECTILE_REMOVE_BATCH;
+  projectileIds: number[];
 }
 
 // ─── Pause ────────────────────────────────────────────────────────────────────

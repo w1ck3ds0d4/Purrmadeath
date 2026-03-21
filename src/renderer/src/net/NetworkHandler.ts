@@ -437,12 +437,20 @@ export function registerMessageHandlers(
     const ps = msg as ProjectileSpawnMessage;
     d.projectileRenderer.spawn(ps.projectileId, ps.x, ps.y, ps.vx, ps.vy, ps.ownerSlot,
       ps.targetX, ps.targetY, ps.totalFlightTime, ps.pierce, ps.homing, ps.ballista,
-      ps.element === 'blood' ? [0xcc1122] : ps.colors);
+      ps.element === 'blood' ? [0xcc1122] : ps.colors, ps.sniper);
   });
 
   net.on(MessageType.PROJECTILE_REMOVE, (msg) => {
     const pr = msg as ProjectileRemoveMessage;
     d.projectileRenderer.remove(pr.projectileId);
+  });
+
+  // Batch remove: single message for all projectiles destroyed in one tick
+  net.on(MessageType.PROJECTILE_REMOVE_BATCH, (msg) => {
+    const batch = msg as import('@shared/protocol').ProjectileRemoveBatchMessage;
+    for (const id of batch.projectileIds) {
+      d.projectileRenderer.remove(id);
+    }
   });
 
   net.on(MessageType.AOE_EXPLOSION, (msg) => {

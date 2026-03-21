@@ -294,6 +294,8 @@ export class ServerSocket {
   private sweepDeadClients(): void {
     const now = Date.now();
     for (const [id, client] of this.clients) {
+      // Skip timeout for localhost/singleplayer connections
+      if (client.ip === '127.0.0.1' || client.ip === '::1' || client.ip === '::ffff:127.0.0.1') continue;
       if (now - client.lastPing > HEARTBEAT_TIMEOUT_MS) {
         console.warn(`[Server] Client ${id} timed out - terminating`);
         client.ws.terminate();

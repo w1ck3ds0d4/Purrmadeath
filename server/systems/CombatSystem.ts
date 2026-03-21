@@ -165,6 +165,8 @@ export class CombatSystem {
       if (srcFaction?.type === 'player' && tgtFaction?.type === 'building') continue;
       // Players and guards don't damage civilians (no friendly fire on NPCs)
       if ((srcFaction?.type === 'player' || srcFaction?.type === 'guard') && tgtFaction?.type === 'civilian') continue;
+      // Players don't damage guards/wolves (no friendly fire on allied units)
+      if (srcFaction?.type === 'player' && tgtFaction?.type === 'guard') continue;
 
       const tgtPos = world.getComponent<PositionComponent>(targetId, C.Position)!;
       const dx = tgtPos.x - attackX;

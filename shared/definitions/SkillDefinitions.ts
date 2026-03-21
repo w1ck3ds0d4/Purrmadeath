@@ -42,9 +42,9 @@ export type AbilityParams =
   | { type: 'unbreakable_charge'; tauntRadius: number; damageReduction: number; chargeDuration: number; damageMultiplier: number }
   | { type: 'blood_drain'; radius: number; duration: number; drainPercent: number }
   // Ranger
-  | { type: 'sniper_shot'; chargeTime: number; damageMultiplier: number }
+  | { type: 'sniper_shot'; damage: number }
   | { type: 'pack_call'; wolfCount: number; wolfHp: number; wolfDamage: number; duration: number }
-  | { type: 'explosive_barrage'; arrowCount: number; damagePerArrow: number; explosionRadius: number }
+  | { type: 'explosive_barrage'; arrowCount: number; damagePerArrow: number; explosionRadius: number; duration: number }
   // Mage
   | { type: 'meteor_shower'; radius: number; duration: number; meteorCount: number; damagePerMeteor: number }
   | { type: 'blizzard_freeze'; radius: number; freezeDuration: number; damageAmp: number }

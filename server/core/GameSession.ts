@@ -2878,7 +2878,22 @@ export class GameSession {
       for (let i = 0; i < 3; i++) this.stats.trackWolfSummoned(player.playerId);
     }
 
-    const { hits, deaths } = this.skills.handleAbilityUse(clientId, msg, send);
+    const { hits, deaths, projectileSpawns } = this.skills.handleAbilityUse(clientId, msg, send);
+
+    // Broadcast any projectile spawns from the ability (e.g., Sniper Shot)
+    if (projectileSpawns) {
+      for (const spawn of projectileSpawns) {
+        const spawnMsg: import('@shared/protocol').ProjectileSpawnMessage = {
+          type: MessageType.PROJECTILE_SPAWN,
+          projectileId: spawn.projectileId,
+          x: spawn.x, y: spawn.y,
+          vx: spawn.vx, vy: spawn.vy,
+          ownerSlot: spawn.ownerSlot,
+          sniper: spawn.sniper,
+        };
+        for (const p of this.players.values()) send(p.client, spawnMsg);
+      }
+    }
 
     if (hits.length > 0) {
       this.logger.ability(`${msg.abilityId} hit ${hits.length} targets, killed ${deaths.length}`, {
@@ -3762,6 +3777,32 @@ export class GameSession {
       }
     }
 
+    // Wolf poison: if a guard wolf hit an enemy, apply poison DOT to the target
+    for (const hit of enemyResult.hits) {
+      const srcFaction = this.world.getComponent<FactionComponent>(hit.sourceId, C.Faction);
+      if (srcFaction?.type !== 'guard') continue;
+      const guard = this.world.getComponent<import('@shared/components').GuardComponent>(hit.sourceId, C.Guard);
+      if (guard?.variant !== 'wolf') continue;
+      // Find the owner player of this wolf
+      for (const [cid, p] of this.players) {
+        if (p.entityId !== guard.barracksId && p.entityId !== guard.followEntityId) continue;
+        const sBuffs = this.skills.getSkillBuffs(cid);
+        const poisonMod = sBuffs.combatMods.find((m: any) => m.type === 'wolf_poison');
+        if (poisonMod && this.world.getComponent<HealthComponent>(hit.targetId, C.Health)) {
+          const existing = this.world.getComponent<BurnDotComponent>(hit.targetId, C.BurnDot);
+          if (existing) {
+            existing.dps = Math.max(existing.dps, poisonMod.value);
+            existing.remaining = Math.max(existing.remaining, (poisonMod as any).params?.duration ?? 10);
+          } else {
+            this.world.addComponent<BurnDotComponent>(hit.targetId, C.BurnDot, {
+              dps: poisonMod.value, remaining: (poisonMod as any).params?.duration ?? 10, sourceId: p.entityId!,
+            });
+          }
+        }
+        break;
+      }
+    }
+
     // Spawn ranged enemy projectiles (uses per-entity stats from EnemySystem)
     for (const ra of enemyResult.rangedAttacks) {
       const dirX = Math.cos(ra.facing);
@@ -3834,13 +3875,16 @@ export class GameSession {
       }
     }
 
-    for (const projId of projResult.destroyed) {
-      const removeMsg: ProjectileRemoveMessage = {
-        type: MessageType.PROJECTILE_REMOVE,
-        projectileId: projId,
-      };
-      for (const p of this.players.values()) send(p.client, removeMsg);
-      this.world.destroyEntity(projId);
+    // Batch projectile removal: single message per tick instead of one per projectile.
+    // With 50 projectiles expiring in one tick, this reduces 50*P messages to just P messages.
+    if (projResult.destroyed.length > 0) {
+      const ids: number[] = [];
+      for (const projId of projResult.destroyed) {
+        ids.push(projId);
+        this.world.destroyEntity(projId);
+      }
+      const batchMsg = { type: MessageType.PROJECTILE_REMOVE_BATCH, projectileIds: ids };
+      for (const p of this.players.values()) send(p.client, batchMsg);
     }
 
     // Broadcast AOE explosions to clients

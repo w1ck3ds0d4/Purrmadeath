@@ -13,7 +13,7 @@ export const TICK_MS = 1000 / TICK_RATE;
 export const PING_INTERVAL_MS = 2_000;
 
 /** Server drops a client that hasn't responded within this window. */
-export const HEARTBEAT_TIMEOUT_MS = 60_000;
+export const HEARTBEAT_TIMEOUT_MS = 120_000;
 
 /** Maximum WebSocket message size in bytes. Prevents memory exhaustion from oversized payloads. */
 export const MAX_MESSAGE_BYTES = 64 * 1024; // 64 KB
@@ -397,8 +397,8 @@ export const BUILDING_EXCLUSION_SIZES: Record<string, { w: number; h: number }> 
   return sizes;
 })();
 
-/** Buildings that can be placed inside ANY building's exclusion zone. */
-export const EXCLUSION_EXEMPT_BUILDINGS = new Set(['bridge', 'moat', 'spike_trap']);
+/** Buildings that can be placed inside ANY building's exclusion zone (only footprint overlap blocks). */
+export const EXCLUSION_EXEMPT_BUILDINGS = new Set(['bridge', 'moat', 'spike_trap', 'wall']);
 
 /**
  * Buildings that ignore exclusion zones only when placed near OTHER buildings
