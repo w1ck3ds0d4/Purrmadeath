@@ -1,3 +1,14 @@
+/**
+ * AbilityExecutor - resolves active skill abilities server-side.
+ *
+ * executeAbility() is the single entry point. It switches on params.type to handle
+ * each ability: Warrior (warcry_rage, unbreakable_charge, blood_drain),
+ * Ranger (sniper_shot, pack_call, explosive_barrage), and
+ * Mage (meteor_shower, blizzard_freeze, thunderwave).
+ *
+ * Returns an AbilityResult with the broadcast effect, hit results, deaths, and
+ * any projectile spawns that GameSession needs to broadcast to clients.
+ */
 import { World } from '@shared/ecs/World';
 import { distance } from '@shared/math/utils';
 import {
@@ -276,8 +287,8 @@ export function executeAbility(
     // =====================================================================
 
     case 'warcry_rage': {
+      // Berserker buff: grants speed, defense, and HP regen for a duration
       baseEffect.duration = params.duration;
-      // Check for warcry extension combat mod
       let duration = params.duration;
       // Extension will be handled by SkillSystem checking combat mods
       let ab = world.getComponent<ActiveBuffsComponent>(entityId, C.ActiveBuffs);
@@ -291,9 +302,10 @@ export function executeAbility(
     }
 
     case 'unbreakable_charge': {
+      // Guardian ultimate: root self, taunt nearby enemies, absorb damage.
+      // Stored damage is multiplied and released as AOE when the charge ends.
       baseEffect.radius = params.tauntRadius;
       baseEffect.duration = params.chargeDuration;
-      // Root the player
       world.addComponent(entityId, C.Root, { remaining: params.chargeDuration });
       // Apply damage reduction buff
       let ab = world.getComponent<ActiveBuffsComponent>(entityId, C.ActiveBuffs);
@@ -318,9 +330,10 @@ export function executeAbility(
     }
 
     case 'blood_drain': {
+      // Blood Knight aura: drains HP from nearby enemies and heals the caster.
+      // Implemented as an ActiveBuff so the aura moves with the player.
       baseEffect.radius = params.radius;
       baseEffect.duration = params.duration;
-      // Add as ActiveBuff so it follows the player (drains nearby enemies, heals player)
       let abDrain = world.getComponent<ActiveBuffsComponent>(entityId, C.ActiveBuffs);
       if (!abDrain) { abDrain = { buffs: [] }; world.addComponent(entityId, C.ActiveBuffs, abDrain); }
       // Remove existing blood_drain buff if any
@@ -339,7 +352,7 @@ export function executeAbility(
     // =====================================================================
 
     case 'sniper_shot': {
-      // Instantly fire a massive piercing arrow in the facing direction
+      // Sharpshooter ability: fires a high-damage piercing projectile through all enemies
       const angle = msg.facing;
       const speed = 600;
       const spawnDist = 25;
@@ -368,8 +381,8 @@ export function executeAbility(
     }
 
     case 'pack_call': {
-      // Spawn temporary wolves near the player that follow and fight
-      // Wolves need the same components as trained guards to engage in combat
+      // Beastmaster ability: summons temporary wolves that follow the player and fight.
+      // Wolves are guard-faction entities with full combat components (melee AI, knockback, etc.)
       for (let i = 0; i < params.wolfCount; i++) {
         const angle = (i / params.wolfCount) * Math.PI * 2;
         const spawnDist = 40 + Math.random() * 30;
@@ -405,7 +418,8 @@ export function executeAbility(
     }
 
     case 'explosive_barrage': {
-      // Targeted area barrage: explosive arrows rain down in a zone (like meteor shower but smaller)
+      // Trapper ability: rains explosive arrows in a targeted zone over time.
+      // Reuses MeteorShower component to spawn timed impacts within the area.
       const tx = msg.targetX ?? pos.x;
       const ty = msg.targetY ?? pos.y;
       const radius = params.explosionRadius * 2 || 120; // Area where arrows land
@@ -438,6 +452,7 @@ export function executeAbility(
     // =====================================================================
 
     case 'meteor_shower': {
+      // Fire Mage ultimate: spawns a zone entity that drops meteors at random positions
       const tx = msg.targetX ?? pos.x;
       const ty = msg.targetY ?? pos.y;
       baseEffect.targetX = tx;
@@ -462,6 +477,7 @@ export function executeAbility(
     }
 
     case 'blizzard_freeze': {
+      // Frost Mage ultimate: freezes all enemies in area and applies damage amplification
       const tx = msg.targetX ?? pos.x;
       const ty = msg.targetY ?? pos.y;
       baseEffect.targetX = tx;
@@ -497,6 +513,7 @@ export function executeAbility(
     }
 
     case 'thunderwave': {
+      // Electric Mage ability: knockback + stun all enemies in radius (no damage)
       baseEffect.radius = params.radius;
       const r2 = params.radius * params.radius;
       for (const eid of world.query(C.Position, C.Health, C.Faction)) {

@@ -1,3 +1,11 @@
+/**
+ * Registers all server message handlers on the NetworkClient.
+ *
+ * Each handler maps a MessageType to a callback that updates shared GameplayState
+ * and drives UI overlays. Handlers are grouped by feature: session lifecycle,
+ * world state (snapshot/delta), combat, waves, day/night, cards, skills, potions,
+ * resources, buildings, civilians, heroes, and transport lifecycle.
+ */
 import { World } from '@shared/ecs/World';
 import { C, PositionComponent, FactionComponent, HealthComponent, BuildingComponent, CivilianComponent } from '@shared/components';
 import { MessageType } from '@shared/protocol';
@@ -335,7 +343,9 @@ export function registerMessageHandlers(
     d.lobbyOverlay.updatePlayers(s.lobbyPlayers);
   });
 
-  // ── World state ─────────────────────────────────────────────────────────
+  // -- World State Sync --
+  // SNAPSHOT: full world reset (on game start). DELTA: incremental entity updates each tick.
+  // Reconciler replays local inputs on top of server corrections to avoid jitter.
 
   net.on(MessageType.SNAPSHOT, (msg) => {
     const snap = msg as SnapshotMessage;
@@ -388,7 +398,8 @@ export function registerMessageHandlers(
     d.remotePlayerSys.applyDelta(d.world, delta);
   });
 
-  // ── Combat ──────────────────────────────────────────────────────────────
+  // -- Combat --
+  // Attack arcs, hit flashes, damage numbers, projectile spawn/remove, AOE explosions.
 
   net.on(MessageType.ATTACK_PERFORMED, (msg) => {
     const ap = msg as AttackPerformedMessage;
@@ -397,10 +408,11 @@ export function registerMessageHandlers(
     }
   });
 
+  // HIT: shows damage numbers, hit particles, screen shake. Skips flash for local
+  // player's own melee hits since client-side prediction already flashed those targets.
   net.on(MessageType.HIT, (msg) => {
     const hit = msg as HitMessage;
     const crit = hit.crit === true;
-    // Skip flash for local player's own attacks - client-side prediction already flashed the target
     if (hit.sourceId !== s.localEntityId) {
       d.playerRenderer.notifyHit(hit.targetId);
     }
@@ -608,7 +620,9 @@ export function registerMessageHandlers(
     s.pickedCardIds = sync.pickedCardIds;
   });
 
-  // ── Skills ──────────────────────────────────────────────────────────────
+  // -- Skills & Abilities --
+  // SKILL_STATE syncs allocated nodes, points, slot assignments, and cooldowns.
+  // Cooldowns may arrive before abilities are populated - stored as pending and applied later.
 
   net.on(MessageType.SKILL_STATE, (msg) => {
     const ss = msg as SkillStateMessage;
@@ -670,7 +684,9 @@ export function registerMessageHandlers(
     d.potionShopOverlay.refreshState(ps.equippedPotion, ps.unlockedPotions, ps.charges, ps.maxCharges, d.combinedResources());
   });
 
-  // ── Resources ───────────────────────────────────────────────────────────
+  // -- Resources --
+  // RESOURCE_UPDATE: player inventory. WAREHOUSE_UPDATE: shared warehouse.
+  // Both update build cost overlays and show floating +N popups for gains.
 
   net.on(MessageType.RESOURCE_UPDATE, (msg) => {
     const ru = msg as ResourceUpdateMessage;
@@ -752,7 +768,8 @@ export function registerMessageHandlers(
     d.debug.log(`[Chat] ${chat.displayName}: ${chat.text}`);
   });
 
-  // ── Player death / respawn ──────────────────────────────────────────────
+  // -- Player Death / Respawn --
+  // Downed -> revive progress -> revived OR bleed-out -> dead -> respawn timer -> respawned
 
   net.on(MessageType.PLAYER_DOWNED, (msg) => {
     if (s.localGameOver) return;
@@ -1070,7 +1087,9 @@ export function registerMessageHandlers(
     }
   });
 
-  // ── Transport callbacks ─────────────────────────────────────────────────
+  // -- Transport Lifecycle --
+  // onConnect: send handshake eagerly. onDrop: reset state and return to menu.
+  // Handshake is sent on every connect so the server has the playerId for stat lookups.
 
   net.onConnect(() => {
     d.menuOverlay.setConnectionStatus('connecting');

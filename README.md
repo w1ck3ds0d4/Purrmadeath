@@ -1,6 +1,6 @@
 # Purrmadeath
 
-2D co-op roguelike survival - base building, procedural world, up to 4 players.
+2D co-op roguelike survival - base building, procedural world, up to 4 players. Version 1.2.1.
 
 ---
 
@@ -13,6 +13,22 @@ Download the latest installer from the [Releases](https://github.com/WickedSoda/
 - **Singleplayer** - Play offline with a local embedded server. Saves are stored locally. Works without internet.
 - **Host Game** - Create an online session. Other players join with the invite code.
 - **Join** - Enter an invite code or server IP to join an existing session.
+
+### Classes
+
+Choose from 3 base classes, each with 3 active subclasses and 2 placeholder subclasses (unlocked via achievements):
+
+- **Warrior** - Sword, 120 HP, 180 speed, 2 defense
+  - Berserker (lifesteal/rage), Guardian (tank/thorns/charge), Blood Knight (drain/arc)
+  - Templar, Slayer (achievement-locked placeholders)
+- **Ranger** - Bow, 80 HP, 220 speed
+  - Sharpshooter (poison/crit), Beastmaster (wolf companion), Trapper (multi-shot/explosives)
+  - Shadow Hunter, Windwalker (achievement-locked placeholders)
+- **Mage** - Staff, 70 HP, 200 speed
+  - Fire (burn/meteor), Frost (slow/blizzard), Electric (chain/thunderwave)
+  - Earth, Void (placeholders)
+
+Each subclass has a 10-tier skill tree with passive stats, combat modifiers, abilities, and ultimates.
 
 ### Controls
 
@@ -54,7 +70,20 @@ Buildings are organized by category in the build menu (Q):
 
 **Shops**: Potion Shop, Tavern (hire hero NPCs)
 
-Campfire is auto-placed at the start and serves as respawn point + initial housing.
+**Achievement-Locked**: Siege Workshop, Kennel, Arcane Tower, Watchtower (unlocked via achievements)
+
+Campfire is auto-placed at the start and serves as respawn point + initial housing. Building exclusion zones prevent placement too close to certain structures (walls, bridges, moats, and spike traps are exempt).
+
+### Cards & Achievements
+
+- **30 cards**: 15 stat buffs (common-legendary), 10 build-defining abilities, 5 curses (dual buff+debuff)
+- **18 achievements**: 10 stat buff achievements, 4 building unlock achievements, 4 class unlock milestones
+- Cards are offered every 3 waves (pick 1 of 3) and granted on boss kills
+- Achievement buffs persist permanently across runs
+
+### Boss Encounters
+
+8 unique bosses every 5 waves (W5 through W40) with multi-phase mechanics, HP thresholds, and boss-specific loot tables. Double bosses from W30+.
 
 ---
 
@@ -96,7 +125,7 @@ Test files live alongside their source in `server/systems/` (e.g. `Pathfinding.t
 
 - **F4** - Debug console with 3-column stats view: Core (FPS, entities, position), Server (wave, enemies, tick profile), Game (class, HP, kills)
 - **F12** / **Ctrl+Shift+I** - Electron DevTools (dev mode only)
-- **Debug commands** (type in debug console): `/spawn [n]`, `/skipwave`, `/pause`, `/give`, `/sp [n]`, `/card [id]`, `/night`, `/day`, `/time [s]`, `/mod [id]`, `/event [id]`, `/ability [id]`
+- **Debug commands** (type in debug console): `/sp`, `/spawn`, `/give`, `/card`, `/wave`, `/kill`, `/pause`, `/god`, `/speed`, `/heal`, `/tp`, `/all`
 - **Session logs** - Server writes timestamped logs to `logs/` directory (ability activations, damage, buffs, wave events, saves)
 - **Client logs** - Production builds write startup/connection logs to `%AppData%/purrmadeath/logs/`
 - **Rate monitor** - Localhost connections log average/peak message rates every 30 seconds
@@ -242,6 +271,8 @@ shared/                    Shared between client and server
   protocol.ts              WebSocket message types
   definitions/             Data definitions
     skills/                Per-class skill trees (WarriorSkills, RangerSkills, MageSkills)
+    CardDefinitions.ts     30 cards (buffs, abilities, curses)
+    ProgressionDefinitions.ts  18 achievements
     SkillDefinitions.ts    Skill types, allocation logic, buff computation
     ClassDefinitions.ts    Class stats (Warrior, Ranger, Mage)
   world/                   Tile registry, world generation

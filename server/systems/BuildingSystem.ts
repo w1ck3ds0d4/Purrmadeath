@@ -1,3 +1,16 @@
+/**
+ * BuildingSystem - handles building placement, demolition, upgrades, repairs,
+ * and per-tick logic for all building types.
+ *
+ * Created per-session via createBuildingSystem(). The main tick() runs subsystems:
+ *   - Production buildings (lumbermill, quarry, mine, farm, workshop)
+ *   - Turrets (arrow, cannon, ballista, catapult) - uses spatial hash for targeting
+ *   - Laser towers (continuous beam damage)
+ *   - Spike traps (proximity damage with per-enemy cooldowns)
+ *   - Heal auras, repair stations, barracks guard spawning
+ *   - Tesla coils (chain lightning), flame towers (cone DPS), moats (slow)
+ *   - Ghost visibility (light tower reveal), building regen, ruins decay
+ */
 import { World } from '@shared/ecs/World';
 import { distance } from '@shared/math/utils';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
@@ -167,6 +180,8 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
 
   // ── Cost helpers ──────────────────────────────────────────────────────────
 
+  // Deducts building cost from warehouse pool first, then player inventory.
+  // Returns false if total available resources are insufficient.
   function deductBuildingCost(
     buildingType: string, player: SessionPlayer, send: SendFn,
     costOverride?: Partial<Record<string, number>>,
@@ -215,7 +230,10 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     for (const p of players.values()) send(p.client, msg);
   }
 
-  // ── Footprint collision ───────────────────────────────────────────────────
+  // -- Footprint Collision --
+  // Checks if a new building at (cx,cy) would overlap existing buildings,
+  // resource nodes, players, or enemies. Uses exclusion zones for spacing
+  // unless both buildings are exempt (bridges/traps) or stackable (walls/gates).
 
   function footprintCollides(cx: number, cy: number, buildingType: string, rotation: number = 0): boolean {
     const newExcl = buildingExclusionExtent(buildingType, rotation);
@@ -288,6 +306,9 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     return roster;
   }
 
+  // -- Building Placement Handler --
+  // Validates tile walkability, footprint collision, and resource cost,
+  // then spawns the building entity and attaches type-specific components.
   function handlePlace(clientId: string, msg: BuildPlaceMessage, send: SendFn): void {
     if (!isActive()) return;
     const player = players.get(clientId);
@@ -484,6 +505,9 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     buildingsByPlayer.set(player.playerId, (buildingsByPlayer.get(player.playerId) ?? 0) + 1);
   }
 
+  // -- Demolish Handler --
+  // Refunds a percentage of total invested cost (base + upgrades).
+  // Warehouse demolition drops 50% of stored resources as item pickups.
   function handleDemolish(clientId: string, msg: BuildDemolishMessage, send: SendFn): void {
     if (!isActive()) return;
     const player = players.get(clientId);
@@ -573,6 +597,10 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     send(player.client, { type: MessageType.BUILD_CONFIRM, success: true } as BuildConfirmMessage);
   }
 
+  // -- Upgrade Handler --
+  // Scales stats per level using UPGRADE_* arrays from constants.
+  // Each building type has custom scaling: HP, production interval/capacity,
+  // turret cooldown/damage, trap damage, heal rate, barracks guard cap, etc.
   function handleUpgrade(clientId: string, msg: BuildUpgradeMessage, send: SendFn): void {
     if (!isActive()) return;
     const player = players.get(clientId);
@@ -811,6 +839,9 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     }
   }
 
+  // -- Production Tick --
+  // Advances production timer for staffed buildings. Applies card debuff multiplier,
+  // world event multiplier, and civilian specialty bonus (25% faster if specialized).
   function tickProduction(dt: number): void {
     const eventMult = deps.getEventProductionMult?.() ?? 1.0;
     const intervalMult = cards.debuffs.productionIntervalMult / eventMult;
@@ -894,6 +925,10 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     return enemiesInRange[bestClusterIdx];
   }
 
+  // -- Turret Tick --
+  // Each turret finds nearest enemy via spatial hash, spawns a projectile entity,
+  // and broadcasts ProjectileSpawnMessage to all clients.
+  // Cannon/catapult projectiles use mortar (arc) flight; ballista projectiles pierce.
   function tickTurrets(dt: number, send: SendFn): void {
     for (const id of world.query(C.Turret, C.Position)) {
       const turret = world.getComponent<TurretComponent>(id, C.Turret)!;
@@ -989,6 +1024,9 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     }
   }
 
+  // -- Laser Beam Tick --
+  // Continuous DPS beam that locks onto nearest enemy. Throttles VFX broadcast
+  // to ~10Hz and damage numbers to ~3Hz to save bandwidth.
   function tickLaserBeams(dt: number, send: SendFn): void {
     const deaths: number[] = [];
     for (const id of world.query(C.LaserBeam, C.Position)) {
@@ -1068,6 +1106,8 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     if (deaths.length > 0) destroyDeadEntities(deaths, undefined, send);
   }
 
+  // -- Ghost Visibility Tick --
+  // Hidden ghosts are revealed by light towers or players with reveal_ghosts card ability.
   function tickGhostVisibility(): void {
     // Pre-cache light reveal positions once per tick (buildings don't move)
     const cachedLightReveals: Array<{ x: number; y: number; rangeSq: number }> = [];
@@ -1227,6 +1267,9 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     }
   }
 
+  // -- Spike Trap Tick --
+  // Damages enemies (and players) that step on traps. Uses per-enemy cooldown map
+  // to prevent rapid re-hits. Trap takes self-damage per trigger and can break.
   function tickSpikeTraps(dt: number, send: SendFn): void {
     const trapDeaths: number[] = [];
     const entityDeaths: number[] = [];
@@ -1408,8 +1451,9 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
   }
 
   /** Re-adds the functional components for a restored ruin. */
-  // ── Tesla Coil tick ──────────────────────────────────────────────────────
-
+  // -- Tesla Coil Tick --
+  // AOE zap hits all enemies in range, then chains to additional enemies.
+  // Chain arcs deal 50% damage and spread via spatial hash queries.
   function tickTeslaCoils(dt: number, send: SendFn): void {
     const deaths: number[] = [];
     for (const id of world.query(C.TeslaCoil, C.Position)) {
@@ -1464,8 +1508,8 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     if (deaths.length > 0) destroyDeadEntities(deaths, undefined, send);
   }
 
-  // ── Flame Tower tick ────────────────────────────────────────────────────
-
+  // -- Flame Tower Tick --
+  // Auto-rotates toward nearest enemy and deals cone DPS within arc.
   function tickFlameTowers(dt: number, send: SendFn): void {
     const deaths: number[] = [];
     for (const id of world.query(C.FlameAura, C.Position)) {
@@ -1500,8 +1544,9 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     if (deaths.length > 0) destroyDeadEntities(deaths, undefined, send);
   }
 
-  // ── Repair Station tick ─────────────────────────────────────────────────
-
+  // -- Repair Station Tick --
+  // Requires staffed civilian worker. Finds the most damaged building (lowest HP ratio)
+  // and repairs it using wood/stone from the warehouse pool.
   function tickRepairStations(dt: number): void {
     for (const id of world.query(C.RepairAura, C.Position)) {
       // Worker gating: only repair when a civilian is assigned
@@ -1771,6 +1816,9 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     depositPlayerToWarehouse,
     cleanupBridge,
     spawnTrainedGuard,
+    // -- Main Tick --
+    // Order matters: siege bonus must be computed before turrets fire.
+    // Enemy spatial hash is rebuilt once per tick and shared across all building subsystems.
     tick(dt: number, send: SendFn): void {
       rebuildEnemyHash();
       tickSiegeWorkshops();     // Must run BEFORE turrets so damage bonus is applied this tick

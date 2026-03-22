@@ -1,3 +1,14 @@
+/**
+ * Client-side projectile, explosion, and meteor rendering system.
+ *
+ * The server only sends spawn/remove events - all movement is predicted locally
+ * using constant velocity (linear) or parabolic arc (mortar). Renders multiple
+ * projectile styles: default circle+trail, ranger arrows (pierce), ballista bolts,
+ * sniper shots, homing mage orbs, blood arc crescents, and elemental color cycling.
+ *
+ * Also handles cannon AOE explosions, meteor warnings (pulsing red circles),
+ * meteor impacts (multi-phase fire explosion), and persistent ground craters.
+ */
 import { Container, Graphics } from 'pixi.js';
 import { PLAYER_COLORS, PROJECTILE_RADIUS } from '@shared/constants';
 
@@ -222,7 +233,8 @@ export class ProjectileRendererSystem {
       if (p.x < cameraX - halfW - margin || p.x > cameraX + halfW + margin ||
           p.y < cameraY - halfH - margin || p.y > cameraY + halfH + margin) continue;
 
-      // Color by projectile type: ranger=green, mage=white, turret=gray, enemy=orange, default=player color
+      // -- Projectile Color Selection --
+      // Special types override color: pierce=green, homing=white, turret=gray, enemy=orange
       let color: number;
       if (p.pierce) color = 0x44dd66;
       else if (p.homing) color = 0xeeeeff;
@@ -230,7 +242,8 @@ export class ProjectileRendererSystem {
       else if (p.ownerSlot === -2) color = 0xdd7722;
       else color = PLAYER_COLORS[p.ownerSlot] ?? 0xffffff;
 
-      // Elemental color cycling overrides the default color
+      // -- Elemental Color Cycling --
+      // Cycles through provided color array every 0.2s (mage elemental projectiles)
       if (p.colors && p.colors.length > 0 && p.spawnTime != null) {
         const elapsed = performance.now() / 1000 - p.spawnTime;
         const cycleIndex = Math.floor(elapsed / 0.2) % p.colors.length;
@@ -243,6 +256,11 @@ export class ProjectileRendererSystem {
       // Direction unit vector
       const dx = p.vx / speed;
       const dy = p.vy / speed;
+
+      // -- Projectile Shape Rendering --
+      // Each type has a unique visual: mortar=arc+shadow, homing=glowing orb,
+      // ballista=heavy bolt, sniper=long green trail, blood arc=crescent moon,
+      // pierce=elongated arrow, default=circle+trail.
 
       // Mortar projectiles: draw larger with parabolic arc scale
       if (p.targetX != null && p.totalFlightTime != null && p.elapsed != null) {

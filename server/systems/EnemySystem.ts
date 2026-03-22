@@ -1,3 +1,16 @@
+/**
+ * EnemySystem - server-side enemy and guard AI.
+ *
+ * Each tick, for every enemy/guard entity:
+ *   1. Targeting: determines what to chase based on variant and priority rules
+ *   2. Combat: melee attack if in range, ranged attack if applicable
+ *   3. Navigation: A* pathfinding around buildings/resources, with obstacle avoidance
+ *   4. Stuck detection: applies perpendicular wiggle if enemy hasn't moved
+ *
+ * Targeting priority (standard enemies): campfire > nearby players > walls > other buildings
+ * Variant overrides: ghosts beeline to players, giants target buildings, assassins dash-lunge,
+ * titans beeline to campfire. Guards target nearest enemy within detection range.
+ */
 import { World } from '@shared/ecs/World';
 import { distance } from '@shared/math/utils';
 import {
@@ -222,7 +235,8 @@ export class EnemySystem {
         ? { damage: stats.damage, range: stats.range, knockback: stats.knockback, aoe: variant === 'titan' }
         : ENEMY_OVERRIDES_DEFAULT;
 
-      // ── Assassin dash tick ─────────────────────────────────────────────────
+      // -- Assassin Dash Tick --
+      // Dashing state: count down timer, restore speed when done. Cooldown state: tick down.
       const dash = world.getComponent<AssassinDashComponent>(id, C.AssassinDash);
       if (dash) {
         if (dash.dashing) {
@@ -337,7 +351,8 @@ export class EnemySystem {
         return best;
       };
 
-      // ── Guard targeting: nearest enemy > patrol to barracks/follow player ──
+      // -- Guard AI --
+      // Priority: attack nearest enemy > follow owner (wolves) > patrol near barracks
       if (isGuard) {
         const guard = world.getComponent<GuardComponent>(id, C.Guard);
 
@@ -376,7 +391,7 @@ export class EnemySystem {
           }
         }
       }
-      // ── Variant-specific targeting (enemies only) ──────────────────────────
+      // -- Variant-Specific Targeting (enemies only) --
       else if (variant === 'ghost') {
         // Ghosts: only target players, phase through everything (no pathfinding)
         const nearest = findNearestPlayer(Infinity);
@@ -558,7 +573,7 @@ export class EnemySystem {
           result.hits.push(...hits);
           result.deaths.push(...deaths);
         } else {
-          // ── Movement toward target ────────────────────────────────────────
+          // -- Movement Toward Target (pathfinding + obstacle avoidance) --
           const ddx = navPos.x - pos.x, ddy = navPos.y - pos.y;
           const len = distance(ddx, ddy);
 
@@ -682,7 +697,8 @@ export class EnemySystem {
       inp.sprint = false;
     }
 
-    // ── Titan rally mechanic ──────────────────────────────────────────────────
+    // -- Titan Rally Mechanic --
+    // At 50% HP, titans activate a speed aura that buffs all nearby non-titan enemies.
     this.tickTitanRally(world);
 
     return result;
@@ -781,6 +797,9 @@ export class EnemySystem {
     return false;
   }
 
+  // Reuses cached A* path if target hasn't moved much. Replans when age exceeds
+  // ENEMY_REPLAN_INTERVAL or target moved beyond ENEMY_REPLAN_DIST_THRESHOLD.
+  // Large enemies inflate blocked tiles to avoid squeezing through narrow gaps.
   private getOrComputePath(
     enemyId: number,
     pos: PositionComponent,
@@ -877,7 +896,9 @@ export class EnemySystem {
     return closest;
   }
 
-  /** Steer inp.dx/dy around nearby resource nodes, portals, and buildings to prevent jamming. */
+  // -- Obstacle Avoidance --
+  // Accumulates perpendicular push forces from ALL nearby obstacles (resources, portals,
+  // buildings). Picks the direction toward the target to steer around rather than into.
   private applyObstacleAvoidance(
     pos: PositionComponent,
     inp: PlayerInputComponent,

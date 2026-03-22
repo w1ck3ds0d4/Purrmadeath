@@ -1,3 +1,16 @@
+/**
+ * CombatSystem - server-authoritative melee combat resolution.
+ *
+ * processMeleeAttack() is called when any entity (player, enemy, guard) swings.
+ * It enforces cooldowns, checks a 120-degree arc for targets, applies defense
+ * reduction, critical hits, dodge rolls, shield blocks, and knockback.
+ *
+ * Friendly fire rules:
+ *   - Same faction never damages same faction
+ *   - Players can't damage own buildings, guards, or civilians
+ *   - Enemies can't damage resource nodes, bridges, or spike traps
+ *   - Giants and titans are immune to knockback
+ */
 import { World } from '@shared/ecs/World';
 import { distance } from '@shared/math/utils';
 import {
@@ -127,6 +140,7 @@ export class CombatSystem {
     const srcFaction = world.getComponent<FactionComponent>(sourceId, C.Faction);
     const halfArc = MELEE_ARC / 2;
 
+    // -- Target Iteration and Filtering --
     for (const targetId of world.query(C.Position, C.Health)) {
       if (targetId === sourceId) continue;
 
@@ -207,7 +221,9 @@ export class CombatSystem {
         continue;
       }
 
-      // Damage with defense reduction
+      // -- Damage Calculation --
+      // Defense reduction: subtract flat armor, then multiply by (1 - percent).
+      // Resource nodes take fixed GATHERING_DAMAGE. Buildings apply damage multiplier.
       const hp  = world.getComponent<HealthComponent>(targetId, C.Health)!;
       const def = world.getComponent<DefenseComponent>(targetId, C.Defense);
       let dmg: number;
@@ -220,7 +236,8 @@ export class CombatSystem {
         if (tgtFaction?.type === 'building') dmg = Math.round(dmg * this.buildingDamageMult);
       }
 
-      // Critical hit (players only) - card buffs add to base crit
+      // -- Critical Hit Roll (players only) --
+      // Base crit chance + card buffs. Frost crit bonus applies vs frozen/slowed targets.
       let crit = false;
       if (srcFaction?.type === 'player') {
         const totalCritChance = CRIT_CHANCE + (overrides?.critChance ?? 0);
@@ -236,13 +253,16 @@ export class CombatSystem {
         }
       }
 
-      // Apply damage reduction (Unbreakable Charge etc.)
+      // -- Damage Reduction (Unbreakable Charge, etc.) --
+      // Raw damage is stored before reduction for Guardian's charge accumulation mechanic.
       const dmgReduction = this.damageReductionMap.get(targetId) ?? 0;
-      const rawDmg = dmg; // Store raw damage before reduction (for charge accumulation)
+      const rawDmg = dmg;
       if (dmgReduction > 0) dmg = Math.max(0, Math.round(dmg * (1 - dmgReduction)));
       hp.current = Math.max(0, hp.current - dmg);
 
-      // Knockback impulse - direction from attacker to target (giants/titans are immune)
+      // -- Knockback --
+      // Direction from attacker to target. Giants/titans are immune.
+      // Knockback resist and card multiplier applied to final impulse.
       let knockbackVx = 0;
       let knockbackVy = 0;
       const tgtVariant = world.getComponent<EnemyVariantComponent>(targetId, C.EnemyVariant);

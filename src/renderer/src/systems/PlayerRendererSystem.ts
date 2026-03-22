@@ -1,3 +1,12 @@
+/**
+ * Renders all visible entities in world space: players, enemies, portals, resource
+ * nodes, item drops, buildings, guards, and civilians. Each entity is drawn as colored
+ * geometric shapes (circles, rectangles) with overlays for status effects, hit flashes,
+ * attack arcs, health bars, production tags, and building icons.
+ *
+ * Uses a dirty-flag system to skip expensive geometry rebuilds when only position changed.
+ * Viewport culling skips off-screen entities entirely.
+ */
 import { Container, Graphics, Text } from 'pixi.js';
 import { World, EntityId } from '@shared/ecs/World';
 import {
@@ -269,8 +278,8 @@ export class PlayerRendererSystem {
     // Viewport culling bounds (world-space)
     const cullHalfW = screenW / (2 * zoom) + 200; // 200px margin for large entities
     const cullHalfH = screenH / (2 * zoom) + 200;
-    // Collect all renderable entities: players, enemies, portals, resources, item drops
-    // Reuse class-level Sets to avoid per-frame allocations
+    // -- Entity Classification --
+    // Classify all entities into type buckets. Reuse class-level Sets to avoid per-frame GC.
     const playerIds = this._playerIds;    playerIds.clear();
     const enemyIds = this._enemyIds;      enemyIds.clear();
     const portalIds = this._portalIds;    portalIds.clear();
@@ -296,6 +305,7 @@ export class PlayerRendererSystem {
       else if (f.type === 'civilian') { civilianIds.add(id); living.add(id); }
     }
 
+    // -- Sprite Cleanup --
     // Remove sprites for entities that no longer exist; clean up all timers
     for (const [id, gfx] of this.sprites) {
       if (!living.has(id)) {
@@ -377,7 +387,9 @@ export class PlayerRendererSystem {
       if (flashRemaining > 0) this.hitTimers.set(id, Math.max(0, flashRemaining - dt));
       const flashT = Math.min(1, flashRemaining / HIT_FLASH_DURATION); // 1 → 0
 
-      // ── Dirty flag determination ──────────────────────────────────────────────
+      // -- Dirty Flag System --
+      // Only rebuild geometry when visual state actually changed (flash, downed, dodge, etc.)
+      // Position-only updates just move the Graphics object without clearing/redrawing.
       const isFlashing = flashT > 0;
       const prevFlashing = this.wasFlashing.get(id) ?? false;
       const hasArc = this.attackArcs.has(id);
@@ -432,7 +444,8 @@ export class PlayerRendererSystem {
       gfx.clear();
 
       if (isPortal) {
-        // ── Portal rendering (faction-colored) ──────────────────────────────
+        // -- Portal Rendering --
+        // Pulsing faction-colored glow ring with dark core. Color tinted by enemy faction.
         const pr = PORTAL_RADIUS;
         const portalFactionComp = world.getComponent<FactionComponent>(id, C.Faction);
         const portalFaction = (portalFactionComp?.enemyFaction as EnemyFaction | undefined);
@@ -492,7 +505,9 @@ export class PlayerRendererSystem {
 
 
       } else if (buildingIds.has(id)) {
-        // ── Building rendering ──────────────────────────────────────────────
+        // -- Building Rendering --
+        // Each building type has a unique icon drawn inside a colored rectangle.
+        // Selection shows pulsing yellow border + turret range circle.
         const bldg = world.getComponent<BuildingComponent>(id, C.Building);
         const bType = bldg?.buildingType ?? 'wall';
         const bColors = BUILDING_COLORS[bType] ?? BUILDING_COLORS.wall;
@@ -844,7 +859,9 @@ export class PlayerRendererSystem {
         }
 
       } else {
-        // ── Standard entity rendering (players, enemies, guards) ─────────────
+        // -- Player / Enemy / Guard Rendering --
+        // Colored circle body, optional attack arc, facing triangle (local player only),
+        // status effect overlays (burn, poison, frost, stun, etc.), boss aura rings.
 
         // Tick down attack arc
         const arc = this.attackArcs.get(id);
@@ -970,7 +987,8 @@ export class PlayerRendererSystem {
           gfx.stroke({ color: 0x000000, alpha: 0.45 * ghostAlpha, width: 2 });
         }
 
-        // ── Status effect visuals ───────────────────────────────────────────
+        // -- Status Effect Overlays --
+        // Bitmask-based rendering: each status bit triggers a unique visual ring/particles.
         const statusFx = world.getComponent<StatusEffectsComponent>(id, C.StatusEffects);
         if (statusFx && statusFx.bitmask && !isDowned) {
           const now = Date.now();
@@ -1118,11 +1136,13 @@ export class PlayerRendererSystem {
       }
     }
 
-    // ── Health bar overlay pass (renders above all entities/buildings) ────────
+    // -- Health Bar Overlay Pass --
+    // Drawn on a separate Graphics layer so bars render above all entity sprites.
     const hb = this.healthBarGfx;
     hb.clear();
 
-    // ── Laser beam pass (drawn in world space on health bar layer) ──────
+    // -- Persistent Laser Beam Rendering --
+    // Laser towers maintain continuous beams drawn as pulsing red lines.
     for (const lid of world.query(C.LaserBeam, C.Position)) {
       const lb = world.getComponent<import('@shared/components').LaserBeamComponent>(lid, C.LaserBeam);
       if (!lb || lb.targetId === null) continue;
@@ -1259,7 +1279,8 @@ export class PlayerRendererSystem {
       }
     }
 
-    // ── Production building resource tags ────────────────────────────────────
+    // -- Production Tags --
+    // Pill-shaped labels above production buildings showing stored/max resources.
     const activeProductionIds = new Set<EntityId>();
 
     for (const id of living) {
@@ -1315,7 +1336,8 @@ export class PlayerRendererSystem {
       }
     }
 
-    // ── Housing building spawn timer (circular ring) ───────────────────────
+    // -- Housing Spawn Timer --
+    // Circular pie-chart indicator above campfires/cat houses showing civilian spawn progress.
     const activeHousingIds = new Set<EntityId>();
     const SPAWN_INTERVAL = 60; // must match CIVILIAN_SPAWN_TIMER_INTERVAL
 

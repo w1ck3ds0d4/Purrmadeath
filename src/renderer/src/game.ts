@@ -1,3 +1,11 @@
+/**
+ * Main client entry point - bootstraps the game loop, state machine, UI overlays,
+ * ECS world, and network transport. Handles all input processing, ability targeting,
+ * build mode, and frame-by-frame rendering orchestration.
+ *
+ * State machine: Menu -> Lobby -> Playing <-> Paused
+ * Transport is persistent across sessions (connect once, send session actions over it).
+ */
 import { distance } from '@shared/math/utils';
 import { Renderer } from './render/Renderer';
 import { Camera } from './render/Camera';
@@ -233,7 +241,9 @@ async function main(): Promise<void> {
   let abilityCooldowns = [0, 0, 0];
   let abilityCooldownMaxes = [0, 0, 0];
 
-  // ── Ability targeting ──────────────────────────────────────────────────────
+  // -- Ability Targeting --
+  // When targetingSlot >= 0, left-click confirms the ability at the mouse position.
+  // RMB or pressing the same key again cancels. Self-cast abilities skip targeting entirely.
   let targetingSlot = -1; // 0-2 ability index, or -1
   let targetingGfx: Graphics | null = null;
 
@@ -250,6 +260,7 @@ async function main(): Promise<void> {
     explosive_barrage:  { fill: 0xff6600, stroke: 0xff9933 },
   };
 
+  // Determines how the ability is aimed: self (instant), ground (circle at cursor), direction (line from player)
   type TargetMode = 'self' | 'ground' | 'direction';
   function getTargetMode(params: AbilityParams): TargetMode {
     // Self-cast: buffs, transforms, AOE centered on player
@@ -296,7 +307,8 @@ async function main(): Promise<void> {
   let unlockedBuildings = new Set<string>(); // Building types unlocked via achievements
   let eventVisionMult = 1.0;
 
-  // ── Death / respawn state ──────────────────────────────────────────────────
+  // -- Death / Respawn State --
+  // Downed = incapacitated but revivable. Dead = bleed-out complete, awaiting respawn timer.
   let localDowned   = false;
   let localDead     = false;
   let respawnTimer  = 0;
@@ -316,8 +328,11 @@ async function main(): Promise<void> {
   let localActiveBuffIdsArr: string[] = [];
   let chargeProgress = 0;
   let chargeDamage = 0;
-  let selfRootTimer = 0; // Client-side root timer for immediate movement block
-  let localChargeElapsed = 0; // Client-side charge timer for smooth progress interpolation
+  // -- Charge / Root State --
+  // selfRootTimer blocks movement immediately on the client (before server confirms).
+  // localChargeElapsed/Duration drive the smooth charge progress bar interpolation.
+  let selfRootTimer = 0;
+  let localChargeElapsed = 0;
   let localChargeDuration = 0;
   let pendingAbilityCooldowns: Record<string, number> | null = null;
 
@@ -797,7 +812,10 @@ async function main(): Promise<void> {
     warehouseHUD.hide();
   }
 
-  // ── Handler state bridge (maps handler reads/writes to local variables) ────
+  // -- Handler State Bridge --
+  // GameplayState is a proxy object with getters/setters that map NetworkHandler
+  // reads/writes to the local variables declared above. This avoids passing 50+
+  // mutable refs individually while keeping the handler decoupled from game.ts internals.
   const handlerState: GameplayState = {
     get localSlot() { return localSlot; }, set localSlot(v) { localSlot = v; },
     get localEntityId() { return localEntityId; }, set localEntityId(v) { localEntityId = v; },
@@ -1181,6 +1199,8 @@ async function main(): Promise<void> {
         else if (civilianPanel.isVisible) civilianPanel.hide();
       }
 
+      // -- Can Act Gate --
+      // Player can only perform gameplay actions when alive, not in menus, and not picking cards.
       const canAct = !localDowned && !localDead && !localGameOver && !chatOverlay.isOpen && !cardPicker.isPicking && !potionShopOverlay.isVisible && !trainingOverlay.isVisible && !buildMenu.isVisible && !civilianPanel.isVisible;
 
       // Auto-cancel targeting when player can't act
@@ -1200,7 +1220,9 @@ async function main(): Promise<void> {
         if (cidx >= 0) localActiveBuffIdsArr.splice(cidx, 1);
       }
 
-      // 2. Read current input (zero when incapacitated or rooted)
+      // -- Charge Progress Interpolation --
+      // Client ticks the charge timer locally for smooth progress bar updates.
+      // On completion, fires a thunderwave VFX and immediately unroots the player.
       if (selfRootTimer > 0) selfRootTimer -= dt;
       if (localChargeDuration > 0 && localChargeElapsed < localChargeDuration) {
         localChargeElapsed += dt;
@@ -1221,6 +1243,7 @@ async function main(): Promise<void> {
           reconciler.smoothY = 0;
         }
       }
+      // Zero movement input when rooted (charge ability) or incapacitated
       const inp = world.getComponent<{ dx: number; dy: number; sprint: boolean }>(localEntityId, C.PlayerInput)!;
       const isRooted = selfRootTimer > 0 || localActiveBuffIdsArr.includes('unbreakable_charge');
       if (!canAct || isRooted) { inp.dx = 0; inp.dy = 0; inp.sprint = false; }
@@ -1340,9 +1363,10 @@ async function main(): Promise<void> {
       // Build ghost update + placement + selection + demolish + upgrade + repair
       if (buildCtrl.phase === 'placing' && pos) buildCtrl.update();
 
-      // Attack: client-side cooldown mirrors server AttackCooldown. Allow a small
-      // tolerance (one server tick) so the client doesn't silently miss an attack
-      // due to floating-point drift between variable-rate client and fixed-rate server.
+      // -- Melee / Ranged Attack --
+      // Client-side cooldown mirrors server AttackCooldown. Allows one-tick tolerance
+      // so floating-point drift between variable-rate client and fixed-rate server
+      // doesn't silently swallow attacks.
       if (attackCooldown > 0) attackCooldown = Math.max(0, attackCooldown - dt);
       const classAttackType = CLASS_STATS[selectedClass].attackType;
       const classCooldown = classAttackType === 'melee' ? MELEE_COOLDOWN : RANGED_COOLDOWN;
@@ -1443,7 +1467,9 @@ async function main(): Promise<void> {
         }
       }
 
-      // ── Ability targeting system ──────────────────────────────────────────────
+      // -- Ability Targeting System --
+      // Keys 1/2/3 enter targeting mode (or instant-cast for self abilities).
+      // Left-click confirms, RMB or same key cancels.
 
       // Cancel targeting: right-click
       if (targetingSlot >= 0 && input.isJustPressed(Action.Cancel)) {
@@ -1512,7 +1538,8 @@ async function main(): Promise<void> {
         cancelTargeting();
       }
 
-      // Render targeting indicator
+      // -- Targeting Indicator Rendering --
+      // Ground mode: circle at cursor with crosshair. Direction mode: line from player clamped to max range.
       if (targetingSlot >= 0 && targetingGfx && pos) {
         targetingGfx.clear();
         const ab = activeAbilities[targetingSlot];
@@ -1575,7 +1602,8 @@ async function main(): Promise<void> {
       for (const [pid, p] of projectileRenderer.getProjectiles()) {
         projOldPos.set(pid, { x: p.x, y: p.y });
       }
-      // Client-side homing: steer homing projectiles toward nearest enemy
+      // -- Homing Projectile Steering --
+      // Client mirrors server homing logic for smooth visuals (turn-rate limited per frame)
       for (const [, proj] of projectileRenderer.getProjectiles()) {
         if (!proj.homing) continue;
         const speed = Math.sqrt(proj.vx * proj.vx + proj.vy * proj.vy);
@@ -1610,7 +1638,8 @@ async function main(): Promise<void> {
       hitParticles.update(dt);
       abilityVFX.update(dt);
 
-      // Client-side projectile hit prediction - swept collision along path
+      // -- Client-Side Hit Prediction --
+      // Swept collision along old->new projectile path for immediate visual feedback.
       const projHits: number[] = [];
       for (const [projId, proj] of projectileRenderer.getProjectiles()) {
         const old = projOldPos.get(projId);
@@ -1647,7 +1676,8 @@ async function main(): Promise<void> {
 
       projectileRenderer.render(camera.viewX, camera.viewY, camera.zoom, sw, sh);
 
-      // Persistent aura effects (warcry, aegis, charge, etc.) - check snapshot buff IDs
+      // -- Persistent Aura VFX --
+      // Sync buff IDs from server snapshots to toggle visual auras around the local player
       if (localEntityId != null && pos) {
         const hasWarcry = localActiveBuffIdsArr.includes('warcry_rage');
         const hasAegis = localActiveBuffIdsArr.includes('aegis_shield');
@@ -1672,7 +1702,8 @@ async function main(): Promise<void> {
       }
     }
 
-    // Look-around only when actively playing with no overlays open
+    // -- Camera Look-Around --
+    // Disable camera look-around when overlays are open or player is incapacitated
     camera.lookEnabled = state === GameState.Playing
       && !localDowned && !localDead && !localGameOver
       && !chatOverlay.isOpen && !cardPicker.isPicking
@@ -1681,6 +1712,7 @@ async function main(): Promise<void> {
     // If look was disabled mid-look, release it so the camera eases back
     if (!camera.lookEnabled) camera.releaseLook();
 
+    // -- HUD Visibility Management --
     // Hide controls panel and chat when any full-screen overlay is open
     const anyOverlayOpen = skillTree.isVisible || buildMenu.isVisible || civilianPanel.isVisible
       || potionShopOverlay.isVisible || cardPicker.isPicking;
@@ -1784,7 +1816,9 @@ async function main(): Promise<void> {
         }
       }
 
-      // Night overlay: gather light sources from players + buildings + portals
+      // -- Night Overlay Light Sources --
+      // Collects all light-emitting entities (players, campfires, light towers, portals)
+      // and passes them to the night overlay for fog-of-war / darkness rendering.
       const playerLights: { x: number; y: number; radius: number; color?: number }[] = [];
       const lightSources: { x: number; y: number; radius: number; color?: number }[] = [];
       let campfirePos: { x: number; y: number } | null = null;

@@ -1,3 +1,13 @@
+/**
+ * SkillSystem - manages skill tree allocations, ability cooldowns, class passives,
+ * status effect ticking, and wolf companion lifecycle.
+ *
+ * Created per-session via createSkillSystem(). Each tick:
+ *   1. Ticks ability cooldowns
+ *   2. Ticks DOT/CC effects (burn, slow, poison, stun, freeze, root, fear, etc.)
+ *   3. Ticks class passives (Warrior Last Stand, Ranger Hunter's Focus, Mage Arcane Surge)
+ *   4. Manages permanent Beastmaster wolf companion spawning and upgrades
+ */
 import { World } from '@shared/ecs/World';
 import {
   C,
@@ -320,7 +330,9 @@ export function createSkillSystem(deps: SkillSystemDeps) {
     }
   }
 
-  // ── New Effect Component Ticking ────────────────────────────────────────────
+  // -- Ability-System CC/Effect Ticking --
+  // Ticks freeze, root, fear, damage marks, shields, stealth, channels,
+  // transforms, persistent zones, meteor showers, and summon expiry.
 
   function tickNewEffects(dt: number): void {
     // Freeze: immobilize entity completely
@@ -427,7 +439,7 @@ export function createSkillSystem(deps: SkillSystemDeps) {
       }
     }
 
-    // PersistentZone: AOE damage to enemies and heal to allies each tick
+    // PersistentZone: AOE - damages enemies and heals allies within radius each tick
     for (const id of deps.world.query(C.PersistentZone)) {
       const zone = deps.world.getComponent<PersistentZoneComponent>(id, C.PersistentZone)!;
       zone.remaining -= dt;
@@ -450,7 +462,9 @@ export function createSkillSystem(deps: SkillSystemDeps) {
       }
     }
 
-    // MeteorShower: spawn individual meteor impacts over time
+    // -- Meteor Shower Tick --
+    // Spawns impacts at random positions within the zone at fixed intervals.
+    // Each impact deals AOE damage (respecting defense) to enemies within impactRadius.
     for (const id of deps.world.query(C.MeteorShower)) {
       const ms = deps.world.getComponent<MeteorShowerComponent>(id, C.MeteorShower)!;
       ms.remaining -= dt;
@@ -493,6 +507,7 @@ export function createSkillSystem(deps: SkillSystemDeps) {
     }
   }
 
+  // -- Main Tick Entry Point --
   function tick(dt: number): void {
     // Tick ability cooldowns
     for (const id of deps.world.query(C.SkillCooldowns)) {
@@ -505,7 +520,9 @@ export function createSkillSystem(deps: SkillSystemDeps) {
     // ActiveBuffs are ticked by GameSession.tickActiveBuffs() - do NOT tick here
     // (double decrement was causing buffs to expire at half their intended duration)
 
-    // Tick burn DOT
+    // -- Burn DOT Tick --
+    // Burns deal dps*dt damage. If the source player has burn_lifesteal combat mod,
+    // they heal for a percentage of the burn damage dealt.
     for (const id of deps.world.query(C.BurnDot, C.Health)) {
       const burn = deps.world.getComponent<BurnDotComponent>(id, C.BurnDot)!;
       const hp = deps.world.getComponent<HealthComponent>(id, C.Health)!;
@@ -530,13 +547,13 @@ export function createSkillSystem(deps: SkillSystemDeps) {
       if (burn.remaining <= 0) deps.world.removeComponent(id, C.BurnDot);
     }
 
-    // Tick slow effects
+    // -- Slow Effect Tick --
+    // On expiry, reverse the slow by dividing out the factor. Clamped to 2x to prevent overflow.
     for (const id of deps.world.query(C.SlowEffect)) {
       const slow = deps.world.getComponent<SlowEffectComponent>(id, C.SlowEffect)!;
       slow.remaining -= dt;
       if (slow.remaining <= 0) {
         deps.world.removeComponent(id, C.SlowEffect);
-        // Restore speed
         const speed = deps.world.getComponent<SpeedComponent>(id, C.Speed);
         if (speed) speed.multiplier = Math.min(speed.multiplier / (1 - slow.factor), 2);
       }
@@ -558,7 +575,8 @@ export function createSkillSystem(deps: SkillSystemDeps) {
       if (stun.remaining <= 0) deps.world.removeComponent(id, C.StunEffect);
     }
 
-    // Tick shadow drain (damage target, heal source)
+    // -- Shadow Drain Tick --
+    // Deals DPS to target and heals the source entity for the same amount (life steal).
     for (const id of deps.world.query(C.ShadowDrain, C.Health)) {
       const drain = deps.world.getComponent<ShadowDrainComponent>(id, C.ShadowDrain)!;
       const hp = deps.world.getComponent<HealthComponent>(id, C.Health)!;
@@ -611,14 +629,17 @@ export function createSkillSystem(deps: SkillSystemDeps) {
     // Tick class passive abilities (Last Stand, Hunter's Focus, etc.)
     tickClassPassives(dt);
 
-    // ── Permanent Wolf Companion management ──────────────────────────────────
+    // -- Wolf Companion Management --
     // Beastmaster tier 2 spawns a permanent wolf. Tier 4/7/9/10 upgrade it.
     tickWolfCompanions(dt);
   }
 
-  // Track permanent wolf entity per player
-  const permanentWolves = new Map<string, number>(); // clientId -> wolfEntityId
+  // Track permanent wolf entity per player (clientId -> wolfEntityId)
+  const permanentWolves = new Map<string, number>();
 
+  // Spawns and maintains permanent wolf companions for Beastmaster players.
+  // Wolf stats scale with combat mods: tier 4 = +50% HP/dmg, tier 10 = 2x dmg + invulnerable.
+  // Wolf auto-respawns near the player if killed.
   function tickWolfCompanions(dt: number): void {
     for (const [clientId, player] of deps.players) {
       if (player.entityId == null) continue;
@@ -687,7 +708,7 @@ export function createSkillSystem(deps: SkillSystemDeps) {
         continue;
       }
 
-      // ── Wolf buff ticks ──────────────────────────────────────────────
+      // -- Wolf Buff Ticks (applied each frame to living wolf) --
       const wolfId = existingWolf!;
 
       // Tier 7: Nature's Bond - wolf heals 5 HP/s when near player
@@ -713,6 +734,8 @@ export function createSkillSystem(deps: SkillSystemDeps) {
     }
   }
 
+  // -- Apply Skill Passives to Entity --
+  // Recalculates defense, max HP, and speed from class base + skill tree + card bonuses.
   function applyPassivesToEntity(clientId: string): void {
     const player = deps.players.get(clientId);
     if (!player || player.entityId == null) return;

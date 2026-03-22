@@ -1,3 +1,15 @@
+/**
+ * Visual effects system for skill abilities, turret attacks, and persistent auras.
+ *
+ * Manages four effect categories:
+ * - VFXEntry: timed circle/ring/particle effects (whirlwind, explosion, rain of arrows, etc.)
+ * - LightningBolt: jagged chain lightning with pre-computed segments
+ * - LaserBeamEntry: pulsing red beam from laser towers
+ * - FlameConeEntry: cone-shaped fire burst from flame towers
+ * - PersistentAura: ongoing glow effects that follow the local player (warcry, aegis, charge)
+ *
+ * Also renders the Unbreakable Charge progress bar and damage counter below the player.
+ */
 import { Graphics, Container } from 'pixi.js';
 
 // ── Effect types ─────────────────────────────────────────────────────────────
@@ -48,7 +60,8 @@ interface LightningBolt {
   segments: Array<Array<{ x: number; y: number }>>;
 }
 
-/** Generate a jagged lightning path between two points. */
+// -- Lightning Path Generation --
+/** Generate a jagged lightning path between two points using perpendicular random offsets. */
 function generateLightningPath(x1: number, y1: number, x2: number, y2: number, jag: number): Array<{ x: number; y: number }> {
   const pts: Array<{ x: number; y: number }> = [{ x: x1, y: y1 }];
   const dx = x2 - x1, dy = y2 - y1;
@@ -264,7 +277,9 @@ export class AbilityVFXSystem {
     if (localPlayer) {
       this.renderPersistentAuras(localPlayer.x, localPlayer.y, localPlayer.dt);
 
-      // Unbreakable Charge progress bar + damage counter
+      // -- Charge Progress Bar --
+      // Rendered in world space below the local player. Shows accumulated damage
+      // and projected release damage. HTML label positioned in screen space.
       if (localPlayer.chargeProgress != null && localPlayer.chargeProgress > 0.001) {
         const barW = 50, barH = 6;
         const barX = localPlayer.x - barW / 2;
@@ -312,6 +327,12 @@ export class AbilityVFXSystem {
       const t = fx.elapsed / fx.duration; // 0→1
       const colors = ABILITY_COLORS[fx.type] ?? { fill: 0xffffff, stroke: 0xffffff };
 
+      // -- VFX Dispatch --
+      // Routes each ability ID to a specific drawing function.
+      // Warrior: whirlwind, shield_wall, warcry_rage, unbreakable_charge
+      // Ranger: rain_of_arrows, sniper_shot, arrow_volley, explosive_barrage, pack_call
+      // Mage: meteor_shower, blizzard_freeze, thunderwave, teleport
+      // Shared: explosion, dash trail, buff aura, summon poof
       switch (fx.type) {
         case 'whirlwind':
           this.drawWhirlwind(fx, t, colors);
@@ -401,7 +422,8 @@ export class AbilityVFXSystem {
       }
     }
 
-    // ── Lightning bolts ──
+    // -- Lightning Bolts --
+    // Jagged paths from source to each target, with glow pass and impact sparks.
     for (const bolt of this.bolts) {
       const bt = bolt.elapsed / bolt.duration;
       const alpha = bt < 0.15 ? bt / 0.15 : (1 - bt) * 0.8;
@@ -435,7 +457,8 @@ export class AbilityVFXSystem {
       }
     }
 
-    // ── Laser beams ──
+    // -- Laser Beams --
+    // Three-layer beam (glow, core, center) with pulsing alpha and impact glow at target.
     for (const beam of this.laserBeams) {
       const bt = beam.elapsed / beam.duration;
       // Pulsing alpha for visual interest
@@ -467,7 +490,8 @@ export class AbilityVFXSystem {
       }
     }
 
-    // ── Flame cones ──
+    // -- Flame Cones --
+    // Filled arc from tower source, with random fire particles and a hot core dot.
     for (const cone of this.flameCones) {
       const ct = cone.elapsed / cone.duration;
       const alpha = (ct < 0.15 ? ct / 0.15 : 1 - ct) * 0.6;
@@ -510,7 +534,10 @@ export class AbilityVFXSystem {
     }
   }
 
-  // ── Individual VFX renderers ─────────────────────────────────────────────────
+  // -- Individual VFX Renderers --
+  // Each method draws one type of ability effect. All take normalized time t (0-1)
+  // and ability-specific colors. Common patterns: expanding rings, fading particles,
+  // zone fills with border strokes.
 
   private drawWhirlwind(fx: VFXEntry, t: number, colors: { fill: number; stroke: number }): void {
     const alpha = (1 - t) * 0.5;
@@ -845,6 +872,9 @@ export class AbilityVFXSystem {
     }
   }
 
+  // -- Meteor Shower VFX --
+  // Multi-phase per-meteor animation: falling rock with smoke trail -> impact explosion
+  // with debris -> gap before next cycle. Uses golden angle distribution for even spread.
   private drawMeteorShower(fx: VFXEntry, t: number, _colors: { fill: number; stroke: number }): void {
     const cx = fx.targetX ?? fx.x;
     const cy = fx.targetY ?? fx.y;
@@ -939,6 +969,8 @@ export class AbilityVFXSystem {
     }
   }
 
+  // -- Thunderwave VFX --
+  // Expanding yellow shockwave ring with jagged lightning bolts radiating from center.
   private drawThunderwave(fx: VFXEntry, t: number): void {
     const alpha = (1 - t) * 0.7;
     const r = fx.radius * t;
@@ -1011,6 +1043,8 @@ export class AbilityVFXSystem {
     }
   }
 
+  // -- Blizzard Freeze VFX --
+  // Persistent ice zone with swirling snowflake particles, floating ice shards, and ground frost.
   private drawBlizzardFreeze(fx: VFXEntry, t: number): void {
     const cx = fx.targetX ?? fx.x;
     const cy = fx.targetY ?? fx.y;
