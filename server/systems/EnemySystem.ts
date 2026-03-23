@@ -56,6 +56,7 @@ import { TILE_DEFS } from '@shared/world/TileRegistry';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
 import { CombatSystem, HitResult } from './CombatSystem';
 import { findPath, CachedPath, tileKey } from './Pathfinding';
+import { createSpatialHash, type SpatialHash } from './SpatialHash';
 
 export interface EnemyAttackResult {
   hits: HitResult[];
@@ -110,6 +111,19 @@ export class EnemySystem {
   /** Stuck detection: tracks last-known positions and time since last significant move. */
   private stuckTimers = new Map<number, { x: number; y: number; timer: number }>();
 
+  // -- Spatial hashes for O(1) neighbor queries (rebuilt each tick) --
+  /** All player entities (for enemy targeting). */
+  private playerHash: SpatialHash = createSpatialHash(256);
+  /** All enemy entities (for guard targeting). */
+  private enemyHash: SpatialHash = createSpatialHash(256);
+  /** All building entities by type (for enemy building targeting). */
+  private buildingHash: SpatialHash = createSpatialHash(256);
+
+  /** Max A* pathfinding calls per tick to prevent frame spikes. */
+  private static readonly MAX_PATHFINDS_PER_TICK = 15;
+  /** Counter for A* calls this tick. */
+  private pathfindsThisTick = 0;
+
   constructor(
     private readonly combat: CombatSystem,
     private readonly generator: WorldGenerator,
@@ -119,20 +133,42 @@ export class EnemySystem {
     const result: EnemyAttackResult = { hits: [], deaths: [], attackPerformed: [], rangedAttacks: [] };
     const playerIds = world.query(C.Position, C.PlayerIndex);
 
-    // Categorize buildings by priority: campfire > walls > other buildings
+    // -- Rebuild spatial hashes + categorize entities in a single pass --
+    // Combines 3 separate world.query() calls into 1 (saves ~3000 lookups with 1500 entities)
+    this.playerHash.clear();
+    this.enemyHash.clear();
+    this.buildingHash.clear();
+    this.pathfindsThisTick = 0;
+
     const campfireIds: number[] = [];
     const wallIds: number[] = [];
     const otherBuildingIds: number[] = [];
-    for (const bid of world.query(C.Position, C.Faction)) {
-      const f = world.getComponent<FactionComponent>(bid, C.Faction)!;
-      if (f.type !== 'building') continue;
-      const bldg = world.getComponent<BuildingComponent>(bid, C.Building);
-      if (!bldg) continue;
-      // Skip bridges and spike traps - enemies don't target them
-      if (bldg.buildingType === 'bridge' || bldg.buildingType === 'spike_trap') continue;
-      if (bldg.buildingType === 'campfire') campfireIds.push(bid);
-      else if (bldg.buildingType === 'wall') wallIds.push(bid);
-      else otherBuildingIds.push(bid);
+
+    // Populate player hash
+    for (const pid of playerIds) {
+      if (world.hasComponent(pid, C.Downed)) continue;
+      const ppos = world.getComponent<PositionComponent>(pid, C.Position)!;
+      this.playerHash.insert(pid, ppos.x, ppos.y);
+    }
+
+    // Single pass: populate enemy hash + categorize buildings
+    for (const eid of world.query(C.Position, C.Faction)) {
+      const ef = world.getComponent<FactionComponent>(eid, C.Faction)!;
+      if (ef.type === 'enemy') {
+        if (!world.hasComponent(eid, C.Downed)) {
+          const epos = world.getComponent<PositionComponent>(eid, C.Position)!;
+          this.enemyHash.insert(eid, epos.x, epos.y);
+        }
+      } else if (ef.type === 'building') {
+        const bldg = world.getComponent<BuildingComponent>(eid, C.Building);
+        if (!bldg) continue;
+        if (bldg.buildingType === 'bridge' || bldg.buildingType === 'spike_trap') continue;
+        if (bldg.buildingType === 'campfire') campfireIds.push(eid);
+        else if (bldg.buildingType === 'wall') wallIds.push(eid);
+        else otherBuildingIds.push(eid);
+        const bpos = world.getComponent<PositionComponent>(eid, C.Position)!;
+        this.buildingHash.insert(eid, bpos.x, bpos.y);
+      }
     }
 
     // Compute building-blocked tiles for pathfinding (so enemies navigate around buildings)
@@ -273,20 +309,14 @@ export class EnemySystem {
       // Margin to push nav point outside building collision so pathfinder can reach it
       const navMargin = eRadius + 4;
 
-      // Helper: find nearest player (alive, not downed)
+      // Helper: find nearest player using spatial hash (O(K) instead of O(N))
       const findNearestPlayer = (maxRange: number) => {
-        let best: { pos: PositionComponent; dist: number } | null = null;
-        for (const pid of playerIds) {
-          if (world.hasComponent(pid, C.Downed)) continue;
-          const ppos = world.getComponent<PositionComponent>(pid, C.Position)!;
-          const ddx = ppos.x - pos.x;
-          const ddy = ppos.y - pos.y;
-          const dist = distance(ddx, ddy);
-          if (dist < maxRange && (!best || dist < best.dist)) {
-            best = { pos: ppos, dist };
-          }
-        }
-        return best;
+        const nearest = this.playerHash.queryNearest(pos.x, pos.y, maxRange);
+        if (!nearest) return null;
+        const ppos = world.getComponent<PositionComponent>(nearest.id, C.Position);
+        if (!ppos) return null;
+        const ddx = ppos.x - pos.x, ddy = ppos.y - pos.y;
+        return { pos: ppos, dist: distance(ddx, ddy) };
       };
 
       const tryBuildings = (ids: number[], maxRange: number) => {
@@ -327,27 +357,23 @@ export class EnemySystem {
         return best;
       };
 
-      // Helper: find nearest hostile enemy (guards target all enemies)
-      const findNearestHostileEnemy = (maxRange: number) => {
-        // Only guards use this - enemies no longer target other enemies
+      // Helper: find nearest hostile enemy using spatial hash (guards only)
+      const findNearestHostileEnemy = (maxRange: number): { pos: PositionComponent; dist: number } | null => {
         if (!isGuard) return null;
+        // Use enemy hash for O(K) lookup instead of O(N) world query
         let best: { pos: PositionComponent; dist: number } | null = null;
-        for (const eid of world.query(C.Position, C.Faction)) {
-          if (eid === id) continue;
-          const ef = world.getComponent<FactionComponent>(eid, C.Faction)!;
-          // Guards target all enemies
-          if (ef.type !== 'enemy') continue;
-          if (world.hasComponent(eid, C.Downed)) continue;
+        let bestD2 = maxRange * maxRange;
+        this.enemyHash.queryRange(pos.x, pos.y, maxRange, (entry, dSq) => {
+          if (entry.id === id) return;
           // Guards can't see hidden ghosts
-          const egs = world.getComponent<GhostStateComponent>(eid, C.GhostState);
-          if (egs?.hidden) continue;
-          const epos = world.getComponent<PositionComponent>(eid, C.Position)!;
-          const ddx = epos.x - pos.x, ddy = epos.y - pos.y;
-          const dist = distance(ddx, ddy);
-          if (dist < maxRange && (!best || dist < best.dist)) {
-            best = { pos: epos, dist };
+          const egs = world.getComponent<GhostStateComponent>(entry.id, C.GhostState);
+          if (egs?.hidden) return;
+          if (dSq < bestD2) {
+            bestD2 = dSq;
+            const epos = world.getComponent<PositionComponent>(entry.id, C.Position);
+            if (epos) best = { pos: epos, dist: Math.sqrt(dSq) };
           }
-        }
+        });
         return best;
       };
 
@@ -819,6 +845,14 @@ export class EnemySystem {
         return existing;
       }
     }
+
+    // Throttle A* calls to prevent frame spikes (max 15 per tick)
+    if (this.pathfindsThisTick >= EnemySystem.MAX_PATHFINDS_PER_TICK) {
+      // Over budget - reuse existing path or beeline
+      if (existing) return existing;
+      return null;
+    }
+    this.pathfindsThisTick++;
 
     // Compute new path (with building-blocked tiles)
     // Inflate blocked tiles for large enemies so they don't try to squeeze through narrow gaps

@@ -178,6 +178,7 @@ export class PlayerRendererSystem {
   private housingTags = new Map<EntityId, { bg: Graphics; text: Text }>();
   civilianSpawn?: { nextSpawnSeconds: number; population: number; capacity: number };
   private civilianTags = new Map<EntityId, { bg: Graphics; text: Text }>();
+  private wolfTags = new Map<EntityId, { bg: Graphics; text: Text }>();
   private speechBubbles = new Map<EntityId, { bg: Graphics; text: Text }>();
   private tagContainer: Container;
   /** Per-entity dirty flags: true when geometry needs rebuild, false when just position update suffices. */
@@ -884,7 +885,9 @@ export class PlayerRendererSystem {
         } else if (isGuard) {
           const gComp = world.getComponent<GuardComponent>(id, C.Guard);
           const gRole = gComp?.guardRole;
-          baseColor = gRole === 'warrior' ? 0xcc4444 : gRole === 'ranger' ? 0x44cc44 : gRole === 'mage' ? 0x6644ff : 0x4488cc;
+          const gVariant = gComp?.variant;
+          // Wolf companions are grey, trained guards use class colors
+          baseColor = gVariant === 'wolf' ? 0x888899 : gRole === 'warrior' ? 0xcc4444 : gRole === 'ranger' ? 0x44cc44 : gRole === 'mage' ? 0x6644ff : 0x4488cc;
         } else if (!isEnemy) {
           baseColor = PLAYER_COLORS[pIdx?.index ?? 0] ?? PLAYER_COLORS[0];
         } else {
@@ -1518,6 +1521,51 @@ export class PlayerRendererSystem {
         bubble.bg.destroy();
         bubble.text.destroy();
         this.speechBubbles.delete(id);
+      }
+    }
+
+    // ── Wolf name tags ────────────────────────────────────────────────────
+    const activeWolfIds = new Set<EntityId>();
+    for (const id of guardIds) {
+      const guard = world.getComponent<GuardComponent>(id, C.Guard);
+      if (!guard?.displayName || guard.variant !== 'wolf') continue;
+      activeWolfIds.add(id);
+      const pos = world.getComponent<PositionComponent>(id, C.Position)!;
+
+      let tag = this.wolfTags.get(id);
+      if (!tag) {
+        const bg = new Graphics();
+        const text = new Text({
+          text: '',
+          style: { fontSize: 9, fill: 0xaaaabb, fontFamily: 'monospace' },
+        });
+        text.anchor.set(0.5, 0.5);
+        this.tagContainer.addChild(bg);
+        this.tagContainer.addChild(text);
+        tag = { bg, text };
+        this.wolfTags.set(id, tag);
+      }
+
+      tag.bg.visible = true;
+      tag.text.visible = true;
+      tag.text.text = guard.displayName;
+      const tw = tag.text.width;
+      const th = tag.text.height;
+      const tagY = pos.y - 18;
+      tag.text.x = pos.x;
+      tag.text.y = tagY;
+      tag.bg.clear();
+      tag.bg.roundRect(pos.x - tw / 2 - 4, tagY - th / 2 - 2, tw + 8, th + 4, 3);
+      tag.bg.fill({ color: 0x222233, alpha: 0.7 });
+    }
+    // Clean up wolf tags for removed entities
+    for (const [id, tag] of this.wolfTags) {
+      if (!activeWolfIds.has(id)) {
+        this.tagContainer.removeChild(tag.bg);
+        this.tagContainer.removeChild(tag.text);
+        tag.bg.destroy();
+        tag.text.destroy();
+        this.wolfTags.delete(id);
       }
     }
   }

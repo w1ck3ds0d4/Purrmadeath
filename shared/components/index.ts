@@ -485,6 +485,8 @@ export interface GuardComponent {
   lifetime?: number;
   /** Wolf companion variant (for rendering). */
   variant?: 'wolf';
+  /** Display name for wolf companions. */
+  displayName?: string;
 }
 
 /** Laser tower continuous-beam component. */

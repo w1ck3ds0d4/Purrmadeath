@@ -20,7 +20,7 @@ import {
   CIVILIAN_INITIAL_COUNT, CIVILIAN_SPAWN_WAVE_INTERVAL,
   CIVILIAN_MAX_POPULATION, CAMPFIRE_HOUSING_PER_LEVEL, CAMPFIRE_SPAWN_ON_LEVELUP,
   CIVILIAN_SPEECH_DURATION, CAT_NAMES,
-  CIVILIAN_RADIUS, buildingHalfExtent, buildingExtent,
+  CIVILIAN_RADIUS, RESOURCE_NODE_RADIUS, buildingHalfExtent, buildingExtent,
   CIVILIAN_SPECIALIZATION_THRESHOLD,
 } from '@shared/constants';
 import { MessageType } from '@shared/protocol';
@@ -78,12 +78,21 @@ export function createCivilianSystem(deps: CivilianSystemDeps) {
 
   /** Check if a position overlaps any building AABB (with civilian radius margin). */
   function overlapsBuilding(px: number, py: number): boolean {
+    // Check buildings
     for (const id of world.query(C.Building, C.Position)) {
       const bldg = world.getComponent<BuildingComponent>(id, C.Building)!;
       const bp = world.getComponent<PositionComponent>(id, C.Position)!;
       const ext = buildingExtent(bldg.buildingType, bldg.rotation ?? 0);
       const margin = CIVILIAN_RADIUS;
       if (Math.abs(px - bp.x) < ext.hx + margin && Math.abs(py - bp.y) < ext.hy + margin) {
+        return true;
+      }
+    }
+    // Check resource nodes
+    for (const id of world.query(C.ResourceNode, C.Position)) {
+      const rp = world.getComponent<PositionComponent>(id, C.Position)!;
+      const dx = px - rp.x, dy = py - rp.y;
+      if (dx * dx + dy * dy < (RESOURCE_NODE_RADIUS + CIVILIAN_RADIUS) * (RESOURCE_NODE_RADIUS + CIVILIAN_RADIUS)) {
         return true;
       }
     }

@@ -635,6 +635,7 @@ async function main(): Promise<void> {
 
   // ── State: Menu ─────────────────────────────────────────────────────────────
   stateMgr.onEnter(GameState.Menu, () => {
+    clog('STATE', 'Entered Menu');
     // Hide night overlay FIRST - before any cleanup that could throw
     nightOverlay.hide();
     cancelTargeting();
@@ -728,6 +729,7 @@ async function main(): Promise<void> {
 
   // ── State: Lobby ────────────────────────────────────────────────────────────
   stateMgr.onEnter(GameState.Lobby, () => {
+    clog('STATE', `Entered Lobby - session=${currentSessionId}, host=${isHost}, singleplayer=${!connectedToRemote}`);
     menuOverlay.hide();
     lobbyOverlay.setSingleplayer(!connectedToRemote);
     lobbyOverlay.show(currentSessionId, currentSessionCode, isHost);
@@ -738,6 +740,7 @@ async function main(): Promise<void> {
 
   // ── State: Playing ──────────────────────────────────────────────────────────
   stateMgr.onEnter(GameState.Playing, () => {
+    clog('STATE', 'Entered Playing');
     if (gameStartTime === 0) gameStartTime = Date.now();
     menuOverlay.hide();
     lobbyOverlay.hide();
@@ -761,6 +764,7 @@ async function main(): Promise<void> {
 
   // ── State: Paused ───────────────────────────────────────────────────────────
   stateMgr.onEnter(GameState.Paused, () => {
+    clog('STATE', 'Entered Paused');
     pauseBanner.hide();
     const elapsed = serverElapsedTime > 0 ? serverElapsedTime : (gameStartTime > 0 ? (Date.now() - gameStartTime) / 1000 : 0);
     menuOverlay.showPause(

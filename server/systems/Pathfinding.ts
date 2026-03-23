@@ -25,6 +25,34 @@ const MAX_SEARCH_TILES = 40;
 /** Maximum nodes in the open set before giving up. */
 const MAX_OPEN_SET = 2000;
 
+/**
+ * Tile walkability cache - avoids repeated perlin noise computation.
+ * Key: tileKey(tx, ty), Value: true if walkable.
+ * Cleared periodically (every 60 seconds) to handle world changes.
+ */
+const walkabilityCache = new Map<number, boolean>();
+let walkabilityCacheAge = 0;
+const WALKABILITY_CACHE_MAX_AGE = 60; // seconds
+
+/** Increment cache age by dt. Clears cache when stale. */
+export function tickWalkabilityCache(dt: number): void {
+  walkabilityCacheAge += dt;
+  if (walkabilityCacheAge >= WALKABILITY_CACHE_MAX_AGE) {
+    walkabilityCache.clear();
+    walkabilityCacheAge = 0;
+  }
+}
+
+/** Get cached walkability for a tile, computing from generator if not cached. */
+function getCachedWalkable(generator: WorldGenerator, tx: number, ty: number): boolean {
+  const key = tileKey(tx, ty);
+  let cached = walkabilityCache.get(key);
+  if (cached !== undefined) return cached;
+  cached = TILE_DEFS[generator.getTile(tx, ty)]?.walkable ?? false;
+  walkabilityCache.set(key, cached);
+  return cached;
+}
+
 // 8-directional neighbors: cardinal + diagonal
 const DIRS: readonly [number, number][] = [
   [1, 0], [-1, 0], [0, 1], [0, -1],
@@ -88,10 +116,10 @@ export function findPath(
   const goalTx  = Math.floor(gx / TILE_SIZE);
   const goalTy  = Math.floor(gy / TILE_SIZE);
 
-  /** Check if a tile is walkable (terrain or bridge override). */
+  /** Check if a tile is walkable (cached terrain lookup + bridge override). */
   const isWalkable = (tx: number, ty: number): boolean => {
     if (bridgeTiles?.has(tileKey(tx, ty))) return true;
-    return TILE_DEFS[generator.getTile(tx, ty)]?.walkable ?? false;
+    return getCachedWalkable(generator, tx, ty);
   };
 
   // Trivial case: same tile

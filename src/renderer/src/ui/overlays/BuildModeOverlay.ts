@@ -53,8 +53,8 @@ export class BuildModeOverlay {
     this.el.style.cssText = [
       hudStyle(),
       'position: absolute',
-      'bottom: 12px',
-      'left: calc(50% + 198px)',
+      'top: 200px',
+      'right: 12px',
       'z-index: 20',
       `border: 1px solid ${THEME.borderDefault}`,
       'padding: 10px 16px',

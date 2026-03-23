@@ -313,83 +313,96 @@ export class CivilianPanelOverlay {
   private renderBuildings(): void {
     this.rightCol.innerHTML = '';
 
-    // Group buildings by category
+    // Group buildings by category, then merge same building types into one row
     for (const cat of BUILDING_CATEGORIES) {
       const catBuildings = this.buildings.filter(b => cat.types.includes(b.buildingType));
       if (catBuildings.length === 0) continue;
 
-      // Category header
+      // Category header (no top margin on first category to align with left column)
+      const isFirst = this.rightCol.children.length === 0;
       const header = document.createElement('div');
-      header.style.cssText = `font-size: 10px; font-weight: bold; color: ${THEME.accent}; letter-spacing: 1.5px; margin-bottom: 4px; margin-top: 6px;`;
+      header.style.cssText = `font-size: 10px; font-weight: bold; color: ${THEME.accent}; letter-spacing: 1.5px; margin-bottom: 4px;${isFirst ? '' : ' margin-top: 6px;'}`;
       header.textContent = cat.name;
       this.rightCol.appendChild(header);
 
+      // Merge buildings of the same type into grouped rows
+      const typeGroups = new Map<string, typeof catBuildings>();
       for (const bldg of catBuildings) {
+        const key = bldg.buildingType;
+        if (!typeGroups.has(key)) typeGroups.set(key, []);
+        typeGroups.get(key)!.push(bldg);
+      }
+
+      for (const [buildingType, group] of typeGroups) {
+        const totalSlots = group.length;
+        const filledSlots = group.filter(b => b.workerName !== null);
+        const emptySlots = group.filter(b => b.workerName === null);
+        const totalRate = group.reduce((s, b) => s + (b.productionRate ?? 0), 0);
+        const resType = group[0].resourceType;
+
         const row = document.createElement('div');
         row.style.cssText = `display: flex; align-items: center; gap: 6px; padding: 4px 6px; margin-bottom: 2px; background: ${THEME.surfaceBg}; border: 1px solid ${THEME.borderSubtle}; border-radius: 2px; font-size: 11px;`;
 
-        // Building name + level
+        // Building name + count
         const nameEl = document.createElement('span');
         nameEl.style.cssText = `font-weight: bold; color: #aac; min-width: 85px; font-size: 11px;`;
-        const label = BUILDING_LABELS[bldg.buildingType] ?? bldg.buildingType;
-        nameEl.textContent = bldg.level > 1 ? `${label} Lv.${bldg.level}` : label;
+        const label = BUILDING_LABELS[buildingType] ?? buildingType;
+        nameEl.textContent = totalSlots > 1 ? `${label} x${totalSlots}` : label;
         row.appendChild(nameEl);
 
-        // Production rate
+        // Aggregate production rate
         const rateEl = document.createElement('span');
         rateEl.style.cssText = 'min-width: 70px; font-size: 10px;';
-        if (bldg.productionRate > 0 && bldg.resourceType) {
-          const icon = RES_ICONS[bldg.resourceType] ?? '';
-          const color = RES_COLORS[bldg.resourceType] ?? '#ccc';
-          rateEl.innerHTML = `<span style="color:${color}">${icon}</span> <span style="color:#8ade8a">${bldg.productionRate.toFixed(1)}</span><span style="color:${THEME.textDim}">/tick</span>`;
+        if (totalRate > 0 && resType) {
+          const icon = RES_ICONS[resType] ?? '';
+          const color = RES_COLORS[resType] ?? '#ccc';
+          rateEl.innerHTML = `<span style="color:${color}">${icon}</span> <span style="color:#8ade8a">${totalRate.toFixed(1)}</span><span style="color:${THEME.textDim}">/tick</span>`;
         } else {
           rateEl.innerHTML = `<span style="color:${THEME.textMuted}">---</span>`;
         }
         row.appendChild(rateEl);
 
-        // Worker slot indicator
+        // Worker slot indicators (one dot per building)
         const slotEl = document.createElement('span');
         slotEl.style.cssText = 'display: flex; gap: 2px; align-items: center; min-width: 20px;';
-        if (bldg.workerName) {
-          // Filled slot (green square)
+        for (const bldg of group) {
           const sq = document.createElement('span');
-          sq.style.cssText = 'width: 10px; height: 10px; background: #44cc44; border-radius: 2px; display: inline-block;';
-          sq.title = bldg.workerName;
-          slotEl.appendChild(sq);
-        } else {
-          // Empty slot (dark square)
-          const sq = document.createElement('span');
-          sq.style.cssText = 'width: 10px; height: 10px; background: #333; border: 1px solid #555; border-radius: 2px; display: inline-block;';
+          if (bldg.workerName) {
+            sq.style.cssText = 'width: 10px; height: 10px; background: #44cc44; border-radius: 2px; display: inline-block;';
+            sq.title = bldg.workerName;
+          } else {
+            sq.style.cssText = 'width: 10px; height: 10px; background: #333; border: 1px solid #555; border-radius: 2px; display: inline-block;';
+          }
           slotEl.appendChild(sq);
         }
         row.appendChild(slotEl);
 
-        // + button (assign idle civilian)
+        // + button (assign to first empty slot in the group)
         const plusBtn = document.createElement('button');
         const hasIdle = this.civilians.some(c => (c.state === 'idle' || c.state === 'wandering') && !c.downed && c.assignedBuildingId === null);
-        const canAdd = bldg.workerName === null && hasIdle;
+        const canAdd = emptySlots.length > 0 && hasIdle;
         plusBtn.style.cssText = `background: ${canAdd ? 'rgba(68,204,68,0.2)' : 'rgba(80,80,80,0.2)'}; border: 1px solid ${canAdd ? 'rgba(68,204,68,0.4)' : 'rgba(80,80,80,0.3)'}; color: ${canAdd ? '#6d6' : '#555'}; border-radius: 2px; padding: 0 5px; font-size: 12px; font-weight: bold; cursor: ${canAdd ? 'pointer' : 'default'}; line-height: 1.4;`;
         plusBtn.textContent = '+';
-        plusBtn.title = canAdd ? 'Assign idle civilian' : (bldg.workerName ? 'Slot occupied' : 'No idle civilians');
+        plusBtn.title = canAdd ? 'Assign idle civilian' : (emptySlots.length === 0 ? 'All slots full' : 'No idle civilians');
         if (canAdd) {
           plusBtn.addEventListener('click', () => {
-            // Find nearest idle civilian and assign
             const idle = this.civilians.find(c => (c.state === 'idle' || c.state === 'wandering') && !c.downed && c.assignedBuildingId === null);
-            if (idle) this.callbacks?.onAssign(idle.entityId, bldg.entityId);
+            const emptyBldg = emptySlots[0];
+            if (idle && emptyBldg) this.callbacks?.onAssign(idle.entityId, emptyBldg.entityId);
           });
         }
         row.appendChild(plusBtn);
 
-        // - button (unassign worker)
+        // - button (unassign from first filled slot in the group)
         const minusBtn = document.createElement('button');
-        const canRemove = bldg.workerName !== null;
+        const canRemove = filledSlots.length > 0;
         minusBtn.style.cssText = `background: ${canRemove ? 'rgba(200,50,50,0.2)' : 'rgba(80,80,80,0.2)'}; border: 1px solid ${canRemove ? 'rgba(200,50,50,0.4)' : 'rgba(80,80,80,0.3)'}; color: ${canRemove ? '#e88' : '#555'}; border-radius: 2px; padding: 0 5px; font-size: 12px; font-weight: bold; cursor: ${canRemove ? 'pointer' : 'default'}; line-height: 1.4;`;
         minusBtn.textContent = '-';
-        minusBtn.title = canRemove ? `Unassign ${bldg.workerName}` : 'No worker assigned';
+        minusBtn.title = canRemove ? `Unassign worker` : 'No worker assigned';
         if (canRemove) {
           minusBtn.addEventListener('click', () => {
-            // Find the assigned civilian and unassign
-            const worker = this.civilians.find(c => c.assignedBuildingId === bldg.entityId);
+            const filledBldg = filledSlots[0];
+            const worker = this.civilians.find(c => c.assignedBuildingId === filledBldg.entityId);
             if (worker) this.callbacks?.onAssign(worker.entityId, null);
           });
         }

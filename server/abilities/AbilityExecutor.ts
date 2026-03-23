@@ -42,6 +42,7 @@ import type { AbilityEffectMessage } from '@shared/protocol';
 import { MessageType } from '@shared/protocol';
 import {
   TILE_SIZE,
+  WOLF_NAMES,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import type { WorldGenerator } from '@shared/world/WorldGenerator';
@@ -404,12 +405,14 @@ export function executeAbility(
           rangedRange: 0, projectileSpeed: 0, rangedDamage: 0, rangedCooldown: 0,
         });
         // Guard component: follow the player, patrol nearby, lifetime-limited
+        const wolfName = WOLF_NAMES[Math.floor(Math.random() * WOLF_NAMES.length)];
         world.addComponent(wolfId, C.Guard, {
           barracksId: entityId,
           patrolRadius: 150,
           followEntityId: entityId,
           lifetime: params.duration,
           variant: 'wolf',
+          displayName: wolfName,
         } as GuardComponent);
       }
       baseEffect.radius = 100;

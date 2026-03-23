@@ -76,7 +76,11 @@ export interface WaveControllerDeps {
   waveSyncInterval: number;
   isWalkable: (wx: number, wy: number) => boolean;
   overlapsBuilding: (wx: number, wy: number, radius?: number) => boolean;
+  /** Check if a position overlaps a resource node. */
+  overlapsResourceNode: (wx: number, wy: number, radius?: number) => boolean;
   onWaveCleared: (wave: number, send: SendFn) => void;
+  /** Get campfire position for portal spawning (portals spawn around campfire, not players). */
+  getCampfirePosition: () => { x: number; y: number } | null;
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
@@ -111,17 +115,26 @@ export function createWaveController(deps: WaveControllerDeps) {
   }
 
   function spawnPortals(wave: number): void {
-    let cx = 0, cy = 0, count = 0;
-    for (const p of players.values()) {
-      if (p.entityId === null) continue;
-      const pos = world.getComponent<PositionComponent>(p.entityId, C.Position);
-      if (pos) { cx += pos.x; cy += pos.y; count++; }
+    // Portals spawn around the campfire, not around players
+    const campfire = deps.getCampfirePosition();
+    let cx: number, cy: number;
+    if (campfire) {
+      cx = campfire.x;
+      cy = campfire.y;
+    } else {
+      // Fallback to player center if campfire doesn't exist
+      cx = 0; cy = 0; let count = 0;
+      for (const p of players.values()) {
+        if (p.entityId === null) continue;
+        const pos = world.getComponent<PositionComponent>(p.entityId, C.Position);
+        if (pos) { cx += pos.x; cy += pos.y; count++; }
+      }
+      if (count === 0) {
+        console.warn(`[Wave] No campfire or players found - cannot spawn portals for wave ${wave}`);
+        return;
+      }
+      cx /= count; cy /= count;
     }
-    if (count === 0) {
-      console.warn(`[Wave] No players with positions found - cannot spawn portals for wave ${wave}`);
-      return;
-    }
-    cx /= count; cy /= count;
 
     const factions = pickWaveFactions(wave);
     // Introduce new factions with toast messages
@@ -146,6 +159,7 @@ export function createWaveController(deps: WaveControllerDeps) {
 
         if (!isWalkable(px, py)) continue;
         if (overlapsBuilding(px, py, PORTAL_RADIUS)) continue;
+        if (deps.overlapsResourceNode(px, py, PORTAL_RADIUS)) continue;
 
         let tooClose = false;
         for (const prev of placed) {

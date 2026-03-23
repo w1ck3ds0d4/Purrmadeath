@@ -9,6 +9,7 @@
  *   4. Manages permanent Beastmaster wolf companion spawning and upgrades
  */
 import { World } from '@shared/ecs/World';
+import { WOLF_NAMES } from '@shared/constants';
 import {
   C,
   HealthComponent,
@@ -484,6 +485,7 @@ export function createSkillSystem(deps: SkillSystemDeps) {
         // Deal damage to all enemies in the impact area
         for (const eid of deps.world.query(C.Position, C.Health, C.Faction)) {
           const ef = deps.world.getComponent<FactionComponent>(eid, C.Faction);
+          // Damage enemies, portals, and resource nodes (not players, buildings, guards, civilians)
           if (!ef || ef.type === 'player' || ef.type === 'building' || ef.type === 'item' || ef.type === 'guard' || ef.type === 'civilian') continue;
           const ep = deps.world.getComponent<PositionComponent>(eid, C.Position)!;
           const dx = ep.x - mx, dy = ep.y - my;
@@ -697,11 +699,13 @@ export function createSkillSystem(deps: SkillSystemDeps) {
           damage: wolfDmg, range: 30, knockback: 50, radius: 10,
           rangedRange: 0, projectileSpeed: 0, rangedDamage: 0, rangedCooldown: 0,
         });
+        const wolfName = WOLF_NAMES[Math.floor(Math.random() * WOLF_NAMES.length)];
         deps.world.addComponent(wolfId, C.Guard, {
           barracksId: player.entityId,
           patrolRadius: 150,
           followEntityId: player.entityId,
           variant: 'wolf',
+          displayName: wolfName,
         } as GuardComponent);
 
         permanentWolves.set(clientId, wolfId);

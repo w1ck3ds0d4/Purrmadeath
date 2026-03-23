@@ -214,10 +214,12 @@ export class RemotePlayerSystem {
           range: 0, damagePerSecond: 0, targetId: snap.laserTargetId,
         } as LaserBeamComponent);
       }
-      // Guard role (for renderer color-coding)
-      if (snap.guardRole) {
+      // Guard role/wolf name (for renderer color-coding and name tags)
+      if (snap.guardRole || snap.guardName) {
         world.addComponent(snap.entityId, C.Guard, {
           guardRole: snap.guardRole,
+          variant: snap.guardName ? 'wolf' : undefined,
+          displayName: snap.guardName,
           barracksId: 0, patrolRadius: 0,
         } as GuardComponent);
       }

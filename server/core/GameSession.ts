@@ -1,4 +1,5 @@
 import { GameLogger } from './GameLogger';
+import { tickWalkabilityCache } from '../systems/Pathfinding';
 import { World } from '@shared/ecs/World';
 import { distance } from '@shared/math/utils';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
@@ -431,7 +432,12 @@ export class GameSession {
       waveSyncInterval: GameSession.WAVE_SYNC_INTERVAL,
       isWalkable: (wx, wy) => this.isWalkable(wx, wy),
       overlapsBuilding: (wx, wy, r) => this.overlapsBuilding(wx, wy, r),
+      overlapsResourceNode: (wx, wy, r) => this.overlapsResourceNode(wx, wy, r),
       onWaveCleared: (wave, send) => this.onWaveCleared(wave, send),
+      getCampfirePosition: () => {
+        if (this.campfireEntityId < 0) return null;
+        return this.world.getComponent<PositionComponent>(this.campfireEntityId, C.Position) ?? null;
+      },
     });
 
     this.worldEvents = createWorldEventController({
@@ -709,6 +715,12 @@ export class GameSession {
     this.playerBuffs = playerBuffs;
     const save = this.loadedSave;
     const hasSave = save !== null;
+    this.logger.log('system', `Game started`, {
+      players: this.players.size,
+      loadedSave: hasSave,
+      wave: this.waveState.currentWave,
+      seed: this.seed,
+    });
     this.startTime = Date.now() - (save?.elapsedTime ?? 0) * 1000;
     this.enemiesKilled = hasSave ? this.enemiesKilled : 0;
 
@@ -1869,21 +1881,26 @@ export class GameSession {
   // ── Building Placement (delegated to BuildingSystem) ─────────────────────────
 
   handleBuildPlace(clientId: string, msg: BuildPlaceMessage, send: SendFn): void {
+    const player = this.players.get(clientId);
+    this.logger.building(`${player?.displayName ?? clientId} placed ${msg.buildingType}`, { x: Math.round(msg.x), y: Math.round(msg.y) });
     this.buildings.handlePlace(clientId, msg, send);
     this.civilians.onBuildingPlaced();
     // Track wall placement for Warden achievement
-    const player = this.players.get(clientId);
     if (player && (msg.buildingType === 'wall' || msg.buildingType === 'gate')) {
       this.stats.trackWallBuilt(player.playerId);
     }
   }
 
   handleBuildDemolish(clientId: string, msg: BuildDemolishMessage, send: SendFn): void {
+    const player = this.players.get(clientId);
+    this.logger.building(`${player?.displayName ?? clientId} demolished entity ${msg.entityId}`);
     this.civilians.onBuildingDestroyed(msg.entityId);
     this.buildings.handleDemolish(clientId, msg, send);
   }
 
   handleBuildUpgrade(clientId: string, msg: BuildUpgradeMessage, send: SendFn): void {
+    const player = this.players.get(clientId);
+    this.logger.building(`${player?.displayName ?? clientId} upgraded entity ${msg.entityId}`);
     this.buildings.handleUpgrade(clientId, msg, send);
   }
 
@@ -2196,6 +2213,12 @@ export class GameSession {
 
     // Broadcast each hit to all players + track damage for meta stats
     const element = this.getPrimaryElement(player.client.id);
+    if (hits.length > 0) {
+      this.logger.combat(`${player.displayName} melee hit ${hits.length} targets`, {
+        totalDmg: hits.reduce((s, h) => s + h.damage, 0),
+        crits: hits.filter(h => h.crit).length,
+      });
+    }
     for (const hit of hits) {
       const hitMsg: HitMessage = { type: MessageType.HIT, ...hit, element };
       for (const p of this.players.values()) send(p.client, hitMsg);
@@ -3704,6 +3727,9 @@ export class GameSession {
       }
     }
 
+    // Tick the pathfinding walkability cache (clears every 60s)
+    tickWalkabilityCache(dt);
+
     const _t0 = performance.now();
     this.combat.update(this.world, dt);
     const _t1 = performance.now();
@@ -3987,6 +4013,21 @@ export class GameSession {
     this.tickProfile.waves      = this.tickProfile.waves      * (1 - _a) + (_t9 - _t8) * _a;
     this.tickProfile.total      = this.tickProfile.total      * (1 - _a) + (_t9 - _t0) * _a;
 
+    // Log performance profile every 10 seconds
+    if (this.tick % 300 === 0) {
+      const entityCount = this.world.query(C.Position).length;
+      this.logger.log('debug', `Tick profile (avg ms)`, {
+        total: +this.tickProfile.total.toFixed(2),
+        enemy: +this.tickProfile.enemy.toFixed(2),
+        combat: +this.tickProfile.combat.toFixed(2),
+        movement: +this.tickProfile.movement.toFixed(2),
+        projectile: +this.tickProfile.projectile.toFixed(2),
+        buildings: +this.tickProfile.buildings.toFixed(2),
+        waves: +this.tickProfile.waves.toFixed(2),
+        entities: entityCount,
+      });
+    }
+
     // ── Flush pending enemy intro messages ──────────────────────────────────
     for (const intro of this.waveState.pendingIntros) {
       const msg = { type: MessageType.ENEMY_INTRO, variant: intro.variant, displayName: intro.displayName };
@@ -4087,6 +4128,15 @@ export class GameSession {
       const vel = this.world.getComponent<VelocityComponent>(id, C.Velocity)!;
       const hp  = this.world.getComponent<HealthComponent>(id, C.Health)!;
 
+      // Fast path: skip static entities that haven't changed since last snapshot.
+      // If velocity is zero and HP matches previous snapshot, reuse previous snap.
+      // This avoids building full snapshots for ~1000 resource nodes + idle buildings.
+      const prev = this.prevSnapshot.get(id);
+      if (prev && vel.vx === 0 && vel.vy === 0 && pos.x === prev.x && pos.y === prev.y && hp.current === prev.hp) {
+        snaps.push(prev); // Reuse unchanged snapshot
+        continue;
+      }
+
       const playerEntry = entityToPlayer.get(id);
       const factionComp = this.world.getComponent<FactionComponent>(id, C.Faction);
       const faction = factionComp?.type ?? (playerEntry ? 'player' : 'enemy');
@@ -4154,9 +4204,12 @@ export class GameSession {
       const laserComp = this.world.getComponent<import('@shared/components').LaserBeamComponent>(id, C.LaserBeam);
       if (laserComp && laserComp.targetId !== null) snap.laserTargetId = laserComp.targetId;
 
-      // Guard role (for client to color-code guards)
+      // Guard role + wolf name (for client rendering)
       const guardComp = this.world.getComponent<import('@shared/components').GuardComponent>(id, C.Guard);
-      if (guardComp) snap.guardRole = guardComp.guardRole;
+      if (guardComp) {
+        snap.guardRole = guardComp.guardRole;
+        if (guardComp.displayName) snap.guardName = guardComp.displayName;
+      }
 
       // Ruins metadata
       const ruinsComp = this.world.getComponent<import('@shared/components').RuinsComponent>(id, C.Ruins);

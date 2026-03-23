@@ -34,7 +34,7 @@ function makeSpan(text: string, style: string): HTMLSpanElement {
 export function createNotificationToast() {
   const container = document.createElement('div');
   container.style.cssText = `
-    position: fixed; left: 50%; top: 80px; z-index: 200;
+    position: fixed; left: 50%; top: 140px; z-index: 200;
     transform: translateX(-50%);
     display: flex; flex-direction: column; gap: 6px;
     pointer-events: none; align-items: center;

@@ -110,10 +110,8 @@ export class MovementSystem {
   constructor(private readonly generator: WorldGenerator) {}
 
   update(world: World, dt: number): void {
-    // Cache solid entities so overlapsAny can treat them as solid blocks
-    this.cacheResources(world);
-    this.cachePortals(world);
-    this.cacheBuildings(world);
+    // Cache solid entities in a single pass (avoids 3x iteration over all entities)
+    this.cacheAllSolids(world);
     for (const id of world.query(C.Position, C.Velocity, C.Speed, C.PlayerInput)) {
       // Skip downed or rooted entities - they cannot move
       if (world.hasComponent(id, C.Downed)) continue;
@@ -298,40 +296,33 @@ export class MovementSystem {
   }
 
   /** Cache resource node positions for solid-block collision checks. */
-  private cacheResources(world: World): void {
+  /**
+   * Cache all solid entities in a single pass over Position+Faction.
+   * Replaces 3 separate queries (resources, portals, buildings) with 1.
+   * With 1500+ resource nodes, this saves ~3000 redundant component lookups per tick.
+   */
+  private cacheAllSolids(world: World): void {
     this.resourceCache.length = 0;
-    for (const id of world.query(C.Position, C.Faction)) {
-      const f = world.getComponent<FactionComponent>(id, C.Faction)!;
-      if (f.type === 'resource') {
-        this.resourceCache.push(world.getComponent<PositionComponent>(id, C.Position)!);
-      }
-    }
-  }
-
-  /** Cache portal positions for solid-circle collision checks. */
-  private cachePortals(world: World): void {
     this.portalCache.length = 0;
-    for (const id of world.query(C.Position, C.Faction)) {
-      const f = world.getComponent<FactionComponent>(id, C.Faction)!;
-      if (f.type === 'portal') {
-        this.portalCache.push(world.getComponent<PositionComponent>(id, C.Position)!);
-      }
-    }
-  }
-
-  /** Cache building positions for solid-block collision checks. */
-  private cacheBuildings(world: World): void {
     this.buildingCache.length = 0;
     for (const id of world.query(C.Position, C.Faction)) {
       const f = world.getComponent<FactionComponent>(id, C.Faction)!;
-      if (f.type === 'building') {
-        const bldg = world.getComponent<BuildingComponent>(id, C.Building);
-        const type = bldg?.buildingType ?? 'wall';
-        // Bridges and spike traps are not solid collision obstacles
-        if (type === 'bridge' || type === 'spike_trap') continue;
-        const pos = world.getComponent<PositionComponent>(id, C.Position)!;
-        const ext = buildingExtent(type, bldg?.rotation ?? 0);
-        this.buildingCache.push({ x: pos.x, y: pos.y, hx: ext.hx, hy: ext.hy, isGate: type === 'gate' });
+      switch (f.type) {
+        case 'resource':
+          this.resourceCache.push(world.getComponent<PositionComponent>(id, C.Position)!);
+          break;
+        case 'portal':
+          this.portalCache.push(world.getComponent<PositionComponent>(id, C.Position)!);
+          break;
+        case 'building': {
+          const bldg = world.getComponent<BuildingComponent>(id, C.Building);
+          const type = bldg?.buildingType ?? 'wall';
+          if (type === 'bridge' || type === 'spike_trap') break;
+          const pos = world.getComponent<PositionComponent>(id, C.Position)!;
+          const ext = buildingExtent(type, bldg?.rotation ?? 0);
+          this.buildingCache.push({ x: pos.x, y: pos.y, hx: ext.hx, hy: ext.hy, isGate: type === 'gate' });
+          break;
+        }
       }
     }
   }

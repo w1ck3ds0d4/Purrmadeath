@@ -8,6 +8,12 @@
  */
 import { World } from '@shared/ecs/World';
 import { C, PositionComponent, FactionComponent, HealthComponent, BuildingComponent, CivilianComponent } from '@shared/components';
+
+/** Client logger - writes to main process log file via IPC. */
+const _electronAPI = (window as any).electronAPI;
+function clog(category: string, msg: string): void {
+  if (_electronAPI?.log) _electronAPI.log(category, msg);
+}
 import { MessageType } from '@shared/protocol';
 import {
   PLAYER_BASE_SPEED,
@@ -483,6 +489,7 @@ export function registerMessageHandlers(
 
   net.on(MessageType.WAVE_START, (msg) => {
     const ws = msg as WaveStartMessage;
+    clog('WAVE', `Wave ${ws.waveNumber} starting (prep=${ws.prepDuration}s)`);
     d.waveHUD.onWaveStart(ws.waveNumber, ws.prepDuration);
     s.waveActive = ws.prepDuration === 0;
     d.debug.log(`Wave ${ws.waveNumber} started (prep: ${ws.prepDuration}s)`);
@@ -776,6 +783,7 @@ export function registerMessageHandlers(
     const pd = msg as PlayerDownedMessage;
     d.playerRenderer.notifyDowned(pd.entityId);
     d.debug.log(`Player downed (entity ${pd.entityId})`);
+    clog('COMBAT', `Player downed (entity ${pd.entityId}, isLocal=${pd.entityId === s.localEntityId})`);
     if (pd.entityId === s.localEntityId) {
       s.localDowned = true;
       s.buildModeActive = false;
@@ -813,6 +821,7 @@ export function registerMessageHandlers(
     const pd = msg as PlayerDiedMessage;
     d.playerRenderer.notifyDeath(pd.entityId);
     d.debug.log(`Player died (entity ${pd.entityId})`);
+    clog('COMBAT', `Player died (entity ${pd.entityId}, isLocal=${pd.entityId === s.localEntityId})`);
     if (pd.entityId === s.localEntityId) {
       s.localDowned = false;
       s.localDead = true;
@@ -849,6 +858,7 @@ export function registerMessageHandlers(
   net.on(MessageType.GAME_OVER, (msg) => {
     const go = msg as GameOverMessage;
     console.log(`[Game] Game Over - reached wave ${go.waveReached}, reason: ${go.reason}`);
+    clog('GAME', `Game Over - wave ${go.waveReached}, reason: ${go.reason}, time=${go.timePlayed?.toFixed(0) ?? '?'}s`);
     d.debug.log(`Game Over - wave ${go.waveReached}, reason: ${go.reason}`);
     s.localGameOver = true;
     s.localDowned = false;
@@ -888,6 +898,7 @@ export function registerMessageHandlers(
   net.on(MessageType.GAME_SAVED, (msg) => {
     const saved = msg as GameSavedMessage;
     d.debug.log(`Game saved (wave ${saved.wave}, slot ${saved.slot})`);
+    clog('SAVE', `Game saved - wave ${saved.wave}, slot ${saved.slot}`);
     d.notificationToast.show(`Game saved - Wave ${saved.wave}`, 'success');
   });
 
