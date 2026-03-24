@@ -33,6 +33,7 @@ interface BuildingDetail {
 }
 
 const BUILDING_DETAILS: Record<string, BuildingDetail> = {
+  campfire:         { hp: 300, description: 'The heart of your settlement. If destroyed, the game is over. Defines an 80-tile building range.', special: '80-tile build range' },
   wall:             { hp: 150, description: 'Basic barrier that blocks enemy movement.' },
   gate:             { hp: 250, description: 'Automatically opens for allies and closes for enemies.' },
   arrow_turret:     { hp: 100, description: 'Fires arrows at the nearest enemy.', range: 200, damage: 8, cooldown: 2.0 },
@@ -64,7 +65,11 @@ const BUILDING_DETAILS: Record<string, BuildingDetail> = {
   siege_workshop:   { hp: 250, description: 'Boosts all turret damage in a radius. Requires: Siege Master achievement.', range: 200, special: '+25% turret damage' },
   kennel:           { hp: 200, description: 'Automatically spawns wolf guards on a timer. Requires: Beast Tamer achievement.', special: '1 wolf / 30s' },
   arcane_tower:     { hp: 150, description: 'Amplifies player ability range when nearby. Requires: Enchanter achievement.', range: 250, special: '+50% ability range' },
-  watchtower:       { hp: 120, description: 'Extends minimap reveal and warns of incoming waves. Requires: Warden achievement.', range: 400, special: 'Wave warning' },
+  watchtower:       { hp: 120, description: 'Extends building range and warns of incoming waves. +20 tiles range per level.', range: 400, special: '+20 tile build range/level' },
+  flak_cannon:      { hp: 180, description: 'Fires spread shots hitting multiple enemies per volley. Requires: Artillery Expert.', range: 250, damage: 12, cooldown: 2.0, special: '3-way spread' },
+  dragon_roost:     { hp: 350, description: 'Summons a dragon that patrols and breathes fire on enemies. Requires: Dragon Tamer.', special: 'Dragon patrol' },
+  smeltery:         { hp: 200, description: 'Converts iron into steel for advanced buildings. Assign civilians to work. Requires: Master Smith.', special: 'Iron -> Steel' },
+  market:           { hp: 150, description: 'Converts surplus resources into gold over time. Requires: Trade Baron.', special: 'Resources -> Gold' },
 };
 
 interface BuildCategory {
@@ -74,9 +79,9 @@ interface BuildCategory {
 }
 
 const BUILD_CATEGORIES: BuildCategory[] = [
-  { name: 'Defense',    accent: '#cc4444', buildings: ['wall', 'gate', 'arrow_turret', 'cannon_turret', 'ballista', 'laser_tower', 'tesla_coil', 'flame_tower', 'catapult', 'moat', 'spike_trap', 'siege_workshop', 'watchtower'] },
-  { name: 'Production', accent: '#44aa44', buildings: ['lumbermill', 'quarry', 'mine', 'farm', 'workshop'] },
-  { name: 'Military',   accent: '#cc8844', buildings: ['training_center', 'kennel'] },
+  { name: 'Defense',    accent: '#cc4444', buildings: ['wall', 'gate', 'arrow_turret', 'cannon_turret', 'ballista', 'laser_tower', 'tesla_coil', 'flame_tower', 'catapult', 'flak_cannon', 'moat', 'spike_trap', 'siege_workshop', 'watchtower'] },
+  { name: 'Production', accent: '#44aa44', buildings: ['lumbermill', 'quarry', 'mine', 'farm', 'workshop', 'smeltery', 'market'] },
+  { name: 'Military',   accent: '#cc8844', buildings: ['training_center', 'kennel', 'dragon_roost'] },
   { name: 'Housing',    accent: '#cc88cc', buildings: ['cat_house'] },
   { name: 'Utility',    accent: '#4488cc', buildings: ['warehouse', 'bridge', 'light_tower', 'healing_shrine', 'repair_station', 'teleporter_pad', 'arcane_tower'] },
   { name: 'Shops',      accent: '#aa66ff', buildings: ['potion_shop', 'tavern'] },
@@ -107,7 +112,10 @@ const ACHIEVEMENT_LOCKED_BUILDINGS: Record<string, string> = {
   siege_workshop: 'Siege Master',
   kennel: 'Beast Tamer',
   arcane_tower: 'Enchanter',
-  watchtower: 'Warden',
+  flak_cannon: 'Artillery Expert',
+  dragon_roost: 'Dragon Tamer',
+  smeltery: 'Master Smith',
+  market: 'Trade Baron',
 };
 
 function titleCase(s: string): string {
@@ -129,6 +137,8 @@ export class BuildMenuOverlay {
   private activeTab = 0;
   private lastAvailable: Record<string, number> = {};
   private unlockedBuildings: Set<string> = new Set();
+  /** Whether the campfire has been placed. When false, only campfire is shown. */
+  private campfirePlaced = false;
 
   constructor() {
     injectScrollbarStyles();
@@ -272,13 +282,21 @@ export class BuildMenuOverlay {
     return this.visible;
   }
 
+  /** Update whether the campfire has been placed (gates the full build menu). */
+  setCampfirePlaced(placed: boolean): void {
+    this.campfirePlaced = placed;
+  }
+
   show(available: Record<string, number>, unlockedBuildings?: Set<string>): void {
     this.visible = true;
     this.lastAvailable = available;
     if (unlockedBuildings) this.unlockedBuildings = unlockedBuildings;
     this.el.style.display = 'flex';
-    this.renderSidebar();
-    this.renderTabs();
+    // Hide sidebar and tabs when campfire not placed (only show campfire card)
+    this.sidebarEl.style.display = this.campfirePlaced ? 'flex' : 'none';
+    this.tabsEl.style.display = this.campfirePlaced ? 'flex' : 'none';
+    if (this.campfirePlaced) this.renderSidebar();
+    if (this.campfirePlaced) this.renderTabs();
     this.renderContent();
   }
 
@@ -412,9 +430,31 @@ export class BuildMenuOverlay {
   private renderContent(): void {
     this.contentEl.innerHTML = '';
     this.hideTooltip();
-    const cat = BUILD_CATEGORIES[this.activeTab];
     const available = this.lastAvailable;
-    const placeable = cat.buildings.filter(b => PLACEABLE_BUILDINGS.includes(b as any));
+
+    // If campfire not placed yet, show centered campfire card with banner
+    if (!this.campfirePlaced) {
+      this.contentEl.style.cssText = 'flex: 1; padding: 10px 14px; overflow-y: auto; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;';
+      const banner = document.createElement('div');
+      banner.style.cssText = `text-align: center; padding: 20px 10px; color: ${THEME.accent}; font-size: 16px; font-weight: bold; letter-spacing: 2px;`;
+      banner.textContent = 'PLACE YOUR CAMPFIRE';
+      this.contentEl.appendChild(banner);
+      const subtitle = document.createElement('div');
+      subtitle.style.cssText = `text-align: center; padding: 0 10px 20px; color: ${THEME.textSecondary}; font-size: 12px;`;
+      subtitle.textContent = 'Choose where to build your settlement';
+      this.contentEl.appendChild(subtitle);
+      // Single centered campfire card
+      const cardWrapper = document.createElement('div');
+      cardWrapper.style.cssText = 'width: 120px;';
+      this.renderBuildingCard(cardWrapper, 'campfire', available, '#cc8844');
+      this.contentEl.appendChild(cardWrapper);
+      return;
+    }
+    // Reset content style for normal mode
+    this.contentEl.style.cssText = 'flex: 1; padding: 10px 14px; overflow-y: auto; min-height: 0;';
+
+    const cat = BUILD_CATEGORIES[this.activeTab];
+    const placeable = cat.buildings.filter(b => PLACEABLE_BUILDINGS.includes(b as any) && b !== 'campfire');
 
     // 5-column grid with uniform square cells
     const grid = document.createElement('div');
@@ -527,6 +567,43 @@ export class BuildMenuOverlay {
     }
 
     this.contentEl.appendChild(grid);
+  }
+
+  /** Render a single building card into the grid container. */
+  private renderBuildingCard(grid: HTMLElement, type: string, available: Record<string, number>, accent: string): void {
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'position: relative; width: 100%; padding-bottom: 100%;';
+    const card = document.createElement('div');
+    card.style.cssText = [
+      'position: absolute', 'inset: 0', 'display: flex', 'flex-direction: column',
+      'align-items: center', 'justify-content: center', 'text-align: center',
+      `background: ${THEME.surfaceBg}`, `border: 1px solid ${THEME.borderDefault}`,
+      `border-top: 3px solid ${accent}66`, `border-radius: ${THEME.radiusSm}`,
+      'padding: 6px 4px', 'cursor: pointer',
+      `transition: background ${THEME.transition}, border-color ${THEME.transition}`,
+      'overflow: hidden', 'gap: 3px',
+    ].join('; ');
+    card.addEventListener('mouseenter', () => { card.style.background = THEME.surfaceHover; this.showTooltip(type, card); });
+    card.addEventListener('mouseleave', () => { card.style.background = THEME.surfaceBg; this.hideTooltip(); });
+    card.addEventListener('click', () => { this.callbacks?.onSelect(type); });
+    const nameEl = document.createElement('div');
+    nameEl.style.cssText = `font-family:${THEME.fontUI};font-size:12px;font-weight:600;color:${THEME.textBright};`;
+    nameEl.textContent = titleCase(type);
+    card.appendChild(nameEl);
+    const costs = BUILDING_COSTS[type] ?? {};
+    if (Object.keys(costs).length > 0) {
+      const costEl = document.createElement('div');
+      costEl.style.cssText = `font-family:${THEME.fontMono};font-size:10px;`;
+      costEl.innerHTML = this.formatCostCompact(costs, available);
+      card.appendChild(costEl);
+    } else {
+      const freeEl = document.createElement('div');
+      freeEl.style.cssText = `font-family:${THEME.fontMono};font-size:10px;color:#8ade8a;`;
+      freeEl.textContent = 'Free';
+      card.appendChild(freeEl);
+    }
+    wrapper.appendChild(card);
+    grid.appendChild(wrapper);
   }
 
   /** Compact cost format for card display. */

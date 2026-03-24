@@ -18,6 +18,29 @@ export const RUINS_REPAIR_COST_MULT = 0.4;
 /** Cost multiplier for restoring ruins to their original level (fraction of total invested cost). */
 export const RUINS_RESTORE_COST_MULT = 0.6;
 
+// ─── Building Range System ──────────────────────────────────────────────
+
+/** Campfire building range in tiles. All buildings must be within this square of the campfire. */
+export const CAMPFIRE_BUILD_RANGE = 80;
+/** Campfire building range in world pixels. */
+export const CAMPFIRE_BUILD_RANGE_PX = CAMPFIRE_BUILD_RANGE * TILE_SIZE;
+/** Additional building range per watchtower level in tiles. */
+export const WATCHTOWER_RANGE_PER_LEVEL = 20;
+/** Additional building range per watchtower level in world pixels. */
+export const WATCHTOWER_RANGE_PER_LEVEL_PX = WATCHTOWER_RANGE_PER_LEVEL * TILE_SIZE;
+
+/** Defence buildings - can be placed adjacent to each other with no exclusion spacing. */
+export const DEFENCE_BUILDINGS = new Set([
+  'wall', 'gate', 'arrow_turret', 'cannon_turret', 'ballista',
+  'laser_tower', 'tesla_coil', 'flame_tower', 'catapult',
+  'moat', 'spike_trap', 'bridge', 'siege_workshop', 'watchtower', 'flak_cannon',
+]);
+
+/** Check if a building type is a defence building (no exclusion spacing between defence buildings). */
+export function isDefenceBuilding(type: string): boolean {
+  return DEFENCE_BUILDINGS.has(type);
+}
+
 // ─── Buildings (Phase 5) ────────────────────────────────────────────────
 
 /** Campfire HP. When it reaches 0 the run ends. */
@@ -49,6 +72,10 @@ export const BUILDING_SIZES: Record<string, { w: number; h: number }> = {
   kennel: { w: 2, h: 2 },
   arcane_tower: { w: 1, h: 1 },
   watchtower: { w: 1, h: 1 },
+  flak_cannon: { w: 2, h: 2 },
+  dragon_roost: { w: 3, h: 3 },
+  smeltery: { w: 2, h: 2 },
+  market: { w: 2, h: 2 },
 };
 
 /**
@@ -195,6 +222,14 @@ export const SIEGE_WORKSHOP_MAX_HEALTH = 250;
 export const KENNEL_MAX_HEALTH = 200;
 export const ARCANE_TOWER_MAX_HEALTH = 150;
 export const WATCHTOWER_MAX_HEALTH = 120;
+/** Flak Cannon HP (spread-shot turret). */
+export const FLAK_CANNON_MAX_HEALTH = 180;
+/** Dragon Roost HP (summons dragon patrol). */
+export const DRAGON_ROOST_MAX_HEALTH = 350;
+/** Smeltery HP (converts iron to steel). */
+export const SMELTERY_MAX_HEALTH = 200;
+/** Market HP (converts resources to gold). */
+export const MARKET_MAX_HEALTH = 150;
 
 /** Radius (px) for auto-depositing player resources into the warehouse. */
 export const WAREHOUSE_DEPOSIT_RADIUS = 80;
@@ -204,7 +239,7 @@ export const DEMOLISH_REFUND_PERCENT = 0.5;
 
 /** Per-building-type resource costs for placement. */
 export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'iron' | 'diamond' | 'food', number>>> = {
-  campfire:       { wood: 20, stone: 15, iron: 5 },
+  campfire:       {},
   wall:           { wood: 5 },
   warehouse:      { wood: 10, stone: 5 },
   lumbermill:     { wood: 15, stone: 5 },
@@ -239,10 +274,15 @@ export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'i
   kennel:          { wood: 20, stone: 10, iron: 10 },
   arcane_tower:    { stone: 15, iron: 15, diamond: 8 },
   watchtower:      { wood: 15, stone: 15, iron: 5 },
+  flak_cannon:     { stone: 20, iron: 15, diamond: 5 },
+  dragon_roost:    { wood: 50, stone: 50, iron: 30, diamond: 15 },
+  smeltery:        { stone: 25, iron: 20 },
+  market:          { wood: 20, stone: 15, iron: 5 },
 };
 
 /** Ordered list of building types the player can cycle through in build mode. */
 export const PLACEABLE_BUILDINGS: string[] = [
+  'campfire',
   'wall', 'warehouse', 'lumbermill', 'quarry', 'mine', 'farm',
   'arrow_turret', 'cannon_turret', 'spike_trap', 'bridge',
   'light_tower', 'healing_shrine', 'potion_shop',
@@ -251,8 +291,10 @@ export const PLACEABLE_BUILDINGS: string[] = [
   'tesla_coil', 'flame_tower', 'catapult', 'moat',
   'repair_station', 'teleporter_pad',
   'tavern',
+  'watchtower',
   // Achievement-unlocked buildings
-  'siege_workshop', 'kennel', 'arcane_tower', 'watchtower',
+  'siege_workshop', 'kennel', 'arcane_tower',
+  'flak_cannon', 'dragon_roost', 'smeltery', 'market',
 ];
 
 // ─── Production Buildings ──────────────────────────────────────────────────
@@ -327,6 +369,10 @@ export const BUILDING_MAX_LEVEL: Record<BuildingType, number> = {
   kennel: 3,
   arcane_tower: 3,
   watchtower: 3,
+  flak_cannon: 3,
+  dragon_roost: 3,
+  smeltery: 3,
+  market: 3,
 };
 
 /** Cost multiplier for each upgrade level (index 0 = level 2, index 1 = level 3, etc.). */
@@ -542,6 +588,7 @@ export function getUpgradePreview(type: string, level: number): string[] {
     tavern: TAVERN_MAX_HEALTH, spike_trap: SPIKE_TRAP_MAX_HEALTH,
     siege_workshop: SIEGE_WORKSHOP_MAX_HEALTH, kennel: KENNEL_MAX_HEALTH,
     arcane_tower: ARCANE_TOWER_MAX_HEALTH, watchtower: WATCHTOWER_MAX_HEALTH,
+    flak_cannon: FLAK_CANNON_MAX_HEALTH, dragon_roost: DRAGON_ROOST_MAX_HEALTH, smeltery: SMELTERY_MAX_HEALTH, market: MARKET_MAX_HEALTH,
   } as Record<string, number>)[type];
   if (hpBase && UPGRADE_HP_MULT[next]) {
     const curHp = Math.round(hpBase * (UPGRADE_HP_MULT[level - 1] ?? 1));

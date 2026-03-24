@@ -77,6 +77,19 @@ export interface BuildRepairConfirmMessage extends BaseMessage {
   reason?: string;
 }
 
+/** Server -> all: building range update (sent when campfire placed or watchtower upgraded). */
+export interface BuildRangeUpdateMessage extends BaseMessage {
+  type: typeof MessageType.BUILD_RANGE_UPDATE;
+  /** Campfire center X in world pixels. */
+  campfireX: number;
+  /** Campfire center Y in world pixels. */
+  campfireY: number;
+  /** Half-extent of the building range square in world pixels. */
+  rangeHalfExtent: number;
+  /** Whether the campfire has been placed. */
+  campfirePlaced: boolean;
+}
+
 /** Server -> all: cannon turret AOE explosion at impact point. */
 export interface AoeExplosionMessage extends BaseMessage {
   type: typeof MessageType.AOE_EXPLOSION;

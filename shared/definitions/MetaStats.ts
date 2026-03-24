@@ -17,6 +17,8 @@ export interface MetaStats {
   totalWolvesSummoned?: number;
   totalAbilitiesUsed?: number;
   totalWallsBuilt?: number;
+  totalTurretKills?: number;
+  totalCiviliansSpawned?: number;
 }
 
 /** Create a blank MetaStats object with all counters at 0. */

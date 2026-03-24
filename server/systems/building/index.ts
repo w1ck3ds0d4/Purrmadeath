@@ -77,6 +77,10 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     destroyDeadEntities,
     enemyHash,
     broadcastWarehouseUpdate,
+    isCampfirePlaced: deps.isCampfirePlaced ?? (() => true),
+    isInsideBuildRange: deps.isInsideBuildRange ?? (() => true),
+    onCampfirePlaced: deps.onCampfirePlaced ?? (() => {}),
+    broadcastBuildRange: deps.broadcastBuildRange ?? (() => {}),
   };
 
   return {

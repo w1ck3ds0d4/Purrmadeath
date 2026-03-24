@@ -81,6 +81,8 @@ export interface RespawnManagerDeps {
   civilianEntityIds?: Set<number>;
   /** Called when a hero guard entity dies. */
   onHeroDeath?: (entityId: number, send: SendFn) => void;
+  /** Whether the campfire has been placed. Used for permanent death before campfire. */
+  isCampfirePlaced?: () => boolean;
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
@@ -188,6 +190,22 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
 
     const vel = world.getComponent<VelocityComponent>(entityId, C.Velocity);
     if (vel) { vel.vx = 0; vel.vy = 0; }
+
+    // Permanent death if campfire hasn't been placed yet
+    if (deps.isCampfirePlaced && !deps.isCampfirePlaced()) {
+      console.log(`[Death] Player ${sp.slot} died before campfire - permanent death (game over)`);
+      deps.setGameOver(true);
+      const goMsg: import('@shared/protocol').GameOverMessage = {
+        type: MessageType.GAME_OVER,
+        waveReached: waveState.currentWave,
+        reason: 'Died before placing campfire',
+        enemiesKilled: deps.getEnemiesKilled(),
+        timePlayed: Math.floor(deps.getElapsedSeconds()),
+      };
+      for (const p of players.values()) send(p.client, goMsg);
+      deps.fireRunEnd();
+      return;
+    }
 
     respawnTimers.set(sp.client.id, RESPAWN_DELAY);
 

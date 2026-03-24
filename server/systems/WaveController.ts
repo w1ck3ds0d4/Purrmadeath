@@ -81,6 +81,10 @@ export interface WaveControllerDeps {
   onWaveCleared: (wave: number, send: SendFn) => void;
   /** Get campfire position for portal spawning (portals spawn around campfire, not players). */
   getCampfirePosition: () => { x: number; y: number } | null;
+  /** Check if a world position is inside the building range square. */
+  isInsideBuildRange: (wx: number, wy: number) => boolean;
+  /** Whether the campfire has been placed. */
+  isCampfirePlaced: () => boolean;
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
@@ -160,6 +164,8 @@ export function createWaveController(deps: WaveControllerDeps) {
         if (!isWalkable(px, py)) continue;
         if (overlapsBuilding(px, py, PORTAL_RADIUS)) continue;
         if (deps.overlapsResourceNode(px, py, PORTAL_RADIUS)) continue;
+        // Portals cannot spawn inside the building range square
+        if (deps.isInsideBuildRange(px, py)) continue;
 
         let tooClose = false;
         for (const prev of placed) {

@@ -307,7 +307,8 @@ export type BuildingType = 'campfire' | 'wall' | 'warehouse' | 'lumbermill' | 'q
   | 'repair_station' | 'storage_shed' | 'teleporter_pad'
   | 'tavern'
   // Achievement-unlocked buildings
-  | 'siege_workshop' | 'kennel' | 'arcane_tower' | 'watchtower';
+  | 'siege_workshop' | 'kennel' | 'arcane_tower' | 'watchtower'
+  | 'flak_cannon' | 'dragon_roost' | 'smeltery' | 'market';
 
 /** Tags an entity as a player-built (or pre-placed) structure. */
 export interface BuildingComponent {

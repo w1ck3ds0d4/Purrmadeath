@@ -1,5 +1,5 @@
 import { Container, Graphics } from 'pixi.js';
-import { snapBuildingPosition, buildingExtent, buildingExclusionExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, BALLISTA_RANGE, UPGRADE_LASER_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RANGE, TESLA_COIL_RANGE, UPGRADE_FLAME_RANGE, CATAPULT_RANGE } from '@shared/constants';
+import { snapBuildingPosition, buildingExtent, buildingExclusionExtent, ARROW_TURRET_RANGE, CANNON_TURRET_RANGE, BALLISTA_RANGE, UPGRADE_LASER_RANGE, UPGRADE_LIGHT_RANGE, UPGRADE_HEAL_RANGE, TESLA_COIL_RANGE, UPGRADE_FLAME_RANGE, CATAPULT_RANGE, CAMPFIRE_BUILD_RANGE_PX } from '@shared/constants';
 import { POTION_SHOP_INTERACT_RANGE } from '@shared/definitions/PotionDefinitions';
 
 const VALID_COLOR   = 0x44cc66;
@@ -46,6 +46,12 @@ export class BuildGhostRenderer {
   snapX = 0;
   snapY = 0;
 
+  // Building range square state
+  private rangeCenterX = 0;
+  private rangeCenterY = 0;
+  private rangeHalfExtent = 0;
+  private campfirePlaced = false;
+
   constructor(worldContainer: Container) {
     this.gfx = new Graphics();
     this.gfx.visible = false;
@@ -60,6 +66,14 @@ export class BuildGhostRenderer {
   hide(): void {
     this.visible = false;
     this.gfx.visible = false;
+  }
+
+  /** Update the building range square from a BUILD_RANGE_UPDATE message. */
+  setBuildRange(cx: number, cy: number, halfExtent: number, placed: boolean): void {
+    this.rangeCenterX = cx;
+    this.rangeCenterY = cy;
+    this.rangeHalfExtent = halfExtent;
+    this.campfirePlaced = placed;
   }
 
   update(worldMouseX: number, worldMouseY: number, canPlace: boolean, buildingType: string, rotation: number = 0): void {
@@ -95,6 +109,26 @@ export class BuildGhostRenderer {
     if (excl.hx > ext.hx || excl.hy > ext.hy) {
       this.gfx.rect(this.snapX - excl.hx, this.snapY - excl.hy, excl.hx * 2, excl.hy * 2);
       this.gfx.stroke({ color: 0xffaa44, alpha: 0.4, width: 1 });
+    }
+
+    // Building range square (shown when placing any building)
+    if (this.campfirePlaced && this.rangeHalfExtent > 0) {
+      // Draw the existing campfire building range square
+      const rx = this.rangeCenterX - this.rangeHalfExtent;
+      const ry = this.rangeCenterY - this.rangeHalfExtent;
+      const rs = this.rangeHalfExtent * 2;
+      this.gfx.rect(rx, ry, rs, rs);
+      this.gfx.stroke({ color: 0x44aaff, alpha: 0.25, width: 2 });
+    } else if (buildingType === 'campfire' && !this.campfirePlaced) {
+      // Preview the range square centered on the ghost position (campfire not placed yet)
+      const previewRange = CAMPFIRE_BUILD_RANGE_PX;
+      const rx = this.snapX - previewRange;
+      const ry = this.snapY - previewRange;
+      const rs = previewRange * 2;
+      this.gfx.rect(rx, ry, rs, rs);
+      this.gfx.fill({ color: 0x44aaff, alpha: 0.03 });
+      this.gfx.rect(rx, ry, rs, rs);
+      this.gfx.stroke({ color: 0x44aaff, alpha: 0.3, width: 2 });
     }
   }
 

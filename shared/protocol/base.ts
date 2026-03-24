@@ -131,6 +131,8 @@ export enum MessageType {
   BUILD_REPAIR = 'BUILD_REPAIR',
   /** Server -> placing client: repair confirmed or rejected. */
   BUILD_REPAIR_CONFIRM = 'BUILD_REPAIR_CONFIRM',
+  /** Server -> all: building range update (campfire placed, range expanded by watchtower). */
+  BUILD_RANGE_UPDATE = 'BUILD_RANGE_UPDATE',
   /** Server -> all: cannon turret AOE explosion visual. */
   AOE_EXPLOSION = 'AOE_EXPLOSION',
   /** Server -> all: incoming meteor warning (red circle on ground before impact). */

@@ -56,19 +56,19 @@ export const ACHIEVEMENTS: Achievement[] = [
     reward: '+5% Crit Chance', medalColor: SILVER, target: 100,
     progress: (s) => s.totalCriticalHits ?? 0 },
 
-  // ── New Building Unlock Achievements (4) - unlock NEW buildings ───────────
-  { id: 'siege_master', category: 'building', displayName: 'Siege Master', description: 'Destroy 5 enemy portals',
-    reward: 'Unlock Siege Workshop', medalColor: GOLD, target: 5,
-    progress: (s) => s.totalPortalsDestroyed ?? 0 },
-  { id: 'beast_tamer', category: 'building', displayName: 'Beast Tamer', description: 'Summon 20 wolves total',
-    reward: 'Unlock Kennel', medalColor: GOLD, target: 20,
-    progress: (s) => s.totalWolvesSummoned ?? 0 },
-  { id: 'enchanter', category: 'building', displayName: 'Enchanter', description: 'Use 50 abilities total',
-    reward: 'Unlock Arcane Tower', medalColor: GOLD, target: 50,
-    progress: (s) => s.totalAbilitiesUsed ?? 0 },
-  { id: 'warden', category: 'building', displayName: 'Warden', description: 'Build 30 walls total',
-    reward: 'Unlock Watchtower', medalColor: GOLD, target: 30,
-    progress: (s) => s.totalWallsBuilt ?? 0 },
+  // ── Building Unlock Achievements (4) - unlock new buildings via meta progress ──
+  { id: 'artillery_expert', category: 'building', displayName: 'Artillery Expert', description: 'Kill 200 enemies with turrets',
+    reward: 'Unlock Flak Cannon', medalColor: GOLD, target: 200,
+    progress: (s) => s.totalTurretKills ?? 0 },
+  { id: 'dragon_tamer', category: 'building', displayName: 'Dragon Tamer', description: 'Survive to wave 50',
+    reward: 'Unlock Dragon Roost', medalColor: GOLD, target: 50,
+    progress: (s) => s.highestWaveSurvived },
+  { id: 'master_smith', category: 'building', displayName: 'Master Smith', description: 'Gather 100 iron total',
+    reward: 'Unlock Smeltery', medalColor: GOLD, target: 100,
+    progress: (s) => s.resourcesGathered.iron },
+  { id: 'trade_baron', category: 'building', displayName: 'Trade Baron', description: 'Have 10 civilians total',
+    reward: 'Unlock Market', medalColor: GOLD, target: 10,
+    progress: (s) => s.totalCiviliansSpawned ?? 0 },
 ];
 
 export const CATEGORY_LABELS: Record<AchievementCategory, string> = {
@@ -95,10 +95,10 @@ export function computeCompletedBuffs(stats: MetaStats): CompletedBuff[] {
 
 /** Map from building achievement ID to the building type it unlocks. */
 const BUILDING_UNLOCK_MAP: Record<string, string> = {
-  siege_master: 'siege_workshop',
-  beast_tamer: 'kennel',
-  enchanter: 'arcane_tower',
-  warden: 'watchtower',
+  artillery_expert: 'flak_cannon',
+  dragon_tamer: 'dragon_roost',
+  master_smith: 'smeltery',
+  trade_baron: 'market',
 };
 
 /** Compute which buildings a player has unlocked via achievements. */

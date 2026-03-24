@@ -66,6 +66,7 @@ import {
   MOAT_SLOW_FACTOR,
   REPAIR_STATION_HP_PER_TICK, REPAIR_STATION_INTERVAL,
   TAVERN_MAX_HEROES, TAVERN_ROSTER_SIZE,
+  isDefenceBuilding,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import { MessageType } from '@shared/protocol';
@@ -172,7 +173,10 @@ export function footprintCollides(ctx: BuildingContext, cx: number, cy: number, 
       const existingStackable = STACKABLE_BUILDINGS.has(bType);
       const bExt = buildingExtent(bType, b?.rotation ?? 0);
 
-      if (newExempt || existingExempt) {
+      // Defence buildings can be placed adjacent to each other (no exclusion zone)
+      if (isDefenceBuilding(buildingType) && isDefenceBuilding(bType)) {
+        if (Math.abs(pos.x - cx) < newExt.hx + bExt.hx && Math.abs(pos.y - cy) < newExt.hy + bExt.hy) return true;
+      } else if (newExempt || existingExempt) {
         if (Math.abs(pos.x - cx) < newExt.hx + bExt.hx && Math.abs(pos.y - cy) < newExt.hy + bExt.hy) return true;
       } else if (newStackable && existingStackable) {
         if (Math.abs(pos.x - cx) < newExt.hx + bExt.hx && Math.abs(pos.y - cy) < newExt.hy + bExt.hy) return true;
@@ -345,6 +349,18 @@ export function handlePlace(ctx: BuildingContext, clientId: string, msg: BuildPl
     return;
   }
 
+  // Campfire gating: only campfire can be placed before campfire exists
+  if (!ctx.isCampfirePlaced() && msg.buildingType !== 'campfire') {
+    send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'campfire_required' } as BuildConfirmMessage);
+    return;
+  }
+
+  // Prevent duplicate campfire placement
+  if (msg.buildingType === 'campfire' && ctx.isCampfirePlaced()) {
+    send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'campfire_already_placed' } as BuildConfirmMessage);
+    return;
+  }
+
   const rotation = msg.rotation ?? 0;
   const { x: snapX, y: snapY } = snapBuildingPosition(msg.x, msg.y, msg.buildingType, rotation);
   const bSize = BUILDING_SIZES[msg.buildingType] ?? { w: 1, h: 1 };
@@ -377,6 +393,12 @@ export function handlePlace(ctx: BuildingContext, clientId: string, msg: BuildPl
     return;
   }
 
+  // Building range check: all buildings except campfire must be within the build range square
+  if (msg.buildingType !== 'campfire' && !ctx.isInsideBuildRange(snapX, snapY)) {
+    send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'out_of_range' } as BuildConfirmMessage);
+    return;
+  }
+
   if (!deductBuildingCost(ctx, msg.buildingType, player, send)) {
     send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'insufficient_resources' } as BuildConfirmMessage);
     return;
@@ -388,6 +410,11 @@ export function handlePlace(ctx: BuildingContext, clientId: string, msg: BuildPl
   if (msg.buildingType === 'warehouse') {
     warehouseIds.add(id);
     broadcastWarehouseUpdate(send);
+  }
+
+  // Campfire placement: set flag, update spawn origin, broadcast range
+  if (msg.buildingType === 'campfire') {
+    ctx.onCampfirePlaced(id, send);
   }
 
   // Attach special components
@@ -548,7 +575,8 @@ export function handleDemolish(ctx: BuildingContext, clientId: string, msg: Buil
     send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'no_building' } as BuildConfirmMessage);
     return;
   }
-  if (bldg.permanent) {
+  // Campfire cannot be demolished (it's the win condition)
+  if (bldg.permanent || bldg.buildingType === 'campfire') {
     send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'permanent' } as BuildConfirmMessage);
     return;
   }

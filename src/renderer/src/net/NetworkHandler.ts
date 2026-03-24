@@ -189,6 +189,14 @@ export interface GameplayState {
   chargeDamage: number;
   /** Pending ability cooldowns from server (applied when abilities become available). */
   pendingAbilityCooldowns: Record<string, number> | null;
+  /** Whether the campfire has been placed by the player. */
+  campfirePlaced: boolean;
+  /** Building range center X (campfire position). */
+  buildRangeCenterX: number;
+  /** Building range center Y (campfire position). */
+  buildRangeCenterY: number;
+  /** Building range half-extent in pixels. */
+  buildRangeHalfExtent: number;
   /** Building types unlocked via achievements (e.g., 'siege_workshop', 'kennel'). */
   unlockedBuildings: Set<string>;
   /** True when user clicked Singleplayer but wasn't connected yet - retries after localhost connect. */
@@ -919,6 +927,20 @@ export function registerMessageHandlers(
   net.on(MessageType.BUILD_CONFIRM, (msg) => {
     const bc = msg as BuildConfirmMessage;
     if (!bc.success) d.debug.log(`Build failed: ${bc.reason ?? 'unknown'}`);
+  });
+
+  // Building range update (campfire placed, watchtower upgraded)
+  net.on(MessageType.BUILD_RANGE_UPDATE, (msg) => {
+    const br = msg as import('@shared/protocol').BuildRangeUpdateMessage;
+    s.campfirePlaced = br.campfirePlaced;
+    s.buildRangeCenterX = br.campfireX;
+    s.buildRangeCenterY = br.campfireY;
+    s.buildRangeHalfExtent = br.rangeHalfExtent;
+    // Update build menu to show full menu or campfire-only
+    d.buildMenu.setCampfirePlaced(br.campfirePlaced);
+    // Update ghost renderer with build range for visualization
+    d.buildGhost.setBuildRange(br.campfireX, br.campfireY, br.rangeHalfExtent, br.campfirePlaced);
+    clog('GAME', `Build range update: placed=${br.campfirePlaced}, range=${br.rangeHalfExtent}px`);
   });
 
   net.on(MessageType.BUILD_UPGRADE_CONFIRM, (msg) => {

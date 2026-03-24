@@ -33,6 +33,14 @@ export interface BuildingSystemDeps {
   spawnBuilding: (x: number, y: number, type: string, maxHp: number, permanent: boolean, rotation?: number) => number;
   spawnItemDrop: (x: number, y: number, itemType: string, quantity: number, autoPickup: boolean) => number;
   destroyDeadEntities: (deaths: number[], attackerMap: Map<number, number> | undefined, send: SendFn) => void;
+  /** Whether the campfire has been placed by the player. */
+  isCampfirePlaced: () => boolean;
+  /** Check if a world position is within the building range square. */
+  isInsideBuildRange: (wx: number, wy: number) => boolean;
+  /** Called when the campfire is placed. Sets flag, updates spawn origin, broadcasts range. */
+  onCampfirePlaced: (entityId: number, send: SendFn) => void;
+  /** Broadcast updated building range to all clients. */
+  broadcastBuildRange: (send: SendFn) => void;
 }
 
 // ── Shared context for extracted sub-modules ────────────────────────────
@@ -61,4 +69,8 @@ export interface BuildingContext {
   destroyDeadEntities: (deaths: number[], attackerMap: Map<number, number> | undefined, send: SendFn) => void;
   enemyHash: SpatialHash;
   broadcastWarehouseUpdate: (send: SendFn) => void;
+  isCampfirePlaced: () => boolean;
+  isInsideBuildRange: (wx: number, wy: number) => boolean;
+  onCampfirePlaced: (entityId: number, send: SendFn) => void;
+  broadcastBuildRange: (send: SendFn) => void;
 }

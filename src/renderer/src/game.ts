@@ -335,6 +335,10 @@ async function main(): Promise<void> {
   let localChargeElapsed = 0;
   let localChargeDuration = 0;
   let pendingAbilityCooldowns: Record<string, number> | null = null;
+  let campfirePlacedState = false;
+  let buildRangeCenterX = 0;
+  let buildRangeCenterY = 0;
+  let buildRangeHalfExtent = 0;
 
   /** Warehouse + player inventory combined (for build cost checks). */
   function combinedResources(): Record<string, number> {
@@ -689,6 +693,10 @@ async function main(): Promise<void> {
     chargeDamage = 0;
     localActiveBuffIdsArr = [];
     pendingAbilityCooldowns = null;
+    campfirePlacedState = false;
+    buildRangeCenterX = 0;
+    buildRangeCenterY = 0;
+    buildRangeHalfExtent = 0;
     lowHpVignette.style.opacity = '0';
     cardAbilities = [];
     pickedCardIds = [];
@@ -883,6 +891,10 @@ async function main(): Promise<void> {
     get chargeProgress() { return chargeProgress; }, set chargeProgress(v) { chargeProgress = v; },
     get chargeDamage() { return chargeDamage; }, set chargeDamage(v) { chargeDamage = v; },
     get pendingAbilityCooldowns() { return pendingAbilityCooldowns; }, set pendingAbilityCooldowns(v) { pendingAbilityCooldowns = v; },
+    get campfirePlaced() { return campfirePlacedState; }, set campfirePlaced(v) { campfirePlacedState = v; },
+    get buildRangeCenterX() { return buildRangeCenterX; }, set buildRangeCenterX(v) { buildRangeCenterX = v; },
+    get buildRangeCenterY() { return buildRangeCenterY; }, set buildRangeCenterY(v) { buildRangeCenterY = v; },
+    get buildRangeHalfExtent() { return buildRangeHalfExtent; }, set buildRangeHalfExtent(v) { buildRangeHalfExtent = v; },
     get pendingSingleplayerRetry() { return pendingSingleplayerRetry; }, set pendingSingleplayerRetry(v) { pendingSingleplayerRetry = v; },
     // Called by NetworkHandler after localhost reconnect succeeds - retriggers the singleplayer flow
     onSingleplayerRetry: null as (() => void) | null,

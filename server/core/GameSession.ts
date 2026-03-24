@@ -61,6 +61,8 @@ import {
   MAX_ATTACK_POSITION_TOLERANCE,
   TICK_MS,
   CAMPFIRE_MAX_HEALTH,
+  CAMPFIRE_BUILD_RANGE_PX,
+  WATCHTOWER_RANGE_PER_LEVEL_PX,
   WALL_MAX_HEALTH,
   RESOURCE_NODE_RADIUS,
   PORTAL_RADIUS,
@@ -249,8 +251,10 @@ export class GameSession {
   /** True after GAME_OVER is sent - stops all death/respawn/wave processing. */
   private gameOver = false;
 
-  /** Entity ID of the campfire (set on game start). -1 = no campfire. */
+  /** Entity ID of the campfire. -1 = not placed yet. */
   private campfireEntityId = -1;
+  /** Whether the campfire has been placed by the player. Gates building menu. */
+  private campfirePlaced = false;
 
   private warehouseIds = new Set<number>();
   private warehousePool = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0 };
@@ -355,6 +359,10 @@ export class GameSession {
       spawnBuilding: (x, y, type, maxHp, permanent, rotation) => this.spawnBuilding(x, y, type as any, maxHp, permanent, rotation),
       spawnItemDrop: (x, y, item, qty, auto) => this.spawnItemDrop(x, y, item, qty, auto),
       destroyDeadEntities: (deaths, attackerMap, send) => this.respawn.destroyDeadEntities(deaths, attackerMap, send),
+      isCampfirePlaced: () => this.campfirePlaced,
+      isInsideBuildRange: (wx, wy) => this.isInsideBuildRange(wx, wy),
+      onCampfirePlaced: (id, send) => this.onCampfirePlaced(id, send),
+      broadcastBuildRange: (send) => this.broadcastBuildRange(send),
     });
 
     this.civilians = createCivilianSystem({
@@ -435,9 +443,11 @@ export class GameSession {
       overlapsResourceNode: (wx, wy, r) => this.overlapsResourceNode(wx, wy, r),
       onWaveCleared: (wave, send) => this.onWaveCleared(wave, send),
       getCampfirePosition: () => {
-        if (this.campfireEntityId < 0) return null;
+        if (this.campfireEntityId < 0 || !this.campfirePlaced) return null;
         return this.world.getComponent<PositionComponent>(this.campfireEntityId, C.Position) ?? null;
       },
+      isInsideBuildRange: (wx, wy) => this.isInsideBuildRange(wx, wy),
+      isCampfirePlaced: () => this.campfirePlaced,
     });
 
     this.worldEvents = createWorldEventController({
@@ -549,6 +559,7 @@ export class GameSession {
       onCivilianDeath: (entityId, send) => this.civilians.handleCivilianDeath(entityId, send),
       onEnemyKilled: (deadId, attackerEntityId, variant, send) => this.onEnemyKilled(deadId, attackerEntityId, variant, send),
       onHeroDeath: (entityId, send) => this.heroes.handleHeroDeath(entityId, send),
+      isCampfirePlaced: () => this.campfirePlaced,
     });
 
     this.stats = createStatsCollector({
@@ -760,13 +771,8 @@ export class GameSession {
       }
     }
 
-    // Spawn campfire at the centre of the spawn area
-    this.campfireEntityId = this.spawnBuilding(
-      origin.x, origin.y,
-      'campfire',
-      CAMPFIRE_MAX_HEALTH,
-      true,
-    );
+    // Campfire is now player-placed via the build menu (not auto-spawned).
+    // It will be placed by handleBuildPlace -> onCampfirePlaced.
 
     // Pre-generate resources for immediate spawn area (skip for saves - resources restored later)
     if (!hasSave) {
@@ -795,19 +801,22 @@ export class GameSession {
 
     // ── Restore saved state ─────────────────────────────────────────────────
     if (hasSave && save) {
+      // Restore campfirePlaced from save (old saves without the flag = true for backward compat)
+      this.campfirePlaced = (save as any).campfirePlaced ?? true;
+
       console.log(`[GameSession] Restoring ${save.buildings.length} buildings from save (wave ${this.waveState.currentWave})`);
-      // Restore saved buildings (campfire was already placed above - just restore its state)
+      // Restore saved buildings
       for (const sb of save.buildings) {
         if (sb.buildingType === 'campfire') {
-          // Restore campfire HP, upgrade level, and position from save
-          if (this.campfireEntityId !== null) {
-            const pos = this.world.getComponent<PositionComponent>(this.campfireEntityId, C.Position);
-            if (pos) { pos.x = sb.x; pos.y = sb.y; }
-            const hp = this.world.getComponent<HealthComponent>(this.campfireEntityId, C.Health);
-            if (hp) { hp.current = sb.currentHp; hp.max = sb.maxHp; }
-            const bld = this.world.getComponent<BuildingComponent>(this.campfireEntityId, C.Building);
-            if (bld) bld.upgradeLevel = sb.upgradeLevel;
-          }
+          // Spawn campfire from save data (no longer auto-spawned)
+          const eid = this.spawnBuilding(sb.x, sb.y, 'campfire', sb.maxHp, true, sb.rotation ?? 0);
+          this.campfireEntityId = eid;
+          this.campfirePlaced = true;
+          this.spawnOrigin = { x: sb.x, y: sb.y };
+          const hp = this.world.getComponent<HealthComponent>(eid, C.Health);
+          if (hp) hp.current = sb.currentHp;
+          const bld = this.world.getComponent<BuildingComponent>(eid, C.Building);
+          if (bld) bld.upgradeLevel = sb.upgradeLevel;
           continue;
         }
         const eid = this.spawnBuilding(sb.x, sb.y, sb.buildingType as BuildingType, sb.maxHp, sb.permanent, sb.rotation ?? 0);
@@ -1101,9 +1110,9 @@ export class GameSession {
       this.dayNight.startFirstDay(send, savedDayTimer);
     }
 
-    // Spawn / restore civilians
+    // Spawn / restore civilians (initial spawn deferred until campfire is placed)
     if (!hasSave) {
-      this.civilians.spawnInitialCivilians(origin, send);
+      // Don't spawn initial civilians - they'll spawn via timer after campfire is placed
     } else if (save?.civilians && save.civilians.length > 0) {
       this.civilians.restore(save.civilians);
       console.log(`[GameSession] Restored ${save.civilians.length} civilians from save`);
@@ -1126,6 +1135,9 @@ export class GameSession {
     // Broadcast full SNAPSHOT (includes restored enemies/portals)
     const snapshot = this.buildFullSnapshot();
     for (const p of this.players.values()) send(p.client, snapshot);
+
+    // Send building range state to all clients
+    this.broadcastBuildRange(send);
 
     // Send resource sync to each player (resources aren't in SNAPSHOT)
     for (const p of this.players.values()) {
@@ -1224,6 +1236,55 @@ export class GameSession {
       if (Math.abs(wx - bpos.x) < half && Math.abs(wy - bpos.y) < half) return true;
     }
     return false;
+  }
+
+  // ── Building Range System ─────────────────────────────────────────────────
+
+  /** Compute the total building range half-extent in pixels (campfire base + watchtower bonuses). */
+  private computeBuildRange(): number {
+    let range = CAMPFIRE_BUILD_RANGE_PX;
+    // Add watchtower bonuses
+    for (const id of this.world.query(C.WatchAura, C.Building)) {
+      const b = this.world.getComponent<BuildingComponent>(id, C.Building);
+      if (b) range += WATCHTOWER_RANGE_PER_LEVEL_PX * b.upgradeLevel;
+    }
+    return range;
+  }
+
+  /** Check if a world position is within the building range square. */
+  private isInsideBuildRange(wx: number, wy: number): boolean {
+    if (this.campfireEntityId < 0 || !this.campfirePlaced) return false;
+    const campPos = this.world.getComponent<PositionComponent>(this.campfireEntityId, C.Position);
+    if (!campPos) return false;
+    const halfExtent = this.computeBuildRange();
+    return Math.abs(wx - campPos.x) <= halfExtent && Math.abs(wy - campPos.y) <= halfExtent;
+  }
+
+  /** Broadcast the current building range to all clients. */
+  private broadcastBuildRange(send: SendFn): void {
+    const campPos = this.campfireEntityId >= 0
+      ? this.world.getComponent<PositionComponent>(this.campfireEntityId, C.Position)
+      : null;
+    const msg = {
+      type: MessageType.BUILD_RANGE_UPDATE,
+      campfireX: campPos?.x ?? 0,
+      campfireY: campPos?.y ?? 0,
+      rangeHalfExtent: this.campfirePlaced ? this.computeBuildRange() : 0,
+      campfirePlaced: this.campfirePlaced,
+    };
+    for (const p of this.players.values()) send(p.client, msg);
+  }
+
+  /** Called when the player places the campfire. Updates spawn origin and broadcasts range. */
+  private onCampfirePlaced(entityId: number, send: SendFn): void {
+    this.campfireEntityId = entityId;
+    this.campfirePlaced = true;
+    const pos = this.world.getComponent<PositionComponent>(entityId, C.Position);
+    if (pos) {
+      this.spawnOrigin = { x: pos.x, y: pos.y };
+    }
+    this.logger.building('Campfire placed', { x: pos?.x, y: pos?.y });
+    this.broadcastBuildRange(send);
   }
 
   /**
@@ -3101,6 +3162,8 @@ export class GameSession {
     data.civilians = this.civilians.serialize();
     // Save heroes
     data.heroes = this.heroes.serialize();
+    // Save campfire placement state
+    (data as any).campfirePlaced = this.campfirePlaced;
     return data;
   }
 
