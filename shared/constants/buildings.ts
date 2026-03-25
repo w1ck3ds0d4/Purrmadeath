@@ -21,7 +21,7 @@ export const RUINS_RESTORE_COST_MULT = 0.6;
 // ─── Building Range System ──────────────────────────────────────────────
 
 /** Campfire building range in tiles. All buildings must be within this square of the campfire. */
-export const CAMPFIRE_BUILD_RANGE = 80;
+export const CAMPFIRE_BUILD_RANGE = 20;
 /** Campfire building range in world pixels. */
 export const CAMPFIRE_BUILD_RANGE_PX = CAMPFIRE_BUILD_RANGE * TILE_SIZE;
 /** Additional building range per watchtower level in tiles. */

@@ -448,6 +448,7 @@ export class GameSession {
       },
       isInsideBuildRange: (wx, wy) => this.isInsideBuildRange(wx, wy),
       isCampfirePlaced: () => this.campfirePlaced,
+      getBuildRangeHalfExtent: () => this.campfirePlaced ? this.computeBuildRange() : 0,
     });
 
     this.worldEvents = createWorldEventController({
@@ -1251,13 +1252,19 @@ export class GameSession {
     return range;
   }
 
-  /** Check if a world position is within the building range square. */
+  /** Check if a world position is within the building range square (tile-grid snapped). */
   private isInsideBuildRange(wx: number, wy: number): boolean {
     if (this.campfireEntityId < 0 || !this.campfirePlaced) return false;
     const campPos = this.world.getComponent<PositionComponent>(this.campfireEntityId, C.Position);
     if (!campPos) return false;
     const halfExtent = this.computeBuildRange();
-    return Math.abs(wx - campPos.x) <= halfExtent && Math.abs(wy - campPos.y) <= halfExtent;
+    // Snap range edges to tile grid so the boundary aligns with building placement
+    const ts = TILE_SIZE;
+    const left = Math.floor((campPos.x - halfExtent) / ts) * ts;
+    const top = Math.floor((campPos.y - halfExtent) / ts) * ts;
+    const right = Math.ceil((campPos.x + halfExtent) / ts) * ts;
+    const bottom = Math.ceil((campPos.y + halfExtent) / ts) * ts;
+    return wx >= left && wx <= right && wy >= top && wy <= bottom;
   }
 
   /** Broadcast the current building range to all clients. */

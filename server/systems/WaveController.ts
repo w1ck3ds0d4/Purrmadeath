@@ -85,6 +85,8 @@ export interface WaveControllerDeps {
   isInsideBuildRange: (wx: number, wy: number) => boolean;
   /** Whether the campfire has been placed. */
   isCampfirePlaced: () => boolean;
+  /** Get the current build range half-extent in pixels (campfire base + watchtower bonuses). */
+  getBuildRangeHalfExtent: () => number;
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
@@ -153,11 +155,18 @@ export function createWaveController(deps: WaveControllerDeps) {
     const numPortals = Math.ceil((PORTALS_PER_WAVE_BASE + PORTALS_PER_WAVE_GROWTH * (wave - 1)) * mods.enemyCountMult);
     const placed: { x: number; y: number }[] = [];
 
+    // Dynamic min distance: portals must spawn outside the building range square.
+    // Use diagonal distance (center to corner of square) to ensure corners are cleared.
+    const buildRangeHE = deps.getBuildRangeHalfExtent();
+    const buildRangeDiag = buildRangeHE > 0 ? Math.ceil(Math.sqrt(2) * buildRangeHE) : 0;
+    const effectiveMinDist = Math.max(PORTAL_MIN_DIST, buildRangeDiag + 100);
+    const effectiveMaxDist = Math.max(effectiveMinDist + 400, PORTAL_MAX_DIST);
+
     for (let i = 0; i < numPortals; i++) {
       let bestX = 0, bestY = 0, found = false;
       for (let attempt = 0; attempt < 100; attempt++) {
         const angle = Math.random() * Math.PI * 2;
-        const dist = PORTAL_MIN_DIST + Math.random() * (PORTAL_MAX_DIST - PORTAL_MIN_DIST);
+        const dist = effectiveMinDist + Math.random() * (effectiveMaxDist - effectiveMinDist);
         const px = cx + Math.cos(angle) * dist;
         const py = cy + Math.sin(angle) * dist;
 

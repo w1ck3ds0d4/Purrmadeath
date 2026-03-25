@@ -393,10 +393,17 @@ export function handlePlace(ctx: BuildingContext, clientId: string, msg: BuildPl
     return;
   }
 
-  // Building range check: all buildings except campfire must be within the build range square
-  if (msg.buildingType !== 'campfire' && !ctx.isInsideBuildRange(snapX, snapY)) {
-    send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'out_of_range' } as BuildConfirmMessage);
-    return;
+  // Building range check: entire building footprint must be within the build range square
+  if (msg.buildingType !== 'campfire') {
+    // Check all 4 corners of the footprint to ensure the whole building is inside
+    const bExt = buildingExtent(msg.buildingType, rotation);
+    if (!ctx.isInsideBuildRange(snapX - bExt.hx, snapY - bExt.hy) ||
+        !ctx.isInsideBuildRange(snapX + bExt.hx, snapY - bExt.hy) ||
+        !ctx.isInsideBuildRange(snapX - bExt.hx, snapY + bExt.hy) ||
+        !ctx.isInsideBuildRange(snapX + bExt.hx, snapY + bExt.hy)) {
+      send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'out_of_range' } as BuildConfirmMessage);
+      return;
+    }
   }
 
   if (!deductBuildingCost(ctx, msg.buildingType, player, send)) {

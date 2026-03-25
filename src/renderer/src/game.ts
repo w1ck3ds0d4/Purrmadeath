@@ -813,6 +813,12 @@ async function main(): Promise<void> {
     getWarehouseResources: () => warehouseResources as Record<string, number>,
     getWarehouseExists: () => warehouseExists,
     send: (msg) => net.send(msg),
+    getBuildRange: () => ({
+      campfirePlaced: campfirePlacedState,
+      centerX: buildRangeCenterX,
+      centerY: buildRangeCenterY,
+      halfExtent: buildRangeHalfExtent,
+    }),
   });
 
   // Wire resource accordion: auto-expand/collapse with build mode
@@ -924,6 +930,10 @@ async function main(): Promise<void> {
         abilityCooldowns[slotIdx] = remaining;
         abilityCooldownMaxes[slotIdx] = Math.max(abilityCooldownMaxes[slotIdx], remaining);
       }
+    },
+    onCampfirePlaced: () => {
+      // Exit build mode when campfire is placed
+      buildCtrl.exitBuildMode();
     },
   });
 
@@ -1367,6 +1377,9 @@ async function main(): Promise<void> {
             exitBuildModeAndCollapse();
           }
           // If clicking a building, the update() call below handles the selection
+        } else if (buildCtrl.phase === 'placing' && !buildCtrl.isSelectMode) {
+          // Placing a building from build menu: RMB cancels placement and exits build mode
+          exitBuildModeAndCollapse();
         } else if (buildCtrl.phase === 'inactive') {
           // Outside build mode: only enter select mode if clicking ON a building
           if (clickedBuilding !== null) {

@@ -38,6 +38,8 @@ export interface BuildControllerDeps {
   getWarehouseResources: () => Record<string, number>;
   getWarehouseExists: () => boolean;
   send: (msg: object) => void;
+  /** Get the current campfire build range state for client-side validation. */
+  getBuildRange: () => { campfirePlaced: boolean; centerX: number; centerY: number; halfExtent: number };
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
@@ -272,6 +274,23 @@ export function createBuildController(deps: BuildControllerDeps) {
         } else if (ef?.type === 'player' || ef?.type === 'enemy') {
           const r = ef.type === 'player' ? PLAYER_RADIUS : ENEMY_RADIUS;
           if (Math.abs(ep.x - snapX) < ext.hx + r && Math.abs(ep.y - snapY) < ext.hy + r) { ghostValid = false; break; }
+        }
+      }
+    }
+
+    // Building range check: entire building footprint must be within the tile-snapped range square
+    if (ghostValid && placingType !== 'campfire') {
+      const br = deps.getBuildRange();
+      if (br.campfirePlaced && br.halfExtent > 0) {
+        const ts = 32; // TILE_SIZE
+        const rangeLeft = Math.floor((br.centerX - br.halfExtent) / ts) * ts;
+        const rangeTop = Math.floor((br.centerY - br.halfExtent) / ts) * ts;
+        const rangeRight = Math.ceil((br.centerX + br.halfExtent) / ts) * ts;
+        const rangeBottom = Math.ceil((br.centerY + br.halfExtent) / ts) * ts;
+        // Check if all 4 corners of the building are inside the snapped range
+        if (snapX - ext.hx < rangeLeft || snapX + ext.hx > rangeRight ||
+            snapY - ext.hy < rangeTop || snapY + ext.hy > rangeBottom) {
+          ghostValid = false;
         }
       }
     }

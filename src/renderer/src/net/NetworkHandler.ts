@@ -248,6 +248,8 @@ export interface NetworkHandlerDeps {
   electronAPI?: { checkForUpdates?: () => void };
   getActiveAbilities?: () => Array<{ abilityId: string; cooldown: number } | null>;
   setAbilityCooldown: (slotIndex: number, remaining: number) => void;
+  /** Called when campfire is first placed - exits build mode. */
+  onCampfirePlaced?: () => void;
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
@@ -932,6 +934,7 @@ export function registerMessageHandlers(
   // Building range update (campfire placed, watchtower upgraded)
   net.on(MessageType.BUILD_RANGE_UPDATE, (msg) => {
     const br = msg as import('@shared/protocol').BuildRangeUpdateMessage;
+    const wasPreviouslyUnplaced = !s.campfirePlaced;
     s.campfirePlaced = br.campfirePlaced;
     s.buildRangeCenterX = br.campfireX;
     s.buildRangeCenterY = br.campfireY;
@@ -940,6 +943,12 @@ export function registerMessageHandlers(
     d.buildMenu.setCampfirePlaced(br.campfirePlaced);
     // Update ghost renderer with build range for visualization
     d.buildGhost.setBuildRange(br.campfireX, br.campfireY, br.rangeHalfExtent, br.campfirePlaced);
+    // If campfire was just placed, exit build mode (remove campfire from hand)
+    if (wasPreviouslyUnplaced && br.campfirePlaced) {
+      d.buildGhost.hide();
+      d.buildMenu.hide();
+      d.onCampfirePlaced?.();
+    }
     clog('GAME', `Build range update: placed=${br.campfirePlaced}, range=${br.rangeHalfExtent}px`);
   });
 

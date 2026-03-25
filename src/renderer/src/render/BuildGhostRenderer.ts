@@ -74,6 +74,7 @@ export class BuildGhostRenderer {
     this.rangeCenterY = cy;
     this.rangeHalfExtent = halfExtent;
     this.campfirePlaced = placed;
+    console.log(`[BuildGhost] setBuildRange: center=(${cx}, ${cy}), halfExtent=${halfExtent}, placed=${placed}`);
   }
 
   update(worldMouseX: number, worldMouseY: number, canPlace: boolean, buildingType: string, rotation: number = 0): void {
@@ -112,23 +113,38 @@ export class BuildGhostRenderer {
     }
 
     // Building range square (shown when placing any building)
+    // Snap edges to tile grid so the boundary aligns with the tile-based building placement
     if (this.campfirePlaced && this.rangeHalfExtent > 0) {
-      // Draw the existing campfire building range square
-      const rx = this.rangeCenterX - this.rangeHalfExtent;
-      const ry = this.rangeCenterY - this.rangeHalfExtent;
-      const rs = this.rangeHalfExtent * 2;
-      this.gfx.rect(rx, ry, rs, rs);
-      this.gfx.stroke({ color: 0x44aaff, alpha: 0.25, width: 2 });
+      const rawLeft = this.rangeCenterX - this.rangeHalfExtent;
+      const rawTop = this.rangeCenterY - this.rangeHalfExtent;
+      const rawRight = this.rangeCenterX + this.rangeHalfExtent;
+      const rawBottom = this.rangeCenterY + this.rangeHalfExtent;
+      // Snap to tile grid (floor left/top, ceil right/bottom)
+      const ts = 32; // TILE_SIZE
+      const rx = Math.floor(rawLeft / ts) * ts;
+      const ry = Math.floor(rawTop / ts) * ts;
+      const rw = Math.ceil(rawRight / ts) * ts - rx;
+      const rh = Math.ceil(rawBottom / ts) * ts - ry;
+      this.gfx.rect(rx, ry, rw, rh);
+      this.gfx.fill({ color: 0x44aaff, alpha: 0.04 });
+      this.gfx.rect(rx, ry, rw, rh);
+      this.gfx.stroke({ color: 0x44aaff, alpha: 0.5, width: 3 });
     } else if (buildingType === 'campfire' && !this.campfirePlaced) {
       // Preview the range square centered on the ghost position (campfire not placed yet)
       const previewRange = CAMPFIRE_BUILD_RANGE_PX;
-      const rx = this.snapX - previewRange;
-      const ry = this.snapY - previewRange;
-      const rs = previewRange * 2;
-      this.gfx.rect(rx, ry, rs, rs);
-      this.gfx.fill({ color: 0x44aaff, alpha: 0.03 });
-      this.gfx.rect(rx, ry, rs, rs);
-      this.gfx.stroke({ color: 0x44aaff, alpha: 0.3, width: 2 });
+      const rawLeft = this.snapX - previewRange;
+      const rawTop = this.snapY - previewRange;
+      const rawRight = this.snapX + previewRange;
+      const rawBottom = this.snapY + previewRange;
+      const ts = 32;
+      const rx = Math.floor(rawLeft / ts) * ts;
+      const ry = Math.floor(rawTop / ts) * ts;
+      const rw = Math.ceil(rawRight / ts) * ts - rx;
+      const rh = Math.ceil(rawBottom / ts) * ts - ry;
+      this.gfx.rect(rx, ry, rw, rh);
+      this.gfx.fill({ color: 0x44aaff, alpha: 0.04 });
+      this.gfx.rect(rx, ry, rw, rh);
+      this.gfx.stroke({ color: 0x44aaff, alpha: 0.5, width: 3 });
     }
   }
 
