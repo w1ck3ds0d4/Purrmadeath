@@ -110,6 +110,7 @@ export class SessionManager {
     socket.on(MessageType.BUILD_DEMOLISH,      (c, m) => this.onBuildDemolish(c, m as BuildDemolishMessage));
     socket.on(MessageType.BUILD_UPGRADE,       (c, m) => this.onBuildUpgrade(c, m as BuildUpgradeMessage));
     socket.on(MessageType.BUILD_REPAIR,        (c, m) => this.onBuildRepair(c, m as BuildRepairMessage));
+    socket.on(MessageType.BUILD_MOVE,          (c, m) => this.onBuildMove(c, m as import('@shared/protocol').BuildMoveMessage));
     socket.on(MessageType.DEBUG_SPAWN_ENEMIES,  (c, m) => this.onDebugAction(c, () => this.onDebugSpawnEnemies(c, m as DebugSpawnEnemiesMessage)));
     socket.on(MessageType.DEBUG_WAVE_SKIP,     (c) => this.onDebugAction(c, () => this.session?.debugWaveSkip((cl, msg) => this.socket.send(cl, msg))));
     socket.on(MessageType.DEBUG_WAVE_PAUSE,    (c) => this.onDebugAction(c, () => this.session?.debugWavePause((cl, msg) => this.socket.send(cl, msg))));
@@ -538,6 +539,10 @@ export class SessionManager {
 
   private onBuildRepair(client: ConnectedClient, msg: BuildRepairMessage): void {
     this.session?.handleBuildRepair(client.id, msg, (c, m) => this.socket.send(c, m));
+  }
+
+  private onBuildMove(client: ConnectedClient, msg: import('@shared/protocol').BuildMoveMessage): void {
+    this.session?.handleBuildMove(client.id, msg, (c, m) => this.socket.send(c, m));
   }
 
   /** Host-only guard for debug commands. */

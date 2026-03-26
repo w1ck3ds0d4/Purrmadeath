@@ -1,5 +1,6 @@
 import { GameLogger } from './GameLogger';
 import { tickWalkabilityCache } from '../systems/Pathfinding';
+import { updateMilestones as updateMilestonesFromSave } from '@shared/definitions/WaveMilestones';
 import { World } from '@shared/ecs/World';
 import { distance } from '@shared/math/utils';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
@@ -561,6 +562,8 @@ export class GameSession {
       onEnemyKilled: (deadId, attackerEntityId, variant, send) => this.onEnemyKilled(deadId, attackerEntityId, variant, send),
       onHeroDeath: (entityId, send) => this.heroes.handleHeroDeath(entityId, send),
       isCampfirePlaced: () => this.campfirePlaced,
+      getUndyingChance: () => this.waves.milestones.undyingChance,
+      spawnEnemyAt: (x, y) => this.waves.spawnEnemy(x, y),
     });
 
     this.stats = createStatsCollector({
@@ -1139,6 +1142,12 @@ export class GameSession {
 
     // Send building range state to all clients
     this.broadcastBuildRange(send);
+
+    // Recalculate milestones based on current wave (for save/load at wave 30+)
+    // This ensures milestones that should have been active are correctly set
+    if (this.waveState.currentWave > 1) {
+      updateMilestonesFromSave(this.waves.milestones, this.waveState.currentWave);
+    }
 
     // Send resource sync to each player (resources aren't in SNAPSHOT)
     for (const p of this.players.values()) {
@@ -1974,6 +1983,10 @@ export class GameSession {
 
   handleBuildRepair(clientId: string, msg: BuildRepairMessage, send: SendFn): void {
     this.buildings.handleRepair(clientId, msg, send);
+  }
+
+  handleBuildMove(clientId: string, msg: import('@shared/protocol').BuildMoveMessage, send: SendFn): void {
+    this.buildings.handleMove(clientId, msg, send);
   }
 
   handleTrainGuard(clientId: string, msg: TrainGuardMessage, send: SendFn): void {
@@ -4025,6 +4038,7 @@ export class GameSession {
     if (!this.gameOver) {
       this.respawn.tickDownedPlayers(dt, send);
       this.respawn.tickRespawnTimers(dt, send);
+      this.respawn.tickResurrections(dt);
     }
 
     // ── Buildings (warehouse, production, turrets, traps, shrines, barracks) ──

@@ -24,6 +24,7 @@ export enum Action {
   CivilianPanel,
   Cancel,
   RotateBuilding,
+  MoveBuilding,
 }
 
 // One or more key strings per action (Set.has is O(1)).
@@ -49,6 +50,7 @@ const DEFAULT_BINDINGS: Readonly<Record<Action, readonly string[]>> = {
   [Action.CivilianPanel]:      ['c'],
   [Action.Cancel]:             ['MouseRight'],
   [Action.RotateBuilding]:     ['ScrollDown', 'ScrollUp'],
+  [Action.MoveBuilding]:       ['f'],
 };
 
 export class InputManager {

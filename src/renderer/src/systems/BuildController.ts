@@ -53,6 +53,10 @@ export function createBuildController(deps: BuildControllerDeps) {
   let selectedId: number | null = null;
   let selectMode = false;
   let rotation = 0;
+  /** When true, the player is moving a building (ghost follows mouse, click to re-place). */
+  let moveMode = false;
+  /** Entity ID of the building being moved. */
+  let movingEntityId: number | null = null;
 
   /** Returns true if the current building type supports rotation (non-square). */
   function isRotatable(type: string): boolean {
@@ -95,6 +99,8 @@ export function createBuildController(deps: BuildControllerDeps) {
     placingType = '';
     selectedId = null;
     selectMode = false;
+    moveMode = false;
+    movingEntityId = null;
     buildOverlay.hide();
     buildGhost.hide();
   }
@@ -166,10 +172,22 @@ export function createBuildController(deps: BuildControllerDeps) {
         }
       }
 
-      // E/R/X on selected building
+      // E/R/X/F on selected building
       if (selectedId !== null) {
         if (input.isJustPressed(Action.Upgrade)) deps.send({ type: MessageType.BUILD_UPGRADE, entityId: selectedId });
         if (input.isJustPressed(Action.Repair)) deps.send({ type: MessageType.BUILD_REPAIR, entityId: selectedId });
+        if (input.isJustPressed(Action.MoveBuilding)) {
+          const selBldg = world.getComponent<BuildingComponent>(selectedId, C.Building);
+          if (selBldg && !selBldg.permanent && selBldg.buildingType !== 'campfire') {
+            // Enter move mode: pick up the building
+            moveMode = true;
+            movingEntityId = selectedId;
+            placingType = selBldg.buildingType;
+            rotation = selBldg.rotation ?? 0;
+            selectMode = false;
+            buildGhost.show();
+          }
+        }
         if (input.isJustPressed(Action.Demolish)) {
           const selBldg = world.getComponent<BuildingComponent>(selectedId, C.Building);
           if (selBldg && !selBldg.permanent) {
@@ -297,18 +315,29 @@ export function createBuildController(deps: BuildControllerDeps) {
 
     buildGhost.update(wmx, wmy, ghostValid, placingType, rotation);
 
-    // LMB: place new building or select existing
+    // LMB: place new building, move building, or select existing
     if (input.isJustPressed(Action.Attack)) {
-      const clicked = findBuildingAt(wmx, wmy);
-      if (clicked !== null) {
-        selectedId = clicked;
-        const bComp = world.getComponent<BuildingComponent>(clicked, C.Building)!;
-        const hp = world.getComponent<HealthComponent>(clicked, C.Health);
-        const hi = isHousingBuilding(bComp.buildingType) ? getHousingInfo() : undefined;
-        buildOverlay.updateSelection(bComp.buildingType, bComp.upgradeLevel, deps.combinedResources(), hp?.current, hp?.max, hi);
-      } else if (ghostValid) {
-        deps.send({ type: MessageType.BUILD_PLACE, buildingType: placingType, x: wmx, y: wmy, rotation });
+      if (moveMode && movingEntityId !== null && ghostValid) {
+        // Move mode: send BUILD_MOVE to relocate the building
+        deps.send({ type: MessageType.BUILD_MOVE, entityId: movingEntityId, x: wmx, y: wmy });
+        moveMode = false;
+        movingEntityId = null;
         selectedId = null;
+        buildGhost.hide();
+        buildOverlay.hide();
+        phase = 'inactive';
+      } else {
+        const clicked = findBuildingAt(wmx, wmy);
+        if (clicked !== null) {
+          selectedId = clicked;
+          const bComp = world.getComponent<BuildingComponent>(clicked, C.Building)!;
+          const hp = world.getComponent<HealthComponent>(clicked, C.Health);
+          const hi = isHousingBuilding(bComp.buildingType) ? getHousingInfo() : undefined;
+          buildOverlay.updateSelection(bComp.buildingType, bComp.upgradeLevel, deps.combinedResources(), hp?.current, hp?.max, hi);
+        } else if (ghostValid) {
+          deps.send({ type: MessageType.BUILD_PLACE, buildingType: placingType, x: wmx, y: wmy, rotation });
+          selectedId = null;
+        }
       }
     }
 

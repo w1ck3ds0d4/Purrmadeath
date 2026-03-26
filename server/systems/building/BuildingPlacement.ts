@@ -921,3 +921,88 @@ export function depositPlayerToWarehouse(ctx: BuildingContext, playerEntityId: n
   }
   return transferred;
 }
+
+// ── Building Move ─────────────────────────────────────────────────────────
+
+/** Move an existing building to a new position. Keeps level, HP, and components. */
+export function handleBuildMove(
+  ctx: BuildingContext,
+  clientId: string,
+  msg: import('@shared/protocol').BuildMoveMessage,
+  send: SendFn,
+): void {
+  const { world, players, respawnTimers, isActive } = ctx;
+  if (!isActive()) return;
+  const player = players.get(clientId);
+  if (!player || player.entityId === null) return;
+  if (world.hasComponent(player.entityId, C.Downed)) return;
+  if (respawnTimers.has(clientId)) return;
+
+  const targetId = msg.entityId;
+  if (!world.hasEntity(targetId)) {
+    send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'no_building' } as BuildConfirmMessage);
+    return;
+  }
+
+  const bldg = world.getComponent<BuildingComponent>(targetId, C.Building);
+  if (!bldg) {
+    send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'no_building' } as BuildConfirmMessage);
+    return;
+  }
+
+  // Can't move campfire
+  if (bldg.buildingType === 'campfire') {
+    send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'permanent' } as BuildConfirmMessage);
+    return;
+  }
+
+  const rotation = bldg.rotation ?? 0;
+  const { x: snapX, y: snapY } = snapBuildingPosition(msg.x, msg.y, bldg.buildingType, rotation);
+  const bExt = buildingExtent(bldg.buildingType, rotation);
+
+  // Walkability check at new position
+  const generator = ctx.generator;
+  const tilesW = rotation === 1 ? (BUILDING_SIZES[bldg.buildingType]?.h ?? 1) : (BUILDING_SIZES[bldg.buildingType]?.w ?? 1);
+  const tilesH = rotation === 1 ? (BUILDING_SIZES[bldg.buildingType]?.w ?? 1) : (BUILDING_SIZES[bldg.buildingType]?.h ?? 1);
+  const startTX = Math.floor((snapX - bExt.hx) / TILE_SIZE);
+  const startTY = Math.floor((snapY - bExt.hy) / TILE_SIZE);
+  const isBridge = bldg.buildingType === 'bridge';
+  for (let dy = 0; dy < tilesH; dy++) {
+    for (let dx = 0; dx < tilesW; dx++) {
+      const tileId = generator.getTile(startTX + dx, startTY + dy);
+      const walkable = TILE_DEFS[tileId]?.walkable ?? false;
+      if (isBridge ? walkable : !walkable) {
+        send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'not_walkable' } as BuildConfirmMessage);
+        return;
+      }
+    }
+  }
+
+  // Building range check at new position
+  if (!ctx.isInsideBuildRange(snapX - bExt.hx, snapY - bExt.hy) ||
+      !ctx.isInsideBuildRange(snapX + bExt.hx, snapY - bExt.hy) ||
+      !ctx.isInsideBuildRange(snapX - bExt.hx, snapY + bExt.hy) ||
+      !ctx.isInsideBuildRange(snapX + bExt.hx, snapY + bExt.hy)) {
+    send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'out_of_range' } as BuildConfirmMessage);
+    return;
+  }
+
+  // Temporarily remove the building from collision checks so it doesn't collide with itself
+  const oldPos = world.getComponent<PositionComponent>(targetId, C.Position)!;
+  const savedX = oldPos.x, savedY = oldPos.y;
+  // Move off-screen temporarily for collision check
+  oldPos.x = -99999; oldPos.y = -99999;
+
+  if (footprintCollides(ctx, snapX, snapY, bldg.buildingType, rotation)) {
+    // Restore position on failure
+    oldPos.x = savedX; oldPos.y = savedY;
+    send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'blocked' } as BuildConfirmMessage);
+    return;
+  }
+
+  // Move the building to the new position
+  oldPos.x = snapX;
+  oldPos.y = snapY;
+
+  send(player.client, { type: MessageType.BUILD_CONFIRM, success: true } as BuildConfirmMessage);
+}

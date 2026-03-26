@@ -49,11 +49,11 @@ export const WAVE_MODIFIERS: Record<WaveModifierId, WaveModifierDef> = {
 /** All modifier IDs for iteration. */
 const ALL_MODIFIERS: WaveModifierId[] = Object.keys(WAVE_MODIFIERS) as WaveModifierId[];
 
-/** 25% chance per wave of rolling modifier(s). Count: 1 (W3-7), up to 2 (W8-14), up to 3 (W15+). */
+/** 15% chance per wave of rolling modifier(s). Count: 1 (W3-7), up to 2 (W8-14), up to 3 (W15+). */
 export function pickWaveModifiers(wave: number): WaveModifierId[] {
   if (wave < 3) return [];
-  // 25% chance of any modifiers this wave
-  if (Math.random() > 0.25) return [];
+  // 15% chance of any modifiers this wave
+  if (Math.random() > 0.15) return [];
 
   const maxCount = wave < 8 ? 1 : wave < 15 ? 2 : 3;
 

@@ -83,6 +83,10 @@ export interface RespawnManagerDeps {
   onHeroDeath?: (entityId: number, send: SendFn) => void;
   /** Whether the campfire has been placed. Used for permanent death before campfire. */
   isCampfirePlaced?: () => boolean;
+  /** Get the undying horde resurrection chance (0 = inactive, 0.15 = 15%). */
+  getUndyingChance?: () => number;
+  /** Spawn a new enemy at the given position (used for undying horde resurrection). */
+  spawnEnemyAt?: (x: number, y: number) => void;
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
@@ -92,6 +96,9 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
     world, players, playerEntityIds, respawnTimers, spawnOrigin, waveState,
     warehousePool, warehouseIds,
   } = deps;
+
+  // ── Undying Horde resurrection queue ──────────────────────────────────────
+  const resurrectionQueue: Array<{ x: number; y: number; timer: number }> = [];
 
   // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -390,6 +397,16 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
           const attackerId = attackerMap?.get(deadId);
           deps.onEnemyKilled(deadId, attackerId, ev?.variant ?? 'melee', send);
         }
+        // W50+ Undying Horde: chance to resurrect enemy after 3 seconds
+        const undyingChance = deps.getUndyingChance?.() ?? 0;
+        if (undyingChance > 0 && Math.random() < undyingChance && !deps.isBoss(deadId)) {
+          const pos = world.getComponent<PositionComponent>(deadId, C.Position);
+          if (pos && deps.spawnEnemyAt) {
+            const rx = pos.x, ry = pos.y;
+            // Queue resurrection after 3 seconds
+            resurrectionQueue.push({ x: rx, y: ry, timer: 3.0 });
+          }
+        }
       }
 
       // Civilian → enter downed state (can be revived)
@@ -610,10 +627,23 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
     }
   }
 
+  /** Tick resurrection queue (Undying Horde W50+). */
+  function tickResurrections(dt: number): void {
+    for (let i = resurrectionQueue.length - 1; i >= 0; i--) {
+      resurrectionQueue[i].timer -= dt;
+      if (resurrectionQueue[i].timer <= 0) {
+        const { x, y } = resurrectionQueue[i];
+        deps.spawnEnemyAt?.(x, y);
+        resurrectionQueue.splice(i, 1);
+      }
+    }
+  }
+
   return {
     destroyDeadEntities,
     tickDownedPlayers,
     tickRespawnTimers,
+    tickResurrections,
     checkPlayerDowned,
     countAlivePlayers,
     findSessionPlayerByEntity,

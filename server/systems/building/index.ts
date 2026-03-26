@@ -88,6 +88,7 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     handleDemolish: (clientId: string, msg: any, send: SendFn) => Placement.handleDemolish(ctx, clientId, msg, send),
     handleUpgrade: (clientId: string, msg: any, send: SendFn) => Placement.handleUpgrade(ctx, clientId, msg, send),
     handleRepair: (clientId: string, msg: any, send: SendFn) => Placement.handleRuinRepair(ctx, clientId, msg, send),
+    handleMove: (clientId: string, msg: any, send: SendFn) => Placement.handleBuildMove(ctx, clientId, msg, send),
     broadcastWarehouseUpdate,
     depositPlayerToWarehouse: (playerEntityId: number, send: SendFn) => Placement.depositPlayerToWarehouse(ctx, playerEntityId, send),
     cleanupBridge: (entityId: number) => Placement.cleanupBridge(ctx, entityId),

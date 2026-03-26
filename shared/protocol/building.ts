@@ -77,6 +77,15 @@ export interface BuildRepairConfirmMessage extends BaseMessage {
   reason?: string;
 }
 
+/** Client -> Server: player attempts to move a building to a new position. */
+export interface BuildMoveMessage extends BaseMessage {
+  type: typeof MessageType.BUILD_MOVE;
+  entityId: number;
+  /** New world-pixel position. */
+  x: number;
+  y: number;
+}
+
 /** Server -> all: building range update (sent when campfire placed or watchtower upgraded). */
 export interface BuildRangeUpdateMessage extends BaseMessage {
   type: typeof MessageType.BUILD_RANGE_UPDATE;

@@ -6,8 +6,10 @@ import {
   HealthComponent,
   FactionComponent,
   EnemyVariantComponent,
+  SpeedComponent,
 } from '@shared/components';
 import type { EnemyVariantType, EnemyStatsComponent, TitanRallyComponent } from '@shared/components';
+import { createMilestoneState, updateMilestones, CORRUPTION_BUFFS, type MilestoneState } from '@shared/definitions/WaveMilestones';
 import {
   ENEMY_VARIANT_STATS, pickEnemyVariant, ENEMY_VARIANT_NAMES,
   pickWaveFactions, pickEnemyVariantForFaction,
@@ -99,6 +101,9 @@ export function createWaveController(deps: WaveControllerDeps) {
   } = deps;
   const s = deps.state;
 
+  /** Milestone state - permanent scaling events at W25/50/75/100+. */
+  const milestones: MilestoneState = createMilestoneState();
+
   /** Maps portal entity ID → assigned faction for that portal. */
   const portalFactions = new Map<number, EnemyFaction>();
 
@@ -152,7 +157,8 @@ export function createWaveController(deps: WaveControllerDeps) {
     }
 
     const mods = deps.getModifierMults();
-    const numPortals = Math.ceil((PORTALS_PER_WAVE_BASE + PORTALS_PER_WAVE_GROWTH * (wave - 1)) * mods.enemyCountMult);
+    // Apply milestone portal count multiplier (W75: 3x, W100+: 3+tier)
+    const numPortals = Math.ceil((PORTALS_PER_WAVE_BASE + PORTALS_PER_WAVE_GROWTH * (wave - 1)) * mods.enemyCountMult * milestones.portalCountMult);
     const placed: { x: number; y: number }[] = [];
 
     // Dynamic min distance: portals must spawn outside the building range square.
@@ -216,8 +222,9 @@ export function createWaveController(deps: WaveControllerDeps) {
     const nightBuffs = deps.getNightBuffs();
     const mods = deps.getModifierMults();
     const eventDmg = deps.getEventDamageMult?.() ?? 1.0;
-    const scaledHp = Math.round(base.hp * hpMult * mods.enemyHpMult);
-    const scaledDmg = Math.round(base.damage * dmgMult * cards.debuffs.enemyDamageMult * nightBuffs.damageMult * mods.enemyDamageMult * eventDmg);
+    // Apply milestone multipliers (W75: 2x HP, W100: 1.5x DMG, W100+: scaling)
+    const scaledHp = Math.round(base.hp * hpMult * mods.enemyHpMult * milestones.milestoneHpMult);
+    const scaledDmg = Math.round(base.damage * dmgMult * cards.debuffs.enemyDamageMult * nightBuffs.damageMult * mods.enemyDamageMult * eventDmg * milestones.milestoneDmgMult);
 
     const id = world.createEntity();
     world.addComponent(id, C.Position, { x, y });
@@ -247,6 +254,44 @@ export function createWaveController(deps: WaveControllerDeps) {
     if (!s.introducedTypes.has(variant) && variant !== 'melee' && variant !== 'ranger') {
       s.introducedTypes.add(variant);
       s.pendingIntros.push({ variant, displayName: ENEMY_VARIANT_NAMES[variant] });
+    }
+
+    // W25+ Corruption: apply a random buff to the enemy
+    if (milestones.corruptionActive) {
+      const buff = CORRUPTION_BUFFS[Math.floor(Math.random() * CORRUPTION_BUFFS.length)];
+      switch (buff) {
+        case 'speed': {
+          const spd = world.getComponent<SpeedComponent>(id, C.Speed);
+          if (spd) spd.multiplier *= 1.3; // 30% speed boost
+          break;
+        }
+        case 'regen': {
+          // Regen enemies get +50% max HP (simulates tankiness from healing)
+          const regenHp = world.getComponent<HealthComponent>(id, C.Health);
+          if (regenHp) {
+            const bonus = Math.round(regenHp.max * 0.5);
+            regenHp.current += bonus;
+            regenHp.max += bonus;
+          }
+          break;
+        }
+        case 'damage_aura': {
+          // 20% damage boost
+          const stats = world.getComponent<EnemyStatsComponent>(id, C.EnemyStats);
+          if (stats) stats.damage = Math.round(stats.damage * 1.2);
+          break;
+        }
+        case 'shield': {
+          // 25% extra HP as shield
+          const shieldHp = world.getComponent<HealthComponent>(id, C.Health);
+          if (shieldHp) {
+            const bonus = Math.round(shieldHp.max * 0.25);
+            shieldHp.current += bonus;
+            shieldHp.max += bonus;
+          }
+          break;
+        }
+      }
     }
 
     s.enemyCount++;
@@ -343,6 +388,16 @@ export function createWaveController(deps: WaveControllerDeps) {
    */
   function activateWave(send: SendFn): void {
     if (s.phase !== 'prep') return;
+
+    // Check and activate wave milestones (W25/50/75/100+)
+    const milestoneAnnouncements = updateMilestones(milestones, s.currentWave);
+    for (const text of milestoneAnnouncements) {
+      console.log(`[Milestone] ${text}`);
+      // Send milestone announcement as notification
+      const notifMsg = { type: MessageType.NOTIFICATION, message: text, level: 'boss' };
+      for (const p of players.values()) send(p.client, notifMsg);
+    }
+
     spawnPortals(s.currentWave);
     spawnTitans(s.currentWave);
     s.phase = 'active';
@@ -461,6 +516,8 @@ export function createWaveController(deps: WaveControllerDeps) {
     broadcastWaveTimerSync,
     debugSkip,
     debugPause,
+    /** Access milestone state for resurrection mechanic etc. */
+    milestones,
   };
 }
 

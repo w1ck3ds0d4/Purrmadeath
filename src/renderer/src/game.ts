@@ -444,6 +444,7 @@ async function main(): Promise<void> {
       'E - Interact / Upgrade',
       'R - Repair',
       'X - Demolish',
+      'F - Move Building',
       'K - Skills',
       'C - Civilians',
       'Space - Dodge',
