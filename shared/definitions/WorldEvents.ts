@@ -4,10 +4,9 @@
 
 export type WorldEventId =
   | 'meteor_shower'
-  | 'blood_moon'
   | 'earthquake'
   | 'resource_boom'
-  | 'portal_surge'
+  | 'surprise_attack'
   | 'solar_eclipse';
 
 export interface WorldEventDef {
@@ -30,11 +29,6 @@ export const WORLD_EVENTS: Record<WorldEventId, WorldEventDef> = {
     duration: 150, minWave: 5, weight: 1.0,
     banner: 'METEOR SHOWER INCOMING',
   },
-  blood_moon: {
-    id: 'blood_moon', name: 'Blood Moon', description: 'Enemies deal +25% damage',
-    duration: 150, minWave: 6, weight: 0.8,
-    banner: 'BLOOD MOON RISES',
-  },
   earthquake: {
     id: 'earthquake', name: 'Earthquake', description: 'Quakes every 30s, damages buildings',
     duration: 150, minWave: 7, weight: 0.7,
@@ -42,13 +36,13 @@ export const WORLD_EVENTS: Record<WorldEventId, WorldEventDef> = {
   },
   resource_boom: {
     id: 'resource_boom', name: 'Resource Boom', description: '3x production all day',
-    duration: 150, minWave: 2, weight: 1.0,
+    duration: 0, minWave: 2, weight: 1.0, // duration 0 = lasts the whole day
     banner: 'RESOURCE BOOM!',
   },
-  portal_surge: {
-    id: 'portal_surge', name: 'Portal Surge', description: 'Portals keep spawning through the day',
+  surprise_attack: {
+    id: 'surprise_attack', name: 'Surprise Attack', description: 'Enemy portals spawn during the day',
     duration: 150, minWave: 5, weight: 0.6,
-    banner: 'PORTAL SURGE!',
+    banner: 'SURPRISE ATTACK!',
   },
   solar_eclipse: {
     id: 'solar_eclipse', name: 'Solar Eclipse', description: 'Darkness falls, the undead rise',

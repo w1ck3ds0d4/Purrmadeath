@@ -68,6 +68,8 @@ export class WaveHUD {
   private activeModifiers: { id: string; name: string; description: string; color: number }[] = [];
   /** Active world event name (or null). */
   private activeEventName: string | null = null;
+  private eventDuration = 0;
+  private eventElapsed = 0;
   /** Big center banner element for event announcements. */
   private bannerEl: HTMLElement;
   /** Subtitle element below banner for event descriptions. */
@@ -356,6 +358,8 @@ export class WaveHUD {
   /** Called when WORLD_EVENT_START arrives. */
   onWorldEventStart(eventId: string, name: string, description: string, duration: number): void {
     this.activeEventName = name;
+    this.eventDuration = duration;
+    this.eventElapsed = 0;
     this.dirty = true;
     // Show big center banner with description
     this.showBanner(name.toUpperCase(), description);
@@ -416,6 +420,8 @@ export class WaveHUD {
   /** Called when WORLD_EVENT_END arrives. */
   onWorldEventEnd(): void {
     this.activeEventName = null;
+    this.eventDuration = 0;
+    this.eventElapsed = 0;
     this.dirty = true;
   }
 
@@ -436,6 +442,12 @@ export class WaveHUD {
 
   /** Tick timers - call each frame with frame delta. */
   update(dt: number): void {
+    // Tick event countdown
+    if (this.activeEventName && this.eventDuration > 0 && !this.paused) {
+      this.eventElapsed += dt;
+      this.dirty = true;
+    }
+
     if (this.phase === 'day') {
       if (!this.paused) {
         this.dayTimeRemaining = Math.max(0, this.dayTimeRemaining - dt);
@@ -574,9 +586,16 @@ export class WaveHUD {
       this.waveEl.innerHTML += `<br><span style="font-size:11px">${tags}</span>`;
     }
 
-    // ── Active world event tag ──
+    // ── Active world event tag with countdown ──
     if (this.activeEventName) {
-      this.waveEl.innerHTML += `<br><span style="color:#ff8844;font-weight:bold;font-size:11px;letter-spacing:0.5px">${esc(this.activeEventName.toUpperCase())}</span>`;
+      let countdownText = '';
+      if (this.eventDuration > 0) {
+        const remaining = Math.max(0, this.eventDuration - this.eventElapsed);
+        const mins = Math.floor(remaining / 60);
+        const secs = Math.floor(remaining % 60);
+        countdownText = ` - ${mins}:${secs.toString().padStart(2, '0')}`;
+      }
+      this.waveEl.innerHTML += `<br><span style="color:#ff8844;font-weight:bold;font-size:11px;letter-spacing:0.5px">${esc(this.activeEventName.toUpperCase())}${countdownText}</span>`;
     }
 
     // Dynamically position sleep button below wave box (which may have extra lines)

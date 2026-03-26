@@ -12,7 +12,7 @@ import type { SendFn, SessionPlayer } from '../core/GameSession';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-const EVENT_CHANCE = 0.25;               // 25% chance per day start
+const EVENT_CHANCE = 0.15;               // 15% chance per day start
 const ROULETTE_DELAY = 3.5;             // seconds to wait for roulette animation before activating
 
 const METEOR_TICK_INTERVAL = 1;          // seconds between meteor strikes
@@ -21,9 +21,6 @@ const METEOR_RADIUS = 60;
 const METEOR_COUNT = 1;                  // one meteor per tick
 const METEOR_SPAWN_RANGE = 300;          // max distance from player center
 const METEOR_WARNING_DELAY = 1.5;        // seconds warning before impact
-
-const BLOOD_MOON_DAMAGE_MULT = 1.25;
-const BLOOD_MOON_TINT = 0x330808;
 
 const EARTHQUAKE_BUILDING_DAMAGE = 30;
 const EARTHQUAKE_BUILDING_COUNT = 3;     // max buildings damaged
@@ -36,8 +33,8 @@ const RESOURCE_BOOM_PRODUCTION_MULT = 3.0;
 const PORTAL_SURGE_EXTRA = 3;
 
 const ECLIPSE_TINT = 0x1a0808;           // dark red darkness
-const ECLIPSE_SPAWN_INTERVAL = 4;        // seconds between undead spawns
-const ECLIPSE_SPAWN_COUNT = 2;           // undead per spawn tick
+const ECLIPSE_SPAWN_INTERVAL = 1;        // seconds between undead spawns (every second)
+const ECLIPSE_SPAWN_COUNT = 5;           // 5 undead per spawn tick
 const ECLIPSE_SPAWN_RANGE = 250;         // max distance from player center
 
 // ── Deps ────────────────────────────────────────────────────────────────────
@@ -100,10 +97,6 @@ export function createWorldEventController(deps: WorldEventDeps) {
 
     // Attach event-specific payload
     switch (eventId) {
-      case 'blood_moon':
-        msg.tintColor = BLOOD_MOON_TINT;
-        msg.damageMult = BLOOD_MOON_DAMAGE_MULT;
-        break;
       case 'earthquake':
         msg.shakeIntensity = EARTHQUAKE_SHAKE_INTENSITY;
         earthquakeRepeatTimer = EARTHQUAKE_REPEAT_INTERVAL;
@@ -112,7 +105,7 @@ export function createWorldEventController(deps: WorldEventDeps) {
       case 'resource_boom':
         msg.productionMult = RESOURCE_BOOM_PRODUCTION_MULT;
         break;
-      case 'portal_surge':
+      case 'surprise_attack':
         deps.spawnExtraPortals(PORTAL_SURGE_EXTRA, send);
         portalSurgeTimer = 30;
         break;
@@ -302,15 +295,22 @@ export function createWorldEventController(deps: WorldEventDeps) {
       if (activeEvent === 'earthquake') {
         tickEarthquake(dt, send);
       }
-      if (activeEvent === 'portal_surge') {
+      if (activeEvent === 'surprise_attack') {
         tickPortalSurge(dt, send);
       }
 
-      eventTimer -= dt;
-      if (eventTimer <= 0) {
-        const completedId = activeEvent;
-        endEvent(send);
-        if (completedId && deps.onEventComplete) deps.onEventComplete(completedId, send);
+      // Duration 0 = lasts the whole day (ended by endActiveEvent on night start)
+      if (eventTimer > 0) {
+        eventTimer -= dt;
+        // Broadcast remaining time for client countdown
+        if (Math.floor(eventTimer) % 10 === 0 && eventTimer > 0) {
+          // The client uses the event timer from the initial start message duration
+        }
+        if (eventTimer <= 0) {
+          const completedId = activeEvent;
+          endEvent(send);
+          if (completedId && deps.onEventComplete) deps.onEventComplete(completedId, send);
+        }
       }
     },
 
@@ -341,7 +341,6 @@ export function createWorldEventController(deps: WorldEventDeps) {
 
     /** Get event-driven enemy damage multiplier. */
     getEventBuffs(): { damageMult: number } {
-      if (activeEvent === 'blood_moon') return { damageMult: BLOOD_MOON_DAMAGE_MULT };
       return { damageMult: 1.0 };
     },
 
@@ -351,9 +350,9 @@ export function createWorldEventController(deps: WorldEventDeps) {
       return 1.0;
     },
 
-    /** Whether an event forces darkness + night buffs (solar eclipse or blood moon). */
+    /** Whether an event forces darkness (solar eclipse). */
     isSolarEclipse(): boolean {
-      return activeEvent === 'solar_eclipse' || activeEvent === 'blood_moon';
+      return activeEvent === 'solar_eclipse';
     },
 
     /** Force-start a specific event (debug command). */
