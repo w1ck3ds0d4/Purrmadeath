@@ -1,6 +1,6 @@
 # Purrmadeath
 
-2D co-op roguelike survival - base building, procedural world, up to 4 players. Version 1.2.1.
+2D co-op roguelike survival - base building, procedural world, up to 4 players. Version 1.2.4.
 
 ---
 
@@ -72,7 +72,7 @@ Buildings are organized by category in the build menu (Q):
 
 **Achievement-Locked**: Siege Workshop, Kennel, Arcane Tower, Watchtower (unlocked via achievements)
 
-Campfire is auto-placed at the start and serves as respawn point + initial housing. Building exclusion zones prevent placement too close to certain structures (walls, bridges, moats, and spike traps are exempt).
+Campfire is player-placed at the start (free cost) and serves as respawn point + initial housing. 80-tile (2560px) square building range from campfire center. Watchtowers extend range by 20 tiles per level. Portals spawn outside the building range. Campfire destruction = game over. Death before campfire placement = permanent death. Building exclusion zones prevent placement too close to certain structures (walls, bridges, moats, and spike traps are exempt). Buildings can be relocated within the building range.
 
 ### Cards & Achievements
 
