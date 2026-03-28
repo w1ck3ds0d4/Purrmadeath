@@ -76,4 +76,35 @@ export const LOOT_TABLES: Record<string, LootTable> = {
       { itemType: 'food',    minQty: 3, maxQty: 6,  chance: 0.8,  autoPickup: true },
     ],
   },
+
+  // ── POI loot tables ───────────────────────────────────────────────────────
+
+  /** Abandoned camp - basic resources, always gives something useful. */
+  abandoned_camp: {
+    entries: [
+      { itemType: 'wood',  minQty: 5,  maxQty: 15, chance: 1.0, autoPickup: true },
+      { itemType: 'stone', minQty: 3,  maxQty: 10, chance: 0.8, autoPickup: true },
+      { itemType: 'iron',  minQty: 1,  maxQty: 5,  chance: 0.5, autoPickup: true },
+      { itemType: 'food',  minQty: 2,  maxQty: 5,  chance: 0.6, autoPickup: true },
+    ],
+  },
+
+  /** Treasure chest - rare/valuable resources. */
+  treasure_chest: {
+    entries: [
+      { itemType: 'diamond', minQty: 1, maxQty: 3,  chance: 1.0,  autoPickup: true },
+      { itemType: 'gold',    minQty: 5, maxQty: 15, chance: 1.0,  autoPickup: true },
+      { itemType: 'iron',    minQty: 2, maxQty: 6,  chance: 0.7,  autoPickup: true },
+    ],
+  },
+
+  /** Enemy nest reward - dropped as item entities after clearing the nest. */
+  enemy_nest_reward: {
+    entries: [
+      { itemType: 'iron',    minQty: 2, maxQty: 6, chance: 1.0,  autoPickup: true },
+      { itemType: 'diamond', minQty: 1, maxQty: 2, chance: 0.4,  autoPickup: true },
+      { itemType: 'gold',    minQty: 3, maxQty: 8, chance: 0.8,  autoPickup: true },
+      { itemType: 'food',    minQty: 2, maxQty: 4, chance: 0.5,  autoPickup: true },
+    ],
+  },
 };

@@ -246,6 +246,14 @@ export enum MessageType {
   /** Server -> all: a world event has ended. */
   WORLD_EVENT_END = 'WORLD_EVENT_END',
 
+  // -- Phase 10: POIs --
+  /** Server -> client: result of interacting with a POI. */
+  POI_RESULT = 'POI_RESULT',
+  /** Server -> all: an enemy nest was triggered (enemies spawned). */
+  POI_NEST_TRIGGERED = 'POI_NEST_TRIGGERED',
+  /** Server -> all: an enemy nest was cleared (loot dropped). */
+  POI_NEST_CLEARED = 'POI_NEST_CLEARED',
+
   // -- Phase 10: Card Drops & Bosses --
   /** Server -> all: a player picked up a card drop. */
   CARD_PICKUP = 'CARD_PICKUP',

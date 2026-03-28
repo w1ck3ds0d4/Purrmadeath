@@ -50,6 +50,12 @@ export interface LoadedSaveState {
   resourceRespawnQueue: { x: number; y: number; type: string; timer: number }[];
   /** Cached resource nodes from unloaded chunks. */
   resourceNodeCache: Record<string, { x: number; y: number; type: string; hp: number; maxHp: number }[]>;
+  /** POI entities saved as data. */
+  pois: { x: number; y: number; poiType: string; consumed: boolean; buffType?: string }[];
+  /** Cached POI data from unloaded chunks. */
+  poiCache: Record<string, { x: number; y: number; poiType: string; consumed: boolean; buffType?: string }[]>;
+  /** Chunks that have had POIs generated. */
+  processedPOIChunks: string[];
 }
 
 // ── Dependencies ────────────────────────────────────────────────────────────
@@ -352,6 +358,9 @@ export function createSaveManager(deps: SaveManagerDeps) {
       heroes: save.heroes ?? [],
       resourceRespawnQueue: save.resourceRespawnQueue ?? [],
       resourceNodeCache: save.resourceNodeCache ?? {},
+      pois: save.pois ?? [],
+      poiCache: save.poiCache ?? {},
+      processedPOIChunks: save.processedPOIChunks ?? [],
     };
   }
 

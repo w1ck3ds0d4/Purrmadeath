@@ -38,6 +38,7 @@ import type {
   PoisonDotComponent, StunEffectComponent, HolyMarkComponent,
   ShadowDrainComponent, ArcaneMarkComponent, NatureBlessingComponent,
   BleedComponent, FreezeComponent,
+  POIType, PointOfInterestComponent,
 } from '@shared/components';
 import {
   TILE_SIZE,
@@ -91,6 +92,11 @@ import {
   MELEE_RANGE,
 } from '@shared/constants';
 import { RESOURCE_STATS, RESOURCE_SPAWN_TABLE, TILE_SPAWN_CHANCE } from '@shared/data/ResourceSpawnTable';
+import {
+  POI_SPAWN_TABLE, POI_TILE_SPAWN_CHANCE, POI_INTERACT_RADIUS,
+  NEST_TRIGGER_RADIUS, NEST_ENEMY_COUNT, SHRINE_BUFF_DURATION,
+  SHRINE_BUFF_VALUES, MAX_POIS_PER_CHUNK, POI_MIN_DIST_FROM_SPAWN, POI_NAMES,
+} from '@shared/data/POISpawnTable';
 import { LOOT_TABLES } from '@shared/data/LootTables';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import { MessageType } from '@shared/protocol';
@@ -255,6 +261,17 @@ export class GameSession {
   private loadedResourceChunks = new Set<string>();
   /** Maps entity ID to chunk key for fast unloading. */
   private resourceNodeChunkMap = new Map<number, string>();
+  // ── POI lifecycle ────────────────────────────────────────────────────────
+  /** Current count of live POI entities. */
+  private poiCount = 0;
+  /** Maps POI entity ID to chunk key. */
+  private poiChunkMap = new Map<number, string>();
+  /** Cached POI data for unloaded chunks. */
+  private poiCache = new Map<string, { x: number; y: number; poiType: POIType; consumed: boolean; buffType?: string }[]>();
+  /** Chunks that have had POIs generated (separate from resource processedChunks). */
+  private processedPOIChunks = new Set<string>();
+  /** Chunks currently with live POI entities. */
+  private loadedPOIChunks = new Set<string>();
 
   /** Spawn origin (set during start()) - downed players respawn here. */
   private spawnOrigin: { x: number; y: number } = { x: 0, y: 0 };
@@ -1121,6 +1138,33 @@ export class GameSession {
         }
       }
 
+      // Restore POI entities
+      if (save.pois) {
+        for (const sp of save.pois) {
+          const id = this.spawnPOI(sp.x, sp.y, sp.poiType as POIType, sp.consumed, sp.buffType);
+          const tx = Math.floor(sp.x / TILE_SIZE);
+          const ty = Math.floor(sp.y / TILE_SIZE);
+          const chunkKey = `${Math.floor(tx / CHUNK_SIZE)},${Math.floor(ty / CHUNK_SIZE)}`;
+          this.poiChunkMap.set(id, chunkKey);
+          this.loadedPOIChunks.add(chunkKey);
+        }
+        if (save.pois.length > 0) {
+          console.log(`[GameSession] Restored ${save.pois.length} POIs from save`);
+        }
+      }
+      // Restore POI cache from unloaded chunks
+      if (save.poiCache) {
+        for (const [key, entries] of Object.entries(save.poiCache)) {
+          this.poiCache.set(key, entries.map(e => ({
+            x: e.x, y: e.y, poiType: e.poiType as POIType, consumed: e.consumed, buffType: e.buffType,
+          })));
+        }
+      }
+      // Restore processed POI chunks
+      if (save.processedPOIChunks) {
+        for (const key of save.processedPOIChunks) this.processedPOIChunks.add(key);
+      }
+
       // Restore saved item drops
       for (const si of save.itemDrops) {
         const id = this.world.createEntity();
@@ -1754,6 +1798,307 @@ export class GameSession {
     this.world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
     this.resourceNodeCount++;
     return id;
+  }
+
+  // ── POI (Points of Interest) ──────────────────────────────────────────────
+
+  /**
+   * Tick POI lifecycle each frame: load/unload chunks, check enemy nest triggers.
+   */
+  private tickPOIs(dt: number, send: SendFn): void {
+    // Load/unload POI chunks alongside resource chunks
+    const loadR = GameSession.RESOURCE_GEN_RADIUS;
+    const unloadR = GameSession.RESOURCE_UNLOAD_RADIUS;
+    const nearbyChunks = new Set<string>();
+
+    for (const player of this.players.values()) {
+      if (!player.entityId) continue;
+      const pos = this.world.getComponent<PositionComponent>(player.entityId, C.Position);
+      if (!pos) continue;
+      const pcx = Math.floor(pos.x / (TILE_SIZE * CHUNK_SIZE));
+      const pcy = Math.floor(pos.y / (TILE_SIZE * CHUNK_SIZE));
+      for (let cx = pcx - loadR; cx <= pcx + loadR; cx++) {
+        for (let cy = pcy - loadR; cy <= pcy + loadR; cy++) {
+          nearbyChunks.add(`${cx},${cy}`);
+        }
+      }
+    }
+
+    // Load nearby POI chunks
+    for (const key of nearbyChunks) {
+      if (this.loadedPOIChunks.has(key)) continue;
+      if (this.poiCache.has(key)) {
+        this.loadPOIChunk(key);
+      } else if (!this.processedPOIChunks.has(key)) {
+        this.processedPOIChunks.add(key);
+        const [cx, cy] = key.split(',').map(Number);
+        this.generatePOIsForChunk(cx, cy);
+      }
+      this.loadedPOIChunks.add(key);
+    }
+
+    // Unload distant POI chunks
+    const toUnload: string[] = [];
+    for (const key of this.loadedPOIChunks) {
+      if (nearbyChunks.has(key)) continue;
+      const [cx, cy] = key.split(',').map(Number);
+      let inRange = false;
+      for (const player of this.players.values()) {
+        if (!player.entityId) continue;
+        const pos = this.world.getComponent<PositionComponent>(player.entityId, C.Position);
+        if (!pos) continue;
+        const pcx = Math.floor(pos.x / (TILE_SIZE * CHUNK_SIZE));
+        const pcy = Math.floor(pos.y / (TILE_SIZE * CHUNK_SIZE));
+        if (Math.abs(cx - pcx) <= unloadR && Math.abs(cy - pcy) <= unloadR) { inRange = true; break; }
+      }
+      if (!inRange) toUnload.push(key);
+    }
+    for (const key of toUnload) this.unloadPOIChunk(key);
+
+    // Tick enemy nest proximity triggers
+    for (const poiId of this.world.query(C.PointOfInterest, C.Position)) {
+      const poi = this.world.getComponent<PointOfInterestComponent>(poiId, C.PointOfInterest)!;
+      if (poi.poiType !== 'enemy_nest' || poi.consumed || poi.triggered) continue;
+
+      const poiPos = this.world.getComponent<PositionComponent>(poiId, C.Position)!;
+      const triggerR2 = NEST_TRIGGER_RADIUS * NEST_TRIGGER_RADIUS;
+
+      for (const player of this.players.values()) {
+        if (!player.entityId) continue;
+        const pp = this.world.getComponent<PositionComponent>(player.entityId, C.Position);
+        if (!pp) continue;
+        const dx = pp.x - poiPos.x, dy = pp.y - poiPos.y;
+        if (dx * dx + dy * dy <= triggerR2) {
+          poi.triggered = true;
+          poi.spawnedEnemyIds = [];
+          const count = NEST_ENEMY_COUNT.min + Math.floor(Math.random() * (NEST_ENEMY_COUNT.max - NEST_ENEMY_COUNT.min + 1));
+          for (let i = 0; i < count; i++) {
+            const angle = (i / count) * Math.PI * 2;
+            const spawnX = poiPos.x + Math.cos(angle) * 60;
+            const spawnY = poiPos.y + Math.sin(angle) * 60;
+            // Spawn enemy using wave controller's spawnEnemy
+            const eid = this.waves.spawnEnemy(spawnX, spawnY);
+            if (eid !== null) poi.spawnedEnemyIds.push(eid);
+          }
+          this.logger.log('debug', `Enemy nest triggered`, { entityId: poiId, enemies: poi.spawnedEnemyIds.length });
+          // Notify clients
+          for (const p of this.players.values()) {
+            send(p.client, { type: MessageType.POI_NEST_TRIGGERED, entityId: poiId, enemyCount: poi.spawnedEnemyIds.length });
+          }
+          break;
+        }
+      }
+    }
+
+    // Check if triggered nests have been cleared
+    for (const poiId of this.world.query(C.PointOfInterest, C.Position)) {
+      const poi = this.world.getComponent<PointOfInterestComponent>(poiId, C.PointOfInterest)!;
+      if (poi.poiType !== 'enemy_nest' || poi.consumed || !poi.triggered) continue;
+      if (!poi.spawnedEnemyIds || poi.spawnedEnemyIds.length === 0) continue;
+
+      const allDead = poi.spawnedEnemyIds.every(eid => !this.world.hasEntity(eid));
+      if (allDead) {
+        poi.consumed = true;
+        const poiPos = this.world.getComponent<PositionComponent>(poiId, C.Position)!;
+        // Drop loot at nest position as item drops
+        const table = LOOT_TABLES['enemy_nest_reward'];
+        if (table) {
+          for (const entry of table.entries) {
+            if (Math.random() > entry.chance) continue;
+            const qty = entry.minQty + Math.floor(Math.random() * (entry.maxQty - entry.minQty + 1));
+            this.spawnItemDrop(poiPos.x, poiPos.y, entry.itemType, qty, entry.autoPickup);
+          }
+        }
+        // Chance to drop a card as reward for clearing the nest
+        const card = rollCardDrop('world_event', this.cards.pickedCardIds as Set<string>);
+        if (card) {
+          this.spawnCardDrop(poiPos.x, poiPos.y, card);
+          this.logger.log('debug', `Enemy nest dropped card: ${card.name} (${card.rarity})`);
+        }
+        this.logger.log('debug', `Enemy nest cleared`, { entityId: poiId });
+        for (const p of this.players.values()) {
+          send(p.client, { type: MessageType.POI_NEST_CLEARED, entityId: poiId });
+        }
+      }
+    }
+  }
+
+  /** Generate POIs for a chunk using deterministic per-chunk seeding (separate from resources). */
+  private generatePOIsForChunk(cx: number, cy: number): void {
+    // Different seed constants than resources to avoid correlation
+    let s = ((this.seed ^ (cx * 48271) ^ (cy * 39916801)) >>> 0);
+    const rand = (): number => {
+      s = (s + 0x6d2b79f5) | 0;
+      let t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+
+    const key = `${cx},${cy}`;
+    let spawned = 0;
+    const baseTx = cx * CHUNK_SIZE;
+    const baseTy = cy * CHUNK_SIZE;
+    const buffTypes: Array<'speed' | 'damage' | 'regen' | 'defense'> = ['speed', 'damage', 'regen', 'defense'];
+
+    for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+      for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+        if (spawned >= MAX_POIS_PER_CHUNK) return;
+
+        const tx = baseTx + lx;
+        const ty = baseTy + ly;
+        const tileId = this.generator.getTile(tx, ty);
+
+        const chance = POI_TILE_SPAWN_CHANCE[tileId];
+        if (!chance || rand() >= chance) continue;
+
+        const entries = POI_SPAWN_TABLE[tileId];
+        if (!entries || entries.length === 0) continue;
+
+        // Weighted random selection
+        const totalWeight = entries.reduce((sum, e) => sum + e.weight, 0);
+        let roll = rand() * totalWeight;
+        let picked = entries[0].poiType;
+        for (const entry of entries) {
+          roll -= entry.weight;
+          if (roll <= 0) { picked = entry.poiType; break; }
+        }
+
+        const wx = tx * TILE_SIZE + TILE_SIZE / 2;
+        const wy = ty * TILE_SIZE + TILE_SIZE / 2;
+
+        // Don't spawn POIs too close to spawn origin
+        const dxO = wx - this.spawnOrigin.x;
+        const dyO = wy - this.spawnOrigin.y;
+        if (dxO * dxO + dyO * dyO < POI_MIN_DIST_FROM_SPAWN * POI_MIN_DIST_FROM_SPAWN) continue;
+
+        // Don't spawn inside building range
+        if (this.isInsideBuildRange(wx, wy)) continue;
+
+        // Roll shrine buff type deterministically
+        const buffType = picked === 'shrine' ? buffTypes[Math.floor(rand() * buffTypes.length)] : undefined;
+
+        const id = this.spawnPOI(wx, wy, picked, false, buffType);
+        this.poiChunkMap.set(id, key);
+        spawned++;
+      }
+    }
+
+    if (spawned > 0) {
+      this.loadedPOIChunks.add(key);
+      this.logger.log('debug', `POI chunk ${key}: +${spawned} POIs (total: ${this.poiCount})`);
+    }
+  }
+
+  /** Create a POI entity. */
+  private spawnPOI(x: number, y: number, poiType: POIType, consumed: boolean, buffType?: string): number {
+    const id = this.world.createEntity();
+    this.world.addComponent(id, C.Position, { x, y });
+    this.world.addComponent(id, C.Velocity, { vx: 0, vy: 0 });
+    this.world.addComponent(id, C.Health, { current: 1, max: 1 });
+    this.world.addComponent(id, C.Faction, { type: 'poi' });
+    this.world.addComponent(id, C.PointOfInterest, {
+      poiType, consumed,
+      buffType: buffType as any,
+      triggered: poiType === 'enemy_nest' ? false : undefined,
+      spawnedEnemyIds: poiType === 'enemy_nest' ? [] : undefined,
+    });
+    this.poiCount++;
+    return id;
+  }
+
+  /** Unload POI entities in a distant chunk - cache their state. */
+  private unloadPOIChunk(chunkKey: string): void {
+    const cached: { x: number; y: number; poiType: POIType; consumed: boolean; buffType?: string }[] = [];
+    for (const [entityId, key] of this.poiChunkMap) {
+      if (key !== chunkKey) continue;
+      const pos = this.world.getComponent<PositionComponent>(entityId, C.Position);
+      const poi = this.world.getComponent<PointOfInterestComponent>(entityId, C.PointOfInterest);
+      if (pos && poi) {
+        cached.push({ x: pos.x, y: pos.y, poiType: poi.poiType, consumed: poi.consumed, buffType: poi.buffType });
+      }
+      this.world.destroyEntity(entityId);
+      this.poiCount--;
+      this.poiChunkMap.delete(entityId);
+    }
+    if (cached.length > 0) this.poiCache.set(chunkKey, cached);
+    this.loadedPOIChunks.delete(chunkKey);
+  }
+
+  /** Restore POIs from cache when a chunk comes back into range. */
+  private loadPOIChunk(chunkKey: string): void {
+    const cached = this.poiCache.get(chunkKey);
+    if (!cached) return;
+    for (const entry of cached) {
+      const id = this.spawnPOI(entry.x, entry.y, entry.poiType, entry.consumed, entry.buffType);
+      this.poiChunkMap.set(id, chunkKey);
+    }
+    this.poiCache.delete(chunkKey);
+    this.loadedPOIChunks.add(chunkKey);
+  }
+
+  /** Handle E-key interaction with a POI (camp, shrine, chest). */
+  private handlePOIInteract(
+    player: SessionPlayer,
+    poiId: number,
+    poi: PointOfInterestComponent,
+    send: SendFn,
+  ): void {
+    poi.consumed = true;
+    this.logger.log('debug', `${player.displayName} interacted with ${poi.poiType}`, { entityId: poiId });
+
+    // Get POI world position for item drop spawning
+    const poiPos = this.world.getComponent<PositionComponent>(poiId, C.Position);
+    const dropX = poiPos?.x ?? 0;
+    const dropY = poiPos?.y ?? 0;
+
+    switch (poi.poiType) {
+      case 'abandoned_camp':
+      case 'treasure_chest': {
+        // Spawn loot as item drops (chest) at the POI position
+        const table = LOOT_TABLES[poi.poiType];
+        const rewards: { itemType: string; quantity: number }[] = [];
+        if (table) {
+          for (const entry of table.entries) {
+            if (Math.random() > entry.chance) continue;
+            const qty = entry.minQty + Math.floor(Math.random() * (entry.maxQty - entry.minQty + 1));
+            this.spawnItemDrop(dropX, dropY, entry.itemType, qty, entry.autoPickup);
+            rewards.push({ itemType: entry.itemType, quantity: qty });
+          }
+        }
+        // Treasure chests have a chance to drop a card
+        if (poi.poiType === 'treasure_chest') {
+          const card = rollCardDrop('world_event', this.cards.pickedCardIds as Set<string>);
+          if (card) {
+            this.spawnCardDrop(dropX, dropY, card);
+            this.logger.log('debug', `Treasure chest dropped card: ${card.name} (${card.rarity})`);
+          }
+        }
+        send(player.client, { type: MessageType.POI_RESULT, poiType: poi.poiType, rewards });
+        const name = POI_NAMES[poi.poiType];
+        for (const p of this.players.values()) {
+          send(p.client, { type: MessageType.NOTIFICATION, text: `${player.displayName} opened ${name}!`, level: 'info' });
+        }
+        break;
+      }
+      case 'shrine': {
+        // Apply temporary buff via ActiveBuffs
+        const ab = this.world.getComponent<import('@shared/components').ActiveBuffsComponent>(player.entityId!, C.ActiveBuffs);
+        if (ab && poi.buffType) {
+          const effect = SHRINE_BUFF_VALUES[poi.buffType] ?? {};
+          ab.buffs.push({
+            id: `shrine_${poi.buffType}`,
+            remaining: SHRINE_BUFF_DURATION,
+            effect,
+          });
+        }
+        send(player.client, { type: MessageType.POI_RESULT, poiType: 'shrine', buffType: poi.buffType, buffDuration: SHRINE_BUFF_DURATION });
+        const buffName = poi.buffType ? poi.buffType.charAt(0).toUpperCase() + poi.buffType.slice(1) : 'Unknown';
+        for (const p of this.players.values()) {
+          send(p.client, { type: MessageType.NOTIFICATION, text: `${player.displayName} received ${buffName} blessing!`, level: 'info' });
+        }
+        break;
+      }
+    }
   }
 
   private spawnItemDrop(
@@ -2391,6 +2736,21 @@ export class GameSession {
         send(player.client, { type: MessageType.NOTIFICATION, text: 'Resources stored!', level: 'info' });
       }
       return;
+    }
+
+    // Check for nearby POI (E-key interaction - camps, shrines, chests)
+    const poiR2 = POI_INTERACT_RADIUS * POI_INTERACT_RADIUS;
+    for (const poiId of this.world.query(C.PointOfInterest, C.Position)) {
+      const poi = this.world.getComponent<PointOfInterestComponent>(poiId, C.PointOfInterest)!;
+      if (poi.consumed) continue;
+      if (poi.poiType === 'enemy_nest') continue; // nests are proximity-triggered, not E-key
+      const ppos = this.world.getComponent<PositionComponent>(poiId, C.Position)!;
+      const pdx = ppos.x - playerPos.x;
+      const pdy = ppos.y - playerPos.y;
+      if (pdx * pdx + pdy * pdy <= poiR2) {
+        this.handlePOIInteract(player, poiId, poi, send);
+        return;
+      }
     }
 
     // Find nearest non-auto-pickup ItemDrop within interact radius
@@ -3391,6 +3751,22 @@ export class GameSession {
     if (Object.keys(cacheObj).length > 0) {
       data.resourceNodeCache = cacheObj;
     }
+    // Save POI entities
+    const pois: { x: number; y: number; poiType: string; consumed: boolean; buffType?: string }[] = [];
+    for (const poiId of this.world.query(C.PointOfInterest, C.Position)) {
+      const pos = this.world.getComponent<PositionComponent>(poiId, C.Position)!;
+      const poi = this.world.getComponent<PointOfInterestComponent>(poiId, C.PointOfInterest)!;
+      pois.push({ x: pos.x, y: pos.y, poiType: poi.poiType, consumed: poi.consumed, buffType: poi.buffType });
+    }
+    if (pois.length > 0) data.pois = pois;
+    // Save POI cache from unloaded chunks
+    const poiCacheObj: Record<string, { x: number; y: number; poiType: string; consumed: boolean; buffType?: string }[]> = {};
+    for (const [key, entries] of this.poiCache) {
+      poiCacheObj[key] = entries;
+    }
+    if (Object.keys(poiCacheObj).length > 0) data.poiCache = poiCacheObj;
+    // Save processed POI chunks
+    if (this.processedPOIChunks.size > 0) data.processedPOIChunks = Array.from(this.processedPOIChunks);
     return data;
   }
 
@@ -3977,6 +4353,9 @@ export class GameSession {
     // Resource node lifecycle: load nearby chunks, unload distant, tick respawns
     this.tickResourceNodes(dt);
 
+    // POI lifecycle: load/unload chunks, tick enemy nest triggers
+    this.tickPOIs(dt, send);
+
     // Sync session-wide building damage mult to combat systems
     this.combat.buildingDamageMult = this.cards.debuffs.buildingDamageMult;
     this.projectile.buildingDamageMult = this.cards.debuffs.buildingDamageMult;
@@ -4482,6 +4861,13 @@ export class GameSession {
       // Resource node metadata
       const rn = this.world.getComponent<ResourceNodeComponent>(id, C.ResourceNode);
       if (rn) snap.resourceType = rn.resourceType;
+
+      // POI metadata
+      const poiComp = this.world.getComponent<PointOfInterestComponent>(id, C.PointOfInterest);
+      if (poiComp) {
+        snap.poiType = poiComp.poiType;
+        snap.poiConsumed = poiComp.consumed;
+      }
 
       // Item drop metadata
       const drop = this.world.getComponent<ItemDropComponent>(id, C.ItemDrop);

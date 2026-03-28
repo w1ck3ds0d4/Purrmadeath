@@ -192,6 +192,7 @@ export class PlayerRendererSystem {
   private _buildingIds = new Set<EntityId>();
   private _guardIds    = new Set<EntityId>();
   private _civilianIds = new Set<EntityId>();
+  private _poiIds      = new Set<EntityId>();
   private _living      = new Set<EntityId>();
   /** Per-entity: was entity flashing last frame? */
   private wasFlashing = new Map<EntityId, boolean>();
@@ -289,6 +290,7 @@ export class PlayerRendererSystem {
     const buildingIds = this._buildingIds; buildingIds.clear();
     const guardIds = this._guardIds;      guardIds.clear();
     const civilianIds = this._civilianIds; civilianIds.clear();
+    const poiIds = this._poiIds;          poiIds.clear();
     const living = this._living;          living.clear();
 
     for (const id of world.query(C.Position, C.PlayerIndex)) {
@@ -304,6 +306,7 @@ export class PlayerRendererSystem {
       else if (f.type === 'building') { buildingIds.add(id); living.add(id); }
       else if (f.type === 'guard') { guardIds.add(id); living.add(id); }
       else if (f.type === 'civilian') { civilianIds.add(id); living.add(id); }
+      else if (f.type === 'poi') { poiIds.add(id); living.add(id); }
     }
 
     // -- Sprite Cleanup --
@@ -354,6 +357,7 @@ export class PlayerRendererSystem {
       const isEnemy    = enemyIds.has(id);
       const isPortal   = portalIds.has(id);
       const isResource = resourceIds.has(id);
+      const isPOI      = poiIds.has(id);
       const isItem     = itemIds.has(id);
 
       let isNew = false;
@@ -504,6 +508,56 @@ export class PlayerRendererSystem {
         gfx.rect(-rr, -rr, rr * 2, rr * 2);
         gfx.stroke({ color: 0x000000, alpha: 0.35, width: 1.5 });
 
+
+      } else if (isPOI) {
+        // ── POI rendering (diamond shape) ─────────────────────────────────────
+        const poiComp = world.getComponent<import('@shared/components').PointOfInterestComponent>(id, C.PointOfInterest);
+        const poiType = poiComp?.poiType ?? 'abandoned_camp';
+        const consumed = poiComp?.consumed ?? false;
+        const pr = 18; // POI_RADIUS
+
+        // Colors per type
+        const poiColorMap: Record<string, { body: number; core: number }> = {
+          abandoned_camp: { body: 0x8B6914, core: 0xD4A843 },
+          shrine:         { body: 0x6A5ACD, core: 0xB8A9FF },
+          enemy_nest:     { body: 0x8B0000, core: 0xFF4444 },
+          treasure_chest: { body: 0xDAA520, core: 0xFFD700 },
+        };
+        const pColors = poiColorMap[poiType] ?? poiColorMap.abandoned_camp;
+        const bodyAlpha = consumed ? 0.35 : 0.9;
+        const coreAlpha = consumed ? 0.25 : 0.8;
+        const bodyColor = consumed ? 0x555555 : pColors.body;
+
+        // Diamond shape (outer)
+        gfx.moveTo(0, -pr);
+        gfx.lineTo(pr, 0);
+        gfx.lineTo(0, pr);
+        gfx.lineTo(-pr, 0);
+        gfx.closePath();
+        gfx.fill({ color: bodyColor, alpha: bodyAlpha });
+        gfx.stroke({ color: 0x000000, alpha: 0.4, width: 1.5 });
+
+        // Inner core diamond (smaller)
+        if (!consumed) {
+          const cr = pr * 0.5;
+          gfx.moveTo(0, -cr);
+          gfx.lineTo(cr, 0);
+          gfx.lineTo(0, cr);
+          gfx.lineTo(-cr, 0);
+          gfx.closePath();
+          gfx.fill({ color: pColors.core, alpha: coreAlpha });
+        }
+
+        // Pulsing glow for unconsumed POIs
+        if (!consumed) {
+          const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.003);
+          gfx.moveTo(0, -(pr + 3));
+          gfx.lineTo(pr + 3, 0);
+          gfx.lineTo(0, pr + 3);
+          gfx.lineTo(-(pr + 3), 0);
+          gfx.closePath();
+          gfx.stroke({ color: pColors.core, alpha: 0.3 * pulse, width: 2 });
+        }
 
       } else if (buildingIds.has(id)) {
         // -- Building Rendering --

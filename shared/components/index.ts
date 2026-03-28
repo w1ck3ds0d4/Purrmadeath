@@ -92,6 +92,8 @@ export const C = {
   SoulMark:        'SoulMark',
   Taunt:           'Taunt',
   MeteorShower:    'MeteorShower',
+  // ── Phase 10 POIs ──────────────────────────────────────────────────────
+  PointOfInterest: 'PointOfInterest',
 } as const;
 
 // ─── Component interfaces ──────────────────────────────────────────────────────
@@ -160,7 +162,7 @@ export interface FacingComponent {
 
 /** Which team an entity belongs to. Determines targetting and rendering. */
 export interface FactionComponent {
-  type: 'player' | 'enemy' | 'portal' | 'resource' | 'item' | 'building' | 'guard' | 'civilian';
+  type: 'player' | 'enemy' | 'portal' | 'resource' | 'item' | 'building' | 'guard' | 'civilian' | 'poi';
   /** Named enemy faction (e.g. 'bandits', 'undead'). Enemies of different factions fight each other. */
   enemyFaction?: string;
 }
@@ -844,4 +846,20 @@ export interface HeroComponent {
   patrolRadius: number;
   /** Per-ability cooldown timers keyed by ability id. */
   abilityCooldowns: Record<string, number>;
+}
+
+// ─── Points of Interest (POIs) ──────────────────────────────────────────────
+
+export type POIType = 'abandoned_camp' | 'shrine' | 'enemy_nest' | 'treasure_chest';
+
+export interface PointOfInterestComponent {
+  poiType: POIType;
+  /** True once the POI has been looted/used/cleared. */
+  consumed: boolean;
+  /** For shrines: the buff type rolled at generation time. */
+  buffType?: 'speed' | 'damage' | 'regen' | 'defense';
+  /** For enemy nests: true once the mini-wave has been triggered by proximity. */
+  triggered?: boolean;
+  /** For enemy nests: entity IDs of spawned enemies (cleared = all dead). */
+  spawnedEnemyIds?: number[];
 }

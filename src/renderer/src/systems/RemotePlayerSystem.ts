@@ -18,6 +18,7 @@ import {
   RuinsComponent,
   LaserBeamComponent,
   GuardComponent,
+  PointOfInterestComponent,
 } from '@shared/components';
 import type { SnapshotMessage, DeltaMessage, EntitySnapshot } from '@shared/protocol';
 import {
@@ -223,6 +224,13 @@ export class RemotePlayerSystem {
           barracksId: 0, patrolRadius: 0,
         } as GuardComponent);
       }
+      // POI metadata (for diamond shape rendering)
+      if (snap.poiType) {
+        world.addComponent(snap.entityId, C.PointOfInterest, {
+          poiType: snap.poiType,
+          consumed: snap.poiConsumed ?? false,
+        } as PointOfInterestComponent);
+      }
       // Ruins state (for renderer darkening + fire effect)
       if (snap.isRuins) {
         world.addComponent(snap.entityId, C.Ruins, {
@@ -306,6 +314,12 @@ export class RemotePlayerSystem {
         } else if (world.hasComponent(snap.entityId, C.Ruins)) {
           world.removeComponent(snap.entityId, C.Ruins);
         }
+      }
+
+      // Update POI consumed state
+      if (snap.poiConsumed !== undefined) {
+        const poi = world.getComponent<PointOfInterestComponent>(snap.entityId, C.PointOfInterest);
+        if (poi) poi.consumed = snap.poiConsumed;
       }
 
       // Laser tower target update

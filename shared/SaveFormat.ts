@@ -21,6 +21,12 @@ export interface SaveData {
   resourceRespawnQueue?: { x: number; y: number; type: string; timer: number }[];
   /** Cached resource nodes in unloaded chunks (chunk key -> node states). */
   resourceNodeCache?: Record<string, { x: number; y: number; type: string; hp: number; maxHp: number }[]>;
+  /** POI entities currently loaded (saved as entities). */
+  pois?: { x: number; y: number; poiType: string; consumed: boolean; buffType?: string }[];
+  /** Cached POI data from unloaded chunks. */
+  poiCache?: Record<string, { x: number; y: number; poiType: string; consumed: boolean; buffType?: string }[]>;
+  /** Chunks that have had POIs generated. */
+  processedPOIChunks?: string[];
   itemDrops?: SavedItemDrop[];
   civilians?: SavedCivilian[];
   /** Session-wide card debuffs from trap cards. */

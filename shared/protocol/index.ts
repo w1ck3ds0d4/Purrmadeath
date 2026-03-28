@@ -25,6 +25,7 @@ import type {
   PlayerDownedMessage, ReviveProgressMessage, PlayerRevivedMessage, PlayerDiedMessage, PlayerRespawnedMessage,
   PartyWipeMessage, GameOverMessage,
   ResourceUpdateMessage, InteractMessage,
+  POIResultMessage, POINestTriggeredMessage, POINestClearedMessage,
 } from './gameplay';
 import type {
   BuildPlaceMessage, BuildConfirmMessage, BuildDestroyedMessage, BuildRuinedMessage,
@@ -86,6 +87,9 @@ export type AnyMessage =
   | WaveTimerSyncMessage
   | ResourceUpdateMessage
   | InteractMessage
+  | POIResultMessage
+  | POINestTriggeredMessage
+  | POINestClearedMessage
   | DebugSpawnEnemiesMessage
   | PlayerDownedMessage
   | ReviveProgressMessage

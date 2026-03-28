@@ -11,7 +11,7 @@ export interface EntitySnapshot {
   /** Slot index if this is a player entity. Absent for enemies. */
   slot?: number;
   /** Faction - used by the client renderer to pick the visual. */
-  faction?: 'player' | 'enemy' | 'portal' | 'resource' | 'item' | 'building' | 'guard' | 'civilian';
+  faction?: 'player' | 'enemy' | 'portal' | 'resource' | 'item' | 'building' | 'guard' | 'civilian' | 'poi';
   x: number;
   y: number;
   vx: number;
@@ -79,6 +79,10 @@ export interface EntitySnapshot {
   /** Unbreakable Charge progress (0-1) and damage stored. Only present during charge. */
   chargeProgress?: number;
   chargeDamage?: number;
+  /** POI type. Only present for 'poi' faction entities. */
+  poiType?: import('../components').POIType;
+  /** True if this POI has been consumed/used. Only present for 'poi' faction entities. */
+  poiConsumed?: boolean;
 }
 
 /** Full world snapshot sent on game start or player rejoin. */
@@ -294,4 +298,31 @@ export interface InteractMessage extends BaseMessage {
   x: number;
   y: number;
   t: number;
+}
+
+// ─── POI Messages ──────────────────────────────────────────────────────────
+
+/** Server -> client: result of interacting with a POI (loot, buff, etc). */
+export interface POIResultMessage extends BaseMessage {
+  type: typeof MessageType.POI_RESULT;
+  poiType: import('../components').POIType;
+  /** Loot rewards for camp/chest POIs. */
+  rewards?: { itemType: string; quantity: number }[];
+  /** Shrine buff type applied. */
+  buffType?: string;
+  /** Shrine buff duration in seconds. */
+  buffDuration?: number;
+}
+
+/** Server -> all: an enemy nest POI was triggered by a nearby player. */
+export interface POINestTriggeredMessage extends BaseMessage {
+  type: typeof MessageType.POI_NEST_TRIGGERED;
+  entityId: number;
+  enemyCount: number;
+}
+
+/** Server -> all: an enemy nest was cleared, loot dropped. */
+export interface POINestClearedMessage extends BaseMessage {
+  type: typeof MessageType.POI_NEST_CLEARED;
+  entityId: number;
 }

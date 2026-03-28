@@ -583,6 +583,32 @@ export function registerMessageHandlers(
     s.eventVisionMult = 1.0;
   });
 
+  // ── POI (Points of Interest) ─────────────────────────────────────────────
+
+  net.on(MessageType.POI_RESULT, (msg) => {
+    const pr = msg as import('@shared/protocol').POIResultMessage;
+    if (pr.rewards && pr.rewards.length > 0) {
+      const loot = pr.rewards.map(r => `${r.quantity} ${r.itemType}`).join(', ');
+      clog('GAME', `POI looted (${pr.poiType}): ${loot}`);
+    }
+    if (pr.buffType) {
+      clog('GAME', `Shrine buff received: ${pr.buffType} for ${pr.buffDuration}s`);
+    }
+  });
+
+  net.on(MessageType.POI_NEST_TRIGGERED, (msg) => {
+    const nt = msg as import('@shared/protocol').POINestTriggeredMessage;
+    d.notificationToast.show(`Enemy Nest disturbed! ${nt.enemyCount} enemies incoming!`, 'danger');
+    d.camera.shake(4, 0.5);
+    clog('COMBAT', `Enemy nest triggered (entity ${nt.entityId}): ${nt.enemyCount} enemies`);
+  });
+
+  net.on(MessageType.POI_NEST_CLEARED, (msg) => {
+    const nc = msg as import('@shared/protocol').POINestClearedMessage;
+    d.notificationToast.show('Enemy Nest cleared! Loot dropped.', 'info');
+    clog('COMBAT', `Enemy nest cleared (entity ${nc.entityId})`);
+  });
+
   // ── Card Drops & Bosses ─────────────────────────────────────────────────
 
   net.on(MessageType.CARD_PICKUP, (msg) => {
