@@ -510,6 +510,7 @@ export function registerMessageHandlers(
     d.waveHUD.onWaveEnd(we.waveNumber);
     s.waveActive = false;
     d.debug.log(`Wave ${we.waveNumber} cleared`);
+    clog('WAVE', `Wave ${we.waveNumber} cleared`);
   });
 
   net.on(MessageType.WAVE_TIMER_SYNC, (msg) => {
@@ -542,6 +543,7 @@ export function registerMessageHandlers(
     const intro = msg as EnemyIntroMessage;
     d.notificationToast.show(`New threat: ${intro.displayName}!`, 'warning');
     d.debug.log(`New enemy type: ${intro.displayName}`);
+    clog('WAVE', `New enemy type introduced: ${intro.displayName} (${intro.variant})`);
   });
 
   // ── Wave Modifiers & World Events ─────────────────────────────────────
@@ -551,6 +553,7 @@ export function registerMessageHandlers(
     d.waveHUD.onWaveModifier(wm.modifiers);
     // Announce modifiers in chat
     const names = wm.modifiers.map(m => m.name).join(' + ');
+    clog('WAVE', `Wave ${wm.waveNumber} modifiers: ${names}`);
     d.notificationToast.show(`Wave ${wm.waveNumber} modifier: ${names}!`, 'warning');
     // Apply fog vision mult
     const fogMod = wm.modifiers.find(m => m.id === 'fog');
@@ -566,6 +569,7 @@ export function registerMessageHandlers(
     const ev = msg as WorldEventStartMessage;
     d.waveHUD.onWorldEventStart(ev.eventId, ev.name, ev.description, ev.duration);
     d.notificationToast.show(`EVENT: ${ev.name}!`, 'warning', ev.description);
+    clog('GAME', `World event started: ${ev.name} (${ev.eventId}, duration=${ev.duration}s)`);
     if (ev.tintColor !== undefined) d.nightOverlay.setTint(ev.tintColor);
     if (ev.visionMult !== undefined) s.eventVisionMult = ev.visionMult;
     if (ev.shakeIntensity !== undefined) d.camera.shake(ev.shakeIntensity, ev.duration);
@@ -574,6 +578,7 @@ export function registerMessageHandlers(
   net.on(MessageType.WORLD_EVENT_END, (msg) => {
     const ev = msg as WorldEventEndMessage;
     d.waveHUD.onWorldEventEnd();
+    clog('GAME', `World event ended: ${ev.eventId}`);
     d.nightOverlay.resetTint();
     s.eventVisionMult = 1.0;
   });
@@ -598,6 +603,7 @@ export function registerMessageHandlers(
     d.notificationToast.show(`BOSS: ${intro.bossName} has appeared!`, 'boss', intro.description);
     d.waveHUD.onBossSpawn(intro.entityId, intro.bossName, intro.description, intro.maxHp);
     d.camera.shake(8, 1.5);
+    clog('COMBAT', `Boss spawned: ${intro.bossName} (HP=${intro.maxHp})`);
   });
 
   net.on(MessageType.BOSS_PHASE, (msg) => {
@@ -622,6 +628,7 @@ export function registerMessageHandlers(
     const prefix = applied.isTrap ? 'CURSE' : 'Card';
     d.notificationToast.show(`${applied.displayName} picked ${prefix}: ${applied.cardName}`, applied.isTrap ? 'danger' : 'info');
     d.cardPicker.hide();
+    clog('GAME', `Card applied: ${applied.cardName} (${prefix}) by ${applied.displayName}`);
     d.waveHUD.setPaused(false);
     // Sync card abilities for the local player
     if (applied.abilities) s.cardAbilities = applied.abilities;
@@ -645,6 +652,7 @@ export function registerMessageHandlers(
     const ss = msg as SkillStateMessage;
     s.skillAllocated = new Set(ss.allocated);
     s.skillPoints = ss.skillPoints;
+    clog('GAME', `Skill state: ${ss.allocated.length} nodes allocated, ${ss.skillPoints} points remaining`);
     if (ss.slotAssignments) s.slotAssignments = ss.slotAssignments;
     s.onSkillStateUpdate?.();
     d.skillTree.updateState(s.skillAllocated, s.skillPoints, s.slotAssignments);
@@ -843,6 +851,7 @@ export function registerMessageHandlers(
   net.on(MessageType.PLAYER_RESPAWNED, (msg) => {
     if (s.localGameOver) return;
     const pr = msg as PlayerRespawnedMessage;
+    clog('COMBAT', `Player respawned (entity ${pr.entityId}, isLocal=${pr.entityId === s.localEntityId})`);
     d.playerRenderer.notifyRespawned(pr.entityId);
     if (pr.entityId === s.localEntityId) {
       s.localDowned = false;
@@ -928,7 +937,12 @@ export function registerMessageHandlers(
 
   net.on(MessageType.BUILD_CONFIRM, (msg) => {
     const bc = msg as BuildConfirmMessage;
-    if (!bc.success) d.debug.log(`Build failed: ${bc.reason ?? 'unknown'}`);
+    if (!bc.success) {
+      d.debug.log(`Build failed: ${bc.reason ?? 'unknown'}`);
+      clog('BUILD', `Build failed: ${bc.reason ?? 'unknown'}`);
+    } else {
+      clog('BUILD', 'Building placed successfully');
+    }
   });
 
   // Building range update (campfire placed, watchtower upgraded)
@@ -987,12 +1001,14 @@ export function registerMessageHandlers(
 
   net.on(MessageType.CAMPFIRE_DESTROYED, () => {
     d.debug.log('Campfire destroyed!');
+    clog('BUILD', 'Campfire destroyed - game over imminent');
   });
 
   net.on(MessageType.BUILD_RUINED, (msg) => {
     const br = msg as BuildRuinedMessage;
     d.debug.log(`Building destroyed - now in ruins (${br.buildingType} L${br.originalLevel})`);
     d.notificationToast.show(`A ${br.buildingType.replace(/_/g, ' ')} has been destroyed!`, 'danger');
+    clog('BUILD', `Building ruined: ${br.buildingType} L${br.originalLevel} (entity ${br.entityId})`);
     // Deselect if this building was selected
     if (s.selectedBuildingId === br.entityId) {
       s.selectedBuildingId = null;

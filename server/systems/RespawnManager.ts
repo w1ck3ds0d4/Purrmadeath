@@ -58,7 +58,9 @@ export interface RespawnManagerDeps {
   setGameOver: (v: boolean) => void;
   getEnemiesKilled: () => number;
   incrementEnemiesKilled: () => void;
-  decrementResourceNodeCount: () => void;
+  decrementResourceNodeCount: (entityId: number) => void;
+  /** Queue a destroyed resource node for respawn at its original position. */
+  queueResourceRespawn?: (x: number, y: number, resourceType: string) => void;
   getCampfireEntityId: () => number;
   getElapsedSeconds: () => number;
   getBuildings: () => BuildingSystem;
@@ -366,14 +368,19 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
 
       const faction = world.getComponent<FactionComponent>(deadId, C.Faction);
 
-      // Resource node → credit attacker
+      // Resource node → credit attacker and queue respawn
       if (faction?.type === 'resource' && attackerMap && send) {
         const rn = world.getComponent<ResourceNodeComponent>(deadId, C.ResourceNode);
+        const pos = world.getComponent<PositionComponent>(deadId, C.Position);
         const attackerId = attackerMap.get(deadId);
         if (rn && attackerId !== undefined) {
           deps.creditResources(attackerId, rn.resourceType, rn.yield, send);
         }
-        deps.decrementResourceNodeCount();
+        // Queue respawn at the node's original position
+        if (rn && pos && deps.queueResourceRespawn) {
+          deps.queueResourceRespawn(pos.x, pos.y, rn.resourceType);
+        }
+        deps.decrementResourceNodeCount(deadId);
       }
 
       // Enemy → spawn loot drops + track kill

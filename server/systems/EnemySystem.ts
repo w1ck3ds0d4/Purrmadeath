@@ -104,10 +104,14 @@ export class EnemySystem {
   private buildingEntities: { x: number; y: number; half: number }[] = [];
   /** Bridge tiles that override unwalkable terrain for pathfinding. */
   private bridgeTiles = new Set<number>();
-  /** Cached resource node positions for line-of-sight collision checks. */
+  /** Cached resource node positions for collision checks. */
   private resourcePositions: { x: number; y: number }[] = [];
-  /** Cached portal positions for line-of-sight collision checks. */
+  /** Spatial hash for resource node O(1) range queries (avoids iterating all 1500+ nodes). */
+  private resourceHash: SpatialHash = createSpatialHash(128);
+  /** Cached portal positions for collision checks. */
   private portalPositions: { x: number; y: number }[] = [];
+  /** Spatial hash for portal O(1) range queries. */
+  private portalHash: SpatialHash = createSpatialHash(128);
   /** Stuck detection: tracks last-known positions and time since last significant move. */
   private stuckTimers = new Map<number, { x: number; y: number; timer: number }>();
 
@@ -123,6 +127,10 @@ export class EnemySystem {
   private static readonly MAX_PATHFINDS_PER_TICK = 15;
   /** Counter for A* calls this tick. */
   private pathfindsThisTick = 0;
+  /** Tick counter for periodic debug logging. */
+  private tickCount = 0;
+  /** Rolling perf stats for debug logging. */
+  private perfStats = { setupMs: 0, aiMs: 0, enemyCount: 0, resourceCount: 0, pathfinds: 0 };
 
   constructor(
     private readonly combat: CombatSystem,
@@ -132,6 +140,8 @@ export class EnemySystem {
   update(world: World, dt: number): EnemyAttackResult {
     const result: EnemyAttackResult = { hits: [], deaths: [], attackPerformed: [], rangedAttacks: [] };
     const playerIds = world.query(C.Position, C.PlayerIndex);
+
+    const _setupStart = performance.now();
 
     // -- Rebuild spatial hashes + categorize entities in a single pass --
     // Combines 3 separate world.query() calls into 1 (saves ~3000 lookups with 1500 entities)
@@ -209,7 +219,9 @@ export class EnemySystem {
 
     // Block tiles occupied by resource nodes and portals so enemies path around them
     this.resourcePositions.length = 0;
+    this.resourceHash.clear();
     this.portalPositions.length = 0;
+    this.portalHash.clear();
     for (const rid of world.query(C.Position, C.Faction)) {
       const rf = world.getComponent<FactionComponent>(rid, C.Faction)!;
       let rHalf: number;
@@ -221,9 +233,14 @@ export class EnemySystem {
         continue;
       }
       const rpos = world.getComponent<PositionComponent>(rid, C.Position)!;
-      // Cache positions for line-of-sight collision checks
-      if (rf.type === 'resource') this.resourcePositions.push(rpos);
-      else this.portalPositions.push(rpos);
+      // Cache positions for collision checks and spatial hash for range queries
+      if (rf.type === 'resource') {
+        this.resourcePositions.push(rpos);
+        this.resourceHash.insert(rid, rpos.x, rpos.y);
+      } else {
+        this.portalPositions.push(rpos);
+        this.portalHash.insert(rid, rpos.x, rpos.y);
+      }
       const rMinTx = Math.floor((rpos.x - rHalf) / TILE_SIZE);
       const rMaxTx = Math.floor((rpos.x + rHalf - 1) / TILE_SIZE);
       const rMinTy = Math.floor((rpos.y - rHalf) / TILE_SIZE);
@@ -243,9 +260,13 @@ export class EnemySystem {
       if (!world.hasEntity(id)) this.stuckTimers.delete(id);
     }
 
+    const _aiStart = performance.now();
+    let _enemyCount = 0;
+
     for (const id of world.query(C.Position, C.Faction, C.PlayerInput)) {
       const faction = world.getComponent<FactionComponent>(id, C.Faction)!;
       if (faction.type !== 'enemy' && faction.type !== 'guard') continue;
+      _enemyCount++;
       const isGuard = faction.type === 'guard';
 
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
@@ -645,13 +666,16 @@ export class EnemySystem {
                 // Find nearest obstacle to push away from (resources, portals, and buildings)
                 let nearOX = 0, nearOY = 0, nearOD = Infinity;
                 let hasNear = false;
-                for (const node of this.resourcePositions) {
-                  const ox = node.x - pos.x, oy = node.y - pos.y;
+                // Use spatial hash for nearby resources (not all 1500+)
+                const nearestResource = this.resourceHash.queryNearest(pos.x, pos.y, 200);
+                if (nearestResource) {
+                  const ox = nearestResource.x - pos.x, oy = nearestResource.y - pos.y;
                   const od = ox * ox + oy * oy;
                   if (od < nearOD) { nearOD = od; nearOX = ox; nearOY = oy; hasNear = true; }
                 }
-                for (const portal of this.portalPositions) {
-                  const ox = portal.x - pos.x, oy = portal.y - pos.y;
+                const nearestPortal = this.portalHash.queryNearest(pos.x, pos.y, 200);
+                if (nearestPortal) {
+                  const ox = nearestPortal.x - pos.x, oy = nearestPortal.y - pos.y;
                   const od = ox * ox + oy * oy;
                   if (od < nearOD) { nearOD = od; nearOX = ox; nearOY = oy; hasNear = true; }
                 }
@@ -726,6 +750,19 @@ export class EnemySystem {
     // -- Titan Rally Mechanic --
     // At 50% HP, titans activate a speed aura that buffs all nearby non-titan enemies.
     this.tickTitanRally(world);
+
+    // -- Debug perf logging (every 300 ticks / 10s) --
+    const _aiEnd = performance.now();
+    const a = 0.1;
+    this.perfStats.setupMs = this.perfStats.setupMs * (1 - a) + (_aiStart - _setupStart) * a;
+    this.perfStats.aiMs = this.perfStats.aiMs * (1 - a) + (_aiEnd - _aiStart) * a;
+    this.perfStats.enemyCount = _enemyCount;
+    this.perfStats.resourceCount = this.resourcePositions.length;
+    this.perfStats.pathfinds = this.pathfindsThisTick;
+    this.tickCount++;
+    if (this.tickCount % 300 === 0) {
+      console.log(`[EnemySystem] setup=${this.perfStats.setupMs.toFixed(1)}ms ai=${this.perfStats.aiMs.toFixed(1)}ms enemies=${this.perfStats.enemyCount} resources=${this.perfStats.resourceCount} pathfinds=${this.perfStats.pathfinds}`);
+    }
 
     return result;
   }
@@ -882,6 +919,20 @@ export class EnemySystem {
     const dist = distance(dx, dy);
     const steps = Math.ceil(dist / (TILE_SIZE / 2)); // 16px resolution
 
+    // Pre-query resources and portals along the path using spatial hash
+    // Use the bounding box of the path + radius to get candidates once
+    const minX = Math.min(sx, ex) - r - RESOURCE_NODE_RADIUS;
+    const maxX = Math.max(sx, ex) + r + RESOURCE_NODE_RADIUS;
+    const minY = Math.min(sy, ey) - r - RESOURCE_NODE_RADIUS;
+    const maxY = Math.max(sy, ey) + r + RESOURCE_NODE_RADIUS;
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const queryRadius = distance(maxX - cx, maxY - cy);
+
+    // Collect nearby resources and portals once (O(K) where K is nearby, not all 1500+)
+    const nearbyResources = this.resourceHash.queryAll(cx, cy, queryRadius);
+    const nearbyPortals = this.portalHash.queryAll(cx, cy, queryRadius);
+
     for (let i = 0; i <= steps; i++) {
       const t = steps > 0 ? i / steps : 0;
       const wx = sx + dx * t;
@@ -893,11 +944,11 @@ export class EnemySystem {
       if (this.tileOrBlockedAt(wx - r, wy + r)) return false;
       if (this.tileOrBlockedAt(wx + r, wy + r)) return false;
 
-      // Check actual entity collision volumes (not just tile occupancy)
-      for (const node of this.resourcePositions) {
+      // Check only nearby entity collision volumes (not all resources/portals)
+      for (const node of nearbyResources) {
         if (circleAABBOverlap(wx, wy, r, node.x, node.y, RESOURCE_NODE_RADIUS)) return false;
       }
-      for (const portal of this.portalPositions) {
+      for (const portal of nearbyPortals) {
         const pdx = wx - portal.x, pdy = wy - portal.y;
         const minDist = r + PORTAL_RADIUS;
         if (pdx * pdx + pdy * pdy < minDist * minDist) return false;
@@ -967,15 +1018,17 @@ export class EnemySystem {
       totalPushY += perpY * strength;
     };
 
-    // Scan resources
-    for (const node of this.resourcePositions) {
-      addObstacle(node.x - pos.x, node.y - pos.y, RESOURCE_NODE_RADIUS);
-    }
+    // Scan nearby resources (spatial hash query instead of iterating all 1500+)
+    const avoidRange = ENEMY_AVOIDANCE_LOOK_AHEAD + enemyRadius + RESOURCE_NODE_RADIUS + ENEMY_AVOIDANCE_MARGIN;
+    this.resourceHash.queryRange(pos.x, pos.y, avoidRange, (entry) => {
+      addObstacle(entry.x - pos.x, entry.y - pos.y, RESOURCE_NODE_RADIUS);
+    });
 
-    // Scan portals
-    for (const portal of this.portalPositions) {
-      addObstacle(portal.x - pos.x, portal.y - pos.y, PORTAL_RADIUS);
-    }
+    // Scan nearby portals
+    const portalAvoidRange = ENEMY_AVOIDANCE_LOOK_AHEAD + enemyRadius + PORTAL_RADIUS + ENEMY_AVOIDANCE_MARGIN;
+    this.portalHash.queryRange(pos.x, pos.y, portalAvoidRange, (entry) => {
+      addObstacle(entry.x - pos.x, entry.y - pos.y, PORTAL_RADIUS);
+    });
 
     // Scan buildings
     for (const bldg of this.buildingEntities) {

@@ -46,6 +46,10 @@ export interface LoadedSaveState {
   dayTimeRemaining: number | null;
   permanentNight: boolean;
   heroes: SavedHero[];
+  /** Destroyed resource nodes waiting to respawn. */
+  resourceRespawnQueue: { x: number; y: number; type: string; timer: number }[];
+  /** Cached resource nodes from unloaded chunks. */
+  resourceNodeCache: Record<string, { x: number; y: number; type: string; hp: number; maxHp: number }[]>;
 }
 
 // ── Dependencies ────────────────────────────────────────────────────────────
@@ -346,6 +350,8 @@ export function createSaveManager(deps: SaveManagerDeps) {
       dayTimeRemaining: save.dayTimeRemaining ?? null,
       permanentNight: save.permanentNight ?? false,
       heroes: save.heroes ?? [],
+      resourceRespawnQueue: save.resourceRespawnQueue ?? [],
+      resourceNodeCache: save.resourceNodeCache ?? {},
     };
   }
 

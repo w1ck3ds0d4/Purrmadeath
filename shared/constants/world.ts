@@ -24,6 +24,11 @@ export const RESOURCE_SPAWN_RADIUS_CHUNKS = 5;
 /** Performance cap on total resource node entities. */
 export const MAX_RESOURCE_NODES = 1500;
 
+/** Seconds before a destroyed resource node respawns at its original position. */
+export const RESOURCE_RESPAWN_TIME = 120;
+/** Extra seconds added randomly (0 to this value) to stagger respawns. */
+export const RESOURCE_RESPAWN_JITTER = 30;
+
 // ─── Item Drops ─────────────────────────────────────────────────────────
 
 /** Render radius of an item drop in world pixels. */

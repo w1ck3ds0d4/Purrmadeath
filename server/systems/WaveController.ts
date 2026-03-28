@@ -110,6 +110,9 @@ export function createWaveController(deps: WaveControllerDeps) {
   /** Grace period after wave activation - prevents instant clear if portals fail to spawn. */
   let activationGraceTicks = 0;
 
+  /** Tracks enemy spawns per variant for the current wave (reset on wave start). */
+  const waveSpawnCounts = new Map<string, number>();
+
   // ── Portal spawning ──────────────────────────────────────────────────────
 
   function spawnPortal(x: number, y: number, wave: number): number {
@@ -295,6 +298,7 @@ export function createWaveController(deps: WaveControllerDeps) {
     }
 
     s.enemyCount++;
+    waveSpawnCounts.set(variant, (waveSpawnCounts.get(variant) ?? 0) + 1);
     return id;
   }
 
@@ -407,6 +411,7 @@ export function createWaveController(deps: WaveControllerDeps) {
       type: MessageType.WAVE_START, waveNumber: s.currentWave, prepDuration: 0,
     };
     for (const p of players.values()) send(p.client, waveActive);
+    waveSpawnCounts.clear();
     console.log(`[Wave] Wave ${s.currentWave} active!`);
   }
 
@@ -451,7 +456,10 @@ export function createWaveController(deps: WaveControllerDeps) {
           type: MessageType.WAVE_START, waveNumber: s.currentWave, prepDuration: -1,
         };
         for (const p of players.values()) send(p.client, waveStart);
-        console.log(`[Wave] Wave ${s.currentWave - 1} cleared! Day phase begins.`);
+        // Log wave clear with spawn breakdown
+        const spawnBreakdown = Array.from(waveSpawnCounts.entries()).map(([v, c]) => `${v}=${c}`).join(', ');
+        const totalSpawned = Array.from(waveSpawnCounts.values()).reduce((a, b) => a + b, 0);
+        console.log(`[Wave] Wave ${s.currentWave - 1} cleared! Spawned ${totalSpawned} enemies (${spawnBreakdown}). Day phase begins.`);
 
         onWaveCleared(s.currentWave - 1, send);
       }

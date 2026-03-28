@@ -17,6 +17,10 @@ export interface SaveData {
   enemies?: SavedEnemy[];
   portals?: SavedPortal[];
   resourceNodes?: SavedResourceNode[];
+  /** Resource nodes waiting to respawn (destroyed but timer not yet expired). */
+  resourceRespawnQueue?: { x: number; y: number; type: string; timer: number }[];
+  /** Cached resource nodes in unloaded chunks (chunk key -> node states). */
+  resourceNodeCache?: Record<string, { x: number; y: number; type: string; hp: number; maxHp: number }[]>;
   itemDrops?: SavedItemDrop[];
   civilians?: SavedCivilian[];
   /** Session-wide card debuffs from trap cards. */

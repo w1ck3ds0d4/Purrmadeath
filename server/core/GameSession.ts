@@ -54,7 +54,8 @@ import {
   WAVE_PREP_INITIAL,
   WAVE_PREP_BETWEEN,
   CHUNK_SIZE,
-  MAX_RESOURCE_NODES,
+  RESOURCE_RESPAWN_TIME,
+  RESOURCE_RESPAWN_JITTER,
   ITEM_DROP_LIFETIME,
   ITEM_DROP_SCATTER_SPEED,
   ITEM_DROP_INTERACT_RADIUS,
@@ -238,12 +239,22 @@ export class GameSession {
   private tickProfile = { combat: 0, enemy: 0, movement: 0, projectile: 0, buildings: 0, waves: 0, total: 0 };
   private static readonly WAVE_SYNC_INTERVAL = 5; // seconds
   private static readonly MAX_ENEMIES = 200;
-  /** Current count of resource node entities. */
+  /** Current count of live resource node entities in the ECS world. */
   private resourceNodeCount = 0;
   /** Chunks already processed for resource generation (never re-generated). */
   private processedChunks = new Set<string>();
-  /** How many chunks around each player to generate (in chunk units). */
+  /** How many chunks around each player to generate/load (in chunk units). */
   private static readonly RESOURCE_GEN_RADIUS = 2;
+  /** Chunks beyond this radius from all players get their resource nodes unloaded. */
+  private static readonly RESOURCE_UNLOAD_RADIUS = 4;
+  /** Queue of destroyed resource nodes waiting to respawn. */
+  private resourceRespawnQueue: { x: number; y: number; type: ResourceType; timer: number }[] = [];
+  /** Cached resource node data for unloaded chunks (chunk key -> node states). */
+  private resourceNodeCache = new Map<string, { x: number; y: number; type: ResourceType; hp: number; maxHp: number }[]>();
+  /** Tracks which chunks currently have live resource node entities loaded. */
+  private loadedResourceChunks = new Set<string>();
+  /** Maps entity ID to chunk key for fast unloading. */
+  private resourceNodeChunkMap = new Map<number, string>();
 
   /** Spawn origin (set during start()) - downed players respawn here. */
   private spawnOrigin: { x: number; y: number } = { x: 0, y: 0 };
@@ -524,7 +535,19 @@ export class GameSession {
       setGameOver: (v) => { this.gameOver = v; },
       getEnemiesKilled: () => this.enemiesKilled,
       incrementEnemiesKilled: () => { this.enemiesKilled++; },
-      decrementResourceNodeCount: () => { this.resourceNodeCount--; },
+      decrementResourceNodeCount: (entityId: number) => {
+        this.resourceNodeCount--;
+        this.resourceNodeChunkMap.delete(entityId);
+      },
+      queueResourceRespawn: (x: number, y: number, resourceType: string) => {
+        const jitter = Math.random() * RESOURCE_RESPAWN_JITTER;
+        const timer = RESOURCE_RESPAWN_TIME + jitter;
+        this.resourceRespawnQueue.push({ x, y, type: resourceType as ResourceType, timer });
+        this.logger.log('debug', `Resource node destroyed, queued respawn`, {
+          type: resourceType, x: Math.round(x), y: Math.round(y), timer: Math.round(timer),
+          queueSize: this.resourceRespawnQueue.length,
+        });
+      },
       getCampfireEntityId: () => this.campfireEntityId,
       getElapsedSeconds: () => this.getElapsedSeconds(),
       getBuildings: () => this.buildings,
@@ -1064,9 +1087,38 @@ export class GameSession {
         this.world.addComponent(id, C.ResourceNode,      { resourceType: sr.resourceType, yield: sr.yield });
         this.world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
         this.resourceNodeCount++;
+        // Track chunk mapping for unload lifecycle
+        const tx = Math.floor(sr.x / TILE_SIZE);
+        const ty = Math.floor(sr.y / TILE_SIZE);
+        const chunkKey = `${Math.floor(tx / CHUNK_SIZE)},${Math.floor(ty / CHUNK_SIZE)}`;
+        this.resourceNodeChunkMap.set(id, chunkKey);
+        this.loadedResourceChunks.add(chunkKey);
       }
       if (save.resourceNodes.length > 0) {
         console.log(`[GameSession] Restored ${save.resourceNodes.length} resource nodes from save`);
+      }
+
+      // Restore resource respawn queue
+      if (save.resourceRespawnQueue) {
+        for (const entry of save.resourceRespawnQueue) {
+          this.resourceRespawnQueue.push({
+            x: entry.x, y: entry.y,
+            type: entry.type as ResourceType,
+            timer: entry.timer,
+          });
+        }
+        if (save.resourceRespawnQueue.length > 0) {
+          console.log(`[GameSession] Restored ${save.resourceRespawnQueue.length} resource respawn timers`);
+        }
+      }
+
+      // Restore cached resource nodes from unloaded chunks
+      if (save.resourceNodeCache) {
+        for (const [key, nodes] of Object.entries(save.resourceNodeCache)) {
+          this.resourceNodeCache.set(key, nodes.map(n => ({
+            x: n.x, y: n.y, type: n.type as ResourceType, hp: n.hp, maxHp: n.maxHp,
+          })));
+        }
       }
 
       // Restore saved item drops
@@ -1458,43 +1510,81 @@ export class GameSession {
     return id;
   }
 
-  // ── Resource & Item spawning ───────────────────────────────────────────────
+  // ── Resource Node Lifecycle (generate / load / unload / respawn) ──────────
 
   /**
-   * Populate the area around the spawn origin with biome-appropriate resource nodes.
-   * Uses seeded deterministic RNG so all clients see the same world.
+   * Main per-tick entry point for resource nodes.
+   * 1. Load/generate resource nodes for chunks near players.
+   * 2. Unload resource nodes in chunks far from all players (cache their state).
+   * 3. Tick respawn timers for destroyed nodes.
    */
-  /**
-   * Chunk-based resource generation - called each tick.
-   * For each player, checks nearby chunks. Unprocessed chunks get resources
-   * generated using a deterministic per-chunk PRNG. Already-processed chunks
-   * are skipped permanently (resources persist, no re-spawning).
-   */
-  private generateResourcesNearPlayers(): void {
-    const R = GameSession.RESOURCE_GEN_RADIUS;
-
+  private tickResourceNodes(dt: number): void {
+    // Collect the set of chunk keys that should be loaded (near any player)
+    const nearbyChunks = new Set<string>();
+    const loadR = GameSession.RESOURCE_GEN_RADIUS;
     for (const player of this.players.values()) {
       if (!player.entityId) continue;
       const pos = this.world.getComponent<PositionComponent>(player.entityId, C.Position);
       if (!pos) continue;
-
       const pcx = Math.floor(pos.x / (TILE_SIZE * CHUNK_SIZE));
       const pcy = Math.floor(pos.y / (TILE_SIZE * CHUNK_SIZE));
-
-      for (let cx = pcx - R; cx <= pcx + R; cx++) {
-        for (let cy = pcy - R; cy <= pcy + R; cy++) {
-          const key = `${cx},${cy}`;
-          if (this.processedChunks.has(key)) continue;
-          this.processedChunks.add(key);
-          this.generateResourcesForChunk(cx, cy);
+      for (let cx = pcx - loadR; cx <= pcx + loadR; cx++) {
+        for (let cy = pcy - loadR; cy <= pcy + loadR; cy++) {
+          nearbyChunks.add(`${cx},${cy}`);
         }
       }
     }
+
+    // Load: generate or restore resource nodes for nearby chunks that aren't loaded
+    for (const key of nearbyChunks) {
+      if (this.loadedResourceChunks.has(key)) continue;
+      if (this.resourceNodeCache.has(key)) {
+        // Restore from cache (previously unloaded chunk)
+        this.loadResourceChunk(key);
+      } else if (!this.processedChunks.has(key)) {
+        // First-time generation for this chunk
+        this.processedChunks.add(key);
+        const [cx, cy] = key.split(',').map(Number);
+        this.generateResourcesForChunk(cx, cy);
+      }
+      // If processedChunks has it but no cache and not loaded, all nodes were
+      // harvested or in the respawn queue - nothing to load, mark as loaded
+      this.loadedResourceChunks.add(key);
+    }
+
+    // Unload: cache and remove resource node entities in distant chunks
+    // Collect keys first to avoid mutating the Set during iteration
+    const unloadR = GameSession.RESOURCE_UNLOAD_RADIUS;
+    const toUnload: string[] = [];
+    for (const key of this.loadedResourceChunks) {
+      if (nearbyChunks.has(key)) continue;
+      // Check if this chunk is beyond unload radius from ALL players
+      const [cx, cy] = key.split(',').map(Number);
+      let inRange = false;
+      for (const player of this.players.values()) {
+        if (!player.entityId) continue;
+        const pos = this.world.getComponent<PositionComponent>(player.entityId, C.Position);
+        if (!pos) continue;
+        const pcx = Math.floor(pos.x / (TILE_SIZE * CHUNK_SIZE));
+        const pcy = Math.floor(pos.y / (TILE_SIZE * CHUNK_SIZE));
+        if (Math.abs(cx - pcx) <= unloadR && Math.abs(cy - pcy) <= unloadR) {
+          inRange = true;
+          break;
+        }
+      }
+      if (!inRange) toUnload.push(key);
+    }
+    for (const key of toUnload) {
+      this.unloadResourceChunk(key);
+    }
+
+    // Tick respawn timers
+    this.tickResourceRespawns(dt);
   }
 
   /**
    * Generate resources for a single chunk using deterministic per-chunk seeding.
-   * Same seed + chunk coords = same resources, regardless of when the chunk is visited.
+   * No global cap - entity count is bounded by chunk load/unload lifecycle.
    */
   private generateResourcesForChunk(cx: number, cy: number): void {
     // Deterministic seed per chunk: mix world seed with chunk coordinates
@@ -1506,14 +1596,13 @@ export class GameSession {
       return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
 
+    const key = `${cx},${cy}`;
     let spawned = 0;
     const baseTx = cx * CHUNK_SIZE;
     const baseTy = cy * CHUNK_SIZE;
 
     for (let lx = 0; lx < CHUNK_SIZE; lx++) {
       for (let ly = 0; ly < CHUNK_SIZE; ly++) {
-        if (this.resourceNodeCount >= MAX_RESOURCE_NODES) return;
-
         const tx = baseTx + lx;
         const ty = baseTy + ly;
         const tileId = this.generator.getTile(tx, ty);
@@ -1541,22 +1630,125 @@ export class GameSession {
         const dyO = wy - this.spawnOrigin.y;
         if (dxO * dxO + dyO * dyO < 120 * 120) continue;
 
-        this.spawnResourceNode(wx, wy, picked);
+        const id = this.spawnResourceNode(wx, wy, picked);
+        this.resourceNodeChunkMap.set(id, key);
         spawned++;
       }
     }
 
     if (spawned > 0) {
-      console.log(`[Resources] Chunk (${cx},${cy}): +${spawned} nodes (total: ${this.resourceNodeCount})`);
+      this.loadedResourceChunks.add(key);
+    }
+  }
+
+  /**
+   * Unload resource nodes in a chunk: cache their current state and destroy entities.
+   */
+  private unloadResourceChunk(chunkKey: string): void {
+    const cached: { x: number; y: number; type: ResourceType; hp: number; maxHp: number }[] = [];
+
+    // Find all resource node entities belonging to this chunk
+    for (const [entityId, key] of this.resourceNodeChunkMap) {
+      if (key !== chunkKey) continue;
+      const pos = this.world.getComponent<PositionComponent>(entityId, C.Position);
+      const hp = this.world.getComponent<HealthComponent>(entityId, C.Health);
+      const rn = this.world.getComponent<ResourceNodeComponent>(entityId, C.ResourceNode);
+      if (pos && hp && rn) {
+        cached.push({ x: pos.x, y: pos.y, type: rn.resourceType, hp: hp.current, maxHp: hp.max });
+      }
+      this.world.destroyEntity(entityId);
+      this.resourceNodeCount--;
+      this.resourceNodeChunkMap.delete(entityId);
+    }
+
+    if (cached.length > 0) {
+      this.resourceNodeCache.set(chunkKey, cached);
+      this.logger.log('debug', `Resource chunk ${chunkKey} unloaded`, { nodes: cached.length, totalLoaded: this.resourceNodeCount });
+    }
+    this.loadedResourceChunks.delete(chunkKey);
+  }
+
+  /**
+   * Restore resource nodes from cache when a chunk comes back into range.
+   */
+  private loadResourceChunk(chunkKey: string): void {
+    const cached = this.resourceNodeCache.get(chunkKey);
+    if (!cached) return;
+
+    for (const node of cached) {
+      const id = this.spawnResourceNodeWithHp(node.x, node.y, node.type, node.hp, node.maxHp);
+      this.resourceNodeChunkMap.set(id, chunkKey);
+    }
+
+    this.logger.log('debug', `Resource chunk ${chunkKey} reloaded from cache`, { nodes: cached.length, totalLoaded: this.resourceNodeCount });
+    this.resourceNodeCache.delete(chunkKey);
+    this.loadedResourceChunks.add(chunkKey);
+  }
+
+  /**
+   * Tick resource node respawn timers. When a timer expires, check if the
+   * position is still valid (walkable, no building, outside build range)
+   * and respawn the node. If the chunk is unloaded, add to cache instead.
+   */
+  private tickResourceRespawns(dt: number): void {
+    for (let i = this.resourceRespawnQueue.length - 1; i >= 0; i--) {
+      const entry = this.resourceRespawnQueue[i];
+      entry.timer -= dt;
+      if (entry.timer > 0) continue;
+
+      // Check if position is still valid for respawning
+      if (!this.isWalkable(entry.x, entry.y)) {
+        // Solid tile - permanently remove from queue
+        this.resourceRespawnQueue.splice(i, 1);
+        continue;
+      }
+      if (this.overlapsBuilding(entry.x, entry.y, RESOURCE_NODE_RADIUS)) {
+        // Building on top - retry next tick
+        entry.timer = 1;
+        continue;
+      }
+      if (this.isInsideBuildRange(entry.x, entry.y)) {
+        // Inside campfire build range - permanently remove from queue
+        this.resourceRespawnQueue.splice(i, 1);
+        continue;
+      }
+
+      // Determine which chunk this node belongs to
+      const tx = Math.floor(entry.x / TILE_SIZE);
+      const ty = Math.floor(entry.y / TILE_SIZE);
+      const cx = Math.floor(tx / CHUNK_SIZE);
+      const cy = Math.floor(ty / CHUNK_SIZE);
+      const chunkKey = `${cx},${cy}`;
+      const stats = RESOURCE_STATS[entry.type];
+
+      if (this.loadedResourceChunks.has(chunkKey)) {
+        // Chunk is loaded - spawn entity
+        const id = this.spawnResourceNode(entry.x, entry.y, entry.type);
+        this.resourceNodeChunkMap.set(id, chunkKey);
+      } else {
+        // Chunk is unloaded - add to cache for when it reloads
+        if (!this.resourceNodeCache.has(chunkKey)) {
+          this.resourceNodeCache.set(chunkKey, []);
+        }
+        this.resourceNodeCache.get(chunkKey)!.push({
+          x: entry.x, y: entry.y, type: entry.type,
+          hp: stats.hp, maxHp: stats.hp,
+        });
+      }
+      this.resourceRespawnQueue.splice(i, 1);
     }
   }
 
   private spawnResourceNode(x: number, y: number, type: ResourceType): number {
+    return this.spawnResourceNodeWithHp(x, y, type, RESOURCE_STATS[type].hp, RESOURCE_STATS[type].hp);
+  }
+
+  private spawnResourceNodeWithHp(x: number, y: number, type: ResourceType, hp: number, maxHp: number): number {
     const stats = RESOURCE_STATS[type];
     const id = this.world.createEntity();
     this.world.addComponent(id, C.Position,          { x, y });
     this.world.addComponent(id, C.Velocity,          { vx: 0, vy: 0 });
-    this.world.addComponent(id, C.Health,            { current: stats.hp, max: stats.hp });
+    this.world.addComponent(id, C.Health,            { current: hp, max: maxHp });
     this.world.addComponent(id, C.Faction,           { type: 'resource' });
     this.world.addComponent(id, C.ResourceNode,      { resourceType: type, yield: stats.yield });
     this.world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
@@ -1814,6 +2006,9 @@ export class GameSession {
     const current = (res as any)[itemType] as number ?? 0;
     const capped = Math.min(current + quantity, cap);
     const overflow = (current + quantity) - capped;
+    this.logger.log('debug', `${target.displayName} gathered ${quantity} ${itemType}`, {
+      current, capped, overflow, cap,
+    });
 
     if (itemType === 'wood') res.wood = capped;
     else if (itemType === 'stone') res.stone = capped;
@@ -3184,6 +3379,18 @@ export class GameSession {
     data.heroes = this.heroes.serialize();
     // Save campfire placement state
     (data as any).campfirePlaced = this.campfirePlaced;
+    // Save resource respawn queue
+    data.resourceRespawnQueue = this.resourceRespawnQueue.map(e => ({
+      x: e.x, y: e.y, type: e.type, timer: e.timer,
+    }));
+    // Save cached resource nodes from unloaded chunks
+    const cacheObj: Record<string, { x: number; y: number; type: string; hp: number; maxHp: number }[]> = {};
+    for (const [key, nodes] of this.resourceNodeCache) {
+      cacheObj[key] = nodes.map(n => ({ x: n.x, y: n.y, type: n.type, hp: n.hp, maxHp: n.maxHp }));
+    }
+    if (Object.keys(cacheObj).length > 0) {
+      data.resourceNodeCache = cacheObj;
+    }
     return data;
   }
 
@@ -3767,8 +3974,8 @@ export class GameSession {
 
     const _tickStart = performance.now();
 
-    // Spawn resources near players (chunk-based, processed chunks are skipped)
-    this.generateResourcesNearPlayers();
+    // Resource node lifecycle: load nearby chunks, unload distant, tick respawns
+    this.tickResourceNodes(dt);
 
     // Sync session-wide building damage mult to combat systems
     this.combat.buildingDamageMult = this.cards.debuffs.buildingDamageMult;
@@ -4097,10 +4304,25 @@ export class GameSession {
     this.tickProfile.waves      = this.tickProfile.waves      * (1 - _a) + (_t9 - _t8) * _a;
     this.tickProfile.total      = this.tickProfile.total      * (1 - _a) + (_t9 - _t0) * _a;
 
-    // Log performance profile every 10 seconds
+    // Log comprehensive debug profile every 10 seconds
     if (this.tick % 300 === 0) {
-      const entityCount = this.world.query(C.Position).length;
-      this.logger.log('debug', `Tick profile (avg ms)`, {
+      const entityCount = this.world.allEntities.size;
+      // Count entities by faction type
+      let enemyCount = 0, buildingCount = 0, civilianCount = 0, resourceCount = 0, portalCount = 0, itemCount = 0, guardCount = 0;
+      for (const eid of this.world.query(C.Faction)) {
+        const f = this.world.getComponent<FactionComponent>(eid, C.Faction);
+        if (!f) continue;
+        switch (f.type) {
+          case 'enemy': enemyCount++; break;
+          case 'building': buildingCount++; break;
+          case 'civilian': civilianCount++; break;
+          case 'resource': resourceCount++; break;
+          case 'portal': portalCount++; break;
+          case 'item': itemCount++; break;
+          case 'guard': guardCount++; break;
+        }
+      }
+      this.logger.log('debug', 'Tick profile (avg ms)', {
         total: +this.tickProfile.total.toFixed(2),
         enemy: +this.tickProfile.enemy.toFixed(2),
         combat: +this.tickProfile.combat.toFixed(2),
@@ -4108,7 +4330,27 @@ export class GameSession {
         projectile: +this.tickProfile.projectile.toFixed(2),
         buildings: +this.tickProfile.buildings.toFixed(2),
         waves: +this.tickProfile.waves.toFixed(2),
-        entities: entityCount,
+      });
+      this.logger.log('debug', 'Entity breakdown', {
+        total: entityCount, enemies: enemyCount, buildings: buildingCount,
+        civilians: civilianCount, resources: resourceCount, portals: portalCount,
+        items: itemCount, guards: guardCount, players: this.players.size,
+      });
+      this.logger.log('debug', 'Resource nodes', {
+        loaded: this.resourceNodeCount,
+        cachedChunks: this.resourceNodeCache.size,
+        loadedChunks: this.loadedResourceChunks.size,
+        processedChunks: this.processedChunks.size,
+        respawnQueue: this.resourceRespawnQueue.length,
+      });
+      this.logger.log('debug', 'Game state', {
+        wave: this.waveState.currentWave,
+        wavePhase: this.waveState.phase,
+        enemiesAlive: this.waveState.enemyCount,
+        paused: this.paused,
+        dayTimer: Math.round(this.dayNightState.dayTimer),
+        campfirePlaced: this.campfirePlaced,
+        elapsed: Math.round(this.getElapsedSeconds()),
       });
     }
 
