@@ -640,7 +640,9 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
       resurrectionQueue[i].timer -= dt;
       if (resurrectionQueue[i].timer <= 0) {
         const { x, y } = resurrectionQueue[i];
-        deps.spawnEnemyAt?.(x, y);
+        // Find safe position in case a building was placed on the death spot
+        const safe = deps.findSafeSpawnNear(x, y);
+        deps.spawnEnemyAt?.(safe.x, safe.y);
         resurrectionQueue.splice(i, 1);
       }
     }

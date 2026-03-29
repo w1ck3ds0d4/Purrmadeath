@@ -26,6 +26,7 @@ import {
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import { WorldGenerator } from '@shared/world/WorldGenerator';
+import { POI_RADIUS } from '@shared/data/POISpawnTable';
 
 const ACCEL   = 20;
 const FRICTION = 16;
@@ -104,6 +105,8 @@ export class MovementSystem {
   private portalCache: PositionComponent[] = [];
   /** Cached building positions - refreshed each update for solid-block collision. */
   private buildingCache: { x: number; y: number; hx: number; hy: number; isGate: boolean }[] = [];
+  /** Cached POI positions for solid-block collision checks. */
+  private poiCache: PositionComponent[] = [];
   /** Bridge tile keys ("tileX,tileY") that override unwalkable terrain. Populated by GameSession. */
   bridgeTiles = new Set<string>();
 
@@ -305,6 +308,7 @@ export class MovementSystem {
     this.resourceCache.length = 0;
     this.portalCache.length = 0;
     this.buildingCache.length = 0;
+    this.poiCache.length = 0;
     for (const id of world.query(C.Position, C.Faction)) {
       const f = world.getComponent<FactionComponent>(id, C.Faction)!;
       switch (f.type) {
@@ -313,6 +317,9 @@ export class MovementSystem {
           break;
         case 'portal':
           this.portalCache.push(world.getComponent<PositionComponent>(id, C.Position)!);
+          break;
+        case 'poi':
+          this.poiCache.push(world.getComponent<PositionComponent>(id, C.Position)!);
           break;
         case 'building': {
           const bldg = world.getComponent<BuildingComponent>(id, C.Building);
@@ -339,6 +346,12 @@ export class MovementSystem {
     // Resource nodes act as solid blocks (circle-vs-AABB)
     for (const node of this.resourceCache) {
       if (circleAABBPush(px, py, entityRadius, node.x, node.y, RESOURCE_NODE_RADIUS)) {
+        return true;
+      }
+    }
+    // POIs act as solid blocks (circle-vs-AABB, same as resources)
+    for (const poi of this.poiCache) {
+      if (circleAABBPush(px, py, entityRadius, poi.x, poi.y, POI_RADIUS)) {
         return true;
       }
     }

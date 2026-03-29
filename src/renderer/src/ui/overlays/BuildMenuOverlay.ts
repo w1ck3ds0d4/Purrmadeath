@@ -72,6 +72,12 @@ const BUILDING_DETAILS: Record<string, BuildingDetail> = {
   market:           { hp: 150, description: 'Converts surplus resources into gold over time. Requires: Trade Baron.', special: 'Resources -> Gold' },
 };
 
+/** Buildings that are not yet implemented - shown as "Coming Soon" in the build menu. */
+const COMING_SOON_BUILDINGS = new Set([
+  'siege_workshop', 'market', 'workshop', 'smeltery',
+  'dragon_roost', 'training_center', 'kennel', 'arcane_tower', 'tavern',
+]);
+
 interface BuildCategory {
   name: string;
   accent: string;
@@ -464,6 +470,7 @@ export class BuildMenuOverlay {
       // Check if this building requires an achievement unlock
       const requiredAchievement = ACHIEVEMENT_LOCKED_BUILDINGS[type];
       const isLocked = requiredAchievement && !this.unlockedBuildings.has(type);
+      const isComingSoon = COMING_SOON_BUILDINGS.has(type);
 
       // Outer wrapper to enforce square aspect ratio
       const wrapper = document.createElement('div');
@@ -507,7 +514,7 @@ export class BuildMenuOverlay {
         this.hideTooltip();
       });
       card.addEventListener('click', () => {
-        if (!isLocked) this.callbacks?.onSelect(type);
+        if (!isLocked && !isComingSoon) this.callbacks?.onSelect(type);
       });
 
       // Building name
@@ -560,6 +567,28 @@ export class BuildMenuOverlay {
         lockLabel.textContent = requiredAchievement;
         lockOverlay.appendChild(lockLabel);
         card.appendChild(lockOverlay);
+      }
+
+      // Coming Soon overlay (takes priority over achievement lock)
+      if (isComingSoon) {
+        card.style.opacity = '0.35';
+        card.style.cursor = 'not-allowed';
+        const soonOverlay = document.createElement('div');
+        soonOverlay.style.cssText = [
+          'position: absolute',
+          'inset: 0',
+          'display: flex',
+          'align-items: center',
+          'justify-content: center',
+          'pointer-events: none',
+          'background: rgba(0,0,0,0.5)',
+          `border-radius: ${THEME.radiusSm}`,
+        ].join('; ');
+        const soonLabel = document.createElement('div');
+        soonLabel.style.cssText = `font-family:${THEME.fontMono};font-size:9px;font-weight:bold;color:#8899aa;text-transform:uppercase;letter-spacing:1px;`;
+        soonLabel.textContent = 'Coming Soon';
+        soonOverlay.appendChild(soonLabel);
+        card.appendChild(soonOverlay);
       }
 
       wrapper.appendChild(card);

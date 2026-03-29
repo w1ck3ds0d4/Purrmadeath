@@ -96,6 +96,7 @@ import {
   POI_SPAWN_TABLE, POI_TILE_SPAWN_CHANCE, POI_INTERACT_RADIUS,
   NEST_TRIGGER_RADIUS, NEST_ENEMY_COUNT, SHRINE_BUFF_DURATION,
   SHRINE_BUFF_VALUES, MAX_POIS_PER_CHUNK, POI_MIN_DIST_FROM_SPAWN, POI_NAMES,
+  POI_HP, POI_RADIUS,
 } from '@shared/data/POISpawnTable';
 import { LOOT_TABLES } from '@shared/data/LootTables';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
@@ -478,6 +479,7 @@ export class GameSession {
       isInsideBuildRange: (wx, wy) => this.isInsideBuildRange(wx, wy),
       isCampfirePlaced: () => this.campfirePlaced,
       getBuildRangeHalfExtent: () => this.campfirePlaced ? this.computeBuildRange() : 0,
+      findSafeSpawnNear: (wx, wy) => this.findSafeSpawnNear(wx, wy),
     });
 
     this.worldEvents = createWorldEventController({
@@ -490,6 +492,7 @@ export class GameSession {
       isWalkable: (wx, wy) => this.isWalkable(wx, wy),
       overlapsBuilding: (wx, wy, r) => this.overlapsBuilding(wx, wy, r),
       overlapsResourceNode: (wx, wy, r) => this.overlapsResourceNode(wx, wy, r),
+      findSafeSpawnNear: (wx, wy) => this.findSafeSpawnNear(wx, wy),
       destroyDeadEntities: (deaths, attackerMap, send) => this.respawn.destroyDeadEntities(deaths, attackerMap, send),
       onEventComplete: (eventId, send) => {
         // 30% chance to auto-grant a card when an event completes naturally
@@ -513,6 +516,7 @@ export class GameSession {
       spawnEnemy: (x, y) => this.waves.spawnEnemy(x, y),
       cards: this.cards,
       incrementEnemyCount: () => { this.waveState.enemyCount++; },
+      findSafeSpawnNear: (wx, wy) => this.findSafeSpawnNear(wx, wy),
     });
 
     this.cardDispenser = createCardDispenser({
@@ -1425,7 +1429,7 @@ export class GameSession {
     if (!this.isWalkable(wx, wy)) return false;
     for (const id of this.world.query(C.Position, C.Faction)) {
       const f = this.world.getComponent<FactionComponent>(id, C.Faction)!;
-      if (f.type !== 'resource' && f.type !== 'building') continue;
+      if (f.type !== 'resource' && f.type !== 'building' && f.type !== 'poi') continue;
       const p = this.world.getComponent<PositionComponent>(id, C.Position)!;
       const dx = Math.abs(p.x - wx);
       const dy = Math.abs(p.y - wy);
@@ -1433,6 +1437,8 @@ export class GameSession {
         const bldg = this.world.getComponent<BuildingComponent>(id, C.Building);
         const half = buildingHalfExtent(bldg?.buildingType ?? 'campfire') + PLAYER_RADIUS;
         if (dx < half && dy < half) return false;
+      } else if (f.type === 'poi') {
+        if (dx < PLAYER_RADIUS + POI_RADIUS && dy < PLAYER_RADIUS + POI_RADIUS) return false;
       } else {
         if (dx < PLAYER_RADIUS + RESOURCE_NODE_RADIUS && dy < PLAYER_RADIUS + RESOURCE_NODE_RADIUS) return false;
       }
@@ -1855,13 +1861,15 @@ export class GameSession {
     }
     for (const key of toUnload) this.unloadPOIChunk(key);
 
-    // Tick enemy nest proximity triggers
-    for (const poiId of this.world.query(C.PointOfInterest, C.Position)) {
+    // Tick enemy nest proximity triggers - nest disappears and spawns enemies
+    const nestIds = [...this.world.query(C.PointOfInterest, C.Position)];
+    for (const poiId of nestIds) {
       const poi = this.world.getComponent<PointOfInterestComponent>(poiId, C.PointOfInterest)!;
-      if (poi.poiType !== 'enemy_nest' || poi.consumed || poi.triggered) continue;
+      if (poi.poiType !== 'enemy_nest' || poi.consumed) continue;
 
       const poiPos = this.world.getComponent<PositionComponent>(poiId, C.Position)!;
       const triggerR2 = NEST_TRIGGER_RADIUS * NEST_TRIGGER_RADIUS;
+      let shouldTrigger = false;
 
       for (const player of this.players.values()) {
         if (!player.entityId) continue;
@@ -1869,56 +1877,50 @@ export class GameSession {
         if (!pp) continue;
         const dx = pp.x - poiPos.x, dy = pp.y - poiPos.y;
         if (dx * dx + dy * dy <= triggerR2) {
-          poi.triggered = true;
-          poi.spawnedEnemyIds = [];
-          const count = NEST_ENEMY_COUNT.min + Math.floor(Math.random() * (NEST_ENEMY_COUNT.max - NEST_ENEMY_COUNT.min + 1));
-          for (let i = 0; i < count; i++) {
-            const angle = (i / count) * Math.PI * 2;
-            const spawnX = poiPos.x + Math.cos(angle) * 60;
-            const spawnY = poiPos.y + Math.sin(angle) * 60;
-            // Spawn enemy using wave controller's spawnEnemy
-            const eid = this.waves.spawnEnemy(spawnX, spawnY);
-            if (eid !== null) poi.spawnedEnemyIds.push(eid);
-          }
-          this.logger.log('debug', `Enemy nest triggered`, { entityId: poiId, enemies: poi.spawnedEnemyIds.length });
-          // Notify clients
-          for (const p of this.players.values()) {
-            send(p.client, { type: MessageType.POI_NEST_TRIGGERED, entityId: poiId, enemyCount: poi.spawnedEnemyIds.length });
-          }
+          shouldTrigger = true;
           break;
         }
       }
-    }
 
-    // Check if triggered nests have been cleared
-    for (const poiId of this.world.query(C.PointOfInterest, C.Position)) {
-      const poi = this.world.getComponent<PointOfInterestComponent>(poiId, C.PointOfInterest)!;
-      if (poi.poiType !== 'enemy_nest' || poi.consumed || !poi.triggered) continue;
-      if (!poi.spawnedEnemyIds || poi.spawnedEnemyIds.length === 0) continue;
+      if (shouldTrigger) {
+        // Spawn enemies around the nest, finding safe positions that don't overlap obstacles
+        const count = NEST_ENEMY_COUNT.min + Math.floor(Math.random() * (NEST_ENEMY_COUNT.max - NEST_ENEMY_COUNT.min + 1));
+        const spawnedIds: number[] = [];
+        const nestX = poiPos.x, nestY = poiPos.y;
+        for (let i = 0; i < count; i++) {
+          const angle = (i / count) * Math.PI * 2;
+          const rawX = nestX + Math.cos(angle) * 60;
+          const rawY = nestY + Math.sin(angle) * 60;
+          // Find a safe position near the target that doesn't overlap buildings/resources/POIs
+          const safe = this.findSafeSpawnNear(rawX, rawY);
+          const eid = this.waves.spawnEnemy(safe.x, safe.y);
+          if (eid !== null) spawnedIds.push(eid);
+        }
+        console.log(`[POI] Enemy nest triggered at entity ${poiId} - spawned ${spawnedIds.length} enemies (x=${Math.round(nestX)}, y=${Math.round(nestY)})`);
+        this.logger.log('combat', `Enemy nest triggered`, { entityId: poiId, enemies: spawnedIds.length, x: Math.round(nestX), y: Math.round(nestY) });
+        for (const p of this.players.values()) {
+          send(p.client, { type: MessageType.POI_NEST_TRIGGERED, entityId: poiId, enemyCount: spawnedIds.length });
+        }
 
-      const allDead = poi.spawnedEnemyIds.every(eid => !this.world.hasEntity(eid));
-      if (allDead) {
-        poi.consumed = true;
-        const poiPos = this.world.getComponent<PositionComponent>(poiId, C.Position)!;
         // Drop loot at nest position as item drops
         const table = LOOT_TABLES['enemy_nest_reward'];
         if (table) {
           for (const entry of table.entries) {
             if (Math.random() > entry.chance) continue;
             const qty = entry.minQty + Math.floor(Math.random() * (entry.maxQty - entry.minQty + 1));
-            this.spawnItemDrop(poiPos.x, poiPos.y, entry.itemType, qty, entry.autoPickup);
+            this.spawnItemDrop(nestX, nestY, entry.itemType, qty, entry.autoPickup);
           }
         }
-        // Chance to drop a card as reward for clearing the nest
+        // Chance to drop a card
         const card = rollCardDrop('world_event', this.cards.pickedCardIds as Set<string>);
         if (card) {
-          this.spawnCardDrop(poiPos.x, poiPos.y, card);
-          this.logger.log('debug', `Enemy nest dropped card: ${card.name} (${card.rarity})`);
+          this.spawnCardDrop(nestX, nestY, card);
+          console.log(`[POI] Enemy nest dropped card: ${card.name} (${card.rarity})`);
+          this.logger.log('combat', `Enemy nest dropped card: ${card.name}`, { rarity: card.rarity });
         }
-        this.logger.log('debug', `Enemy nest cleared`, { entityId: poiId });
-        for (const p of this.players.values()) {
-          send(p.client, { type: MessageType.POI_NEST_CLEARED, entityId: poiId });
-        }
+
+        // Destroy the nest entity immediately (disappears when enemies spawn)
+        this.destroyPOI(poiId);
       }
     }
   }
@@ -1979,23 +1981,30 @@ export class GameSession {
 
         const id = this.spawnPOI(wx, wy, picked, false, buffType);
         this.poiChunkMap.set(id, key);
+        // Spawn decorative ruins around the POI (camps, nests, chests - not shrines)
+        if (picked !== 'shrine') {
+          this.spawnPOIRuins(wx, wy, rand);
+        }
         spawned++;
       }
     }
 
     if (spawned > 0) {
       this.loadedPOIChunks.add(key);
-      this.logger.log('debug', `POI chunk ${key}: +${spawned} POIs (total: ${this.poiCount})`);
+      console.log(`[POI] Chunk (${cx},${cy}): +${spawned} POIs (total: ${this.poiCount})`);
+      this.logger.log('debug', `POI chunk ${key}: +${spawned} POIs`, { total: this.poiCount });
     }
   }
 
   /** Create a POI entity. */
   private spawnPOI(x: number, y: number, poiType: POIType, consumed: boolean, buffType?: string): number {
+    const hp = POI_HP[poiType] ?? 200;
     const id = this.world.createEntity();
     this.world.addComponent(id, C.Position, { x, y });
     this.world.addComponent(id, C.Velocity, { vx: 0, vy: 0 });
-    this.world.addComponent(id, C.Health, { current: 1, max: 1 });
+    this.world.addComponent(id, C.Health, { current: hp, max: hp });
     this.world.addComponent(id, C.Faction, { type: 'poi' });
+    this.world.addComponent(id, C.KnockbackReceiver, { vx: 0, vy: 0 });
     this.world.addComponent(id, C.PointOfInterest, {
       poiType, consumed,
       buffType: buffType as any,
@@ -2004,6 +2013,86 @@ export class GameSession {
     });
     this.poiCount++;
     return id;
+  }
+
+  /**
+   * Spawn decorative ruin walls/buildings around a POI to create a settlement feel.
+   * Uses deterministic RNG so ruins are consistent across save/load.
+   */
+  private spawnPOIRuins(poiX: number, poiY: number, rand: () => number): void {
+    const ruinTypes: import('@shared/components').BuildingType[] = ['wall'];
+    const count = 2 + Math.floor(rand() * 3); // 2-4 ruin pieces
+    const placed: { x: number; y: number }[] = [];
+    const MIN_RUIN_SPACING = 36; // minimum distance between ruins (px)
+    const MIN_POI_DIST = 28;     // minimum distance from POI center (px)
+
+    for (let i = 0; i < count; i++) {
+      // Try a few positions to find a valid one
+      let rx = 0, ry = 0, valid = false;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const angle = rand() * Math.PI * 2;
+        const dist = 40 + rand() * 50; // 40-90px from POI center
+        // Snap to tile grid center (same as resource nodes and buildings)
+        const tx = Math.floor((poiX + Math.cos(angle) * dist) / TILE_SIZE);
+        const ty = Math.floor((poiY + Math.sin(angle) * dist) / TILE_SIZE);
+        rx = tx * TILE_SIZE + TILE_SIZE / 2;
+        ry = ty * TILE_SIZE + TILE_SIZE / 2;
+        const tileId = this.generator.getTile(tx, ty);
+        if (!(TILE_DEFS[tileId]?.walkable ?? false)) continue;
+
+        // Don't overlap with POI itself
+        const dPoi = Math.sqrt((rx - poiX) ** 2 + (ry - poiY) ** 2);
+        if (dPoi < MIN_POI_DIST) continue;
+
+        // Don't overlap with existing buildings
+        if (this.overlapsBuilding(rx, ry, 16)) continue;
+
+        // Don't overlap with previously placed ruins in this group
+        let tooClose = false;
+        for (const p of placed) {
+          if ((rx - p.x) ** 2 + (ry - p.y) ** 2 < MIN_RUIN_SPACING * MIN_RUIN_SPACING) {
+            tooClose = true; break;
+          }
+        }
+        if (tooClose) continue;
+
+        valid = true;
+        break;
+      }
+      if (!valid) continue;
+
+      // Remove any resource nodes that overlap with this ruin position
+      for (const [nodeId, chunkKey] of this.resourceNodeChunkMap) {
+        const npos = this.world.getComponent<PositionComponent>(nodeId, C.Position);
+        if (!npos) continue;
+        const ndx = npos.x - rx, ndy = npos.y - ry;
+        if (ndx * ndx + ndy * ndy < 30 * 30) { // 30px overlap radius
+          this.world.destroyEntity(nodeId);
+          this.resourceNodeCount--;
+          this.resourceNodeChunkMap.delete(nodeId);
+        }
+      }
+
+      const type = ruinTypes[Math.floor(rand() * ruinTypes.length)];
+      const id = this.spawnBuilding(rx, ry, type, 1, false);
+      // Add ruins component - no burn timer (old ruins), permanent decay
+      this.world.addComponent(id, C.Ruins, {
+        originalType: type,
+        originalLevel: 1,
+        burnTimer: 0,
+        decayTimer: 999999,
+      } as import('@shared/components').RuinsComponent);
+      const ruinHp = this.world.getComponent<HealthComponent>(id, C.Health);
+      if (ruinHp) { ruinHp.current = 1; ruinHp.max = 1; }
+      placed.push({ x: rx, y: ry });
+    }
+  }
+
+  /** Destroy a consumed POI entity and remove it from tracking. */
+  private destroyPOI(poiId: number): void {
+    this.world.destroyEntity(poiId);
+    this.poiChunkMap.delete(poiId);
+    this.poiCount--;
   }
 
   /** Unload POI entities in a distant chunk - cache their state. */
@@ -2044,6 +2133,8 @@ export class GameSession {
     send: SendFn,
   ): void {
     poi.consumed = true;
+    const poiName = POI_NAMES[poi.poiType];
+    console.log(`[POI] ${player.displayName} interacted with ${poiName} (${poi.poiType}) at entity ${poiId}`);
     this.logger.log('debug', `${player.displayName} interacted with ${poi.poiType}`, { entityId: poiId });
 
     // Get POI world position for item drop spawning
@@ -2070,13 +2161,16 @@ export class GameSession {
           const card = rollCardDrop('world_event', this.cards.pickedCardIds as Set<string>);
           if (card) {
             this.spawnCardDrop(dropX, dropY, card);
-            this.logger.log('debug', `Treasure chest dropped card: ${card.name} (${card.rarity})`);
+            console.log(`[POI] Treasure chest dropped card: ${card.name} (${card.rarity})`);
+            this.logger.log('debug', `Treasure chest dropped card: ${card.name}`, { rarity: card.rarity });
           }
         }
         send(player.client, { type: MessageType.POI_RESULT, poiType: poi.poiType, rewards });
-        const name = POI_NAMES[poi.poiType];
+        const lootSummary = rewards.map(r => `${r.quantity} ${r.itemType}`).join(', ');
+        console.log(`[POI] ${poiName} loot: ${lootSummary || 'nothing'}`);
+        this.logger.log('debug', `POI loot from ${poi.poiType}`, { rewards });
         for (const p of this.players.values()) {
-          send(p.client, { type: MessageType.NOTIFICATION, text: `${player.displayName} opened ${name}!`, level: 'info' });
+          send(p.client, { type: MessageType.NOTIFICATION, text: `${player.displayName} opened ${poiName}!`, level: 'info' });
         }
         break;
       }
@@ -2093,12 +2187,17 @@ export class GameSession {
         }
         send(player.client, { type: MessageType.POI_RESULT, poiType: 'shrine', buffType: poi.buffType, buffDuration: SHRINE_BUFF_DURATION });
         const buffName = poi.buffType ? poi.buffType.charAt(0).toUpperCase() + poi.buffType.slice(1) : 'Unknown';
+        console.log(`[POI] Shrine buff applied: ${buffName} (${SHRINE_BUFF_DURATION}s) to ${player.displayName}`);
+        this.logger.log('buff', `Shrine ${buffName} buff applied to ${player.displayName}`, { buffType: poi.buffType, duration: SHRINE_BUFF_DURATION });
         for (const p of this.players.values()) {
           send(p.client, { type: MessageType.NOTIFICATION, text: `${player.displayName} received ${buffName} blessing!`, level: 'info' });
         }
         break;
       }
     }
+
+    // Destroy the POI entity after use (it disappears from the world)
+    this.destroyPOI(poiId);
   }
 
   private spawnItemDrop(
@@ -3809,8 +3908,8 @@ export class GameSession {
       const ex = pos.x + Math.cos(angle) * dist;
       const ey = pos.y + Math.sin(angle) * dist;
       if (!this.isWalkable(ex, ey) || this.overlapsBuilding(ex, ey, ENEMY_RADIUS)) continue;
-
-      this.waves.spawnEnemy(ex, ey);
+      const safeDebug = this.findSafeSpawnNear(ex, ey);
+      this.waves.spawnEnemy(safeDebug.x, safeDebug.y);
       spawned++;
     }
     console.log(`[Debug] Spawned ${spawned}/${n} enemies around player ${player.slot}`);
@@ -4241,6 +4340,7 @@ export class GameSession {
       const faction = this.world.getComponent<FactionComponent>(eid, C.Faction);
       if (faction?.type === 'player') continue;
       if (faction?.type === 'civilian') continue;
+      if (faction?.type === 'poi') continue; // POIs are unbreakable
       deaths.push(eid);
       // For resource/enemy drops, try to find a player to credit
       // Check if any player is nearby (within 500px) as the attacker

@@ -400,6 +400,30 @@ async function main(): Promise<void> {
   ].join('; ');
   document.getElementById('overlay')!.appendChild(lowHpVignette);
 
+  // Campfire placement banner - shown until the player places a campfire
+  const campfireBanner = document.createElement('div');
+  campfireBanner.style.cssText = [
+    'position: absolute',
+    'top: 12px',
+    'left: 12px',
+    'z-index: 20',
+    'display: none',
+    'font-family: monospace',
+    'font-size: 15px',
+    'font-weight: bold',
+    'color: #ffd700',
+    'background: rgba(0, 0, 0, 0.75)',
+    'padding: 8px 20px',
+    'border-radius: 6px',
+    'border: 1px solid rgba(255, 215, 0, 0.4)',
+    'pointer-events: none',
+    'text-align: center',
+    'white-space: nowrap',
+    'text-shadow: 0 1px 3px rgba(0,0,0,0.8)',
+  ].join('; ');
+  campfireBanner.textContent = 'Press Q and place a Campfire to start building!';
+  document.getElementById('overlay')!.appendChild(campfireBanner);
+
   // Interaction prompt (floating above player near interactive buildings)
   const interactPrompt = document.createElement('div');
   interactPrompt.style.cssText = [
@@ -695,6 +719,7 @@ async function main(): Promise<void> {
     localActiveBuffIdsArr = [];
     pendingAbilityCooldowns = null;
     campfirePlacedState = false;
+    campfireBanner.style.display = 'none';
     buildRangeCenterX = 0;
     buildRangeCenterY = 0;
     buildRangeHalfExtent = 0;
@@ -743,6 +768,8 @@ async function main(): Promise<void> {
     lobbyOverlay.setSingleplayer(!connectedToRemote);
     lobbyOverlay.show(currentSessionId, currentSessionCode, isHost);
     lobbyOverlay.updatePlayers(lobbyPlayers);
+    // Sync lobby class selection UI with the current selectedClass (reset to default on menu enter)
+    lobbyOverlay.selectClass(selectedClass);
     hud.setVisible(false);
     weaponHotbar.setVisible(false);
   });
@@ -762,6 +789,8 @@ async function main(): Promise<void> {
     minimap.setVisible(true);
     keybindPanel.style.display = 'block';
     chatOverlay.setActive(true);
+    // Show campfire placement banner if campfire not yet placed
+    campfireBanner.style.display = campfirePlacedState ? 'none' : 'block';
 
     // Clear menu background chunks from the tile renderer
     for (const key of menuStreamedKeys) {
@@ -935,6 +964,8 @@ async function main(): Promise<void> {
     onCampfirePlaced: () => {
       // Exit build mode when campfire is placed
       buildCtrl.exitBuildMode();
+      // Hide the campfire placement banner
+      campfireBanner.style.display = 'none';
     },
   });
 
@@ -971,6 +1002,7 @@ async function main(): Promise<void> {
       if (connectedToRemote) {
         clog('GAME', 'Switching from remote to localhost...');
         connectedToRemote = false;
+        menuOverlay.setConnectionTarget('localhost');
         menuOverlay.setConnectionStatus('connecting');
         net.reconnectTo(`ws://localhost:${SERVER_PORT}`);
         pendingSingleplayerRetry = true;
@@ -1008,6 +1040,7 @@ async function main(): Promise<void> {
     onHost: () => {
       // Switch to remote server for online hosting (if available)
       if (hasRemoteServer && !connectedToRemote) {
+        menuOverlay.setConnectionTarget('remote');
         menuOverlay.setConnectionStatus('connecting');
         menuOverlay.setButtonsEnabled(false);
         net.reconnectTo(`ws://${remoteServerIp}:${SERVER_PORT}`);
@@ -1034,6 +1067,8 @@ async function main(): Promise<void> {
       // If input looks like an IP, reconnect transport to that IP
       if (/[\d.].*:|\d+\.\d+/.test(value)) {
         const ip = value.includes(':') ? value.split(':')[0] : value;
+        menuOverlay.setConnectionTarget('remote');
+        menuOverlay.setConnectionStatus('connecting');
         net.reconnectTo(`ws://${ip}:${SERVER_PORT}`);
         connectedToRemote = true;
         return;
@@ -1100,6 +1135,40 @@ async function main(): Promise<void> {
   // Host/Join start disabled (need remote connection, which happens on-demand)
   menuOverlay.setButtonsEnabled(false);
 
+  // Set initial remote server status and probe availability
+  menuOverlay.setConnectionTarget('remote');
+  if (hasRemoteServer) {
+    // Probe the remote server in the background to check if it's online
+    menuOverlay.setConnectionStatus('connecting');
+    const probeWs = new WebSocket(`ws://${remoteServerIp}:${SERVER_PORT}`);
+    const probeTimeout = setTimeout(() => {
+      probeWs.close();
+      menuOverlay.setConnectionTarget('remote');
+      menuOverlay.setConnectionStatus('disconnected');
+      menuOverlay.setConnectionTarget('localhost');
+      clog('STARTUP', 'Host server probe timed out - offline');
+    }, 5000);
+    probeWs.onopen = () => {
+      clearTimeout(probeTimeout);
+      probeWs.close();
+      menuOverlay.setConnectionTarget('remote');
+      menuOverlay.setConnectionStatus('connected');
+      menuOverlay.setConnectionTarget('localhost');
+      clog('STARTUP', 'Host server probe succeeded - online');
+    };
+    probeWs.onerror = () => {
+      clearTimeout(probeTimeout);
+      probeWs.close();
+      menuOverlay.setConnectionTarget('remote');
+      menuOverlay.setConnectionStatus('disconnected');
+      menuOverlay.setConnectionTarget('localhost');
+      clog('STARTUP', 'Host server probe failed - offline');
+    };
+  } else {
+    menuOverlay.setConnectionStatus('disconnected');
+  }
+  menuOverlay.setConnectionTarget('localhost');
+
   if (electronAPI) {
     // Production: wait for embedded server, then connect to localhost.
     clog('STARTUP', 'Electron detected - waiting for embedded server');
@@ -1111,6 +1180,7 @@ async function main(): Promise<void> {
       clog('STARTUP', `Connecting to localhost - triggered by: ${source}`);
       net.connect();
       menuOverlay.setSingleplayerEnabled(true);
+      menuOverlay.setConnectionTarget('localhost');
       menuOverlay.setConnectionStatus('connecting');
     };
     electronAPI.isLocalServerReady().then((ready: boolean) => {
@@ -1133,6 +1203,8 @@ async function main(): Promise<void> {
     // Dev mode: connect immediately (dev server assumed running via npm run server:dev)
     clog('STARTUP', 'Dev mode - connecting immediately to localhost');
     net.connect();
+    menuOverlay.setConnectionTarget('localhost');
+    menuOverlay.setConnectionStatus('connecting');
     menuOverlay.setSingleplayerEnabled(true);
   }
   stateMgr.transition(GameState.Menu);
@@ -1817,6 +1889,7 @@ async function main(): Promise<void> {
         if (localEntityId !== null && !localDowned && !localDead && !localGameOver) {
           const pPos = world.getComponent<PositionComponent>(localEntityId, C.Position);
           if (pPos) {
+            // Check nearby buildings for interaction prompts
             for (const bid of world.query(C.Building, C.Position)) {
               const b = world.getComponent<BuildingComponent>(bid, C.Building);
               if (!b) continue;
@@ -1828,6 +1901,28 @@ async function main(): Promise<void> {
                 promptText = 'Press E to store resources';
                 promptWorldX = bp.x;
                 promptWorldY = bp.y - 40;
+                break;
+              }
+            }
+            // Check nearby POIs for interaction prompts
+            if (!showPrompt) {
+              const poiPromptR2 = 70 * 70;
+              for (const pid of world.query(C.PointOfInterest, C.Position)) {
+                const poi = world.getComponent<import('@shared/components').PointOfInterestComponent>(pid, C.PointOfInterest);
+                if (!poi || poi.consumed) continue;
+                if (poi.poiType === 'enemy_nest') continue; // nests are proximity/attack triggered
+                const pp = world.getComponent<PositionComponent>(pid, C.Position)!;
+                const dx = pp.x - pPos.x, dy = pp.y - pPos.y;
+                if (dx * dx + dy * dy > poiPromptR2) continue;
+                showPrompt = true;
+                const poiNames: Record<string, string> = {
+                  abandoned_camp: 'loot Abandoned Camp',
+                  shrine: 'pray at Shrine',
+                  treasure_chest: 'open Treasure Chest',
+                };
+                promptText = `Press E to ${poiNames[poi.poiType] ?? 'interact'}`;
+                promptWorldX = pp.x;
+                promptWorldY = pp.y - 30;
                 break;
               }
             }

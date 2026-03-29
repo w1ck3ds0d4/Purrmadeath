@@ -510,7 +510,7 @@ export class PlayerRendererSystem {
 
 
       } else if (isPOI) {
-        // ── POI rendering (diamond shape) ─────────────────────────────────────
+        // ── POI rendering (square with "?" symbol) ───────────────────────────
         const poiComp = world.getComponent<import('@shared/components').PointOfInterestComponent>(id, C.PointOfInterest);
         const poiType = poiComp?.poiType ?? 'abandoned_camp';
         const consumed = poiComp?.consumed ?? false;
@@ -524,38 +524,35 @@ export class PlayerRendererSystem {
           treasure_chest: { body: 0xDAA520, core: 0xFFD700 },
         };
         const pColors = poiColorMap[poiType] ?? poiColorMap.abandoned_camp;
-        const bodyAlpha = consumed ? 0.35 : 0.9;
-        const coreAlpha = consumed ? 0.25 : 0.8;
         const bodyColor = consumed ? 0x555555 : pColors.body;
 
-        // Diamond shape (outer)
-        gfx.moveTo(0, -pr);
-        gfx.lineTo(pr, 0);
-        gfx.lineTo(0, pr);
-        gfx.lineTo(-pr, 0);
-        gfx.closePath();
-        gfx.fill({ color: bodyColor, alpha: bodyAlpha });
-        gfx.stroke({ color: 0x000000, alpha: 0.4, width: 1.5 });
+        // Square body
+        gfx.rect(-pr, -pr, pr * 2, pr * 2);
+        gfx.fill({ color: bodyColor, alpha: consumed ? 0.35 : 0.9 });
+        gfx.stroke({ color: 0x000000, alpha: 0.5, width: 1.5 });
 
-        // Inner core diamond (smaller)
         if (!consumed) {
-          const cr = pr * 0.5;
-          gfx.moveTo(0, -cr);
-          gfx.lineTo(cr, 0);
-          gfx.lineTo(0, cr);
-          gfx.lineTo(-cr, 0);
-          gfx.closePath();
-          gfx.fill({ color: pColors.core, alpha: coreAlpha });
-        }
+          // Inner border
+          const ib = 3;
+          gfx.rect(-pr + ib, -pr + ib, (pr - ib) * 2, (pr - ib) * 2);
+          gfx.stroke({ color: pColors.core, alpha: 0.6, width: 1 });
 
-        // Pulsing glow for unconsumed POIs
-        if (!consumed) {
+          // Draw "?" using a Text child (created once, cached on the Graphics object)
+          if (!(gfx as any)._poiLabel) {
+            const label = new Text({ text: '?', style: {
+              fontFamily: 'monospace', fontSize: 20, fill: 0xffffff,
+              fontWeight: 'bold',
+              stroke: { color: 0x000000, width: 3 },
+            }});
+            label.anchor.set(0.5, 0.5);
+            label.position.set(0, 0);
+            gfx.addChild(label);
+            (gfx as any)._poiLabel = label;
+          }
+
+          // Pulsing glow outline
           const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.003);
-          gfx.moveTo(0, -(pr + 3));
-          gfx.lineTo(pr + 3, 0);
-          gfx.lineTo(0, pr + 3);
-          gfx.lineTo(-(pr + 3), 0);
-          gfx.closePath();
+          gfx.rect(-(pr + 2), -(pr + 2), (pr + 2) * 2, (pr + 2) * 2);
           gfx.stroke({ color: pColors.core, alpha: 0.3 * pulse, width: 2 });
         }
 

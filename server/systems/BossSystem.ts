@@ -52,6 +52,8 @@ export interface BossSystemDeps {
   };
   /** Track enemy count in wave state. */
   incrementEnemyCount: () => void;
+  /** Find a safe spawn position near (wx, wy) that doesn't overlap obstacles. */
+  findSafeSpawnNear: (wx: number, wy: number) => { x: number; y: number };
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
@@ -404,9 +406,10 @@ export function createBossSystem(deps: BossSystemDeps) {
       const count = boss.enraged ? 6 : 3;
       for (let i = 0; i < count; i++) {
         const angle = (Math.PI * 2 * i) / count;
-        const sx = pos.x + Math.cos(angle) * 60;
-        const sy = pos.y + Math.sin(angle) * 60;
-        const eid = deps.spawnEnemy(sx, sy);
+        const rawX = pos.x + Math.cos(angle) * 60;
+        const rawY = pos.y + Math.sin(angle) * 60;
+        const safe = deps.findSafeSpawnNear(rawX, rawY);
+        const eid = deps.spawnEnemy(safe.x, safe.y);
         if (eid !== null) deps.incrementEnemyCount();
       }
       resetAbilityCooldown(boss, 'summon', def);
@@ -445,7 +448,8 @@ export function createBossSystem(deps: BossSystemDeps) {
 
         // In phase 2, leave a shadow clone
         if (boss.phaseIndex >= 1) {
-          const cloneId = deps.spawnEnemy(pos.x, pos.y);
+          const safeClone = deps.findSafeSpawnNear(pos.x, pos.y);
+          const cloneId = deps.spawnEnemy(safeClone.x, safeClone.y);
           if (cloneId !== null) {
             deps.incrementEnemyCount();
             const cloneHp = world.getComponent<HealthComponent>(cloneId, C.Health);
@@ -516,9 +520,10 @@ export function createBossSystem(deps: BossSystemDeps) {
         const spiderCount = boss.enraged ? 6 : 4;
         for (let i = 0; i < spiderCount; i++) {
           const angle = (Math.PI * 2 * i) / spiderCount;
-          const sx = pos.x + Math.cos(angle) * 50;
-          const sy = pos.y + Math.sin(angle) * 50;
-          const eid = deps.spawnEnemy(sx, sy);
+          const rawSX = pos.x + Math.cos(angle) * 50;
+          const rawSY = pos.y + Math.sin(angle) * 50;
+          const safeSp = deps.findSafeSpawnNear(rawSX, rawSY);
+          const eid = deps.spawnEnemy(safeSp.x, safeSp.y);
           if (eid !== null) {
             deps.incrementEnemyCount();
             const spiderHp = world.getComponent<HealthComponent>(eid, C.Health);

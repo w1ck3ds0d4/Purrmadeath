@@ -6,6 +6,14 @@ import type { POIType } from '@shared/components';
 /** Render/collision radius of a POI in world pixels. */
 export const POI_RADIUS = 18;
 
+/** HP per POI type. POIs are durable - not easily destroyed. */
+export const POI_HP: Record<POIType, number> = {
+  abandoned_camp: 200,
+  shrine:         150,
+  enemy_nest:     300,
+  treasure_chest: 250,
+};
+
 /** Interaction radius for E-key POIs (camp, shrine, chest). */
 export const POI_INTERACT_RADIUS = 60;
 

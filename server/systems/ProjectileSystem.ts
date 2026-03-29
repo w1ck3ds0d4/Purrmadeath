@@ -288,6 +288,8 @@ export class ProjectileSystem {
         if (tgtFaction?.type === 'item') continue;
         // Enemy projectiles can't damage resource nodes (only players can harvest them)
         if (projFaction?.type === 'enemy' && tgtFaction?.type === 'resource') continue;
+        // POIs are unbreakable - interacted via E-key or proximity only
+        if (tgtFaction?.type === 'poi') continue;
 
         // Bridges and spike traps are invulnerable to enemy projectiles
         if (projFaction?.type === 'enemy' && tgtFaction?.type === 'building') {

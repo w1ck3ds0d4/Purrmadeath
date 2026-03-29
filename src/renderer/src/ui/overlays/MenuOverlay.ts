@@ -23,6 +23,8 @@ export class MenuOverlay {
   private pauseSubtitle:   HTMLElement;
   private pauseStats:      HTMLElement;
   private connectionStatus: HTMLElement;
+  private localStatusEl: HTMLElement;
+  private remoteStatusEl: HTMLElement;
   private singleplayerBtn: HTMLElement;
   private hostBtn:         HTMLElement;
   private joinBtn:         HTMLElement;
@@ -44,6 +46,19 @@ export class MenuOverlay {
     this.pauseSubtitle   = this.require('pause-subtitle');
     this.pauseStats      = this.require('pause-stats');
     this.connectionStatus = this.require('connection-status');
+    // Build two side-by-side status indicators inside the connection-status container
+    this.connectionStatus.textContent = '';
+    this.connectionStatus.style.display = 'flex';
+    this.connectionStatus.style.gap = '16px';
+    this.connectionStatus.style.justifyContent = 'center';
+    this.localStatusEl = document.createElement('span');
+    this.localStatusEl.textContent = 'LOCAL: ---';
+    this.localStatusEl.style.color = '#6a7a8a';
+    this.remoteStatusEl = document.createElement('span');
+    this.remoteStatusEl.textContent = 'HOST: ---';
+    this.remoteStatusEl.style.color = '#6a7a8a';
+    this.connectionStatus.appendChild(this.localStatusEl);
+    this.connectionStatus.appendChild(this.remoteStatusEl);
     this.singleplayerBtn = this.require('btn-singleplayer');
     this.hostBtn         = this.require('btn-host-game');
     this.joinBtn         = this.require('btn-join-game');
@@ -158,37 +173,62 @@ export class MenuOverlay {
     }
   }
 
-  /** Update the connection status indicator below the subtitle. */
+  /** Track which server we're currently targeting for status updates. */
+  private connectionTarget: 'localhost' | 'remote' = 'localhost';
+  /** Track whether the host (remote) server is online. */
+  private hostOnline = false;
+
+  /** Update which server target subsequent status calls refer to. */
+  setConnectionTarget(target: 'localhost' | 'remote'): void {
+    this.connectionTarget = target;
+  }
+
+  /** Update the connection status for the current target (local or host). */
   setConnectionStatus(status: 'connecting' | 'connected' | 'disconnected' | 'starting'): void {
-    const el = this.connectionStatus;
+    const isHost = this.connectionTarget === 'remote';
+    const el = isHost ? this.remoteStatusEl : this.localStatusEl;
+    const label = isHost ? 'HOST' : 'LOCAL';
     switch (status) {
       case 'starting':
-        el.textContent = 'STARTING SERVER...';
+        el.textContent = `${label}: STARTING...`;
         el.style.color = '#6a7a8a';
         break;
       case 'connecting':
-        el.textContent = 'CONNECTING...';
-        el.style.color = '#6a7a8a';
+        el.textContent = `${label}: CONNECTING...`;
+        el.style.color = '#d4a843';
         break;
       case 'connected':
-        el.textContent = 'CONNECTED';
+        el.textContent = `${label}: ONLINE`;
         el.style.color = '#6bcf7f';
+        if (isHost) this.hostOnline = true;
         break;
       case 'disconnected':
-        el.textContent = 'DISCONNECTED \u2014 RETRYING...';
+        el.textContent = `${label}: OFFLINE`;
         el.style.color = '#e05252';
+        if (isHost) this.hostOnline = false;
         break;
     }
+    // Update Host button based on host server availability
+    this.updateHostButton();
   }
 
-  /** Enable or disable Host and Join buttons (grayed out when not connected to remote). */
+  /** Enable or disable Host and Join buttons based on transport + host availability. */
   setButtonsEnabled(enabled: boolean): void {
-    const opacity = enabled ? '1' : '0.4';
-    const events  = enabled ? 'auto' : 'none';
-    this.hostBtn.style.opacity = opacity;
-    this.hostBtn.style.pointerEvents = events;
-    this.joinBtn.style.opacity = opacity;
-    this.joinBtn.style.pointerEvents = events;
+    // Join is always available when transport is ready (can connect to any IP)
+    const joinOpacity = enabled ? '1' : '0.4';
+    const joinEvents  = enabled ? 'auto' : 'none';
+    this.joinBtn.style.opacity = joinOpacity;
+    this.joinBtn.style.pointerEvents = joinEvents;
+    this._buttonsEnabled = enabled;
+    this.updateHostButton();
+  }
+  private _buttonsEnabled = false;
+
+  /** Update Host button: only enabled when transport is ready AND host server is online. */
+  private updateHostButton(): void {
+    const enabled = this._buttonsEnabled && this.hostOnline;
+    this.hostBtn.style.opacity = enabled ? '1' : '0.4';
+    this.hostBtn.style.pointerEvents = enabled ? 'auto' : 'none';
   }
 
   /** Programmatically trigger the singleplayer flow (used after localhost reconnect). */

@@ -51,6 +51,8 @@ export interface WorldEventDeps {
   isWalkable: (wx: number, wy: number) => boolean;
   overlapsBuilding: (wx: number, wy: number, radius?: number) => boolean;
   overlapsResourceNode: (wx: number, wy: number, radius?: number) => boolean;
+  /** Find a safe spawn position near (wx, wy) that doesn't overlap obstacles. */
+  findSafeSpawnNear: (wx: number, wy: number) => { x: number; y: number };
   /** Process entity deaths (handles player downed, entity removal, etc). */
   destroyDeadEntities: (deaths: number[], attackerMap: Map<number, number> | undefined, send: SendFn) => void;
   /** Called when an event ends naturally (timer expired, not force-ended). */
@@ -262,7 +264,8 @@ export function createWorldEventController(deps: WorldEventDeps) {
         const sx = center.x + Math.cos(angle) * dist;
         const sy = center.y + Math.sin(angle) * dist;
         if (!deps.isWalkable(sx, sy) || deps.overlapsBuilding(sx, sy, 10) || deps.overlapsResourceNode(sx, sy, 10)) continue;
-        deps.spawnEnemy(sx, sy, 'undead');
+        const safePos = deps.findSafeSpawnNear(sx, sy);
+        deps.spawnEnemy(safePos.x, safePos.y, 'undead');
         break;
       }
     }

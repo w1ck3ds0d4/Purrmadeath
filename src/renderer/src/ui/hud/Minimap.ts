@@ -32,6 +32,7 @@ const DOT_COLORS: Record<string, number> = {
   resource: 0x66aa66, // fallback
   civilian: 0xf5c06a,
   guard: 0x4488cc,
+  poi: 0xffd700, // gold/yellow for points of interest
 };
 
 const RESOURCE_DOT_COLORS: Record<string, number> = {
@@ -49,6 +50,7 @@ const DOT_SIZES: Record<string, number> = {
   resource: 1.5,
   civilian: 2,
   guard: 2,
+  poi: 3, // slightly larger to stand out
 };
 
 /** Function that returns a tile ID for a given tile coordinate. */
@@ -179,6 +181,10 @@ export class Minimap {
       } else if (faction.type === 'resource') {
         const rn = world.getComponent<ResourceNodeComponent>(id, C.ResourceNode);
         if (rn) color = RESOURCE_DOT_COLORS[rn.resourceType] ?? color;
+      } else if (faction.type === 'poi') {
+        // Hide consumed POIs from minimap
+        const poiComp = world.getComponent<import('@shared/components').PointOfInterestComponent>(id, C.PointOfInterest);
+        if (poiComp?.consumed) continue;
       }
 
       const size = DOT_SIZES[faction.type] ?? 2;

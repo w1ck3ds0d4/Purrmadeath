@@ -53,6 +53,10 @@ ipcMain.on('client-log', (_event, category: string, message: string) => {
 
 let serverProcess: ChildProcess | null = null;
 let localServerReady = false;
+/** True when the embedded server failed to start because the port is already in use
+ *  (e.g. from a previous app instance that hasn't fully exited yet). In this case
+ *  we piggyback on the existing server and don't reset localServerReady on exit. */
+let usingExistingServer = false;
 
 /** Data directories for the embedded server (userData path in production). */
 function getServerDataDirs(): { metastatsDir: string; savesDir: string } {
@@ -67,6 +71,7 @@ function getServerDataDirs(): { metastatsDir: string; savesDir: string } {
 
 function startEmbeddedServer(): void {
   clog('SERVER', 'Starting embedded server...');
+  usingExistingServer = false;
   const { metastatsDir, savesDir } = getServerDataDirs();
   clog('SERVER', `Data dirs: metastats=${metastatsDir}, saves=${savesDir}`);
   const env = { ...process.env, METASTATS_DIR: metastatsDir, SAVES_DIR: savesDir };
@@ -137,6 +142,7 @@ function startEmbeddedServer(): void {
     if (msg.includes('EADDRINUSE')) {
       clog('SERVER', 'Port already in use, using existing server');
       localServerReady = true;
+      usingExistingServer = true;
       serverProcess = null;
       for (const win of BrowserWindow.getAllWindows()) {
         win.webContents.send('local-server-ready');
@@ -151,7 +157,10 @@ function startEmbeddedServer(): void {
       console.log(`[EmbeddedServer] Server exited with code ${code}`);
     }
     serverProcess = null;
-    localServerReady = false;
+    // Don't reset localServerReady if we're using an existing server on the port
+    if (!usingExistingServer) {
+      localServerReady = false;
+    }
   });
 }
 

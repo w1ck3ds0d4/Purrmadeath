@@ -89,6 +89,8 @@ export interface WaveControllerDeps {
   isCampfirePlaced: () => boolean;
   /** Get the current build range half-extent in pixels (campfire base + watchtower bonuses). */
   getBuildRangeHalfExtent: () => number;
+  /** Find a safe spawn position near (wx, wy) that doesn't overlap obstacles. */
+  findSafeSpawnNear: (wx: number, wy: number) => { x: number; y: number };
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
@@ -340,6 +342,9 @@ export function createWaveController(deps: WaveControllerDeps) {
         if (isWalkable(sx, sy) && !overlapsBuilding(sx, sy, 30)) { found = true; break; }
       }
       if (!found) continue;
+      // Nudge to safe position away from resource nodes and POIs
+      const safeTitan = deps.findSafeSpawnNear(sx, sy);
+      sx = safeTitan.x; sy = safeTitan.y;
 
       const base = ENEMY_VARIANT_STATS['titan'];
       const hpMult = Math.pow(1 + ENEMY_HP_SCALE_PER_WAVE, wave - 1);
@@ -429,10 +434,10 @@ export function createWaveController(deps: WaveControllerDeps) {
       const extraSpawns = Math.floor(s.currentWave / PORTAL_EXTRA_SPAWN_EVERY_N_WAVES);
       const spawnRequests = portal.update(world, dt, extraSpawns);
       for (const req of spawnRequests) {
-        if (isWalkable(req.x, req.y) && !overlapsBuilding(req.x, req.y, ENEMY_RADIUS)) {
-          const faction = portalFactions.get(req.portalId) ?? 'bandits';
-          spawnEnemy(req.x, req.y, faction);
-        }
+        // Find a safe spawn position that doesn't overlap buildings, resources, or POIs
+        const safe = deps.findSafeSpawnNear(req.x, req.y);
+        const faction = portalFactions.get(req.portalId) ?? 'bandits';
+        spawnEnemy(safe.x, safe.y, faction);
       }
 
       let anyAlive = false;

@@ -280,6 +280,7 @@ export function registerMessageHandlers(
     const isLocal = net.url.includes('localhost') || net.url.includes('127.0.0.1');
     d.menuOverlay.setSingleplayerEnabled(isLocal);
     d.menuOverlay.setButtonsEnabled(true);
+    d.menuOverlay.setConnectionTarget(isLocal ? 'localhost' : 'remote');
     d.menuOverlay.setConnectionStatus('connected');
 
     // If the user clicked Singleplayer while disconnected, auto-retry now that we're connected
@@ -1176,6 +1177,9 @@ export function registerMessageHandlers(
   // Handshake is sent on every connect so the server has the playerId for stat lookups.
 
   net.onConnect(() => {
+    // Determine target from URL before updating status
+    const isLocal = net.url.includes('localhost') || net.url.includes('127.0.0.1');
+    d.menuOverlay.setConnectionTarget(isLocal ? 'localhost' : 'remote');
     d.menuOverlay.setConnectionStatus('connecting');
     // Send handshake eagerly so the server has our playerId for META_STATS_REQUEST
     // Use saved localStorage name first (input may not be filled yet at startup)
@@ -1190,9 +1194,12 @@ export function registerMessageHandlers(
   net.onDrop(() => {
     s.transportReady = false;
     s.handshakeSent = false;
-    d.menuOverlay.setConnectionStatus('disconnected');
+    // Show "CONNECTING..." instead of "OFFLINE" since auto-reconnect will retry
+    const isLocal = net.url.includes('localhost') || net.url.includes('127.0.0.1');
+    d.menuOverlay.setConnectionTarget(isLocal ? 'localhost' : 'remote');
+    d.menuOverlay.setConnectionStatus('connecting');
     d.menuOverlay.setButtonsEnabled(false);
-    d.debug.log('Connection lost');
+    d.debug.log('Connection lost - reconnecting...');
 
     if (d.stateMgr.current !== GameState.Menu) {
       console.warn('[Net] Connection lost - returning to menu');

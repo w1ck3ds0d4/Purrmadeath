@@ -168,6 +168,8 @@ export class CombatSystem {
       if (tgtFaction?.type === 'item') continue;
       // Enemies can't damage resource nodes (only players can harvest them)
       if (srcFaction?.type === 'enemy' && tgtFaction?.type === 'resource') continue;
+      // POIs are unbreakable - interacted via E-key or proximity only
+      if (tgtFaction?.type === 'poi') continue;
 
       // Bridges and spike traps are invulnerable to enemy melee
       if (srcFaction?.type === 'enemy' && tgtFaction?.type === 'building') {
