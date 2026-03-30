@@ -1,6 +1,6 @@
 # Purrmadeath
 
-2D co-op roguelike survival - base building, procedural world, up to 4 players. Version 1.2.4.
+2D co-op roguelike survival - base building, procedural world, up to 4 players. Version 1.3.0.
 
 ---
 
