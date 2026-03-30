@@ -45,7 +45,7 @@ export interface BossSystemDeps {
   isWalkable: (wx: number, wy: number) => boolean;
   overlapsBuilding: (wx: number, wy: number, radius?: number) => boolean;
   /** Spawn a regular enemy at position (for Necromancer summons, Broodmother spiders, etc). */
-  spawnEnemy: (x: number, y: number) => number | null;
+  spawnEnemy: (x: number, y: number, aggroMode?: 'campfire' | 'proximity') => number | null;
   /** Card debuff multipliers. */
   cards: {
     debuffs: { enemyDamageMult: number; enemySpeedMult: number; enemyKnockbackMult: number };
@@ -409,7 +409,7 @@ export function createBossSystem(deps: BossSystemDeps) {
         const rawX = pos.x + Math.cos(angle) * 60;
         const rawY = pos.y + Math.sin(angle) * 60;
         const safe = deps.findSafeSpawnNear(rawX, rawY);
-        const eid = deps.spawnEnemy(safe.x, safe.y);
+        const eid = deps.spawnEnemy(safe.x, safe.y, 'proximity');
         if (eid !== null) deps.incrementEnemyCount();
       }
       resetAbilityCooldown(boss, 'summon', def);
@@ -449,7 +449,7 @@ export function createBossSystem(deps: BossSystemDeps) {
         // In phase 2, leave a shadow clone
         if (boss.phaseIndex >= 1) {
           const safeClone = deps.findSafeSpawnNear(pos.x, pos.y);
-          const cloneId = deps.spawnEnemy(safeClone.x, safeClone.y);
+          const cloneId = deps.spawnEnemy(safeClone.x, safeClone.y, 'proximity');
           if (cloneId !== null) {
             deps.incrementEnemyCount();
             const cloneHp = world.getComponent<HealthComponent>(cloneId, C.Health);
@@ -523,7 +523,7 @@ export function createBossSystem(deps: BossSystemDeps) {
           const rawSX = pos.x + Math.cos(angle) * 50;
           const rawSY = pos.y + Math.sin(angle) * 50;
           const safeSp = deps.findSafeSpawnNear(rawSX, rawSY);
-          const eid = deps.spawnEnemy(safeSp.x, safeSp.y);
+          const eid = deps.spawnEnemy(safeSp.x, safeSp.y, 'proximity');
           if (eid !== null) {
             deps.incrementEnemyCount();
             const spiderHp = world.getComponent<HealthComponent>(eid, C.Health);

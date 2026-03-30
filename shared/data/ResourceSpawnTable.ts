@@ -52,11 +52,11 @@ export const RESOURCE_SPAWN_TABLE: Partial<Record<number, ResourceSpawnEntry[]>>
  * Higher values = denser resource coverage in that biome.
  */
 export const TILE_SPAWN_CHANCE: Partial<Record<number, number>> = {
-  [TileId.Sand]:   0.015,  // sparse - shore/desert have few resources
-  [TileId.Grass]:  0.02,
-  [TileId.Dirt]:   0.02,
-  [TileId.Forest]: 0.06,   // dense - forests are full of trees
-  [TileId.Stone]:  0.05,
-  [TileId.Tundra]: 0.03,
-  [TileId.Cave]:   0.04,
+  [TileId.Sand]:   0.01,   // sparse
+  [TileId.Grass]:  0.015,
+  [TileId.Dirt]:   0.015,
+  [TileId.Forest]: 0.04,   // dense - forests have many trees
+  [TileId.Stone]:  0.035,
+  [TileId.Tundra]: 0.02,
+  [TileId.Cave]:   0.03,
 };

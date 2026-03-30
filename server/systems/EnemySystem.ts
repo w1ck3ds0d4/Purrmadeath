@@ -50,6 +50,7 @@ import {
   ENEMY_AVOIDANCE_MARGIN,
   ENEMY_AVOIDANCE_STRENGTH,
   GUARD_DETECT_RANGE,
+  GATHERING_DAMAGE,
   buildingHalfExtent,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
@@ -65,6 +66,8 @@ export interface EnemyAttackResult {
   attackPerformed: { sourceId: number; facing: number }[];
   /** Rangers that want to fire a projectile (spawned by GameSession). */
   rangedAttacks: { sourceId: number; x: number; y: number; facing: number; projectileSpeed: number; damage: number; radius: number }[];
+  /** Resource nodes that stuck enemies are trying to break through. */
+  resourceDamage: { entityId: number; damage: number }[];
 }
 
 const ENEMY_OVERRIDES_DEFAULT = {
@@ -102,8 +105,18 @@ export class EnemySystem {
   private buildingTilesMap = new Map<number, number[]>();
   /** Cached building positions for break-through checks. */
   private buildingEntities: { x: number; y: number; half: number }[] = [];
+  /** Maps building entity ID to half-extent for spatial hash lookups. */
+  private buildingHalfMap = new Map<number, number>();
   /** Bridge tiles that override unwalkable terrain for pathfinding. */
   private bridgeTiles = new Set<number>();
+  /**
+   * Shared path cache: enemies targeting the same destination from nearby positions
+   * can reuse a computed A* path instead of each computing their own.
+   * Key: `${targetEntityId}_${regionX}_${regionY}` (64px grid regions)
+   * Cleared each tick since buildingBlockedTiles change.
+   */
+  private sharedPathCache = new Map<string, { waypoints: { x: number; y: number }[]; targetX: number; targetY: number }>();
+  private static readonly SHARED_PATH_REGION_SIZE = 64;
   /** Cached resource node positions for collision checks. */
   private resourcePositions: { x: number; y: number }[] = [];
   /** Spatial hash for resource node O(1) range queries (avoids iterating all 1500+ nodes). */
@@ -123,10 +136,18 @@ export class EnemySystem {
   /** All building entities by type (for enemy building targeting). */
   private buildingHash: SpatialHash = createSpatialHash(256);
 
-  /** Max A* pathfinding calls per tick to prevent frame spikes. */
-  private static readonly MAX_PATHFINDS_PER_TICK = 15;
+  /** Base pathfinding budget per tick (adjusted dynamically based on tick time). */
+  private static readonly BASE_PATHFINDS_PER_TICK = 15;
   /** Counter for A* calls this tick. */
   private pathfindsThisTick = 0;
+  /** Dynamic pathfinding budget for this tick (adjusted by last tick performance). */
+  private pathfindBudget = 15;
+  /** Last tick duration in ms (used for dynamic budget). */
+  private lastTickMs = 0;
+  /** Distance threshold for LOD AI (enemies farther than this use simplified AI). */
+  private static readonly LOD_DISTANCE = 500;
+  /** Reduced replan interval for distant enemies (seconds). */
+  private static readonly LOD_REPLAN_INTERVAL = 1.5;
   /** Tick counter for periodic debug logging. */
   private tickCount = 0;
   /** Rolling perf stats for debug logging. */
@@ -138,7 +159,7 @@ export class EnemySystem {
   ) {}
 
   update(world: World, dt: number): EnemyAttackResult {
-    const result: EnemyAttackResult = { hits: [], deaths: [], attackPerformed: [], rangedAttacks: [] };
+    const result: EnemyAttackResult = { hits: [], deaths: [], attackPerformed: [], rangedAttacks: [], resourceDamage: [] };
     const playerIds = world.query(C.Position, C.PlayerIndex);
 
     const _setupStart = performance.now();
@@ -149,6 +170,11 @@ export class EnemySystem {
     this.enemyHash.clear();
     this.buildingHash.clear();
     this.pathfindsThisTick = 0;
+    this.sharedPathCache.clear();
+    // Dynamic pathfinding budget based on last tick performance
+    if (this.lastTickMs < 20) this.pathfindBudget = 30;
+    else if (this.lastTickMs < 50) this.pathfindBudget = EnemySystem.BASE_PATHFINDS_PER_TICK;
+    else this.pathfindBudget = 5; // degraded mode
 
     const campfireIds: number[] = [];
     const wallIds: number[] = [];
@@ -185,6 +211,7 @@ export class EnemySystem {
     this.buildingBlockedTiles.clear();
     this.buildingTilesMap.clear();
     this.buildingEntities = [];
+    this.buildingHalfMap.clear();
     this.bridgeTiles.clear();
     for (const bid of world.query(C.Position, C.Building)) {
       const bpos = world.getComponent<PositionComponent>(bid, C.Position)!;
@@ -202,6 +229,7 @@ export class EnemySystem {
       if (bldg.buildingType === 'spike_trap') continue;
 
       this.buildingEntities.push({ x: bpos.x, y: bpos.y, half });
+      this.buildingHalfMap.set(bid, half);
       const tiles: number[] = [];
       const minTx = Math.floor((bpos.x - half) / TILE_SIZE);
       const maxTx = Math.floor((bpos.x + half - 1) / TILE_SIZE);
@@ -217,38 +245,63 @@ export class EnemySystem {
       this.buildingTilesMap.set(bid, tiles);
     }
 
-    // Block tiles occupied by resource nodes and portals so enemies path around them
+    // Cache resource/portal/POI positions for collision checks and pathfinding.
+    // Resources and portals block pathfinding tiles so enemies path around them.
+    // Only resources within a limited radius of the campfire/players are added to
+    // the pathfinding blocked set to prevent A* explosion with 1600+ resources.
     this.resourcePositions.length = 0;
     this.resourceHash.clear();
     this.portalPositions.length = 0;
     this.portalHash.clear();
+
+    // Compute pathfinding relevance center (player centroid)
+    let pfCenterX = 0, pfCenterY = 0, pfCenterCount = 0;
+    for (const pid of playerIds) {
+      const pp = world.getComponent<PositionComponent>(pid, C.Position);
+      if (pp) { pfCenterX += pp.x; pfCenterY += pp.y; pfCenterCount++; }
+    }
+    if (pfCenterCount > 0) { pfCenterX /= pfCenterCount; pfCenterY /= pfCenterCount; }
+    // Only block resources within this radius for pathfinding (keeps A* search area bounded)
+    const PF_RESOURCE_RADIUS = 800; // ~25 tiles - covers the active combat zone
+    const pfR2 = PF_RESOURCE_RADIUS * PF_RESOURCE_RADIUS;
+
     for (const rid of world.query(C.Position, C.Faction)) {
       const rf = world.getComponent<FactionComponent>(rid, C.Faction)!;
-      let rHalf: number;
       if (rf.type === 'resource') {
-        rHalf = RESOURCE_NODE_RADIUS + ENEMY_RADIUS;
-      } else if (rf.type === 'portal') {
-        rHalf = PORTAL_RADIUS + ENEMY_RADIUS;
-      } else {
-        continue;
-      }
-      const rpos = world.getComponent<PositionComponent>(rid, C.Position)!;
-      // Cache positions for collision checks and spatial hash for range queries
-      if (rf.type === 'resource') {
+        const rpos = world.getComponent<PositionComponent>(rid, C.Position)!;
         this.resourcePositions.push(rpos);
         this.resourceHash.insert(rid, rpos.x, rpos.y);
-      } else {
+        // Only add nearby resources to pathfinding blocked tiles
+        const rdx = rpos.x - pfCenterX, rdy = rpos.y - pfCenterY;
+        if (rdx * rdx + rdy * rdy < pfR2) {
+          const rHalf = RESOURCE_NODE_RADIUS + ENEMY_RADIUS;
+          const rMinTx = Math.floor((rpos.x - rHalf) / TILE_SIZE);
+          const rMaxTx = Math.floor((rpos.x + rHalf - 1) / TILE_SIZE);
+          const rMinTy = Math.floor((rpos.y - rHalf) / TILE_SIZE);
+          const rMaxTy = Math.floor((rpos.y + rHalf - 1) / TILE_SIZE);
+          for (let tx = rMinTx; tx <= rMaxTx; tx++) {
+            for (let ty = rMinTy; ty <= rMaxTy; ty++) {
+              this.buildingBlockedTiles.add(tileKey(tx, ty));
+            }
+          }
+        }
+      } else if (rf.type === 'portal') {
+        const rpos = world.getComponent<PositionComponent>(rid, C.Position)!;
         this.portalPositions.push(rpos);
         this.portalHash.insert(rid, rpos.x, rpos.y);
-      }
-      const rMinTx = Math.floor((rpos.x - rHalf) / TILE_SIZE);
-      const rMaxTx = Math.floor((rpos.x + rHalf - 1) / TILE_SIZE);
-      const rMinTy = Math.floor((rpos.y - rHalf) / TILE_SIZE);
-      const rMaxTy = Math.floor((rpos.y + rHalf - 1) / TILE_SIZE);
-      for (let tx = rMinTx; tx <= rMaxTx; tx++) {
-        for (let ty = rMinTy; ty <= rMaxTy; ty++) {
-          this.buildingBlockedTiles.add(tileKey(tx, ty));
+        const rHalf = PORTAL_RADIUS + ENEMY_RADIUS;
+        const rMinTx = Math.floor((rpos.x - rHalf) / TILE_SIZE);
+        const rMaxTx = Math.floor((rpos.x + rHalf - 1) / TILE_SIZE);
+        const rMinTy = Math.floor((rpos.y - rHalf) / TILE_SIZE);
+        const rMaxTy = Math.floor((rpos.y + rHalf - 1) / TILE_SIZE);
+        for (let tx = rMinTx; tx <= rMaxTx; tx++) {
+          for (let ty = rMinTy; ty <= rMaxTy; ty++) {
+            this.buildingBlockedTiles.add(tileKey(tx, ty));
+          }
         }
+      } else if (rf.type === 'poi') {
+        const rpos = world.getComponent<PositionComponent>(rid, C.Position)!;
+        this.resourceHash.insert(rid, rpos.x, rpos.y);
       }
     }
 
@@ -271,6 +324,17 @@ export class EnemySystem {
 
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
       const inp = world.getComponent<PlayerInputComponent>(id, C.PlayerInput)!;
+
+      // LOD check: compute distance to nearest player for AI simplification
+      let nearestPlayerDist2 = Infinity;
+      for (const pid of playerIds) {
+        const pp = world.getComponent<PositionComponent>(pid, C.Position);
+        if (!pp) continue;
+        const pdx = pos.x - pp.x, pdy = pos.y - pp.y;
+        const pd2 = pdx * pdx + pdy * pdy;
+        if (pd2 < nearestPlayerDist2) nearestPlayerDist2 = pd2;
+      }
+      const isDistant = nearestPlayerDist2 > EnemySystem.LOD_DISTANCE * EnemySystem.LOD_DISTANCE;
 
       // Stunned enemies cannot move or attack
       if (world.hasComponent(id, C.StunEffect)) {
@@ -441,7 +505,7 @@ export class EnemySystem {
       // -- Variant-Specific Targeting (enemies only) --
       else if (variant === 'ghost') {
         // Ghosts: only target players, phase through everything (no pathfinding)
-        const nearest = findNearestPlayer(Infinity);
+        const nearest = findNearestPlayer(5000); // large range but not infinite
         if (nearest) {
           targetPos = nearest.pos;
           navPos = nearest.pos;
@@ -450,7 +514,7 @@ export class EnemySystem {
         }
       } else if (variant === 'assassin') {
         // Assassins: only target players (use pathfinding, not beeline)
-        const nearest = findNearestPlayer(Infinity);
+        const nearest = findNearestPlayer(5000);
         if (nearest) {
           targetPos = nearest.pos;
           navPos = nearest.pos;
@@ -509,35 +573,54 @@ export class EnemySystem {
           directBeeline = true;
         }
       } else {
-        // Standard targeting: campfire > players > walls > other buildings
-        // (melee, ranger all use this)
+        const aggroMode = stats?.aggroMode ?? 'campfire';
 
-        // 1. Campfire (always the global objective - no range limit)
-        const campfire = tryBuildings(campfireIds, Infinity);
-        if (campfire) {
-          targetPos = campfire.pos;
-          navPos = campfire.nav;
-          targetDist = campfire.dist;
-          targetHalfExtent = campfire.half;
-          targetEntityId = campfire.id;
-        }
+        if (aggroMode === 'campfire') {
+          // Portal enemies: campfire > players > walls > other buildings
+          // 1. Campfire (always the global objective - no range limit)
+          const campfire = tryBuildings(campfireIds, Infinity);
+          if (campfire) {
+            targetPos = campfire.pos;
+            navPos = campfire.nav;
+            targetDist = campfire.dist;
+            targetHalfExtent = campfire.half;
+            targetEntityId = campfire.id;
+          }
 
-        // 2. Nearby players override campfire (distraction range extends to rangedRange for ranged enemies)
-        const PLAYER_DISTRACT_RANGE = rangedRange > 0 ? rangedRange : ENEMY_MELEE_RANGE * 2;
-        const closestPlayer = findNearestPlayer(ENEMY_AGGRO_RANGE);
-        if (closestPlayer && (closestPlayer.dist < PLAYER_DISTRACT_RANGE || !targetPos)) {
-          if (!targetPos || this.isDirectPathClear(pos.x, pos.y, closestPlayer.pos.x, closestPlayer.pos.y, eRadius)) {
+          // 2. Nearby players override campfire
+          const PLAYER_DISTRACT_RANGE = rangedRange > 0 ? rangedRange : ENEMY_MELEE_RANGE * 2;
+          const closestPlayer = findNearestPlayer(ENEMY_AGGRO_RANGE);
+          if (closestPlayer && (closestPlayer.dist < PLAYER_DISTRACT_RANGE || !targetPos)) {
+            if (!targetPos || (isDistant ? true : this.isDirectPathClear(pos.x, pos.y, closestPlayer.pos.x, closestPlayer.pos.y, eRadius))) {
+              targetPos = closestPlayer.pos;
+              navPos = closestPlayer.pos;
+              targetDist = closestPlayer.dist;
+              targetHalfExtent = 0;
+              targetEntityId = null;
+            }
+          }
+        } else {
+          // Proximity enemies (POI nests, boss summons): only engage targets within aggro range
+          // 1. Nearest player in range
+          const closestPlayer = findNearestPlayer(ENEMY_AGGRO_RANGE);
+          if (closestPlayer) {
             targetPos = closestPlayer.pos;
             navPos = closestPlayer.pos;
             targetDist = closestPlayer.dist;
             targetHalfExtent = 0;
             targetEntityId = null;
           }
+          // 2. Nearest building in range (if no player found)
+          if (!targetPos) {
+            const nearBldg = tryBuildings([...campfireIds, ...wallIds, ...otherBuildingIds], ENEMY_AGGRO_RANGE);
+            if (nearBldg) {
+              targetPos = nearBldg.pos; navPos = nearBldg.nav; targetDist = nearBldg.dist;
+              targetHalfExtent = nearBldg.half; targetEntityId = nearBldg.id;
+            }
+          }
         }
 
-        // 2b. Enemies no longer target other enemies - removed cross-faction combat
-
-        // 3. Walls (only if nothing else found)
+        // 3. Walls (only if nothing else found - campfire mode only)
         if (!targetPos) {
           const wall = tryBuildings(wallIds, ENEMY_AGGRO_RANGE);
           if (wall) { targetPos = wall.pos; navPos = wall.nav; targetDist = wall.dist; targetHalfExtent = wall.half; targetEntityId = wall.id; }
@@ -646,10 +729,12 @@ export class EnemySystem {
             const excludedTiles = targetEntityId !== null ? this.buildingTilesMap.get(targetEntityId) : undefined;
             if (excludedTiles) for (const tk of excludedTiles) this.buildingBlockedTiles.delete(tk);
 
-            this.navigateToward(id, pos, navPos as PositionComponent, inp, dt, len, ddx, ddy, eRadius);
+            this.navigateToward(id, pos, navPos as PositionComponent, inp, dt, len, ddx, ddy, eRadius, isDistant);
 
-            // Local obstacle avoidance: steer around resource nodes and portals
-            this.applyObstacleAvoidance(pos, inp, navPos as { x: number; y: number }, eRadius);
+            // Local obstacle avoidance: skip for distant enemies (LOD optimization)
+            if (!isDistant) {
+              this.applyObstacleAvoidance(pos, inp, navPos as { x: number; y: number }, eRadius);
+            }
 
             // Stuck detection: if enemy hasn't moved, apply perpendicular wiggle
             let stuck = this.stuckTimers.get(id);
@@ -663,6 +748,14 @@ export class EnemySystem {
             } else {
               stuck.timer += dt;
               if (stuck.timer > ENEMY_STUCK_TIME) {
+                // If stuck for 2+ seconds, try to break nearby resource nodes blocking the path
+                if (stuck.timer > 2.0) {
+                  const blockingResource = this.resourceHash.queryNearest(pos.x, pos.y, RESOURCE_NODE_RADIUS + ENEMY_RADIUS + 8);
+                  if (blockingResource) {
+                    result.resourceDamage.push({ entityId: blockingResource.id, damage: GATHERING_DAMAGE });
+                  }
+                }
+
                 // Find nearest obstacle to push away from (resources, portals, and buildings)
                 let nearOX = 0, nearOY = 0, nearOD = Infinity;
                 let hasNear = false;
@@ -679,8 +772,9 @@ export class EnemySystem {
                   const od = ox * ox + oy * oy;
                   if (od < nearOD) { nearOD = od; nearOX = ox; nearOY = oy; hasNear = true; }
                 }
-                for (const bldg of this.buildingEntities) {
-                  const ox = bldg.x - pos.x, oy = bldg.y - pos.y;
+                const nearestBuilding = this.buildingHash.queryNearest(pos.x, pos.y, 200);
+                if (nearestBuilding) {
+                  const ox = nearestBuilding.x - pos.x, oy = nearestBuilding.y - pos.y;
                   const od = ox * ox + oy * oy;
                   if (od < nearOD) { nearOD = od; nearOX = ox; nearOY = oy; hasNear = true; }
                 }
@@ -760,8 +854,11 @@ export class EnemySystem {
     this.perfStats.resourceCount = this.resourcePositions.length;
     this.perfStats.pathfinds = this.pathfindsThisTick;
     this.tickCount++;
+    // Track tick time for dynamic pathfinding budget
+    this.lastTickMs = _aiEnd - _setupStart;
+
     if (this.tickCount % 300 === 0) {
-      console.log(`[EnemySystem] setup=${this.perfStats.setupMs.toFixed(1)}ms ai=${this.perfStats.aiMs.toFixed(1)}ms enemies=${this.perfStats.enemyCount} resources=${this.perfStats.resourceCount} pathfinds=${this.perfStats.pathfinds}`);
+      console.log(`[EnemySystem] setup=${this.perfStats.setupMs.toFixed(1)}ms ai=${this.perfStats.aiMs.toFixed(1)}ms enemies=${this.perfStats.enemyCount} resources=${this.perfStats.resourceCount} pathfinds=${this.perfStats.pathfinds} budget=${this.pathfindBudget}`);
     }
 
     return result;
@@ -811,17 +908,20 @@ export class EnemySystem {
     directDx: number,
     directDy: number,
     enemyRadius = ENEMY_RADIUS,
+    isDistant = false,
   ): boolean {
     // If direct line is clear (tiles + buildings), chase directly
-    if (this.isDirectPathClear(pos.x, pos.y, target.x, target.y, enemyRadius)) {
+    // Distant enemies skip this expensive check (LOD optimization)
+    if (!isDistant && this.isDirectPathClear(pos.x, pos.y, target.x, target.y, enemyRadius)) {
       inp.dx = directLen > 0 ? directDx / directLen : 0;
       inp.dy = directLen > 0 ? directDy / directLen : 0;
       this.paths.delete(id);
       return true;
     }
 
-    // Use cached path or compute a new one (building-aware)
-    const path = this.getOrComputePath(id, pos, target, dt, enemyRadius);
+    // Use cached path or compute a new one (distant enemies replan less frequently)
+    const replanInterval = isDistant ? EnemySystem.LOD_REPLAN_INTERVAL : ENEMY_REPLAN_INTERVAL;
+    const path = this.getOrComputePath(id, pos, target, dt, enemyRadius, replanInterval);
 
     if (path && path.nextIndex < path.waypoints.length) {
       const wp = path.waypoints[path.nextIndex];
@@ -869,26 +969,47 @@ export class EnemySystem {
     target: PositionComponent,
     dt: number,
     enemyRadius = ENEMY_RADIUS,
+    replanInterval = ENEMY_REPLAN_INTERVAL,
   ): CachedPath | null {
     const existing = this.paths.get(enemyId);
 
     if (existing) {
       existing.age += dt;
 
-      // Check if replan is needed
+      // Check if replan is needed (distant enemies replan less frequently)
       const tdx = target.x - existing.targetX;
       const tdy = target.y - existing.targetY;
-      if (existing.age < ENEMY_REPLAN_INTERVAL && (tdx * tdx + tdy * tdy) < ENEMY_REPLAN_DIST_THRESHOLD * ENEMY_REPLAN_DIST_THRESHOLD) {
+      if (existing.age < replanInterval && (tdx * tdx + tdy * tdy) < ENEMY_REPLAN_DIST_THRESHOLD * ENEMY_REPLAN_DIST_THRESHOLD) {
         return existing;
       }
     }
 
-    // Throttle A* calls to prevent frame spikes (max 15 per tick)
-    if (this.pathfindsThisTick >= EnemySystem.MAX_PATHFINDS_PER_TICK) {
+    // Throttle A* calls to prevent frame spikes
+    if (this.pathfindsThisTick >= this.pathfindBudget) {
       // Over budget - reuse existing path or beeline
       if (existing) return existing;
       return null;
     }
+
+    // Check shared path cache: nearby enemies targeting the same destination can reuse paths
+    const regionSize = EnemySystem.SHARED_PATH_REGION_SIZE;
+    const regionX = Math.floor(pos.x / regionSize);
+    const regionY = Math.floor(pos.y / regionSize);
+    const targetRegionKey = `${Math.floor(target.x / regionSize)}_${Math.floor(target.y / regionSize)}_${regionX}_${regionY}`;
+    const shared = this.sharedPathCache.get(targetRegionKey);
+    if (shared && shared.waypoints.length > 0) {
+      // Reuse shared path (don't consume pathfinding budget)
+      const cached: CachedPath = {
+        waypoints: shared.waypoints,
+        nextIndex: 0,
+        age: 0,
+        targetX: shared.targetX,
+        targetY: shared.targetY,
+      };
+      this.paths.set(enemyId, cached);
+      return cached;
+    }
+
     this.pathfindsThisTick++;
 
     // Compute new path (with building-blocked tiles)
@@ -899,6 +1020,9 @@ export class EnemySystem {
       this.paths.delete(enemyId);
       return null;
     }
+
+    // Store in shared cache so nearby enemies can reuse this path
+    this.sharedPathCache.set(targetRegionKey, { waypoints: [...waypoints], targetX: target.x, targetY: target.y });
 
     const cached: CachedPath = {
       waypoints,
@@ -970,14 +1094,17 @@ export class EnemySystem {
   /** Find the nearest building within melee range to break through. */
   private findBlockingBuilding(pos: PositionComponent, range = ENEMY_MELEE_RANGE): { x: number; y: number } | null {
     let closest: { x: number; y: number; dist: number } | null = null;
-    for (const b of this.buildingEntities) {
-      const edx = Math.max(0, Math.abs(b.x - pos.x) - b.half);
-      const edy = Math.max(0, Math.abs(b.y - pos.y) - b.half);
+    // Use spatial hash for O(K) lookup instead of iterating all buildings
+    const searchRange = range + 48; // 48 = max building half-extent
+    this.buildingHash.queryRange(pos.x, pos.y, searchRange, (entry) => {
+      const half = this.buildingHalfMap.get(entry.id) ?? 16;
+      const edx = Math.max(0, Math.abs(entry.x - pos.x) - half);
+      const edy = Math.max(0, Math.abs(entry.y - pos.y) - half);
       const edgeDist = distance(edx, edy);
       if (edgeDist <= range && (!closest || edgeDist < closest.dist)) {
-        closest = { x: b.x, y: b.y, dist: edgeDist };
+        closest = { x: entry.x, y: entry.y, dist: edgeDist };
       }
-    }
+    });
     return closest;
   }
 
@@ -1030,10 +1157,12 @@ export class EnemySystem {
       addObstacle(entry.x - pos.x, entry.y - pos.y, PORTAL_RADIUS);
     });
 
-    // Scan buildings
-    for (const bldg of this.buildingEntities) {
-      addObstacle(bldg.x - pos.x, bldg.y - pos.y, bldg.half);
-    }
+    // Scan nearby buildings (spatial hash query instead of iterating all 200+)
+    const bldgAvoidRange = ENEMY_AVOIDANCE_LOOK_AHEAD + enemyRadius + 48 + ENEMY_AVOIDANCE_MARGIN; // 48 = max building half-extent
+    this.buildingHash.queryRange(pos.x, pos.y, bldgAvoidRange, (entry) => {
+      const half = this.buildingHalfMap.get(entry.id) ?? 16;
+      addObstacle(entry.x - pos.x, entry.y - pos.y, half);
+    });
 
     if (totalPushX === 0 && totalPushY === 0) return;
 

@@ -46,6 +46,20 @@ export function createSpatialHash(cellSize = 128) {
     range: number,
     callback: (entry: SpatialEntry, distSq: number) => boolean | void,
   ): void {
+    // Handle infinite/very large range: iterate all cells instead of computing a cell range
+    // (prevents infinite loop when range is Infinity)
+    if (!Number.isFinite(range) || range > 100_000) {
+      for (const bucket of cells.values()) {
+        for (const entry of bucket) {
+          const dx = entry.x - qx;
+          const dy = entry.y - qy;
+          const dSq = dx * dx + dy * dy;
+          if (callback(entry, dSq) === true) return;
+        }
+      }
+      return;
+    }
+
     const rangeSq = range * range;
     const minCx = Math.floor((qx - range) * invCell);
     const maxCx = Math.floor((qx + range) * invCell);

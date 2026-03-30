@@ -1,6 +1,6 @@
 import { app, BrowserWindow, shell, session, ipcMain } from 'electron';
 import { join } from 'path';
-import { spawn, fork, type ChildProcess } from 'node:child_process';
+import { spawn, fork, exec, type ChildProcess } from 'node:child_process';
 import * as dgram from 'node:dgram';
 import * as fs from 'node:fs';
 import { DISCOVERY_PORT } from '../../server/discovery';
@@ -74,7 +74,9 @@ function startEmbeddedServer(): void {
   usingExistingServer = false;
   const { metastatsDir, savesDir } = getServerDataDirs();
   clog('SERVER', `Data dirs: metastats=${metastatsDir}, saves=${savesDir}`);
-  const env = { ...process.env, METASTATS_DIR: metastatsDir, SAVES_DIR: savesDir };
+  const logsDir = join(app.isPackaged ? app.getPath('userData') : join(__dirname, '../..'), 'logs');
+  if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
+  const env = { ...process.env, METASTATS_DIR: metastatsDir, SAVES_DIR: savesDir, LOG_DIR: logsDir };
 
   if (app.isPackaged) {
     // Production: the server bundle is packed inside the asar. Node's fork() can't
@@ -140,13 +142,21 @@ function startEmbeddedServer(): void {
   serverProcess.stderr?.on('data', (data: Buffer) => {
     const msg = data.toString().trim();
     if (msg.includes('EADDRINUSE')) {
-      clog('SERVER', 'Port already in use, using existing server');
-      localServerReady = true;
-      usingExistingServer = true;
+      clog('SERVER', 'Port 7777 in use - killing old process and retrying...');
       serverProcess = null;
-      for (const win of BrowserWindow.getAllWindows()) {
-        win.webContents.send('local-server-ready');
-      }
+      // Kill whatever is holding port 7777 and restart
+      const killCmd = process.platform === 'win32'
+        ? 'powershell -Command "Get-NetTCPConnection -LocalPort 7777 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }"'
+        : 'lsof -ti:7777 | xargs kill -9 2>/dev/null';
+      exec(killCmd, (err) => {
+        if (err) clog('ERROR', `Failed to kill port 7777 process: ${err.message}`);
+        else clog('SERVER', 'Killed old server process on port 7777');
+        // Wait a moment for the port to be released, then retry
+        setTimeout(() => {
+          clog('SERVER', 'Retrying server start...');
+          startEmbeddedServer();
+        }, 1000);
+      });
     } else if (msg) {
       clog('ERROR', `Server stderr: ${msg}`);
     }

@@ -416,6 +416,12 @@ export interface EnemyStatsComponent {
   rangedDamage: number;
   /** Ranged cooldown. */
   rangedCooldown: number;
+  /**
+   * Targeting behavior:
+   * - 'campfire': always targets campfire, then players nearby (default - portal enemies)
+   * - 'proximity': idle until a player/building is within aggro range (POI/boss summon enemies)
+   */
+  aggroMode?: 'campfire' | 'proximity';
 }
 
 /** Ghost visibility state. */

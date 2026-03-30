@@ -167,11 +167,10 @@ export function createWaveController(deps: WaveControllerDeps) {
     const placed: { x: number; y: number }[] = [];
 
     // Dynamic min distance: portals must spawn outside the building range square.
-    // Use diagonal distance (center to corner of square) to ensure corners are cleared.
+    // Use half-extent + small buffer (not diagonal - we check the square directly below).
     const buildRangeHE = deps.getBuildRangeHalfExtent();
-    const buildRangeDiag = buildRangeHE > 0 ? Math.ceil(Math.sqrt(2) * buildRangeHE) : 0;
-    const effectiveMinDist = Math.max(PORTAL_MIN_DIST, buildRangeDiag + 100);
-    const effectiveMaxDist = Math.max(effectiveMinDist + 400, PORTAL_MAX_DIST);
+    const effectiveMinDist = Math.max(PORTAL_MIN_DIST, buildRangeHE + 100);
+    const effectiveMaxDist = Math.max(effectiveMinDist + 300, PORTAL_MAX_DIST);
 
     for (let i = 0; i < numPortals; i++) {
       let bestX = 0, bestY = 0, found = false;
@@ -216,7 +215,7 @@ export function createWaveController(deps: WaveControllerDeps) {
 
   // ── Enemy spawning ───────────────────────────────────────────────────────
 
-  function spawnEnemy(x: number, y: number, faction: EnemyFaction = 'bandits'): number | null {
+  function spawnEnemy(x: number, y: number, faction: EnemyFaction = 'bandits', aggroMode: 'campfire' | 'proximity' = 'campfire'): number | null {
     if (s.enemyCount >= deps.maxEnemies) return null;
 
     const variant = pickEnemyVariantForFaction(s.currentWave, faction);
@@ -247,6 +246,7 @@ export function createWaveController(deps: WaveControllerDeps) {
       rangedRange: base.rangedRange ?? 0, projectileSpeed: base.projectileSpeed ?? 0,
       rangedDamage: Math.round((base.rangedDamage ?? 0) * dmgMult * cards.debuffs.enemyDamageMult),
       rangedCooldown: base.rangedCooldown ?? base.cooldown,
+      aggroMode,
     });
 
     if (variant === 'ghost') world.addComponent(id, C.GhostState, { hidden: true });

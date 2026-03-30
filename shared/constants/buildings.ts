@@ -239,7 +239,7 @@ export const DEMOLISH_REFUND_PERCENT = 0.5;
 
 /** Per-building-type resource costs for placement. */
 export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'iron' | 'diamond' | 'food', number>>> = {
-  campfire:       {},
+  campfire:       { wood: 10, stone: 10 },
   wall:           { wood: 5 },
   warehouse:      { wood: 10, stone: 5 },
   lumbermill:     { wood: 15, stone: 5 },

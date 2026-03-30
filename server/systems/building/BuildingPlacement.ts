@@ -155,7 +155,11 @@ export function deductBuildingCost(
 
 // ── Footprint Collision ───────────────────────────────────────────────────
 
-export function footprintCollides(ctx: BuildingContext, cx: number, cy: number, buildingType: string, rotation: number = 0): boolean {
+/**
+ * Check if a building footprint collides with existing entities.
+ * @param skipExclusionZones - If true, only check direct overlap (not exclusion zones). Used for BUILD_MOVE.
+ */
+export function footprintCollides(ctx: BuildingContext, cx: number, cy: number, buildingType: string, rotation: number = 0, skipExclusionZones = false): boolean {
   const { world } = ctx;
   const newExcl = buildingExclusionExtent(buildingType, rotation);
   const newExt = buildingExtent(buildingType, rotation);
@@ -173,8 +177,11 @@ export function footprintCollides(ctx: BuildingContext, cx: number, cy: number, 
       const existingStackable = STACKABLE_BUILDINGS.has(bType);
       const bExt = buildingExtent(bType, b?.rotation ?? 0);
 
-      // Defence buildings can be placed adjacent to each other (no exclusion zone)
-      if (isDefenceBuilding(buildingType) && isDefenceBuilding(bType)) {
+      if (skipExclusionZones) {
+        // Moving a building: only check direct footprint overlap (no exclusion zones)
+        if (Math.abs(pos.x - cx) < newExt.hx + bExt.hx && Math.abs(pos.y - cy) < newExt.hy + bExt.hy) return true;
+      } else if (isDefenceBuilding(buildingType) && isDefenceBuilding(bType)) {
+        // Defence buildings can be placed adjacent to each other (no exclusion zone)
         if (Math.abs(pos.x - cx) < newExt.hx + bExt.hx && Math.abs(pos.y - cy) < newExt.hy + bExt.hy) return true;
       } else if (newExempt || existingExempt) {
         if (Math.abs(pos.x - cx) < newExt.hx + bExt.hx && Math.abs(pos.y - cy) < newExt.hy + bExt.hy) return true;
@@ -190,14 +197,11 @@ export function footprintCollides(ctx: BuildingContext, cx: number, cy: number, 
     } else if (f.type === 'resource') {
       exHx = RESOURCE_NODE_RADIUS;
       exHy = RESOURCE_NODE_RADIUS;
-    } else if (f.type === 'player') {
-      if (world.hasComponent(id, C.Downed)) continue;
+    } else if (f.type === 'civilian' || f.type === 'guard') {
       exHx = PLAYER_RADIUS;
       exHy = PLAYER_RADIUS;
-    } else if (f.type === 'enemy') {
-      exHx = ENEMY_RADIUS;
-      exHy = ENEMY_RADIUS;
     } else {
+      // Players, enemies, guards, POIs - don't block building placement
       continue;
     }
     if (Math.abs(pos.x - cx) < newExt.hx + exHx && Math.abs(pos.y - cy) < newExt.hy + exHy) return true;
@@ -406,7 +410,9 @@ export function handlePlace(ctx: BuildingContext, clientId: string, msg: BuildPl
     }
   }
 
-  if (!deductBuildingCost(ctx, msg.buildingType, player, send)) {
+  // Campfire placement is free (cost only applies to upgrades)
+  const placementCostOverride = msg.buildingType === 'campfire' ? {} : undefined;
+  if (!deductBuildingCost(ctx, msg.buildingType, player, send, placementCostOverride)) {
     send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'insufficient_resources' } as BuildConfirmMessage);
     return;
   }
@@ -993,7 +999,8 @@ export function handleBuildMove(
   // Move off-screen temporarily for collision check
   oldPos.x = -99999; oldPos.y = -99999;
 
-  if (footprintCollides(ctx, snapX, snapY, bldg.buildingType, rotation)) {
+  // Skip exclusion zones when moving - only prevent direct overlap with other buildings
+  if (footprintCollides(ctx, snapX, snapY, bldg.buildingType, rotation, true)) {
     // Restore position on failure
     oldPos.x = savedX; oldPos.y = savedY;
     send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'blocked' } as BuildConfirmMessage);

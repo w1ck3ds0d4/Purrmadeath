@@ -488,7 +488,7 @@ export class GameSession {
       getCurrentWave: () => this.waveState.currentWave,
       getPlayerCenter: () => this.getPlayerCenter(),
       spawnExtraPortals: (count, send) => this.waves.spawnExtraPortals(count, send),
-      spawnEnemy: (x, y, faction) => this.waves.spawnEnemy(x, y, faction as any),
+      spawnEnemy: (x, y, faction) => this.waves.spawnEnemy(x, y, faction as any, 'proximity'),
       isWalkable: (wx, wy) => this.isWalkable(wx, wy),
       overlapsBuilding: (wx, wy, r) => this.overlapsBuilding(wx, wy, r),
       overlapsResourceNode: (wx, wy, r) => this.overlapsResourceNode(wx, wy, r),
@@ -513,7 +513,7 @@ export class GameSession {
       players: this.players,
       isWalkable: (wx, wy) => this.isWalkable(wx, wy),
       overlapsBuilding: (wx, wy, r) => this.overlapsBuilding(wx, wy, r),
-      spawnEnemy: (x, y) => this.waves.spawnEnemy(x, y),
+      spawnEnemy: (x, y, aggroMode) => this.waves.spawnEnemy(x, y, 'bandits' as any, aggroMode ?? 'proximity'),
       cards: this.cards,
       incrementEnemyCount: () => { this.waveState.enemyCount++; },
       findSafeSpawnNear: (wx, wy) => this.findSafeSpawnNear(wx, wy),
@@ -1893,7 +1893,7 @@ export class GameSession {
           const rawY = nestY + Math.sin(angle) * 60;
           // Find a safe position near the target that doesn't overlap buildings/resources/POIs
           const safe = this.findSafeSpawnNear(rawX, rawY);
-          const eid = this.waves.spawnEnemy(safe.x, safe.y);
+          const eid = this.waves.spawnEnemy(safe.x, safe.y, 'bandits' as any, 'proximity');
           if (eid !== null) spawnedIds.push(eid);
         }
         console.log(`[POI] Enemy nest triggered at entity ${poiId} - spawned ${spawnedIds.length} enemies (x=${Math.round(nestX)}, y=${Math.round(nestY)})`);
@@ -4623,6 +4623,14 @@ export class GameSession {
       for (const p of this.players.values()) send(p.client, spawn);
     }
 
+    // Process enemy resource node breaking (stuck enemies damage blocking resources)
+    for (const rd of enemyResult.resourceDamage) {
+      const hp = this.world.getComponent<HealthComponent>(rd.entityId, C.Health);
+      if (hp && hp.current > 0) {
+        hp.current = Math.max(0, hp.current - rd.damage);
+      }
+    }
+
     // Destroy dead entities (players enter downed state, others are removed)
     this.respawn.destroyDeadEntities(enemyResult.deaths, undefined, send);
 
@@ -4936,10 +4944,15 @@ export class GameSession {
       // Fast path: skip static entities that haven't changed since last snapshot.
       // If velocity is zero and HP matches previous snapshot, reuse previous snap.
       // This avoids building full snapshots for ~1000 resource nodes + idle buildings.
+      // Exception: production buildings need to check stored amount changes.
       const prev = this.prevSnapshot.get(id);
       if (prev && vel.vx === 0 && vel.vy === 0 && pos.x === prev.x && pos.y === prev.y && hp.current === prev.hp) {
-        snaps.push(prev); // Reuse unchanged snapshot
-        continue;
+        // Check if production stored changed (buildings with workers)
+        const prodComp = this.world.getComponent<ProductionComponent>(id, C.Production);
+        if (!prodComp || prodComp.stored === (prev.productionStored ?? 0)) {
+          snaps.push(prev); // Reuse unchanged snapshot
+          continue;
+        }
       }
 
       const playerEntry = entityToPlayer.get(id);
