@@ -7,7 +7,8 @@
  * Uses a dirty-flag system to skip expensive geometry rebuilds when only position changed.
  * Viewport culling skips off-screen entities entirely.
  */
-import { Container, Graphics, Text } from 'pixi.js';
+import { Container, Graphics, Text, Sprite, Texture, SCALE_MODES } from 'pixi.js';
+import type { ClassComponent, VelocityComponent } from '@shared/components';
 import { World, EntityId } from '@shared/ecs/World';
 import {
   C,
@@ -171,6 +172,8 @@ export class PlayerRendererSystem {
   private bossLabels = new Map<EntityId, Text>();
   /** Currently selected building entity ID (for highlight rendering). */
   selectedBuildingId: number | null = null;
+  /** Building being moved - hidden from rendering while the ghost shows its new position. */
+  movingBuildingId: number | null = null;
   /** Dedicated layer for all health bars - renders above entities/buildings. */
   private healthBarGfx: Graphics;
   /** Production building resource tags (Text objects managed per-entity). */
@@ -207,7 +210,22 @@ export class PlayerRendererSystem {
   /** Last selected building ID (to detect selection changes). */
   private lastSelectedId: number | null = null;
 
+  // ── Class sprite textures ──────────────────────────────────────────────────
+  // Maps class name to idle texture + walk frame textures.
+  private classTextures = new Map<string, { idle: Texture; walkFrames: Texture[]; walkInterval: number }>();
+  // Walk animation state per class (shared across all entities of same class)
+  private walkAnimTimers = new Map<string, { elapsed: number; frameIndex: number }>();
+  // Maps entity ID to Sprite child (added to the entity's Graphics container).
+  private classSprites = new Map<EntityId, Sprite>();
+  // Tracks which animation state each entity sprite is showing
+  private classSpriteState = new Map<EntityId, 'idle' | 'walk'>();
+
   constructor(private readonly worldContainer: Container) {
+    // Load class sprite textures (idle + walking)
+    this.loadClassSprites('ranger',
+      new URL('../assets/ranger/ranger_front.png', import.meta.url).href,
+      new URL('../assets/ranger/ranger_walking_front.gif', import.meta.url).href,
+    );
     this.healthBarGfx = new Graphics();
     this.healthBarGfx.zIndex = 9; // above entities, below projectiles (10)
     this.worldContainer.addChild(this.healthBarGfx);
@@ -215,6 +233,91 @@ export class PlayerRendererSystem {
     this.tagContainer = new Container();
     this.tagContainer.zIndex = 9;
     this.worldContainer.addChild(this.tagContainer);
+  }
+
+  /** Loads idle PNG + extracts walk GIF frames using ImageDecoder API. */
+  private loadClassSprites(className: string, idleUrl: string, walkUrl: string): void {
+    const entry: { idle: Texture; walkFrames: Texture[]; walkInterval: number } = {
+      idle: Texture.EMPTY, walkFrames: [], walkInterval: 100,
+    };
+
+    // Idle (static PNG)
+    const idleImg = new Image();
+    idleImg.src = idleUrl;
+    idleImg.onload = () => {
+      console.log(`[Sprite] Loaded idle for ${className}: ${idleImg.naturalWidth}x${idleImg.naturalHeight}`);
+      entry.idle = Texture.from(idleImg);
+      this.classTextures.set(className, entry);
+    };
+    idleImg.onerror = (e) => console.error(`[Sprite] Failed to load idle for ${className}:`, e);
+
+    // Walking (animated GIF) - decode frames via ImageDecoder
+    this.decodeGifFrames(className, walkUrl, entry);
+  }
+
+  /** Decodes GIF frames using the ImageDecoder API (Chromium/Electron). */
+  private async decodeGifFrames(
+    className: string,
+    url: string,
+    entry: { idle: Texture; walkFrames: Texture[]; walkInterval: number },
+  ): Promise<void> {
+    try {
+      const response = await fetch(url);
+      const blob = await response.blob();
+
+      // Use ImageDecoder to extract individual frames
+      const decoder = new (window as any).ImageDecoder({ data: blob.stream(), type: 'image/gif' });
+      await decoder.completed;
+
+      const track = decoder.tracks.selectedTrack;
+      const frameCount = track.frameCount;
+      console.log(`[Sprite] Decoding ${frameCount} walk frames for ${className}`);
+
+      const frames: Texture[] = [];
+      for (let i = 0; i < frameCount; i++) {
+        const result = await decoder.decode({ frameIndex: i });
+        const vf = result.image; // VideoFrame
+
+        // Draw VideoFrame onto a canvas to create a texture
+        const canvas = document.createElement('canvas');
+        canvas.width = vf.displayWidth;
+        canvas.height = vf.displayHeight;
+        const ctx = canvas.getContext('2d')!;
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(vf, 0, 0);
+        vf.close();
+
+        frames.push(Texture.from(canvas));
+      }
+
+      // Get frame duration from first frame (microseconds -> milliseconds)
+      const firstFrame = await decoder.decode({ frameIndex: 0 });
+      const intervalMs = (firstFrame.image.duration ?? 100000) / 1000;
+      firstFrame.image.close();
+      decoder.close();
+
+      entry.walkFrames = frames;
+      entry.walkInterval = Math.max(16, intervalMs); // minimum ~60fps
+      this.walkAnimTimers.set(className, { elapsed: 0, frameIndex: 0 });
+
+      console.log(`[Sprite] Loaded ${frames.length} walk frames for ${className}, interval=${entry.walkInterval}ms`);
+    } catch (e) {
+      console.error(`[Sprite] Failed to decode walk GIF for ${className}:`, e);
+    }
+  }
+
+  /** Advances walk animation frame timers. */
+  private updateWalkAnimations(dt: number): void {
+    const dtMs = dt * 1000;
+    for (const [className, timer] of this.walkAnimTimers) {
+      const texEntry = this.classTextures.get(className);
+      if (!texEntry || texEntry.walkFrames.length === 0) continue;
+      timer.elapsed += dtMs;
+      if (timer.elapsed >= texEntry.walkInterval) {
+        timer.elapsed -= texEntry.walkInterval;
+        timer.frameIndex = (timer.frameIndex + 1) % texEntry.walkFrames.length;
+      }
+    }
   }
 
   /** Triggers a 150ms white flash on the struck entity. */
@@ -277,6 +380,9 @@ export class PlayerRendererSystem {
     screenW = 1920,
     screenH = 1080,
   ): void {
+    // Advance walk animation frame timers
+    this.updateWalkAnimations(dt);
+
     // Viewport culling bounds (world-space)
     const cullHalfW = screenW / (2 * zoom) + 200; // 200px margin for large entities
     const cullHalfH = screenH / (2 * zoom) + 200;
@@ -316,6 +422,8 @@ export class PlayerRendererSystem {
         this.worldContainer.removeChild(gfx);
         gfx.destroy();
         this.sprites.delete(id);
+        this.classSprites.delete(id); // sprite child destroyed with parent gfx
+        this.classSpriteState.delete(id);
         this.hitTimers.delete(id);
         this.attackArcs.delete(id);
         this.dirty.delete(id);
@@ -379,6 +487,11 @@ export class PlayerRendererSystem {
         gfx.visible = false;
         continue;
       }
+      // Hide building being moved (ghost renderer shows its new position)
+      if (this.movingBuildingId !== null && id === this.movingBuildingId) {
+        gfx.visible = false;
+        continue;
+      }
       // Force redraw if entity was hidden (off-screen) and is now visible
       if (!gfx.visible || isNew) {
         this.dirty.set(id, true);
@@ -405,7 +518,8 @@ export class PlayerRendererSystem {
 
       // Always-animated entities need per-frame redraw
       const hasBurningRuins = buildingIds.has(id) && world.getComponent<RuinsComponent>(id, C.Ruins)?.burnTimer! > 0;
-      const alwaysAnimated = isPortal || isItem || civilianIds.has(id) || id === localEntityId || this.selectedBuildingId === id || hasBurningRuins;
+      const hasClassSprite = this.classSprites.has(id);
+      const alwaysAnimated = isPortal || isItem || civilianIds.has(id) || id === localEntityId || hasClassSprite || this.selectedBuildingId === id || hasBurningRuins;
 
       let needsRedraw = isNew || alwaysAnimated
         || isFlashing || prevFlashing !== isFlashing
@@ -986,15 +1100,46 @@ export class PlayerRendererSystem {
 
         // ── Body ────────────────────────────────────────────────────────────────
 
+        // Check for class sprite (used in both downed and alive states)
+        const isPlayer = !isEnemy && !isGuard && !isCivilian;
+        const classComp = isPlayer ? world.getComponent<ClassComponent>(id, C.Class) : undefined;
+        const classTexPair = classComp ? this.classTextures.get(classComp.classType) : undefined;
+
+        // Determine if player is moving (for walk animation)
+        const vel = isPlayer ? world.getComponent<VelocityComponent>(id, C.Velocity) : undefined;
+        const isMoving = vel != null && (vel.vx * vel.vx + vel.vy * vel.vy) > 1;
+        const desiredState: 'idle' | 'walk' = isMoving ? 'walk' : 'idle';
+
         if (isDowned) {
-          // Downed: dark tint + reduced alpha
-          gfx.circle(0, 0, r);
-          gfx.fill({ color: lerpColor(color, 0x111111, 0.5), alpha: 0.55 });
+          // Downed state - always show idle sprite
+          if (isPlayer && classTexPair) {
+            let spr = this.classSprites.get(id);
+            if (!spr) {
+              spr = new Sprite(classTexPair.idle);
+              spr.anchor.set(0.5, 0.85);
+              gfx.addChild(spr);
+              this.classSprites.set(id, spr);
+              this.classSpriteState.set(id, 'idle');
+            }
+            spr.texture = classTexPair.idle;
+            const spriteSize = r * 3.5;
+            spr.width = spriteSize;
+            spr.height = spriteSize;
+            spr.visible = true;
+            spr.alpha = 0.55;
+            spr.tint = lerpColor(0xffffff, 0x111111, 0.5);
+          } else {
+            const existingSpr = this.classSprites.get(id);
+            if (existingSpr) existingSpr.visible = false;
 
-          gfx.circle(0, 0, r);
-          gfx.stroke({ color: 0xff3333, alpha: 0.5, width: 2 });
+            gfx.circle(0, 0, r);
+            gfx.fill({ color: lerpColor(color, 0x111111, 0.5), alpha: 0.55 });
 
-          // Red X overlay
+            gfx.circle(0, 0, r);
+            gfx.stroke({ color: 0xff3333, alpha: 0.5, width: 2 });
+          }
+
+          // Red X overlay (always drawn for downed entities)
           const xr = r * 0.6;
           gfx.moveTo(-xr, -xr); gfx.lineTo(xr, xr);
           gfx.moveTo(xr, -xr); gfx.lineTo(-xr, xr);
@@ -1034,11 +1179,48 @@ export class PlayerRendererSystem {
             gfx.stroke({ color: 0xff4400, alpha: pulse, width: 2 });
           }
 
-          gfx.circle(0, 0, r);
-          gfx.fill({ color, alpha: ghostAlpha });
+          // ── Class sprite rendering (players only) ────────────────────────
+          if (isPlayer && classTexPair) {
+            // Use sprite instead of circle
+            let spr = this.classSprites.get(id);
+            if (!spr) {
+              spr = new Sprite(classTexPair.idle);
+              spr.anchor.set(0.5, 0.7); // bottom-center so feet align with entity position
+              gfx.addChild(spr);
+              this.classSprites.set(id, spr);
+              this.classSpriteState.set(id, 'idle');
+            }
+            // Swap texture between idle and walking frames based on velocity
+            if (desiredState === 'walk' && classTexPair.walkFrames.length > 0) {
+              const timer = classComp ? this.walkAnimTimers.get(classComp.classType) : undefined;
+              const frameIdx = timer?.frameIndex ?? 0;
+              spr.texture = classTexPair.walkFrames[frameIdx];
+            } else {
+              spr.texture = classTexPair.idle;
+            }
+            this.classSpriteState.set(id, desiredState);
+            const spriteSize = r * 3.5;
+            spr.width = spriteSize;
+            spr.height = spriteSize;
+            spr.visible = true;
+            spr.alpha = ghostAlpha;
+            // Flash tint
+            if (flashT > 0) {
+              spr.tint = lerpColor(0xffffff, 0xffffff, flashT * 0.6);
+            } else {
+              spr.tint = 0xffffff;
+            }
+          } else {
+            // Hide sprite if it exists (class changed or not a player)
+            const existingSpr = this.classSprites.get(id);
+            if (existingSpr) existingSpr.visible = false;
 
-          gfx.circle(0, 0, r);
-          gfx.stroke({ color: 0x000000, alpha: 0.45 * ghostAlpha, width: 2 });
+            gfx.circle(0, 0, r);
+            gfx.fill({ color, alpha: ghostAlpha });
+
+            gfx.circle(0, 0, r);
+            gfx.stroke({ color: 0x000000, alpha: 0.45 * ghostAlpha, width: 2 });
+          }
         }
 
         // -- Status Effect Overlays --

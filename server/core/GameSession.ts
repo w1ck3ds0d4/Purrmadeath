@@ -45,6 +45,7 @@ import {
   PLAYER_RADIUS,
   PLAYER_MAX_HEALTH,
   PLAYER_CARRY_LIMITS,
+  getEffectiveCarryLimits,
   ENEMY_BASE_SPEED,
   ENEMY_MAX_HEALTH,
   ENEMY_MELEE_COOLDOWN,
@@ -285,6 +286,11 @@ export class GameSession {
   private campfireEntityId = -1;
   /** Whether the campfire has been placed by the player. Gates building menu. */
   private campfirePlaced = false;
+
+  /** In-memory snapshot ring buffer for rollback (last ~30 seconds). */
+  private rollbackSnapshots: { tick: number; data: import('@shared/SaveFormat').SaveData }[] = [];
+  private static readonly ROLLBACK_SNAPSHOT_INTERVAL = 300; // every 300 ticks (~10 seconds at 30 TPS)
+  private static readonly ROLLBACK_MAX_SNAPSHOTS = 4; // keep ~40 seconds of history
 
   private warehouseIds = new Set<number>();
   private warehousePool = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0 };
@@ -849,8 +855,9 @@ export class GameSession {
 
     // ── Restore saved state ─────────────────────────────────────────────────
     if (hasSave && save) {
-      // Restore campfirePlaced from save (old saves without the flag = true for backward compat)
-      this.campfirePlaced = (save as any).campfirePlaced ?? true;
+      // Restore campfirePlaced from save - only true if there's actually a campfire building saved
+      const hasCampfireBuilding = save.buildings.some(b => b.buildingType === 'campfire');
+      this.campfirePlaced = hasCampfireBuilding;
 
       console.log(`[GameSession] Restoring ${save.buildings.length} buildings from save (wave ${this.waveState.currentWave})`);
       // Restore saved buildings
@@ -2075,15 +2082,17 @@ export class GameSession {
 
       const type = ruinTypes[Math.floor(rand() * ruinTypes.length)];
       const id = this.spawnBuilding(rx, ry, type, 1, false);
-      // Add ruins component - no burn timer (old ruins), permanent decay
+      // Add ruins component - burning ruins, permanent (never fully decay)
       this.world.addComponent(id, C.Ruins, {
         originalType: type,
         originalLevel: 1,
-        burnTimer: 0,
+        burnTimer: 999999,
         decayTimer: 999999,
       } as import('@shared/components').RuinsComponent);
+      // Ruins have ~30% of normal wall HP - fragile but not instant-kill
+      const ruinMaxHp = Math.round(WALL_MAX_HEALTH * 0.3);
       const ruinHp = this.world.getComponent<HealthComponent>(id, C.Health);
-      if (ruinHp) { ruinHp.current = 1; ruinHp.max = 1; }
+      if (ruinHp) { ruinHp.current = ruinMaxHp; ruinHp.max = ruinMaxHp; }
       placed.push({ x: rx, y: ry });
     }
   }
@@ -2305,8 +2314,9 @@ export class GameSession {
         if (!p.entityId) continue;
         const res = this.world.getComponent<Record<string, number>>(p.entityId, C.Resources);
         if (res) {
+          const bossLimits = getEffectiveCarryLimits(this.getTotalWarehouseLevels());
           for (const [key, amount] of Object.entries(loot.bonusResources)) {
-            const cap = PLAYER_CARRY_LIMITS[key] ?? Infinity;
+            const cap = bossLimits[key] ?? Infinity;
             res[key] = Math.min((res[key] ?? 0) + amount, cap);
           }
         }
@@ -2320,7 +2330,8 @@ export class GameSession {
         const res = this.world.getComponent<Record<string, number>>(recipient.entityId, C.Resources);
         if (res) {
           const bd = loot.bonusDrop;
-          const bdCap = PLAYER_CARRY_LIMITS[bd.resource] ?? Infinity;
+          const bdLimits = getEffectiveCarryLimits(this.getTotalWarehouseLevels());
+          const bdCap = bdLimits[bd.resource] ?? Infinity;
           res[bd.resource] = Math.min((res[bd.resource] ?? 0) + bd.amount, bdCap);
         }
       }
@@ -2421,6 +2432,16 @@ export class GameSession {
   /**
    * Credit a player's resource counter and send RESOURCE_UPDATE.
    */
+  /** Sum all warehouse upgrade levels for inventory capacity calculation. */
+  private getTotalWarehouseLevels(): number {
+    let total = 0;
+    for (const wid of this.warehouseIds) {
+      const bldg = this.world.getComponent<BuildingComponent>(wid, C.Building);
+      if (bldg) total += bldg.upgradeLevel;
+    }
+    return total;
+  }
+
   private creditResources(
     playerEntityId: number,
     itemType: string,
@@ -2445,8 +2466,9 @@ export class GameSession {
       return;
     }
 
-    // Credit the resource (with carry cap)
-    const cap = PLAYER_CARRY_LIMITS[itemType] ?? Infinity;
+    // Credit the resource (with carry cap - warehouse upgrades increase capacity)
+    const effectiveLimits = getEffectiveCarryLimits(this.getTotalWarehouseLevels());
+    const cap = effectiveLimits[itemType] ?? Infinity;
     const current = (res as any)[itemType] as number ?? 0;
     const capped = Math.min(current + quantity, cap);
     const overflow = (current + quantity) - capped;
@@ -3915,6 +3937,32 @@ export class GameSession {
     console.log(`[Debug] Spawned ${spawned}/${n} enemies around player ${player.slot}`);
   }
 
+  /** Kill all enemy entities instantly. */
+  debugKillEnemies(): void {
+    if (this.phase !== 'playing') return;
+    let killed = 0;
+    for (const id of this.world.query(C.Faction, C.Health)) {
+      const f = this.world.getComponent<FactionComponent>(id, C.Faction);
+      if (f?.type !== 'enemy') continue;
+      const hp = this.world.getComponent<HealthComponent>(id, C.Health);
+      if (hp && hp.current > 0) { hp.current = 0; killed++; }
+    }
+    console.log(`[Debug] Killed ${killed} enemies`);
+  }
+
+  /** Destroy all portal entities instantly. */
+  debugDestroyPortals(): void {
+    if (this.phase !== 'playing') return;
+    let destroyed = 0;
+    for (const id of this.world.query(C.Faction, C.Health)) {
+      const f = this.world.getComponent<FactionComponent>(id, C.Faction);
+      if (f?.type !== 'portal') continue;
+      const hp = this.world.getComponent<HealthComponent>(id, C.Health);
+      if (hp && hp.current > 0) { hp.current = 0; destroyed++; }
+    }
+    console.log(`[Debug] Destroyed ${destroyed} portals`);
+  }
+
   debugWaveSkip(send: (client: ConnectedClient, msg: object) => void): void {
     if (this.phase !== 'playing') return;
     this.waves.debugSkip(send);
@@ -4790,6 +4838,15 @@ export class GameSession {
     this.tickProfile.buildings  = this.tickProfile.buildings  * (1 - _a) + (_t7 - _t6) * _a;
     this.tickProfile.waves      = this.tickProfile.waves      * (1 - _a) + (_t9 - _t8) * _a;
     this.tickProfile.total      = this.tickProfile.total      * (1 - _a) + (_t9 - _t0) * _a;
+
+    // Capture rollback snapshot periodically (~every 10 seconds)
+    if (this.tick % GameSession.ROLLBACK_SNAPSHOT_INTERVAL === 0 && this.tick > 0) {
+      const snapshot = this.serializeSave();
+      this.rollbackSnapshots.push({ tick: this.tick, data: snapshot });
+      if (this.rollbackSnapshots.length > GameSession.ROLLBACK_MAX_SNAPSHOTS) {
+        this.rollbackSnapshots.shift(); // drop oldest
+      }
+    }
 
     // Log comprehensive debug profile every 10 seconds
     if (this.tick % 300 === 0) {

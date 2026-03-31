@@ -216,7 +216,7 @@ export class MovementSystem {
   /** Push overlapping entities apart so they can't stack. */
   private separateEntities(world: World): void {
     // Collect all solid entities
-    const bodies: { id: number; pos: PositionComponent; r: number; movable: boolean; square: boolean }[] = [];
+    const bodies: { id: number; pos: PositionComponent; r: number; movable: boolean; square: boolean; faction: string }[] = [];
     for (const id of world.query(C.Position, C.Faction)) {
       if (world.hasComponent(id, C.Projectile)) continue; // projectiles aren't solid bodies
       const faction = world.getComponent<FactionComponent>(id, C.Faction)!;
@@ -232,7 +232,7 @@ export class MovementSystem {
       if (r <= 0) continue;
       const pos = world.getComponent<PositionComponent>(id, C.Position)!;
       const movable = faction.type === 'player' || faction.type === 'enemy' || faction.type === 'guard' || faction.type === 'civilian';
-      bodies.push({ id, pos, r, movable, square: isSquareEntity(faction.type) });
+      bodies.push({ id, pos, r, movable, square: isSquareEntity(faction.type), faction: faction.type });
     }
 
     for (let iter = 0; iter < ENTITY_SEPARATION_ITERATIONS; iter++) {
@@ -241,6 +241,8 @@ export class MovementSystem {
           const a = bodies[i];
           const b = bodies[j];
           if (!a.movable && !b.movable) continue; // both static
+          // Civilians pass through each other (no civilian-vs-civilian collision)
+          if (a.faction === 'civilian' && b.faction === 'civilian') continue;
 
           // Determine push vector based on collision shapes
           let pushX: number, pushY: number;

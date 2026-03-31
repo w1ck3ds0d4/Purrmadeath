@@ -14,7 +14,7 @@ export const PLAYER_BASE_SPEED = 180;
 /** Full health at spawn. */
 export const PLAYER_MAX_HEALTH = 100;
 
-/** Per-resource carry limits for players. Gold is unlimited (Infinity). */
+/** Base per-resource carry limits for players (no warehouses). Gold is unlimited. */
 export const PLAYER_CARRY_LIMITS: Record<string, number> = {
   wood: 100,
   stone: 50,
@@ -22,6 +22,24 @@ export const PLAYER_CARRY_LIMITS: Record<string, number> = {
   diamond: 50,
   gold: Infinity,
 };
+
+/** Bonus inventory multiplier per warehouse upgrade level (50% per level). */
+export const WAREHOUSE_INVENTORY_BONUS_PER_LEVEL = 0.5;
+
+/**
+ * Compute effective carry limits based on total warehouse upgrade levels.
+ * Each warehouse upgrade level adds 50% of the base limit.
+ * Multiple warehouses stack their levels additively.
+ * Example: 2 warehouses at level 3 each = 6 total levels = 300% bonus = 4x capacity.
+ */
+export function getEffectiveCarryLimits(totalWarehouseLevels: number): Record<string, number> {
+  const mult = 1 + totalWarehouseLevels * WAREHOUSE_INVENTORY_BONUS_PER_LEVEL;
+  const limits: Record<string, number> = {};
+  for (const [res, base] of Object.entries(PLAYER_CARRY_LIMITS)) {
+    limits[res] = base === Infinity ? Infinity : Math.round(base * mult);
+  }
+  return limits;
+}
 
 /** Full stamina at spawn. */
 export const PLAYER_MAX_STAMINA = 100;

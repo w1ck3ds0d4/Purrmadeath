@@ -282,6 +282,8 @@ export class DebugOverlay {
         '/sp [n]     Give n skill points (default 1)',
         '/modifier <id> Force wave modifier',
         '/event <id>   Force world event',
+        '/killenemies  Kill all enemies',
+        '/destroyportals  Destroy all portals',
         '/buffs      Show active buffs + timers',
         '/stats      Full stat breakdown',
         '/ability <id> Force activate ability',
@@ -372,6 +374,8 @@ export class DebugOverlay {
       case '/event':
       case '/ability':
       case '/pause':
+      case '/killenemies':
+      case '/destroyportals':
         this.cheatHandler?.(cmd, args);
         this.log(`Executed: ${raw}`);
         break;

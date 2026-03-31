@@ -47,6 +47,7 @@ Each subclass has a 10-tier skill tree with passive stats, combat modifiers, abi
 | Select building | Right Mouse Button |
 | Repair building | R |
 | Demolish building | X |
+| Move Building | F (with building selected) |
 | Civilian Panel | C |
 | Skill Tree | K |
 | Chat | Enter |
@@ -58,9 +59,9 @@ Each subclass has a 10-tier skill tree with passive stats, combat modifiers, abi
 
 Buildings are organized by category in the build menu (Q):
 
-**Defense**: Wall, Gate, Arrow Turret, Cannon Turret, Ballista, Laser Tower, Tesla Coil, Flame Tower, Catapult, Moat, Spike Trap
+**Defense**: Wall, Gate, Arrow Turret, Cannon Turret, Ballista, Laser Tower, Tesla Coil, Flame Tower, Catapult, Flak Cannon, Moat, Spike Trap
 
-**Production**: Lumbermill, Quarry, Mine, Farm, Workshop
+**Production**: Lumbermill, Quarry, Mine, Farm, Workshop, Smeltery, Market
 
 **Military**: Training Center (trains civilians into Warrior/Ranger/Mage guards)
 
@@ -71,6 +72,18 @@ Buildings are organized by category in the build menu (Q):
 **Shops**: Potion Shop, Tavern (hire hero NPCs)
 
 **Achievement-Locked**: Siege Workshop, Kennel, Arcane Tower, Watchtower (unlocked via achievements)
+
+### Points of Interest
+
+The procedural world contains discoverable POIs:
+- **Abandoned Camp** - Loot resources (press E to interact)
+- **Shrine** - Grants a temporary blessing (speed, damage, regen, or defense) for 120 seconds
+- **Enemy Nest** - Triggers a mini-wave when approached (150px proximity)
+- **Treasure Chest** - Contains rare resources (press E to open)
+
+POIs appear as diamond shapes with "?" markers. Active shrine blessings are shown in the top-right HUD with countdown timers.
+
+### Campfire & Building Range
 
 Campfire is player-placed at the start (free cost) and serves as respawn point + initial housing. 80-tile (2560px) square building range from campfire center. Watchtowers extend range by 20 tiles per level. Portals spawn outside the building range. Campfire destruction = game over. Death before campfire placement = permanent death. Building exclusion zones prevent placement too close to certain structures (walls, bridges, moats, and spike traps are exempt). Buildings can be relocated within the building range.
 

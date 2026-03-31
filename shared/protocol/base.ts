@@ -177,6 +177,10 @@ export enum MessageType {
   DEBUG_FORCE_MODIFIER = 'DEBUG_FORCE_MODIFIER',
   /** Client -> Server: force a world event (dev tool). */
   DEBUG_FORCE_EVENT = 'DEBUG_FORCE_EVENT',
+  /** Client -> Server: kill all enemies (dev tool). */
+  DEBUG_KILL_ENEMIES = 'DEBUG_KILL_ENEMIES',
+  /** Client -> Server: destroy all portals (dev tool). */
+  DEBUG_DESTROY_PORTALS = 'DEBUG_DESTROY_PORTALS',
 
   // -- Phase 6 --
   /** Server -> all: a new enemy type appeared for the first time this run. */

@@ -381,6 +381,7 @@ export function registerMessageHandlers(
       d.world.addComponent(s.localEntityId, C.Speed,       { base: PLAYER_BASE_SPEED, multiplier: 1 });
       d.world.addComponent(s.localEntityId, C.Stamina,     { current: PLAYER_MAX_STAMINA, max: PLAYER_MAX_STAMINA, regenRate: PLAYER_STAMINA_REGEN, exhausted: false });
       d.world.addComponent(s.localEntityId, C.PlayerInput, { dx: 0, dy: 0, sprint: false });
+      d.world.addComponent(s.localEntityId, C.Class,       { classType: localSnap.playerClass ?? s.selectedClass });
 
       const pos = d.world.getComponent<PositionComponent>(s.localEntityId, C.Position)!;
       d.camera.x = pos.x; d.camera.y = pos.y;
@@ -773,6 +774,8 @@ export function registerMessageHandlers(
     const wu = msg as WarehouseUpdateMessage;
     s.warehouseResources = { wood: wu.wood, stone: wu.stone, iron: wu.iron, diamond: wu.diamond, gold: wu.gold, food: wu.food, weapons: wu.weapons };
     s.warehouseExists = wu.exists;
+    // Update inventory capacity based on warehouse upgrade levels
+    d.resourceHUD.setCarryLimits(wu.totalWarehouseLevels ?? 0);
     if (s.warehouseExists) {
       d.warehouseHUD.update(s.warehouseResources);
       // Warehouse HUD only visible in build mode

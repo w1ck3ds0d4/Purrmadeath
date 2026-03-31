@@ -122,6 +122,8 @@ export class SessionManager {
     socket.on(MessageType.DEBUG_SET_TIME, (c, m) => this.onDebugAction(c, () => this.session?.debugSetTime((m as import('@shared/protocol').DebugSetTimeMessage).seconds, (cl, msg) => this.socket.send(cl, msg))));
     socket.on(MessageType.DEBUG_FORCE_MODIFIER, (c, m) => this.onDebugAction(c, () => this.session?.debugForceModifier((m as import('@shared/protocol').DebugForceModifierMessage).modifierId, (cl, msg) => this.socket.send(cl, msg))));
     socket.on(MessageType.DEBUG_FORCE_EVENT, (c, m) => this.onDebugAction(c, () => this.session?.debugForceEvent((m as import('@shared/protocol').DebugForceEventMessage).eventId, (cl, msg) => this.socket.send(cl, msg))));
+    socket.on(MessageType.DEBUG_KILL_ENEMIES, (c) => this.onDebugAction(c, () => this.session?.debugKillEnemies()));
+    socket.on(MessageType.DEBUG_DESTROY_PORTALS, (c) => this.onDebugAction(c, () => this.session?.debugDestroyPortals()));
     socket.on(MessageType.CHAT,                 (c, m) => this.onChat(c, m as ChatSendMessage));
     socket.on(MessageType.PAUSE_VOTE,            (c) => this.onPauseVote(c));
     socket.on(MessageType.SLEEP_VOTE,            (c, m) => this.onSleepVote(c, m as import('@shared/protocol').SleepVoteMessage));

@@ -47,10 +47,17 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
 
   // Broadcast warehouse update to all players
   function broadcastWarehouseUpdate(send: SendFn): void {
+    // Sum warehouse upgrade levels for inventory capacity bonus
+    let totalWarehouseLevels = 0;
+    for (const wid of warehouseIds) {
+      const bldg = world.getComponent<import('@shared/components').BuildingComponent>(wid, C.Building);
+      if (bldg) totalWarehouseLevels += bldg.upgradeLevel;
+    }
     const msg = {
       type: MessageType.WAREHOUSE_UPDATE,
       ...wPool(),
       exists: warehouseIds.size > 0,
+      totalWarehouseLevels,
     };
     for (const p of players.values()) send(p.client, msg);
   }

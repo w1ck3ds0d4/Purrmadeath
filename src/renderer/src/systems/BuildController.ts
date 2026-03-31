@@ -395,6 +395,8 @@ export function createBuildController(deps: BuildControllerDeps) {
     get placingType() { return placingType; },
     get selectedId() { return selectedId; },
     set selectedId(v: number | null) { selectedId = v; },
+    /** Entity ID of the building currently being moved (null if not moving). */
+    get movingEntityId() { return moveMode ? movingEntityId : null; },
     openPicker,
     selectBuilding,
     reopenPicker,

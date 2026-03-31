@@ -132,16 +132,16 @@ export const PORTAL_BASE_HP = 100;
 export const PORTAL_HP_PER_WAVE = 20;
 
 /** Base seconds between enemy spawns from a portal. */
-export const PORTAL_BASE_SPAWN_INTERVAL = 8;
+export const PORTAL_BASE_SPAWN_INTERVAL = 10;
 
 /** Multiplicative decay applied to spawn interval each wave (faster spawning). */
-export const PORTAL_SPAWN_INTERVAL_DECAY = 0.85;
+export const PORTAL_SPAWN_INTERVAL_DECAY = 0.9;
 
 /** Number of portals spawned for wave 1. */
 export const PORTALS_PER_WAVE_BASE = 1;
 
-/** Additional portals per wave beyond wave 1. */
-export const PORTALS_PER_WAVE_GROWTH = 1;
+/** Additional portals per wave beyond wave 1 (0.5 = +1 portal every 2 waves). */
+export const PORTALS_PER_WAVE_GROWTH = 0.5;
 
 /** Minimum distance (px) from player centroid to place portals. */
 export const PORTAL_MIN_DIST = 400;
@@ -160,6 +160,6 @@ export const PORTAL_RADIUS = 18;
 /** Boss spawns every N waves. */
 export const BOSS_SPAWN_INTERVAL = 5;
 /** First wave a boss can appear. */
-export const BOSS_FIRST_WAVE = 5;
+export const BOSS_FIRST_WAVE = 10;
 /** Card drop spawns at campfire every N waves. */
 export const MILESTONE_CARD_INTERVAL = 10;

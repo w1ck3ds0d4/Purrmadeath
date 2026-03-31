@@ -67,6 +67,7 @@ import {
   REPAIR_STATION_HP_PER_TICK, REPAIR_STATION_INTERVAL,
   TAVERN_MAX_HEROES, TAVERN_ROSTER_SIZE,
   isDefenceBuilding,
+  getEffectiveCarryLimits,
 } from '@shared/constants';
 import { TILE_DEFS } from '@shared/world/TileRegistry';
 import { MessageType } from '@shared/protocol';
@@ -647,6 +648,36 @@ export function handleDemolish(ctx: BuildingContext, clientId: string, msg: Buil
       const wp = warehousePool();
       wp.wood = 0; wp.stone = 0; wp.iron = 0; wp.diamond = 0; wp.gold = 0; wp.food = 0;
     }
+
+    // Clamp player inventories to new lower carry limits (drop overflow as items)
+    let totalLevels = 0;
+    for (const wid of warehouseIds) {
+      const wb = world.getComponent<BuildingComponent>(wid, C.Building);
+      if (wb) totalLevels += wb.upgradeLevel;
+    }
+    const newLimits = getEffectiveCarryLimits(totalLevels);
+    for (const p of players.values()) {
+      if (!p.entityId) continue;
+      const res = world.getComponent<ResourcesComponent>(p.entityId, C.Resources);
+      const pos = world.getComponent<PositionComponent>(p.entityId, C.Position);
+      if (!res || !pos) continue;
+      for (const key of ['wood', 'stone', 'iron', 'diamond'] as const) {
+        const cap = newLimits[key] ?? Infinity;
+        if (res[key] > cap) {
+          const overflow = res[key] - cap;
+          res[key] = cap;
+          // Drop excess as item pickups near the player
+          ctx.spawnItemDrop(pos.x, pos.y, key, overflow, true);
+        }
+      }
+      // Send updated inventory to the player
+      send(p.client, {
+        type: MessageType.RESOURCE_UPDATE,
+        wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond,
+        gold: res.gold, food: res.food, weapons: res.weapons,
+      });
+    }
+
     broadcastWarehouseUpdate(send);
   }
 
@@ -792,6 +823,11 @@ export function handleUpgrade(ctx: BuildingContext, clientId: string, msg: Build
 
   const tavern = world.getComponent<TavernComponent>(targetId, C.Tavern);
   if (tavern && lvlIdx < TAVERN_MAX_HEROES.length) tavern.maxHeroes = TAVERN_MAX_HEROES[lvlIdx];
+
+  // Broadcast updated warehouse levels if a warehouse was upgraded (updates player carry limits)
+  if (bldg.buildingType === 'warehouse' || bldg.buildingType === 'storage_shed') {
+    ctx.broadcastWarehouseUpdate(send);
+  }
 
   send(player.client, {
     type: MessageType.BUILD_UPGRADE_CONFIRM, success: true, entityId: targetId, newLevel,

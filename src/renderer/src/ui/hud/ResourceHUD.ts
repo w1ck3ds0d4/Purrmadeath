@@ -1,4 +1,4 @@
-import { PLAYER_CARRY_LIMITS } from '@shared/constants';
+import { PLAYER_CARRY_LIMITS, getEffectiveCarryLimits } from '@shared/constants';
 import { THEME, hudStyle } from '../theme';
 
 interface SlotDef {
@@ -23,6 +23,8 @@ export class ResourceHUD {
   onToggle: ((expanded: boolean) => void) | null = null;
 
   private resources: Record<string, number> = {};
+  /** Effective carry limits (updated when warehouse upgrades change). */
+  private carryLimits: Record<string, number> = { ...PLAYER_CARRY_LIMITS };
 
   private static readonly ITEMS: SlotDef[] = [
     { key: 'wood',    color: '#8a6a3a', label: 'Wood' },
@@ -108,6 +110,11 @@ export class ResourceHUD {
     this.renderBody();
   }
 
+  /** Update carry limits when warehouse upgrades change. */
+  setCarryLimits(totalWarehouseLevels: number): void {
+    this.carryLimits = getEffectiveCarryLimits(totalWarehouseLevels);
+  }
+
   setVisible(visible: boolean): void {
     this.el.style.display = visible ? 'block' : 'none';
   }
@@ -151,7 +158,7 @@ export class ResourceHUD {
 
       const right = document.createElement('span');
       right.style.cssText = `color:${THEME.textBright};font-weight:bold;font-size:11px;text-align:right;`;
-      const cap = PLAYER_CARRY_LIMITS[item.key];
+      const cap = this.carryLimits[item.key];
       const count = this.resources[item.key] ?? 0;
       if (cap !== undefined && cap !== Infinity) {
         const atCap = count >= cap;

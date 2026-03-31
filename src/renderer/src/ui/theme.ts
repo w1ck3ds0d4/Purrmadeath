@@ -1,25 +1,25 @@
 /**
- * Unified dark medieval crimson UI theme.
+ * Unified dark medieval purple UI theme.
  * All overlays and HUDs import from here instead of hardcoding colors.
  */
 export const THEME = {
-  // -- Backgrounds (dark stone with faint red warmth) --
-  panelBg:      'rgba(10, 4, 6, 0.92)',
-  panelBgLight: 'rgba(10, 4, 6, 0.75)',
-  surfaceBg:    'rgba(180, 40, 40, 0.06)',
-  surfaceHover: 'rgba(180, 40, 40, 0.12)',
+  // -- Backgrounds (dark stone with faint purple warmth) --
+  panelBg:      'rgba(10, 4, 12, 0.92)',
+  panelBgLight: 'rgba(10, 4, 12, 0.75)',
+  surfaceBg:    'rgba(110, 50, 170, 0.06)',
+  surfaceHover: 'rgba(110, 50, 170, 0.12)',
 
-  // -- Accents (aged blood crimson) --
-  accent:       '#aa2233',
-  accentHex:    0xaa2233,
-  accentBright: '#cc4444',
-  accentRgba:   (a: number) => `rgba(170, 34, 51, ${a})`,
+  // -- Accents (mystic purple) --
+  accent:       '#8844cc',
+  accentHex:    0x8844cc,
+  accentBright: '#aa66ee',
+  accentRgba:   (a: number) => `rgba(110, 50, 170, ${a})`,
 
   // -- Borders --
   borderSubtle:  'rgba(255, 255, 255, 0.06)',
-  borderDefault: 'rgba(170, 34, 51, 0.25)',
-  borderHover:   'rgba(200, 60, 60, 0.5)',
-  borderAccent:  'rgba(170, 34, 51, 0.35)',
+  borderDefault: 'rgba(110, 50, 170, 0.25)',
+  borderHover:   'rgba(140, 80, 200, 0.5)',
+  borderAccent:  'rgba(110, 50, 170, 0.35)',
 
   // -- Border radius --
   radiusSm: '4px',
@@ -41,8 +41,8 @@ export const THEME = {
   textMuted:     '#7a6a60',
   textDim:       '#5a4a44',
 
-  // -- Panel glow (dying embers) --
-  panelGlow: '0 0 20px rgba(120, 20, 30, 0.15)',
+  // -- Panel glow (purple embers) --
+  panelGlow: '0 0 20px rgba(80, 30, 120, 0.15)',
 
   // -- Transitions --
   transition: '0.15s',

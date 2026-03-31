@@ -31,7 +31,7 @@ const logStream = fs.createWriteStream(logPath, { flags: 'a' });
 
 function clog(category: string, message: string): void {
   const time = new Date().toISOString().slice(11, 23); // HH:mm:ss.SSS
-  const line = `[${time}] [${category.padEnd(10)}] ${message}`;
+  const line = `[${time}] [${category}] ${message}`;
   logStream.write(line + '\n');
   console.log(line);
 }
@@ -326,6 +326,9 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     title: 'Purrmadeath',
+    icon: app.isPackaged
+      ? join(process.resourcesPath, 'icon.png')
+      : join(__dirname, '../../build/icon.png'),
     backgroundColor: '#0a0a0f',
     autoHideMenuBar: true,
     webPreferences: {

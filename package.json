@@ -58,10 +58,15 @@
         "from": "resources/server/",
         "to": "server/",
         "filter": ["**/*"]
+      },
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
       }
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": true,

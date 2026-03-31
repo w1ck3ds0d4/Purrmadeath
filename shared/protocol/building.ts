@@ -130,6 +130,8 @@ export interface WarehouseUpdateMessage extends BaseMessage {
   food: number;
   weapons: number;
   exists: boolean;
+  /** Sum of all warehouse upgrade levels (for inventory capacity bonus). */
+  totalWarehouseLevels?: number;
 }
 
 // ---- Laser Beam ----

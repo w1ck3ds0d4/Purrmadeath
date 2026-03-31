@@ -42,6 +42,7 @@ import type { LobbySlot } from '@shared/protocol';
 import type { SaveSlotInfo } from '@shared/SaveFormat';
 import { registerMessageHandlers, type GameplayState } from './net/NetworkHandler';
 import { createBuildController } from './systems/BuildController';
+import { createAmbientAudio } from './systems/AmbientAudioSystem';
 
 import { World } from '@shared/ecs/World';
 import { C, PositionComponent, FactionComponent, BuildingComponent, DodgeRollComponent, StaminaComponent, PlayerInputComponent, FacingComponent, GhostStateComponent, HealthComponent } from '@shared/components';
@@ -63,6 +64,7 @@ import { WeaponHotbar } from './ui/hud/WeaponHotbar';
 import { ProjectileRendererSystem } from './systems/ProjectileRendererSystem';
 import { WaveHUD } from './ui/hud/WaveHUD';
 import { ResourceHUD } from './ui/hud/ResourceHUD';
+import { BlessingHUD } from './ui/hud/BlessingHUD';
 import { DeathOverlay } from './ui/overlays/DeathOverlay';
 import { GameOverOverlay } from './ui/overlays/GameOverOverlay';
 import { UpdateBanner } from './ui/banners/UpdateBanner';
@@ -145,6 +147,7 @@ async function main(): Promise<void> {
   const damageNumbers = new DamageNumberSystem(renderer.stage);
   const hitParticles  = new HitParticleSystem(tileRenderer.worldContainer);
   const abilityVFX    = new AbilityVFXSystem(tileRenderer.worldContainer);
+  const ambientAudio  = createAmbientAudio();
   const nightOverlay  = new NightOverlay(renderer.stage);
   const hud          = new HUD(renderer.stage);
   const weaponHotbar = new WeaponHotbar(renderer.stage);
@@ -371,9 +374,11 @@ async function main(): Promise<void> {
   const waveHUD      = new WaveHUD();
   const resourceHUD  = new ResourceHUD();
   const warehouseHUD = new WarehouseHUD();
+  const blessingHUD  = new BlessingHUD();
 
   // Top-center inventory accordion (open by default)
   document.getElementById('overlay')!.appendChild(resourceHUD.el);
+  document.getElementById('overlay')!.appendChild(blessingHUD.el);
 
   // Warehouse HUD kept for state tracking but not added to DOM
   // Warehouse resources are shown in the build menu sidebar instead
@@ -611,6 +616,12 @@ async function main(): Promise<void> {
       case '/pause':
         net.send({ type: MessageType.DEBUG_WAVE_PAUSE });
         break;
+      case '/killenemies':
+        net.send({ type: MessageType.DEBUG_KILL_ENEMIES });
+        break;
+      case '/destroyportals':
+        net.send({ type: MessageType.DEBUG_DESTROY_PORTALS });
+        break;
     }
   });
 
@@ -750,6 +761,7 @@ async function main(): Promise<void> {
     resourceHUD.setResources(0, 0, 0, 0, 0, 0);
     resourceHUD.hide();
     buildCtrl.reset();
+    ambientAudio.reset();
     localResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0 };
     warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0 };
     warehouseExists = false;
@@ -1387,6 +1399,12 @@ async function main(): Promise<void> {
       cardToast.update(dt);
       chatOverlay.update(dt);
 
+      // Update blessings HUD with active shrine buffs
+      if (localEntityId != null) {
+        const ab = world.getComponent<import('@shared/components').ActiveBuffsComponent>(localEntityId, C.ActiveBuffs);
+        blessingHUD.update(ab?.buffs ?? []);
+      }
+
       // Tick local dodge roll timer
       if (localEntityId !== null) {
         const dr = world.getComponent<DodgeRollComponent>(localEntityId, C.DodgeRoll);
@@ -1692,9 +1710,11 @@ async function main(): Promise<void> {
       }
 
       playerRenderer.selectedBuildingId = buildCtrl.selectedId;
+      playerRenderer.movingBuildingId = buildCtrl.movingEntityId;
       playerRenderer.civilianSpawn = handlerState.civilianSpawn;
       const { width: _vw, height: _vh } = renderer.screen;
       playerRenderer.update(world, localEntityId, localFacing, dt, reconciler.smoothX, reconciler.smoothY, camera.viewX, camera.viewY, camera.zoom, _vw, _vh);
+      ambientAudio.update(world, dt, camera.viewX, camera.viewY);
       deathOverlay.update(dt);
 
       // 6. Update and render projectiles
@@ -1850,7 +1870,7 @@ async function main(): Promise<void> {
 
     tileRenderer.applyCamera(camera.viewX, camera.viewY, camera.zoom, width, height);
 
-    if (state === GameState.Playing) {
+    if (state === GameState.Playing || state === GameState.Paused) {
       hud.update(world, width, height, localEntityId);
       // Low HP vignette
       if (localEntityId !== null) {

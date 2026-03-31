@@ -41,6 +41,9 @@ export class PortalSystem {
             portalId: id,
           });
         }
+
+        // Portals lose 5% of max HP each spawn cycle (self-destruct over time)
+        hp.current = Math.max(0, hp.current - Math.ceil(hp.max * 0.05));
       }
     }
 

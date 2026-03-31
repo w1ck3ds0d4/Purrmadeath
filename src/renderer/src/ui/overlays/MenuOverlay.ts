@@ -104,6 +104,11 @@ export class MenuOverlay {
       console.log('[Settings] Not implemented yet - Phase 9');
     });
 
+    // Exit button - close the app
+    this.require('btn-exit').addEventListener('click', () => {
+      window.close();
+    });
+
     // Card browser screen
     this.cardScreen = document.createElement('div');
     this.cardScreen.className = 'screen';

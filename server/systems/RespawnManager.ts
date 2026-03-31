@@ -520,6 +520,17 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
           spawner.guardIds.length = 0;
         }
 
+        // If already a ruin (POI decoration or previously ruined), fully destroy it
+        if (world.hasComponent(deadId, C.Ruins)) {
+          const destroyedMsg: BuildDestroyedMessage = {
+            type: MessageType.BUILD_DESTROYED,
+            entityId: deadId,
+          };
+          for (const p of players.values()) send(p.client, destroyedMsg);
+          world.destroyEntity(deadId);
+          continue;
+        }
+
         // Convert to ruins - strip functional components, add Ruins component
         const originalType = bldg?.buildingType ?? 'wall';
         const originalLevel = bldg?.upgradeLevel ?? 1;
