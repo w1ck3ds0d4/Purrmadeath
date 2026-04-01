@@ -33,7 +33,7 @@ export const MAX_MESSAGES_PER_SECOND = 500;
 export const MAX_CONNECTIONS = 16;
 
 /** Semantic version string - compared in HANDSHAKE for version gating. */
-export const GAME_VERSION = '1.3.1';
+export const GAME_VERSION = '1.3.2';
 
 /** Milliseconds a disconnected player's slot is held before removal. */
 export const RECONNECT_GRACE_MS = 30_000;

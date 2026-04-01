@@ -315,6 +315,8 @@ export class EnemySystem {
 
     const _aiStart = performance.now();
     let _enemyCount = 0;
+    // Pre-cache all building IDs for giant/titan targeting (avoid per-entity array spread)
+    const allBuildingIdsCache = [...campfireIds, ...wallIds, ...otherBuildingIds];
 
     for (const id of world.query(C.Position, C.Faction, C.PlayerInput)) {
       const faction = world.getComponent<FactionComponent>(id, C.Faction)!;
@@ -505,7 +507,7 @@ export class EnemySystem {
       // -- Variant-Specific Targeting (enemies only) --
       else if (variant === 'ghost') {
         // Ghosts: only target players, phase through everything (no pathfinding)
-        const nearest = findNearestPlayer(5000); // large range but not infinite
+        const nearest = findNearestPlayer(1500);
         if (nearest) {
           targetPos = nearest.pos;
           navPos = nearest.pos;
@@ -514,7 +516,7 @@ export class EnemySystem {
         }
       } else if (variant === 'assassin') {
         // Assassins: only target players (use pathfinding, not beeline)
-        const nearest = findNearestPlayer(5000);
+        const nearest = findNearestPlayer(1500);
         if (nearest) {
           targetPos = nearest.pos;
           navPos = nearest.pos;
@@ -522,8 +524,7 @@ export class EnemySystem {
         }
       } else if (variant === 'giant') {
         // Giants: target nearest building (any type), skip player distraction entirely
-        const allBuildingIds = [...campfireIds, ...wallIds, ...otherBuildingIds];
-        const nearest = tryBuildings(allBuildingIds, Infinity);
+        const nearest = tryBuildings(allBuildingIdsCache, Infinity);
         if (nearest) {
           targetPos = nearest.pos;
           navPos = nearest.nav;
@@ -552,8 +553,7 @@ export class EnemySystem {
         }
         // No campfire and no players - fall back to any building
         if (!targetPos) {
-          const allBuildingIds = [...campfireIds, ...wallIds, ...otherBuildingIds];
-          const nearest = tryBuildings(allBuildingIds, Infinity);
+          const nearest = tryBuildings(allBuildingIdsCache, Infinity);
           if (nearest) {
             targetPos = nearest.pos;
             navPos = nearest.nav;
@@ -612,7 +612,7 @@ export class EnemySystem {
           }
           // 2. Nearest building in range (if no player found)
           if (!targetPos) {
-            const nearBldg = tryBuildings([...campfireIds, ...wallIds, ...otherBuildingIds], ENEMY_AGGRO_RANGE);
+            const nearBldg = tryBuildings(allBuildingIdsCache, ENEMY_AGGRO_RANGE);
             if (nearBldg) {
               targetPos = nearBldg.pos; navPos = nearBldg.nav; targetDist = nearBldg.dist;
               targetHalfExtent = nearBldg.half; targetEntityId = nearBldg.id;
@@ -857,8 +857,8 @@ export class EnemySystem {
     // Track tick time for dynamic pathfinding budget
     this.lastTickMs = _aiEnd - _setupStart;
 
-    if (this.tickCount % 300 === 0) {
-      console.log(`[EnemySystem] setup=${this.perfStats.setupMs.toFixed(1)}ms ai=${this.perfStats.aiMs.toFixed(1)}ms enemies=${this.perfStats.enemyCount} resources=${this.perfStats.resourceCount} pathfinds=${this.perfStats.pathfinds} budget=${this.pathfindBudget}`);
+    if (this.tickCount % 300 === 0 || this.lastTickMs > 500) {
+      console.log(`[EnemySystem] setup=${((_aiStart - _setupStart)).toFixed(1)}ms ai=${((_aiEnd - _aiStart)).toFixed(1)}ms enemies=${_enemyCount} resources=${this.resourcePositions.length} pathfinds=${this.pathfindsThisTick} budget=${this.pathfindBudget} total=${this.lastTickMs.toFixed(1)}ms`);
     }
 
     return result;
