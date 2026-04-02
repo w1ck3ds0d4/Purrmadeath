@@ -302,6 +302,17 @@ export class EnemySystem {
       } else if (rf.type === 'poi') {
         const rpos = world.getComponent<PositionComponent>(rid, C.Position)!;
         this.resourceHash.insert(rid, rpos.x, rpos.y);
+        // Block POI tiles for pathfinding so enemies navigate around them
+        const poiHalf = ENEMY_RADIUS + 18; // POI_RADIUS = 18
+        const poiMinTx = Math.floor((rpos.x - poiHalf) / TILE_SIZE);
+        const poiMaxTx = Math.floor((rpos.x + poiHalf - 1) / TILE_SIZE);
+        const poiMinTy = Math.floor((rpos.y - poiHalf) / TILE_SIZE);
+        const poiMaxTy = Math.floor((rpos.y + poiHalf - 1) / TILE_SIZE);
+        for (let tx = poiMinTx; tx <= poiMaxTx; tx++) {
+          for (let ty = poiMinTy; ty <= poiMaxTy; ty++) {
+            this.buildingBlockedTiles.add(tileKey(tx, ty));
+          }
+        }
       }
     }
 
