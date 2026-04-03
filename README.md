@@ -1,6 +1,6 @@
 # Purrmadeath
 
-2D co-op roguelike survival - base building, procedural world, up to 4 players. Version 1.3.0.
+2D co-op roguelike survival - base building, procedural world, up to 4 players. Version 1.3.2.
 
 ---
 
@@ -61,17 +61,17 @@ Buildings are organized by category in the build menu (Q):
 
 **Defense**: Wall, Gate, Arrow Turret, Cannon Turret, Ballista, Laser Tower, Tesla Coil, Flame Tower, Catapult, Flak Cannon, Moat, Spike Trap
 
-**Production**: Lumbermill, Quarry, Mine, Farm, Workshop, Smeltery, Market
+**Production**: Lumbermill, Quarry, Mine, Farm, Workshop, Smeltery (produces steel from wood + iron)
 
-**Military**: Training Center (trains civilians into Warrior/Ranger/Mage guards)
+**Military**: Guard House (trains random-role guards - costs civilian + food + steel + gold)
 
 **Housing**: Cat House (provides housing for additional civilians)
 
 **Utility**: Warehouse, Bridge, Light Tower, Healing Shrine, Repair Station, Teleporter Pad
 
-**Shops**: Potion Shop, Tavern (hire hero NPCs)
+**Shops**: Potion Shop, Tavern (hire hero NPCs), Market (daily card shop - 3 random cards per wave, buy 1 with gold, 1 max per game)
 
-**Achievement-Locked**: Siege Workshop, Kennel, Arcane Tower, Watchtower (unlocked via achievements)
+**Coming Soon**: Dragon Roost
 
 ### Points of Interest
 
