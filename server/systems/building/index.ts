@@ -88,6 +88,8 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     isInsideBuildRange: deps.isInsideBuildRange ?? (() => true),
     onCampfirePlaced: deps.onCampfirePlaced ?? (() => {}),
     broadcastBuildRange: deps.broadcastBuildRange ?? (() => {}),
+    getMarketEntityId: deps.getMarketEntityId ?? (() => -1),
+    setMarketEntityId: deps.setMarketEntityId ?? (() => {}),
   };
 
   return {
@@ -97,12 +99,12 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
     handleRepair: (clientId: string, msg: any, send: SendFn) => Placement.handleRuinRepair(ctx, clientId, msg, send),
     handleMove: (clientId: string, msg: any, send: SendFn) => Placement.handleBuildMove(ctx, clientId, msg, send),
     broadcastWarehouseUpdate,
+    broadcastBuildRange: (send: SendFn) => ctx.broadcastBuildRange(send),
     depositPlayerToWarehouse: (playerEntityId: number, send: SendFn) => Placement.depositPlayerToWarehouse(ctx, playerEntityId, send),
     cleanupBridge: (entityId: number) => Placement.cleanupBridge(ctx, entityId),
     spawnTrainedGuard: (x: number, y: number, buildingId: number, role: 'warrior' | 'ranger' | 'mage') => Ticks.spawnTrainedGuard(world, x, y, buildingId, role),
     tick(dt: number, send: SendFn): void {
       rebuildEnemyHash();
-      Ticks.tickSiegeWorkshops(ctx);
       Ticks.tickProduction(ctx, dt);
       Ticks.tickTurrets(ctx, dt, send);
       Ticks.tickLaserBeams(ctx, dt, send);
@@ -116,7 +118,6 @@ export function createBuildingSystem(deps: BuildingSystemDeps) {
       Ticks.tickFlameTowers(ctx, dt, send);
       Ticks.tickRepairStations(ctx, dt);
       Ticks.tickMoats(ctx);
-      Ticks.tickKennels(ctx, dt);
     },
   };
 }

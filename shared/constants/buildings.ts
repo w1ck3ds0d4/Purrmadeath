@@ -33,7 +33,7 @@ export const WATCHTOWER_RANGE_PER_LEVEL_PX = WATCHTOWER_RANGE_PER_LEVEL * TILE_S
 export const DEFENCE_BUILDINGS = new Set([
   'wall', 'gate', 'arrow_turret', 'cannon_turret', 'ballista',
   'laser_tower', 'tesla_coil', 'flame_tower', 'catapult',
-  'moat', 'spike_trap', 'bridge', 'siege_workshop', 'watchtower', 'flak_cannon',
+  'moat', 'spike_trap', 'bridge', 'watchtower', 'flak_cannon',
 ]);
 
 /** Check if a building type is a defence building (no exclusion spacing between defence buildings). */
@@ -60,7 +60,7 @@ export const BUILDING_SIZES: Record<string, { w: number; h: number }> = {
   light_tower: { w: 1, h: 1 }, healing_shrine: { w: 1, h: 1 }, barracks: { w: 2, h: 2 }, potion_shop: { w: 2, h: 2 },
   cat_house: { w: 2, h: 2 },
   gate: { w: 3, h: 1 }, ballista: { w: 2, h: 2 }, laser_tower: { w: 1, h: 1 },
-  workshop: { w: 2, h: 2 }, training_center: { w: 2, h: 2 },
+  workshop: { w: 2, h: 2 },
   // ── New buildings ──────────────────────────────────────────────────────────
   tesla_coil: { w: 1, h: 1 }, flame_tower: { w: 1, h: 1 }, catapult: { w: 2, h: 2 },
   moat: { w: 1, h: 1 },
@@ -68,14 +68,12 @@ export const BUILDING_SIZES: Record<string, { w: number; h: number }> = {
   teleporter_pad: { w: 1, h: 1 },
   tavern: { w: 2, h: 2 },
   // Achievement-unlocked buildings
-  siege_workshop: { w: 2, h: 2 },
-  kennel: { w: 2, h: 2 },
-  arcane_tower: { w: 1, h: 1 },
   watchtower: { w: 1, h: 1 },
   flak_cannon: { w: 2, h: 2 },
   dragon_roost: { w: 3, h: 3 },
   smeltery: { w: 2, h: 2 },
   market: { w: 2, h: 2 },
+  guard_house: { w: 2, h: 2 },
 };
 
 /**
@@ -197,8 +195,6 @@ export const BALLISTA_MAX_HEALTH = 120;
 export const LASER_TOWER_MAX_HEALTH = 100;
 /** Workshop HP. */
 export const WORKSHOP_MAX_HEALTH = 150;
-/** Training center HP. */
-export const TRAINING_CENTER_MAX_HEALTH = 220;
 
 // ── New Building HP ─────────────────────────────────────────────────────────
 /** Tesla coil HP. */
@@ -218,9 +214,6 @@ export const TELEPORTER_PAD_MAX_HEALTH = 100;
 /** Tavern HP. */
 export const TAVERN_MAX_HEALTH = 200;
 // Achievement-unlocked buildings
-export const SIEGE_WORKSHOP_MAX_HEALTH = 250;
-export const KENNEL_MAX_HEALTH = 200;
-export const ARCANE_TOWER_MAX_HEALTH = 150;
 export const WATCHTOWER_MAX_HEALTH = 120;
 /** Flak Cannon HP (spread-shot turret). */
 export const FLAK_CANNON_MAX_HEALTH = 180;
@@ -230,6 +223,8 @@ export const DRAGON_ROOST_MAX_HEALTH = 350;
 export const SMELTERY_MAX_HEALTH = 200;
 /** Market HP (converts resources to gold). */
 export const MARKET_MAX_HEALTH = 150;
+/** Guard house HP. */
+export const GUARD_HOUSE_MAX_HEALTH = 220;
 
 /** Radius (px) for auto-depositing player resources into the warehouse. */
 export const WAREHOUSE_DEPOSIT_RADIUS = 80;
@@ -238,7 +233,7 @@ export const WAREHOUSE_DEPOSIT_RADIUS = 80;
 export const DEMOLISH_REFUND_PERCENT = 0.5;
 
 /** Per-building-type resource costs for placement. */
-export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'iron' | 'diamond' | 'food', number>>> = {
+export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'iron' | 'diamond' | 'food' | 'steel', number>>> = {
   campfire:       { wood: 10, stone: 10 },
   wall:           { wood: 5 },
   warehouse:      { wood: 10, stone: 5 },
@@ -257,12 +252,11 @@ export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'i
   cat_house:      { wood: 10, stone: 5 },
   gate:           { wood: 8, stone: 5 },
   ballista:       { stone: 8, iron: 8 },
-  laser_tower:    { stone: 10, iron: 10, diamond: 1 },
+  laser_tower:    { stone: 10, iron: 10, diamond: 1, steel: 5 },
   workshop:       { wood: 15, iron: 10, diamond: 2 },
-  training_center: { wood: 20, iron: 15, diamond: 3 },
   // ── New buildings ──────────────────────────────────────────────────────────
-  tesla_coil:      { stone: 8, iron: 8, diamond: 1 },
-  flame_tower:     { stone: 6, iron: 6 },
+  tesla_coil:      { stone: 8, iron: 8, diamond: 1, steel: 3 },
+  flame_tower:     { stone: 6, iron: 6, steel: 3 },
   catapult:        { stone: 15, iron: 10, diamond: 3 },
   moat:            { stone: 3 },
   repair_station:  { wood: 15, iron: 10 },
@@ -270,14 +264,12 @@ export const BUILDING_COSTS: Record<string, Partial<Record<'wood' | 'stone' | 'i
   teleporter_pad:  { iron: 10, diamond: 5 },
   tavern:          { wood: 20, stone: 15, iron: 10 },
   // Achievement-unlocked buildings
-  siege_workshop:  { wood: 25, stone: 20, iron: 15, diamond: 5 },
-  kennel:          { wood: 20, stone: 10, iron: 10 },
-  arcane_tower:    { stone: 15, iron: 15, diamond: 8 },
   watchtower:      { wood: 15, stone: 15, iron: 5 },
   flak_cannon:     { stone: 20, iron: 15, diamond: 5 },
   dragon_roost:    { wood: 50, stone: 50, iron: 30, diamond: 15 },
   smeltery:        { stone: 25, iron: 20 },
   market:          { wood: 20, stone: 15, iron: 5 },
+  guard_house:     { wood: 25, stone: 15, iron: 10, steel: 5 },
 };
 
 /** Ordered list of building types the player can cycle through in build mode. */
@@ -287,13 +279,13 @@ export const PLACEABLE_BUILDINGS: string[] = [
   'arrow_turret', 'cannon_turret', 'spike_trap', 'bridge',
   'light_tower', 'healing_shrine', 'potion_shop',
   'cat_house',
-  'gate', 'ballista', 'laser_tower', 'workshop', 'training_center',
+  'gate', 'ballista', 'laser_tower', 'workshop',
   'tesla_coil', 'flame_tower', 'catapult', 'moat',
   'repair_station', 'teleporter_pad',
   'tavern',
   'watchtower',
+  'guard_house',
   // Achievement-unlocked buildings
-  'siege_workshop', 'kennel', 'arcane_tower',
   'flak_cannon', 'dragon_roost', 'smeltery', 'market',
 ];
 
@@ -357,7 +349,7 @@ export const BUILDING_MAX_LEVEL: Record<BuildingType, number> = {
   arrow_turret: 3, cannon_turret: 3, spike_trap: 3,
   light_tower: 3, healing_shrine: 3, barracks: 3, potion_shop: 3,
   cat_house: 3,
-  gate: 3, ballista: 3, laser_tower: 3, workshop: 3, training_center: 3,
+  gate: 3, ballista: 3, laser_tower: 3, workshop: 3,
   // ── New buildings ──────────────────────────────────────────────────────────
   tesla_coil: 3, flame_tower: 3, catapult: 3,
   moat: 1,
@@ -365,10 +357,7 @@ export const BUILDING_MAX_LEVEL: Record<BuildingType, number> = {
   teleporter_pad: 1,
   tavern: 3,
   // Achievement-unlocked buildings
-  siege_workshop: 3,
-  kennel: 3,
-  arcane_tower: 3,
-  watchtower: 3,
+  watchtower: 3, guard_house: 3,
   flak_cannon: 3,
   dragon_roost: 3,
   smeltery: 3,
@@ -461,11 +450,18 @@ export const UPGRADE_LASER_DPS = [15, 22, 30];
 /** Workshop production interval per level (seconds per weapon). */
 export const WORKSHOP_PROD_INTERVAL = [30, 22, 15];
 
-// ─── Training Center ───────────────────────────────────────────────────────
+/** Smeltery production interval per level (seconds per steel). */
+export const SMELTERY_PROD_INTERVAL = [20, 15, 10];
+/** Wood consumed per smeltery cycle. */
+export const SMELTERY_WOOD_COST = 2;
+/** Iron consumed per smeltery cycle. */
+export const SMELTERY_IRON_COST = 2;
 
-/** Max trained guards per training center level. */
-export const TRAINING_CENTER_MAX_GUARDS = [2, 3, 4];
-/** Training center guard role stats. */
+// ─── Guard House ──────────────────────────────────────────────────────────
+
+/** Max trained guards per guard house level. */
+export const GUARD_HOUSE_MAX_GUARDS = [2, 3, 4];
+/** Guard role stats (used by guard house). */
 export const TC_WARRIOR_HP = 100;
 export const TC_WARRIOR_DAMAGE = 15;
 export const TC_WARRIOR_SPEED = 55;
@@ -485,15 +481,15 @@ export const TC_MAGE_SPEED = 45;
 export function getUpgradeCost(
   buildingType: BuildingType,
   currentLevel: number,
-): Partial<Record<'wood' | 'stone' | 'iron' | 'diamond' | 'food', number>> | null {
+): Partial<Record<'wood' | 'stone' | 'iron' | 'diamond' | 'food' | 'steel', number>> | null {
   const maxLevel = BUILDING_MAX_LEVEL[buildingType];
   if (currentLevel >= maxLevel) return null;
   const baseCost = BUILDING_COSTS[buildingType];
   if (!baseCost) return null;
   const mult = UPGRADE_COST_MULTIPLIERS[currentLevel - 1]; // level 1->2 uses index 0
-  const cost: Partial<Record<'wood' | 'stone' | 'iron' | 'diamond' | 'food', number>> = {};
+  const cost: Partial<Record<'wood' | 'stone' | 'iron' | 'diamond' | 'food' | 'steel', number>> = {};
   for (const [res, amount] of Object.entries(baseCost)) {
-    cost[res as 'wood' | 'stone' | 'iron' | 'diamond' | 'food'] = Math.ceil((amount as number) * mult);
+    cost[res as 'wood' | 'stone' | 'iron' | 'diamond' | 'food' | 'steel'] = Math.ceil((amount as number) * mult);
   }
   return cost;
 }
@@ -506,17 +502,17 @@ export function getRepairCost(
   buildingType: BuildingType,
   missingHp: number,
   maxHp: number,
-): Partial<Record<'wood' | 'stone' | 'iron' | 'diamond' | 'food', number>> | null {
+): Partial<Record<'wood' | 'stone' | 'iron' | 'diamond' | 'food' | 'steel', number>> | null {
   if (missingHp <= 0) return null;
   const baseCost = BUILDING_COSTS[buildingType];
   if (!baseCost) return null;
   const fraction = missingHp / maxHp;
-  const cost: Partial<Record<'wood' | 'stone' | 'iron' | 'diamond' | 'food', number>> = {};
+  const cost: Partial<Record<'wood' | 'stone' | 'iron' | 'diamond' | 'food' | 'steel', number>> = {};
   let hasAnyCost = false;
   for (const [res, amount] of Object.entries(baseCost)) {
     const val = Math.ceil((amount as number) * fraction);
     if (val > 0) {
-      cost[res as 'wood' | 'stone' | 'iron' | 'diamond' | 'food'] = val;
+      cost[res as 'wood' | 'stone' | 'iron' | 'diamond' | 'food' | 'steel'] = val;
       hasAnyCost = true;
     }
   }
@@ -580,15 +576,15 @@ export function getUpgradePreview(type: string, level: number): string[] {
     arrow_turret: ARROW_TURRET_MAX_HEALTH, cannon_turret: CANNON_TURRET_MAX_HEALTH,
     ballista: BALLISTA_MAX_HEALTH, laser_tower: LASER_TOWER_MAX_HEALTH,
     lumbermill: LUMBERMILL_MAX_HEALTH, quarry: QUARRY_MAX_HEALTH, mine: MINE_MAX_HEALTH,
-    farm: FARM_MAX_HEALTH, workshop: WORKSHOP_MAX_HEALTH, training_center: TRAINING_CENTER_MAX_HEALTH,
+    farm: FARM_MAX_HEALTH, workshop: WORKSHOP_MAX_HEALTH,
     light_tower: LIGHT_TOWER_MAX_HEALTH, healing_shrine: HEALING_SHRINE_MAX_HEALTH,
     cat_house: CAT_HOUSE_MAX_HEALTH, gate: GATE_MAX_HEALTH, potion_shop: POTION_SHOP_MAX_HEALTH,
     tesla_coil: TESLA_COIL_MAX_HEALTH, flame_tower: FLAME_TOWER_MAX_HEALTH,
     catapult: CATAPULT_MAX_HEALTH, repair_station: REPAIR_STATION_MAX_HEALTH,
     tavern: TAVERN_MAX_HEALTH, spike_trap: SPIKE_TRAP_MAX_HEALTH,
-    siege_workshop: SIEGE_WORKSHOP_MAX_HEALTH, kennel: KENNEL_MAX_HEALTH,
-    arcane_tower: ARCANE_TOWER_MAX_HEALTH, watchtower: WATCHTOWER_MAX_HEALTH,
+    watchtower: WATCHTOWER_MAX_HEALTH,
     flak_cannon: FLAK_CANNON_MAX_HEALTH, dragon_roost: DRAGON_ROOST_MAX_HEALTH, smeltery: SMELTERY_MAX_HEALTH, market: MARKET_MAX_HEALTH,
+    guard_house: GUARD_HOUSE_MAX_HEALTH,
   } as Record<string, number>)[type];
   if (hpBase && UPGRADE_HP_MULT[next]) {
     const curHp = Math.round(hpBase * (UPGRADE_HP_MULT[level - 1] ?? 1));
@@ -650,8 +646,8 @@ export function getUpgradePreview(type: string, level: number): string[] {
     case 'barracks':
       if (BARRACKS_MAX_GUARDS[next]) lines.push(`Max guards: ${BARRACKS_MAX_GUARDS[level - 1]} -> ${BARRACKS_MAX_GUARDS[next]}`);
       break;
-    case 'training_center':
-      if (TRAINING_CENTER_MAX_GUARDS[next]) lines.push(`Max guards: ${TRAINING_CENTER_MAX_GUARDS[level - 1]} -> ${TRAINING_CENTER_MAX_GUARDS[next]}`);
+    case 'guard_house':
+      if (GUARD_HOUSE_MAX_GUARDS[next]) lines.push(`Max guards: ${GUARD_HOUSE_MAX_GUARDS[level - 1]} -> ${GUARD_HOUSE_MAX_GUARDS[next]}`);
       break;
     case 'cat_house':
       if (CAT_HOUSE_CAPACITY[next]) lines.push(`Housing: ${CAT_HOUSE_CAPACITY[level - 1]} -> ${CAT_HOUSE_CAPACITY[next]}`);

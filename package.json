@@ -37,9 +37,9 @@
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "concurrently": "^8.2.2",
-    "electron": "^31.0.0",
-    "electron-builder": "^24.13.0",
-    "electron-vite": "^2.3.0",
+    "electron": "^41.1.0",
+    "electron-builder": "^26.8.1",
+    "electron-vite": "^5.0.0",
     "eslint": "^9.0.0",
     "globals": "^15.0.0",
     "nodemon": "^3.1.4",
@@ -57,7 +57,9 @@
       {
         "from": "resources/server/",
         "to": "server/",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "build/icon.png",

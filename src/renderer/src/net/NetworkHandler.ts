@@ -153,7 +153,7 @@ export interface GameplayState {
   placingType: string;
   selectedBuildingId: number | null;
   localResources: Record<string, number>;
-  warehouseResources: { wood: number; stone: number; iron: number; diamond: number; gold: number; food: number; weapons: number };
+  warehouseResources: { wood: number; stone: number; iron: number; diamond: number; gold: number; food: number; weapons: number; steel: number };
   warehouseExists: boolean;
   selectedClass: import('@shared/definitions/ClassDefinitions').PlayerClass;
   lastServerStats?: {
@@ -238,6 +238,7 @@ export interface NetworkHandlerDeps {
   potionShopOverlay: PotionShopOverlay;
   trainingOverlay: TrainingCenterOverlay;
   tavernOverlay: TavernOverlay;
+  marketOverlay: import('../ui/overlays/MarketOverlay').MarketOverlay;
   buildMenu: BuildMenuOverlay;
   civilianPanel: CivilianPanelOverlay;
   nightOverlay: NightOverlay;
@@ -762,8 +763,8 @@ export function registerMessageHandlers(
         }
       }
     }
-    d.resourceHUD.setResources(ru.wood, ru.stone, ru.iron, ru.diamond, ru.gold, ru.food, ru.weapons);
-    s.localResources = { wood: ru.wood, stone: ru.stone, iron: ru.iron, diamond: ru.diamond, gold: ru.gold, food: ru.food, weapons: ru.weapons };
+    d.resourceHUD.setResources(ru.wood, ru.stone, ru.iron, ru.diamond, ru.gold, ru.food, ru.weapons, ru.steel ?? 0);
+    s.localResources = { wood: ru.wood, stone: ru.stone, iron: ru.iron, diamond: ru.diamond, gold: ru.gold, food: ru.food, weapons: ru.weapons, steel: ru.steel ?? 0 };
     if (s.buildModeActive && s.placingType) {
       d.buildOverlay.update(s.placingType, d.combinedResources());
     }
@@ -772,7 +773,7 @@ export function registerMessageHandlers(
 
   net.on(MessageType.WAREHOUSE_UPDATE, (msg) => {
     const wu = msg as WarehouseUpdateMessage;
-    s.warehouseResources = { wood: wu.wood, stone: wu.stone, iron: wu.iron, diamond: wu.diamond, gold: wu.gold, food: wu.food, weapons: wu.weapons };
+    s.warehouseResources = { wood: wu.wood, stone: wu.stone, iron: wu.iron, diamond: wu.diamond, gold: wu.gold, food: wu.food, weapons: wu.weapons, steel: wu.steel ?? 0 };
     s.warehouseExists = wu.exists;
     // Update inventory capacity based on warehouse upgrade levels
     d.resourceHUD.setCarryLimits(wu.totalWarehouseLevels ?? 0);
@@ -1106,6 +1107,22 @@ export function registerMessageHandlers(
     }
     if (m.success) {
       d.tavernOverlay.hide();
+    }
+  });
+
+  // -- Market --
+  net.on(MessageType.MARKET_OPEN, (msg) => {
+    const m = msg as import('@shared/protocol').MarketOpenMessage;
+    d.marketOverlay.show(0, m.cards, m.boughtThisDay, m.playerGold);
+  });
+
+  net.on(MessageType.MARKET_BUY_RESULT, (msg) => {
+    const m = msg as import('@shared/protocol').MarketBuyResultMessage;
+    if (!m.success && m.reason) {
+      d.debug.log(`Market buy failed: ${m.reason}`);
+    }
+    if (m.success) {
+      d.marketOverlay.hide();
     }
   });
 

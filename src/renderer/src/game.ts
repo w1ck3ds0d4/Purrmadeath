@@ -85,6 +85,7 @@ import { CardPickerOverlay } from './ui/overlays/CardPickerOverlay';
 import { SkillTreeOverlay } from './ui/overlays/SkillTreeOverlay';
 import { PotionShopOverlay } from './ui/overlays/PotionShopOverlay';
 import { TrainingCenterOverlay } from './ui/overlays/TrainingCenterOverlay';
+import { MarketOverlay } from './ui/overlays/MarketOverlay';
 import { TavernOverlay } from './ui/overlays/TavernOverlay';
 import { CivilianPanelOverlay } from './ui/overlays/CivilianPanelOverlay';
 import { CLASS_STATS, DEFAULT_CLASS } from '@shared/definitions/ClassDefinitions';
@@ -320,8 +321,8 @@ async function main(): Promise<void> {
   let lastServerStats: { wave: number; enemyCount: number; portalCount: number; playerCount: number } | undefined;
 
   // ── Build / resource state ──────────────────────────────────────────────
-  let localResources: Record<string, number> = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0 };
-  let warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0 };
+  let localResources: Record<string, number> = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0, steel: 0 };
+  let warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0, steel: 0 };
   let warehouseExists = false;
   let keybindVisible = true;
   let handshakeSent = false;
@@ -521,7 +522,7 @@ async function main(): Promise<void> {
     },
   });
 
-  // Wire training center overlay
+  // Wire guard house overlay
   const trainingOverlay = new TrainingCenterOverlay();
   trainingOverlay.setCallbacks({
     onTrain: (buildingId, role) => {
@@ -530,6 +531,18 @@ async function main(): Promise<void> {
     },
     onClose: () => {
       trainingOverlay.hide();
+    },
+  });
+
+  // Wire market overlay
+  const marketOverlay = new MarketOverlay();
+  marketOverlay.setCallbacks({
+    onBuy: (buildingId, cardIndex) => {
+      net.send({ type: MessageType.MARKET_BUY, buildingId, cardIndex });
+      marketOverlay.hide();
+    },
+    onClose: () => {
+      marketOverlay.hide();
     },
   });
 
@@ -749,6 +762,7 @@ async function main(): Promise<void> {
     eventRoulette.hide();
     potionShopOverlay.hide();
     trainingOverlay.hide();
+    marketOverlay.hide();
     buildMenu.hide();
     waveHUD.setPaused(false);
     coordsEl.style.display = 'none';
@@ -762,8 +776,8 @@ async function main(): Promise<void> {
     resourceHUD.hide();
     buildCtrl.reset();
     ambientAudio.reset();
-    localResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0 };
-    warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0 };
+    localResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0, steel: 0 };
+    warehouseResources = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0, steel: 0 };
     warehouseExists = false;
     warehouseHUD.hide();
     resourceHUD.hide();
@@ -965,7 +979,7 @@ async function main(): Promise<void> {
     },
     stateMgr, menuOverlay, lobbyOverlay, pauseBanner, waveHUD, resourceHUD,
     deathOverlay, gameOverOverlay, chatOverlay, debug, buildOverlay, buildGhost,
-    warehouseHUD, cardPicker, skillTree, statsOverlay, abilityVFX, potionShopOverlay, trainingOverlay, tavernOverlay, buildMenu, civilianPanel, nightOverlay, eventRoulette, cardToast, notificationToast, combinedResources, electronAPI,
+    warehouseHUD, cardPicker, skillTree, statsOverlay, abilityVFX, potionShopOverlay, trainingOverlay, tavernOverlay, marketOverlay, buildMenu, civilianPanel, nightOverlay, eventRoulette, cardToast, notificationToast, combinedResources, electronAPI,
     getActiveAbilities: () => activeAbilities,
     setAbilityCooldown: (slotIdx: number, remaining: number) => {
       if (slotIdx >= 0 && slotIdx < 3) {
@@ -1232,6 +1246,8 @@ async function main(): Promise<void> {
         chatOverlay.hide();
       } else if (trainingOverlay.isVisible && state === GameState.Playing) {
         trainingOverlay.hide();
+      } else if (marketOverlay.isVisible && state === GameState.Playing) {
+        marketOverlay.hide();
       } else if (potionShopOverlay.isVisible && state === GameState.Playing) {
         potionShopOverlay.hide();
       } else if (buildCtrl.phase !== 'inactive' && state === GameState.Playing) {
@@ -1312,7 +1328,7 @@ async function main(): Promise<void> {
 
       // -- Can Act Gate --
       // Player can only perform gameplay actions when alive, not in menus, and not picking cards.
-      const canAct = !localDowned && !localDead && !localGameOver && !chatOverlay.isOpen && !cardPicker.isPicking && !potionShopOverlay.isVisible && !trainingOverlay.isVisible && !buildMenu.isVisible && !civilianPanel.isVisible;
+      const canAct = !localDowned && !localDead && !localGameOver && !chatOverlay.isOpen && !cardPicker.isPicking && !potionShopOverlay.isVisible && !trainingOverlay.isVisible && !marketOverlay.isVisible && !buildMenu.isVisible && !civilianPanel.isVisible;
 
       // Auto-cancel targeting when player can't act
       if (!canAct && targetingSlot >= 0) cancelTargeting();
@@ -1525,6 +1541,8 @@ async function main(): Promise<void> {
         // Close overlays if open, otherwise check for interactive buildings / send interact
         if (trainingOverlay.isVisible) {
           trainingOverlay.hide();
+        } else if (marketOverlay.isVisible) {
+          marketOverlay.hide();
         } else if (potionShopOverlay.isVisible) {
           potionShopOverlay.hide();
         } else if (tavernOverlay.isVisible) {
@@ -1539,8 +1557,14 @@ async function main(): Promise<void> {
             const dx = bp.x - pos.x, dy = bp.y - pos.y;
             if (dx * dx + dy * dy > 80 * 80) continue;
 
-            if (b.buildingType === 'training_center') {
+            if (b.buildingType === 'guard_house') {
               trainingOverlay.show(bid);
+              openedBuilding = true;
+              break;
+            }
+            if (b.buildingType === 'market') {
+              // Send interact to server - server detects market proximity and sends MARKET_OPEN
+              net.send({ type: MessageType.INTERACT, x: pos.x, y: pos.y, t: performance.now() });
               openedBuilding = true;
               break;
             }

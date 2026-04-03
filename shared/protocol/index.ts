@@ -37,6 +37,7 @@ import type {
   CivilianSpeechMessage, CivilianDiedMessage, CivilianSpawnedMessage,
   CivilianPanelRequestMessage, CivilianPanelStateMessage, CivilianAssignMessage,
   TrainGuardMessage, TrainGuardResultMessage,
+  MarketOpenMessage, MarketBuyMessage, MarketBuyResultMessage,
   TavernStateMessage, HireHeroMessage, HireHeroResultMessage, HeroDiedMessage, HeroAbilityMessage,
 } from './building';
 import type {
@@ -143,6 +144,9 @@ export type AnyMessage =
   | CivilianAssignMessage
   | TrainGuardMessage
   | TrainGuardResultMessage
+  | MarketOpenMessage
+  | MarketBuyMessage
+  | MarketBuyResultMessage
   | DayNightSyncMessage
   | SleepVoteMessage
   | SleepUpdateMessage

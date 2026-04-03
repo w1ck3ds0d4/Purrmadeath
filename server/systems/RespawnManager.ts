@@ -89,6 +89,10 @@ export interface RespawnManagerDeps {
   getUndyingChance?: () => number;
   /** Spawn a new enemy at the given position (used for undying horde resurrection). */
   spawnEnemyAt?: (x: number, y: number) => void;
+  /** Get the market entity ID (-1 if not placed). */
+  getMarketEntityId?: () => number;
+  /** Reset the market entity ID (called when market is destroyed). */
+  setMarketEntityId?: (id: number) => void;
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
@@ -264,7 +268,7 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
       const update: ResourceUpdateMessage = {
         type: MessageType.RESOURCE_UPDATE,
         wood: res.wood, stone: res.stone, iron: res.iron,
-        diamond: res.diamond, gold: res.gold, food: res.food, weapons: res.weapons,
+        diamond: res.diamond, gold: res.gold, food: res.food, weapons: res.weapons, steel: res.steel,
       };
       send(sp.client, update);
     }
@@ -509,6 +513,17 @@ export function createRespawnManager(deps: RespawnManagerDeps) {
             warehousePool.diamond = 0; warehousePool.gold = 0; warehousePool.food = 0;
           }
           deps.getBuildings().broadcastWarehouseUpdate(send);
+        }
+
+        // Market destroyed → reset market entity ID so a new one can be placed
+        const bldgComp = world.getComponent<BuildingComponent>(deadId, C.Building);
+        if (bldgComp?.buildingType === 'market' && deps.getMarketEntityId?.() === deadId) {
+          deps.setMarketEntityId?.(-1);
+        }
+
+        // Watchtower destroyed → shrink build range
+        if (bldgComp?.buildingType === 'watchtower') {
+          deps.getBuildings().broadcastBuildRange(send);
         }
 
         // Barracks destroyed → destroy all its guards

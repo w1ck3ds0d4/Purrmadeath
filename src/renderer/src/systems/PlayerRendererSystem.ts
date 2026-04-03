@@ -880,8 +880,8 @@ export class PlayerRendererSystem {
           gfx.rect(-8, 3, 16, 3);
           gfx.fill({ color: 0xbbaa88, alpha: 0.8 });
         }
-        // Training center: sword + shield
-        if (bType === 'training_center') {
+        // Guard house: sword + shield
+        if (bType === 'guard_house') {
           // Sword
           gfx.moveTo(0, -9); gfx.lineTo(0, 5);
           gfx.stroke({ color: 0xddddee, alpha: 0.9, width: 2 });

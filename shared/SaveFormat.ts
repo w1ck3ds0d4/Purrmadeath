@@ -7,7 +7,7 @@ export interface SaveData {
   currentWave: number;
   wavePhase?: 'idle' | 'prep' | 'active' | 'cleared';
   prepTimeRemaining?: number;
-  warehousePool: { wood: number; stone: number; iron: number; diamond: number; gold: number; food: number; weapons?: number };
+  warehousePool: { wood: number; stone: number; iron: number; diamond: number; gold: number; food: number; weapons?: number; steel?: number };
   spawnOrigin: { x: number; y: number };
   processedChunks: string[];
   enemiesKilled: number;
@@ -134,7 +134,7 @@ export interface SavedPlayer {
   playerId: string;
   displayName: string;
   slot: number;
-  resources: { wood: number; stone: number; iron: number; diamond: number; gold: number; food: number; weapons?: number };
+  resources: { wood: number; stone: number; iron: number; diamond: number; gold: number; food: number; weapons?: number; steel?: number };
   hp: number;
   maxHp: number;
   x: number;

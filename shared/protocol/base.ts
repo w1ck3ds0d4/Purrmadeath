@@ -313,6 +313,14 @@ export enum MessageType {
   HERO_DIED = 'HERO_DIED',
   /** Server -> all: a hero used an ability (VFX). */
   HERO_ABILITY = 'HERO_ABILITY',
+
+  // -- Market (card shop) --
+  /** Server -> Client: market card shop state (3 cards + prices). */
+  MARKET_OPEN = 'MARKET_OPEN',
+  /** Client -> Server: player wants to buy a card from the market. */
+  MARKET_BUY = 'MARKET_BUY',
+  /** Server -> Client: market purchase result. */
+  MARKET_BUY_RESULT = 'MARKET_BUY_RESULT',
 }
 
 // ---- Base ----

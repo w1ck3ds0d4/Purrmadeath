@@ -129,6 +129,7 @@ export interface WarehouseUpdateMessage extends BaseMessage {
   gold: number;
   food: number;
   weapons: number;
+  steel: number;
   exists: boolean;
   /** Sum of all warehouse upgrade levels (for inventory capacity bonus). */
   totalWarehouseLevels?: number;
@@ -183,6 +184,40 @@ export interface TeleporterResultMessage extends BaseMessage {
   x?: number;
   y?: number;
   reason?: string;
+}
+
+// ---- Market (card shop) ----
+
+export interface MarketCardInfo {
+  cardId: string;
+  name: string;
+  description: string;
+  category: string;
+  rarity: string;
+  goldPrice: number;
+}
+
+/** Server -> Client: market state with 3 available cards. */
+export interface MarketOpenMessage extends BaseMessage {
+  type: typeof MessageType.MARKET_OPEN;
+  cards: MarketCardInfo[];
+  boughtThisDay: boolean;
+  playerGold: number;
+}
+
+/** Client -> Server: buy a card from the market. */
+export interface MarketBuyMessage extends BaseMessage {
+  type: typeof MessageType.MARKET_BUY;
+  buildingId: number;
+  cardIndex: number;
+}
+
+/** Server -> Client: market purchase result. */
+export interface MarketBuyResultMessage extends BaseMessage {
+  type: typeof MessageType.MARKET_BUY_RESULT;
+  success: boolean;
+  reason?: string;
+  cardId?: string;
 }
 
 // ---- Civilians (Phase 8) ----

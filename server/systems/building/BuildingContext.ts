@@ -41,6 +41,10 @@ export interface BuildingSystemDeps {
   onCampfirePlaced: (entityId: number, send: SendFn) => void;
   /** Broadcast updated building range to all clients. */
   broadcastBuildRange: (send: SendFn) => void;
+  /** Get the entity ID of the placed market (-1 if none). */
+  getMarketEntityId?: () => number;
+  /** Set the entity ID of the placed market. */
+  setMarketEntityId?: (id: number) => void;
 }
 
 // ── Shared context for extracted sub-modules ────────────────────────────
@@ -73,4 +77,8 @@ export interface BuildingContext {
   isInsideBuildRange: (wx: number, wy: number) => boolean;
   onCampfirePlaced: (entityId: number, send: SendFn) => void;
   broadcastBuildRange: (send: SendFn) => void;
+  /** Get the entity ID of the placed market (-1 if none). */
+  getMarketEntityId: () => number;
+  /** Set the entity ID of the placed market. */
+  setMarketEntityId: (id: number) => void;
 }

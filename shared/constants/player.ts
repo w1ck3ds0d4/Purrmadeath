@@ -20,6 +20,7 @@ export const PLAYER_CARRY_LIMITS: Record<string, number> = {
   stone: 50,
   iron: 50,
   diamond: 50,
+  steel: 50,
   gold: Infinity,
 };
 

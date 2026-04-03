@@ -61,7 +61,7 @@ export const C = {
   Ruins:           'Ruins',
   // ── Building expansion ──────────────────────────────────────────────────
   LaserBeam:       'LaserBeam',
-  TrainingCenter:  'TrainingCenter',
+  GuardHouse:      'GuardHouse',
   // ── New buildings ─────────────────────────────────────────────────────
   TeslaCoil:       'TeslaCoil',
   FlameAura:       'FlameAura',
@@ -294,6 +294,7 @@ export interface ResourcesComponent {
   gold: number;
   food: number;
   weapons: number;
+  steel: number;
 }
 
 // ── Phase 4.11 components ────────────────────────────────────────────────────
@@ -304,12 +305,12 @@ export type BuildingType = 'campfire' | 'wall' | 'warehouse' | 'lumbermill' | 'q
   | 'arrow_turret' | 'cannon_turret' | 'spike_trap' | 'bridge'
   | 'light_tower' | 'healing_shrine' | 'barracks' | 'potion_shop'
   | 'cat_house'
-  | 'gate' | 'ballista' | 'laser_tower' | 'workshop' | 'training_center'
+  | 'gate' | 'ballista' | 'laser_tower' | 'workshop'
   | 'tesla_coil' | 'flame_tower' | 'catapult' | 'moat'
   | 'repair_station' | 'storage_shed' | 'teleporter_pad'
   | 'tavern'
-  // Achievement-unlocked buildings
-  | 'siege_workshop' | 'kennel' | 'arcane_tower' | 'watchtower'
+  // Achievement-unlocked / special buildings
+  | 'watchtower' | 'guard_house'
   | 'flak_cannon' | 'dragon_roost' | 'smeltery' | 'market';
 
 /** Tags an entity as a player-built (or pre-placed) structure. */
@@ -338,7 +339,7 @@ export interface DownedComponent {
 /** Passive resource generator attached to lumbermill, mine, or farm. */
 export interface ProductionComponent {
   /** Which resource this building generates. */
-  resourceType: 'wood' | 'stone' | 'iron' | 'diamond' | 'food' | 'weapons';
+  resourceType: 'wood' | 'stone' | 'iron' | 'diamond' | 'food' | 'weapons' | 'steel';
   /** Seconds between each production tick. */
   interval: number;
   /** Accumulator - counts up toward `interval`. */
@@ -512,8 +513,8 @@ export interface LaserBeamComponent {
   hitTimer?: number;
 }
 
-/** Training center component - trains civilians into role-specific guards. */
-export interface TrainingCenterComponent {
+/** Guard house component - trains civilians into guards with a random role. */
+export interface GuardHouseComponent {
   /** Max trained guards this building supports at current level. */
   maxGuards: number;
   /** Entity IDs of guards trained by this building. */

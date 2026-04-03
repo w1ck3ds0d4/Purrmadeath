@@ -42,6 +42,7 @@ import {
   TC_RANGER_HP, TC_RANGER_DAMAGE, TC_RANGER_RANGE, TC_RANGER_SPEED,
   TC_MAGE_HP, TC_MAGE_DAMAGE, TC_MAGE_RANGE, TC_MAGE_SPEED,
   WORKSHOP_PROD_INTERVAL,
+  SMELTERY_WOOD_COST, SMELTERY_IRON_COST,
 } from '@shared/constants';
 import { MessageType } from '@shared/protocol';
 import type { HitMessage, ProjectileSpawnMessage } from '@shared/protocol';
@@ -122,6 +123,19 @@ export function tickProduction(ctx: BuildingContext, dt: number): void {
     }
 
     if (prod.timer < effectiveInterval) continue;
+
+    // Smeltery: consume wood + iron from warehouse before producing steel
+    if (prod.resourceType === 'steel') {
+      const pool = ctx.warehousePool();
+      if (pool.wood < SMELTERY_WOOD_COST || pool.iron < SMELTERY_IRON_COST) {
+        // Not enough input materials - stall production (don't consume timer)
+        prod.timer = effectiveInterval;
+        continue;
+      }
+      pool.wood -= SMELTERY_WOOD_COST;
+      pool.iron -= SMELTERY_IRON_COST;
+    }
+
     prod.timer -= effectiveInterval;
     prod.stored = Math.min(prod.stored + prod.amount, prod.maxStored);
   }

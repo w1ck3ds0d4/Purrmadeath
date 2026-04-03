@@ -147,6 +147,7 @@ export class SessionManager {
     socket.on(MessageType.TRAIN_GUARD,             (c, m) => this.session?.handleTrainGuard(c.id, m as import('@shared/protocol').TrainGuardMessage, (cl, msg) => this.socket.send(cl, msg)));
     socket.on(MessageType.HIRE_HERO,               (c, m) => this.session?.handleHireHero(c.id, m as import('@shared/protocol').HireHeroMessage, (cl, msg) => this.socket.send(cl, msg)));
     socket.on(MessageType.TELEPORTER_USE,          (c, m) => this.session?.handleTeleporterUse(c.id, m as import('@shared/protocol').TeleporterUseMessage, (cl, msg) => this.socket.send(cl, msg)));
+    socket.on(MessageType.MARKET_BUY,              (c, m) => this.session?.handleMarketBuy(c.id, m as import('@shared/protocol').MarketBuyMessage, (cl, msg) => this.socket.send(cl, msg)));
     socket.onDisconnect((c) => this.onDisconnect(c));
 
     // Load persisted saves and meta stats from disk

@@ -31,6 +31,7 @@ export class ResourceHUD {
     { key: 'stone',   color: '#999',    label: 'Stone' },
     { key: 'iron',    color: '#8a5a3a', label: 'Iron' },
     { key: 'diamond', color: '#44ccdd', label: 'Diamond' },
+    { key: 'steel',   color: '#7a8a9a', label: 'Steel' },
     { key: 'gold',    color: '#e0c030', label: 'Gold' },
   ];
 
@@ -105,8 +106,8 @@ export class ResourceHUD {
   get isManuallyToggled(): boolean { return this._manualToggle; }
   resetManualToggle(): void { this._manualToggle = false; }
 
-  setResources(wood: number, stone: number, iron: number, diamond: number, gold: number, _food: number = 0, _weapons: number = 0): void {
-    this.resources = { ...this.resources, wood, stone, iron, diamond, gold };
+  setResources(wood: number, stone: number, iron: number, diamond: number, gold: number, _food: number = 0, _weapons: number = 0, steel: number = 0): void {
+    this.resources = { ...this.resources, wood, stone, iron, diamond, steel, gold };
     this.renderBody();
   }
 

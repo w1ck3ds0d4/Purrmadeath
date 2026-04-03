@@ -58,24 +58,20 @@ const BUILDING_DETAILS: Record<string, BuildingDetail> = {
   repair_station:   { hp: 150, description: 'Assign a civilian to repair damaged buildings. Consumes wood and stone from the warehouse.', special: '10 HP per repair' },
   teleporter_pad:   { hp: 100, description: 'Place two pads, then press E to teleport between them.' },
   potion_shop:      { hp: 150, description: 'Brew and equip potions for combat advantages.' },
-  training_center:  { hp: 220, description: 'Spend 1 weapon + 1 civilian to train a combat guard.' },
+  guard_house:      { hp: 220, description: 'Train a civilian into a guard (random role). Costs 1 civilian + 20 food + 5 steel + 30 gold.', special: 'Random Warrior/Ranger/Mage' },
   tavern:           { hp: 200, description: 'Hire powerful hero NPCs using gold.' },
   cat_house:        { hp: 100, description: 'Provides housing for 2/3/4 additional civilians.' },
   // Achievement-unlocked buildings
-  siege_workshop:   { hp: 250, description: 'Boosts all turret damage in a radius. Requires: Siege Master achievement.', range: 200, special: '+25% turret damage' },
-  kennel:           { hp: 200, description: 'Automatically spawns wolf guards on a timer. Requires: Beast Tamer achievement.', special: '1 wolf / 30s' },
-  arcane_tower:     { hp: 150, description: 'Amplifies player ability range when nearby. Requires: Enchanter achievement.', range: 250, special: '+50% ability range' },
   watchtower:       { hp: 120, description: 'Extends building range and warns of incoming waves. +20 tiles range per level.', range: 400, special: '+20 tile build range/level' },
   flak_cannon:      { hp: 180, description: 'Fires spread shots hitting multiple enemies per volley. Requires: Artillery Expert.', range: 250, damage: 12, cooldown: 2.0, special: '3-way spread' },
   dragon_roost:     { hp: 350, description: 'Summons a dragon that patrols and breathes fire on enemies. Requires: Dragon Tamer.', special: 'Dragon patrol' },
-  smeltery:         { hp: 200, description: 'Converts iron into steel for advanced buildings. Assign civilians to work. Requires: Master Smith.', special: 'Iron -> Steel' },
-  market:           { hp: 150, description: 'Converts surplus resources into gold over time. Requires: Trade Baron.', special: 'Resources -> Gold' },
+  smeltery:         { hp: 200, description: 'Consumes 2 wood + 2 iron from warehouse to produce 1 steel. Steel is needed for advanced towers. Assign a civilian worker.', special: 'Wood + Iron -> Steel' },
+  market:           { hp: 150, description: 'Daily card shop - offers 3 random cards each wave. Buy 1 per day with gold. Only 1 market allowed.', special: 'Card shop' },
 };
 
 /** Buildings that are not yet implemented - shown as "Coming Soon" in the build menu. */
 const COMING_SOON_BUILDINGS = new Set([
-  'siege_workshop', 'market', 'workshop', 'smeltery',
-  'dragon_roost', 'training_center', 'kennel', 'arcane_tower', 'tavern',
+  'dragon_roost',
 ]);
 
 interface BuildCategory {
@@ -85,11 +81,11 @@ interface BuildCategory {
 }
 
 const BUILD_CATEGORIES: BuildCategory[] = [
-  { name: 'Defense',    accent: '#cc4444', buildings: ['wall', 'gate', 'arrow_turret', 'cannon_turret', 'ballista', 'laser_tower', 'tesla_coil', 'flame_tower', 'catapult', 'flak_cannon', 'moat', 'spike_trap', 'siege_workshop', 'watchtower'] },
+  { name: 'Defense',    accent: '#cc4444', buildings: ['wall', 'gate', 'arrow_turret', 'cannon_turret', 'ballista', 'laser_tower', 'tesla_coil', 'flame_tower', 'catapult', 'flak_cannon', 'moat', 'spike_trap', 'watchtower'] },
   { name: 'Production', accent: '#44aa44', buildings: ['lumbermill', 'quarry', 'mine', 'farm', 'workshop', 'smeltery', 'market'] },
-  { name: 'Military',   accent: '#cc8844', buildings: ['training_center', 'kennel', 'dragon_roost'] },
+  { name: 'Military',   accent: '#cc8844', buildings: ['guard_house', 'dragon_roost'] },
   { name: 'Housing',    accent: '#cc88cc', buildings: ['cat_house'] },
-  { name: 'Utility',    accent: '#4488cc', buildings: ['warehouse', 'bridge', 'light_tower', 'healing_shrine', 'repair_station', 'teleporter_pad', 'arcane_tower'] },
+  { name: 'Utility',    accent: '#4488cc', buildings: ['warehouse', 'bridge', 'light_tower', 'healing_shrine', 'repair_station', 'teleporter_pad'] },
   { name: 'Shops',      accent: '#aa66ff', buildings: ['potion_shop', 'tavern'] },
 ];
 
@@ -115,13 +111,8 @@ export interface BuildMenuCallbacks {
 
 /** Buildings that require achievement unlocks. Maps building type to achievement name. */
 const ACHIEVEMENT_LOCKED_BUILDINGS: Record<string, string> = {
-  siege_workshop: 'Siege Master',
-  kennel: 'Beast Tamer',
-  arcane_tower: 'Enchanter',
   flak_cannon: 'Artillery Expert',
   dragon_roost: 'Dragon Tamer',
-  smeltery: 'Master Smith',
-  market: 'Trade Baron',
 };
 
 function titleCase(s: string): string {

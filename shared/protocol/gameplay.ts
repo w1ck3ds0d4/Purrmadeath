@@ -289,6 +289,7 @@ export interface ResourceUpdateMessage extends BaseMessage {
   gold: number;
   food: number;
   weapons: number;
+  steel: number;
 }
 
 /** Client -> Server: player pressed E to interact/pick up nearby item. */

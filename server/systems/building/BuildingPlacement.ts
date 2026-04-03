@@ -44,19 +44,19 @@ import {
   BARRACKS_MAX_GUARDS, BARRACKS_SPAWN_INTERVAL,
   BARRACKS_GUARD_PATROL_RADIUS,
   CAT_HOUSE_MAX_HEALTH, CAT_HOUSE_CAPACITY,
-  GATE_MAX_HEALTH, BALLISTA_MAX_HEALTH, LASER_TOWER_MAX_HEALTH, WORKSHOP_MAX_HEALTH, TRAINING_CENTER_MAX_HEALTH,
+  GATE_MAX_HEALTH, BALLISTA_MAX_HEALTH, LASER_TOWER_MAX_HEALTH, WORKSHOP_MAX_HEALTH,
   BALLISTA_RANGE, BALLISTA_COOLDOWN, BALLISTA_DAMAGE, BALLISTA_PROJ_SPEED,
   UPGRADE_BALLISTA_AOE, UPGRADE_BALLISTA_CD, UPGRADE_BALLISTA_DMG,
   UPGRADE_LASER_RANGE, UPGRADE_LASER_DPS,
-  WORKSHOP_PROD_INTERVAL,
-  TRAINING_CENTER_MAX_GUARDS,
+  WORKSHOP_PROD_INTERVAL, SMELTERY_PROD_INTERVAL, SMELTERY_WOOD_COST, SMELTERY_IRON_COST,
+  GUARD_HOUSE_MAX_GUARDS, GUARD_HOUSE_MAX_HEALTH,
   getUpgradeCost, getRepairCost,
   // New buildings
   TESLA_COIL_MAX_HEALTH, FLAME_TOWER_MAX_HEALTH, CATAPULT_MAX_HEALTH,
   MOAT_MAX_HEALTH,
   REPAIR_STATION_MAX_HEALTH, STORAGE_SHED_MAX_HEALTH,
   TELEPORTER_PAD_MAX_HEALTH, TAVERN_MAX_HEALTH,
-  SIEGE_WORKSHOP_MAX_HEALTH, KENNEL_MAX_HEALTH, ARCANE_TOWER_MAX_HEALTH, WATCHTOWER_MAX_HEALTH,
+  WATCHTOWER_MAX_HEALTH,
   TESLA_COIL_RANGE, TESLA_COIL_COOLDOWN, TESLA_COIL_DAMAGE, TESLA_COIL_CHAIN_COUNT, TESLA_COIL_CHAIN_RANGE,
   UPGRADE_TESLA_DAMAGE, UPGRADE_TESLA_CHAIN, UPGRADE_TESLA_CD,
   FLAME_TOWER_RANGE, FLAME_TOWER_DPS, FLAME_TOWER_ARC,
@@ -66,6 +66,7 @@ import {
   MOAT_SLOW_FACTOR,
   REPAIR_STATION_HP_PER_TICK, REPAIR_STATION_INTERVAL,
   TAVERN_MAX_HEROES, TAVERN_ROSTER_SIZE,
+  MARKET_MAX_HEALTH,
   isDefenceBuilding,
   getEffectiveCarryLimits,
 } from '@shared/constants';
@@ -94,7 +95,7 @@ export const HP_MAP: Record<string, number> = {
   ballista: BALLISTA_MAX_HEALTH,
   laser_tower: LASER_TOWER_MAX_HEALTH,
   workshop: WORKSHOP_MAX_HEALTH,
-  training_center: TRAINING_CENTER_MAX_HEALTH,
+  guard_house: GUARD_HOUSE_MAX_HEALTH,
   tesla_coil: TESLA_COIL_MAX_HEALTH,
   flame_tower: FLAME_TOWER_MAX_HEALTH,
   catapult: CATAPULT_MAX_HEALTH,
@@ -103,10 +104,8 @@ export const HP_MAP: Record<string, number> = {
   storage_shed: STORAGE_SHED_MAX_HEALTH,
   teleporter_pad: TELEPORTER_PAD_MAX_HEALTH,
   tavern: TAVERN_MAX_HEALTH,
-  siege_workshop: SIEGE_WORKSHOP_MAX_HEALTH,
-  kennel: KENNEL_MAX_HEALTH,
-  arcane_tower: ARCANE_TOWER_MAX_HEALTH,
   watchtower: WATCHTOWER_MAX_HEALTH,
+  market: MARKET_MAX_HEALTH,
 };
 
 // ── Cost helpers ──────────────────────────────────────────────────────────
@@ -259,6 +258,10 @@ export function restoreBuildingComponents(ctx: BuildingContext, id: number, buil
       world.addComponent(id, C.Production, { timer: 0, interval: WORKSHOP_PROD_INTERVAL[0], amount: 1, maxStored: PRODUCTION_MAX_STORED, stored: 0, resourceType: 'weapons' } as ProductionComponent);
       world.addComponent(id, C.WorkerSlot, { workerId: null } as WorkerSlotComponent);
       break;
+    case 'smeltery':
+      world.addComponent(id, C.Production, { timer: 0, interval: SMELTERY_PROD_INTERVAL[0], amount: 1, maxStored: PRODUCTION_MAX_STORED, stored: 0, resourceType: 'steel' } as ProductionComponent);
+      world.addComponent(id, C.WorkerSlot, { workerId: null } as WorkerSlotComponent);
+      break;
     case 'arrow_turret':
       world.addComponent(id, C.Turret, { range: ARROW_TURRET_RANGE, cooldown: ARROW_TURRET_COOLDOWN, cooldownTimer: 0, damage: ARROW_TURRET_DAMAGE, projectileSpeed: ARROW_TURRET_PROJ_SPEED, aoeRadius: 0, turretType: 'arrow' } as TurretComponent);
       break;
@@ -283,8 +286,8 @@ export function restoreBuildingComponents(ctx: BuildingContext, id: number, buil
     case 'barracks':
       world.addComponent(id, C.BarracksSpawner, { maxGuards: BARRACKS_MAX_GUARDS[0], spawnInterval: BARRACKS_SPAWN_INTERVAL, spawnTimer: 0, guardIds: [] } as BarracksSpawnerComponent);
       break;
-    case 'training_center':
-      world.addComponent(id, C.TrainingCenter, { maxGuards: TRAINING_CENTER_MAX_GUARDS[0], guardIds: [] } as import('@shared/components').TrainingCenterComponent);
+    case 'guard_house':
+      world.addComponent(id, C.GuardHouse, { maxGuards: GUARD_HOUSE_MAX_GUARDS[0], guardIds: [] } as import('@shared/components').GuardHouseComponent);
       break;
     case 'warehouse':
       warehouseIds.add(id);
@@ -327,10 +330,6 @@ export function restoreBuildingComponents(ctx: BuildingContext, id: number, buil
       world.addComponent(id, C.Kennel, { spawnInterval: 30, spawnTimer: 30, maxWolves: 2, wolfIds: [] } as import('@shared/components').KennelComponent);
       break;
     }
-    case 'arcane_tower': {
-      world.addComponent(id, C.ArcaneAura, { range: 250, rangeBonus: 0.50 } as import('@shared/components').ArcaneAuraComponent);
-      break;
-    }
     case 'watchtower': {
       world.addComponent(id, C.WatchAura, { revealRadius: 400, warningTime: 5 } as import('@shared/components').WatchAuraComponent);
       break;
@@ -363,6 +362,12 @@ export function handlePlace(ctx: BuildingContext, clientId: string, msg: BuildPl
   // Prevent duplicate campfire placement
   if (msg.buildingType === 'campfire' && ctx.isCampfirePlaced()) {
     send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'campfire_already_placed' } as BuildConfirmMessage);
+    return;
+  }
+
+  // Only one market allowed per game
+  if (msg.buildingType === 'market' && ctx.getMarketEntityId() > 0) {
+    send(player.client, { type: MessageType.BUILD_CONFIRM, success: false, reason: 'Only one market allowed' } as BuildConfirmMessage);
     return;
   }
 
@@ -431,6 +436,11 @@ export function handlePlace(ctx: BuildingContext, clientId: string, msg: BuildPl
     ctx.onCampfirePlaced(id, send);
   }
 
+  // Market placement: track entity ID (only one allowed)
+  if (msg.buildingType === 'market') {
+    ctx.setMarketEntityId(id);
+  }
+
   // Attach special components
   if (msg.buildingType === 'lumbermill') {
     world.addComponent(id, C.Production, {
@@ -492,15 +502,20 @@ export function handlePlace(ctx: BuildingContext, clientId: string, msg: BuildPl
       resourceType: 'weapons', interval: WORKSHOP_PROD_INTERVAL[0],
       timer: 0, amount: 1, stored: 0, maxStored: PRODUCTION_MAX_STORED,
     } as ProductionComponent);
+  } else if (msg.buildingType === 'smeltery') {
+    world.addComponent(id, C.Production, {
+      resourceType: 'steel', interval: SMELTERY_PROD_INTERVAL[0],
+      timer: 0, amount: 1, stored: 0, maxStored: PRODUCTION_MAX_STORED,
+    } as ProductionComponent);
   } else if (msg.buildingType === 'barracks') {
     world.addComponent(id, C.BarracksSpawner, {
       maxGuards: BARRACKS_MAX_GUARDS[0], spawnTimer: BARRACKS_SPAWN_INTERVAL,
       spawnInterval: BARRACKS_SPAWN_INTERVAL, guardIds: [],
     } as BarracksSpawnerComponent);
-  } else if (msg.buildingType === 'training_center') {
-    world.addComponent(id, C.TrainingCenter, {
-      maxGuards: TRAINING_CENTER_MAX_GUARDS[0], guardIds: [],
-    } as import('@shared/components').TrainingCenterComponent);
+  } else if (msg.buildingType === 'guard_house') {
+    world.addComponent(id, C.GuardHouse, {
+      maxGuards: GUARD_HOUSE_MAX_GUARDS[0], guardIds: [],
+    } as import('@shared/components').GuardHouseComponent);
   } else if (msg.buildingType === 'cat_house') {
     world.addComponent(id, C.Housing, { capacity: CAT_HOUSE_CAPACITY[0], residentIds: [] } as HousingComponent);
   } else if (msg.buildingType === 'tesla_coil') {
@@ -549,18 +564,14 @@ export function handlePlace(ctx: BuildingContext, clientId: string, msg: BuildPl
     world.addComponent(id, C.Tavern, {
       maxHeroes: TAVERN_MAX_HEROES[0], heroIds: [], roster,
     } as TavernComponent);
-  } else if (msg.buildingType === 'siege_workshop') {
-    world.addComponent(id, C.SiegeAura, { range: 200, damageBonus: 0.25 } as import('@shared/components').SiegeAuraComponent);
-  } else if (msg.buildingType === 'kennel') {
-    world.addComponent(id, C.Kennel, { spawnInterval: 30, spawnTimer: 30, maxWolves: 2, wolfIds: [] } as import('@shared/components').KennelComponent);
-  } else if (msg.buildingType === 'arcane_tower') {
-    world.addComponent(id, C.ArcaneAura, { range: 250, rangeBonus: 0.50 } as import('@shared/components').ArcaneAuraComponent);
   } else if (msg.buildingType === 'watchtower') {
     world.addComponent(id, C.WatchAura, { revealRadius: 400, warningTime: 5 } as import('@shared/components').WatchAuraComponent);
+    // Watchtower extends build range - broadcast updated range to all clients
+    ctx.broadcastBuildRange(send);
   }
 
   // Attach WorkerSlot to production buildings
-  if (['lumbermill', 'quarry', 'mine', 'farm', 'workshop', 'repair_station'].includes(msg.buildingType)) {
+  if (['lumbermill', 'quarry', 'mine', 'farm', 'workshop', 'smeltery', 'repair_station'].includes(msg.buildingType)) {
     world.addComponent(id, C.WorkerSlot, { workerId: null } as WorkerSlotComponent);
   }
 
@@ -681,6 +692,24 @@ export function handleDemolish(ctx: BuildingContext, clientId: string, msg: Buil
     broadcastWarehouseUpdate(send);
   }
 
+  // Reset market entity ID if the market was demolished
+  if (bldg.buildingType === 'market' && ctx.getMarketEntityId() === targetId) {
+    ctx.setMarketEntityId(-1);
+  }
+
+  // Watchtower demolition shrinks build range
+  if (bldg.buildingType === 'watchtower') {
+    // Broadcast after entity is destroyed (so computeBuildRange excludes it)
+    cleanupBridge(ctx, targetId);
+    world.destroyEntity(targetId);
+    ctx.broadcastBuildRange(send);
+    for (const p of players.values()) {
+      send(p.client, { type: MessageType.BUILD_DESTROYED, entityId: targetId } as any);
+    }
+    send(player.client, { type: MessageType.BUILD_CONFIRM, success: true } as BuildConfirmMessage);
+    return;
+  }
+
   cleanupBridge(ctx, targetId);
   world.destroyEntity(targetId);
   for (const p of players.values()) {
@@ -742,6 +771,8 @@ export function handleUpgrade(ctx: BuildingContext, clientId: string, msg: Build
   if (prod) {
     if (bldg.buildingType === 'workshop' && lvlIdx < WORKSHOP_PROD_INTERVAL.length) {
       prod.interval = WORKSHOP_PROD_INTERVAL[lvlIdx];
+    } else if (bldg.buildingType === 'smeltery' && lvlIdx < SMELTERY_PROD_INTERVAL.length) {
+      prod.interval = SMELTERY_PROD_INTERVAL[lvlIdx];
     } else if (lvlIdx < UPGRADE_PROD_INTERVAL.length) {
       const baseInterval = prod.interval / UPGRADE_PROD_INTERVAL[oldLevel - 1];
       prod.interval = baseInterval * UPGRADE_PROD_INTERVAL[lvlIdx];
@@ -788,8 +819,8 @@ export function handleUpgrade(ctx: BuildingContext, clientId: string, msg: Build
   const barracks = world.getComponent<BarracksSpawnerComponent>(targetId, C.BarracksSpawner);
   if (barracks && lvlIdx < BARRACKS_MAX_GUARDS.length) barracks.maxGuards = BARRACKS_MAX_GUARDS[lvlIdx];
 
-  const tc = world.getComponent<import('@shared/components').TrainingCenterComponent>(targetId, C.TrainingCenter);
-  if (tc && lvlIdx < TRAINING_CENTER_MAX_GUARDS.length) tc.maxGuards = TRAINING_CENTER_MAX_GUARDS[lvlIdx];
+  const gh = world.getComponent<import('@shared/components').GuardHouseComponent>(targetId, C.GuardHouse);
+  if (gh && lvlIdx < GUARD_HOUSE_MAX_GUARDS.length) gh.maxGuards = GUARD_HOUSE_MAX_GUARDS[lvlIdx];
 
   const housing = world.getComponent<HousingComponent>(targetId, C.Housing);
   if (housing && bldg.buildingType === 'cat_house' && lvlIdx < CAT_HOUSE_CAPACITY.length) {
@@ -827,6 +858,11 @@ export function handleUpgrade(ctx: BuildingContext, clientId: string, msg: Build
   // Broadcast updated warehouse levels if a warehouse was upgraded (updates player carry limits)
   if (bldg.buildingType === 'warehouse' || bldg.buildingType === 'storage_shed') {
     ctx.broadcastWarehouseUpdate(send);
+  }
+
+  // Watchtower upgrade extends build range - broadcast updated range
+  if (bldg.buildingType === 'watchtower') {
+    ctx.broadcastBuildRange(send);
   }
 
   send(player.client, {

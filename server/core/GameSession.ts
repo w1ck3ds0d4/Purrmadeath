@@ -128,6 +128,8 @@ import type {
   SkillAllocateMessage,
   AbilityUseMessage,
   TrainGuardMessage,
+  MarketBuyMessage,
+  MarketCardInfo,
 } from '@shared/protocol';
 import { ItemDropSystem, PickupResult } from '../systems/ItemDropSystem';
 import type { ConnectedClient } from '../net/ServerSocket';
@@ -287,13 +289,21 @@ export class GameSession {
   /** Whether the campfire has been placed by the player. Gates building menu. */
   private campfirePlaced = false;
 
+  // ── Market (card shop) ──────────────────────────────────────────────────
+  /** Entity ID of the market building. -1 = not placed yet. */
+  private marketEntityId = -1;
+  /** Current daily market card offerings (refreshed each day). */
+  private marketCards: import('@shared/protocol/building').MarketCardInfo[] = [];
+  /** Client IDs that have already bought a card this day. */
+  private marketBoughtBy = new Set<string>();
+
   /** In-memory snapshot ring buffer for rollback (last ~30 seconds). */
   private rollbackSnapshots: { tick: number; data: import('@shared/SaveFormat').SaveData }[] = [];
   private static readonly ROLLBACK_SNAPSHOT_INTERVAL = 300; // every 300 ticks (~10 seconds at 30 TPS)
   private static readonly ROLLBACK_MAX_SNAPSHOTS = 4; // keep ~40 seconds of history
 
   private warehouseIds = new Set<number>();
-  private warehousePool = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0 };
+  private warehousePool = { wood: 0, stone: 0, iron: 0, diamond: 0, gold: 0, food: 0, weapons: 0, steel: 0 };
   /** Bridge tile positions: "tileX,tileY" → entityId. */
   private bridgePositions = new Map<string, number>();
 
@@ -399,6 +409,8 @@ export class GameSession {
       isInsideBuildRange: (wx, wy) => this.isInsideBuildRange(wx, wy),
       onCampfirePlaced: (id, send) => this.onCampfirePlaced(id, send),
       broadcastBuildRange: (send) => this.broadcastBuildRange(send),
+      getMarketEntityId: () => this.marketEntityId,
+      setMarketEntityId: (id) => { this.marketEntityId = id; },
     });
 
     this.civilians = createCivilianSystem({
@@ -458,6 +470,8 @@ export class GameSession {
         // End previous event when a new day starts (events last full day+night cycle)
         this.worldEvents?.endActiveEvent(send);
         this.worldEvents?.rollDayEvent(this.waveState.currentWave, send);
+        // Refresh market card offerings each day
+        this.refreshMarketCards();
       },
       getEventOverrides: () => ({ forceNightBuffs: this.worldEvents?.isSolarEclipse() }),
     });
@@ -614,6 +628,8 @@ export class GameSession {
       isCampfirePlaced: () => this.campfirePlaced,
       getUndyingChance: () => this.waves.milestones.undyingChance,
       spawnEnemyAt: (x, y) => this.waves.spawnEnemy(x, y),
+      getMarketEntityId: () => this.marketEntityId,
+      setMarketEntityId: (id) => { this.marketEntityId = id; },
     });
 
     this.stats = createStatsCollector({
@@ -877,6 +893,8 @@ export class GameSession {
         const eid = this.spawnBuilding(sb.x, sb.y, sb.buildingType as BuildingType, sb.maxHp, sb.permanent, sb.rotation ?? 0);
         // Track warehouse entities
         if (sb.buildingType === 'warehouse') this.warehouseIds.add(eid);
+        // Track market entity (only one allowed)
+        if (sb.buildingType === 'market') this.marketEntityId = eid;
         const hp = this.world.getComponent<HealthComponent>(eid, C.Health);
         if (hp) { hp.current = sb.currentHp; hp.max = sb.maxHp; }
         const bld = this.world.getComponent<BuildingComponent>(eid, C.Building);
@@ -1264,7 +1282,7 @@ export class GameSession {
         send(p.client, {
           type: MessageType.RESOURCE_UPDATE,
           wood: res.wood, stone: res.stone, iron: res.iron,
-          diamond: res.diamond, gold: res.gold, food: res.food, weapons: res.weapons,
+          diamond: res.diamond, gold: res.gold, food: res.food, weapons: res.weapons, steel: res.steel,
         });
       }
     }
@@ -2429,6 +2447,171 @@ export class GameSession {
     console.log(`[CardDrop] ${recipient.displayName} picked up "${card.name}" (${card.rarity})`);
   }
 
+  // ── Market (card shop) ──────────────────────────────────────────────────
+
+  /** Refresh the market card offerings. Called at each day start. */
+  private refreshMarketCards(): void {
+    this.marketBoughtBy.clear();
+    this.marketCards = [];
+    // Filter out curses - don't sell those in the market
+    const pool = CARD_POOL.filter(c => c.category !== 'curse');
+    for (let i = 0; i < 3; i++) {
+      const card = pool[Math.floor(Math.random() * pool.length)];
+      const price = card.rarity === 'legendary' ? 400
+        : card.rarity === 'epic' ? 200
+        : card.rarity === 'rare' ? 100
+        : 50;
+      this.marketCards.push({
+        cardId: card.id,
+        name: card.name,
+        description: card.description,
+        category: card.category,
+        rarity: card.rarity,
+        goldPrice: price,
+      });
+    }
+    console.log(`[Market] Refreshed cards: ${this.marketCards.map(c => c.name).join(', ')}`);
+  }
+
+  /** Handle player pressing E near a market building - send MARKET_OPEN. */
+  handleMarketOpen(
+    clientId: string,
+    buildingId: number,
+    send: SendFn,
+  ): void {
+    const player = this.players.get(clientId);
+    if (!player || player.entityId === null) return;
+
+    // Validate the building is the market
+    const bldg = this.world.getComponent<BuildingComponent>(buildingId, C.Building);
+    if (!bldg || bldg.buildingType !== 'market') return;
+
+    // Calculate player's total gold (personal + warehouse)
+    const res = this.world.getComponent<ResourcesComponent>(player.entityId, C.Resources);
+    const personalGold = res?.gold ?? 0;
+    const warehouseGold = this.warehouseIds.size > 0 ? (this.warehousePool.gold ?? 0) : 0;
+    const totalGold = personalGold + warehouseGold;
+
+    const msg: import('@shared/protocol/building').MarketOpenMessage = {
+      type: MessageType.MARKET_OPEN,
+      cards: this.marketCards,
+      boughtThisDay: this.marketBoughtBy.has(clientId),
+      playerGold: totalGold,
+    };
+    send(player.client, msg);
+  }
+
+  /** Handle player buying a card from the market. */
+  handleMarketBuy(
+    clientId: string,
+    msg: MarketBuyMessage,
+    send: SendFn,
+  ): void {
+    const player = this.players.get(clientId);
+    if (!player || player.entityId === null) return;
+
+    const fail = (reason: string) => {
+      send(player.client, {
+        type: MessageType.MARKET_BUY_RESULT,
+        success: false,
+        reason,
+      });
+    };
+
+    // Validate building is the market
+    const bldg = this.world.getComponent<BuildingComponent>(msg.buildingId, C.Building);
+    if (!bldg || bldg.buildingType !== 'market') { fail('Invalid building'); return; }
+
+    // Validate card index
+    if (msg.cardIndex < 0 || msg.cardIndex >= this.marketCards.length) { fail('Invalid card'); return; }
+
+    // Check if player already bought this day
+    if (this.marketBoughtBy.has(clientId)) { fail('Already bought today'); return; }
+
+    const cardInfo = this.marketCards[msg.cardIndex];
+    const price = cardInfo.goldPrice;
+
+    // Calculate total gold available
+    const res = this.world.getComponent<ResourcesComponent>(player.entityId, C.Resources);
+    if (!res) { fail('No resources'); return; }
+    const hasWarehouse = this.warehouseIds.size > 0;
+    const warehouseGold = hasWarehouse ? (this.warehousePool.gold ?? 0) : 0;
+    const totalGold = res.gold + warehouseGold;
+
+    if (totalGold < price) { fail('Not enough gold'); return; }
+
+    // Deduct gold: personal first, then warehouse
+    let remaining = price;
+    const fromPersonal = Math.min(remaining, res.gold);
+    res.gold -= fromPersonal;
+    remaining -= fromPersonal;
+    if (remaining > 0 && hasWarehouse) {
+      this.warehousePool.gold -= remaining;
+      this.buildings.broadcastWarehouseUpdate(send);
+    }
+
+    // Send resource update to the buyer
+    send(player.client, {
+      type: MessageType.RESOURCE_UPDATE,
+      wood: res.wood, stone: res.stone, iron: res.iron,
+      diamond: res.diamond, gold: res.gold, food: res.food,
+      weapons: res.weapons, steel: (res as any).steel ?? 0,
+    });
+
+    // Find the card definition and apply it
+    const card = CARD_POOL.find(c => c.id === cardInfo.cardId);
+    if (!card) { fail('Card not found'); return; }
+
+    // Apply card via CardSystem
+    this.cards.forceApplyCard(clientId, card);
+
+    // Apply ECS side-effects (speed, maxHp, resources, etc.)
+    const buffs = this.cards.getBuffs(clientId);
+    const applyEcs = (e: import('@shared/definitions/CardDefinitions').CardEffect) => {
+      if (e.type === 'stat_buff' && e.stat === 'speed') {
+        const spd = this.world.getComponent<import('@shared/components').SpeedComponent>(player.entityId!, C.Speed);
+        if (spd) spd.multiplier = buffs.speedMultiplier;
+      } else if (e.type === 'stat_buff' && e.stat === 'maxHp') {
+        const hp = this.world.getComponent<HealthComponent>(player.entityId!, C.Health);
+        if (hp) {
+          const baseHp = CLASS_STATS[player.playerClass].hp;
+          const skillMod = this.skills.getSkillBuffs(clientId).maxHpBonus;
+          hp.max = Math.max(1, baseHp + skillMod + buffs.maxHpBonus - this.cards.debuffs.playerMaxHpPenalty);
+          hp.current = Math.min(hp.current + e.value, hp.max);
+        }
+      } else if (e.type === 'resource') {
+        this.creditResources(player.entityId!, e.resource, e.amount, send);
+      } else if (e.type === 'multi') {
+        for (const sub of e.effects) applyEcs(sub);
+      }
+    };
+    applyEcs(card.effect);
+
+    // Mark this player as having bought today
+    this.marketBoughtBy.add(clientId);
+
+    // Send success result
+    send(player.client, {
+      type: MessageType.MARKET_BUY_RESULT,
+      success: true,
+      cardId: card.id,
+    });
+
+    // Broadcast card applied to all players
+    const applied: import('@shared/protocol').CardAppliedMessage = {
+      type: MessageType.CARD_APPLIED,
+      displayName: player.displayName,
+      cardId: card.id,
+      cardName: card.name,
+      category: card.category,
+      isTrap: card.category === 'curse',
+      abilities: [...buffs.abilities],
+    };
+    for (const p of this.players.values()) send(p.client, applied);
+
+    console.log(`[Market] ${player.displayName} bought "${card.name}" (${card.rarity}) for ${price} gold`);
+  }
+
   /**
    * Credit a player's resource counter and send RESOURCE_UPDATE.
    */
@@ -2480,6 +2663,7 @@ export class GameSession {
     else if (itemType === 'stone') res.stone = capped;
     else if (itemType === 'iron') res.iron = capped;
     else if (itemType === 'diamond') res.diamond = capped;
+    else if (itemType === 'steel') res.steel = capped;
     else if (itemType === 'gold') res.gold = capped;
 
     // Drop excess on the ground and notify the player
@@ -2511,6 +2695,7 @@ export class GameSession {
       gold: res.gold,
       food: res.food,
       weapons: res.weapons,
+      steel: res.steel,
     };
     send(target.client, update);
   }
@@ -2659,23 +2844,26 @@ export class GameSession {
       send(player.client, { type: MessageType.TRAIN_GUARD_RESULT, success: false, reason });
     };
 
-    // Validate building exists and is a training center
+    // Validate building exists and is a guard house
     const bldg = this.world.getComponent<BuildingComponent>(msg.buildingId, C.Building);
-    if (!bldg || bldg.buildingType !== 'training_center') return fail('Not a training center');
+    if (!bldg || bldg.buildingType !== 'guard_house') return fail('Not a guard house');
 
-    const tc = this.world.getComponent<import('@shared/components').TrainingCenterComponent>(msg.buildingId, C.TrainingCenter);
-    if (!tc) return fail('Not a training center');
+    const tc = this.world.getComponent<import('@shared/components').GuardHouseComponent>(msg.buildingId, C.GuardHouse);
+    if (!tc) return fail('Not a guard house');
 
     // Check guard capacity
     // Clean up dead guard IDs first
     tc.guardIds = tc.guardIds.filter(id => this.world.hasEntity(id));
     if (tc.guardIds.length >= tc.maxGuards) return fail('Guard capacity full');
 
-    // Check warehouse has weapons
-    if (this.warehousePool.weapons < 1) return fail('No weapons available');
+    // Check warehouse has required resources (20 food, 5 steel, 30 gold)
+    if ((this.warehousePool.food ?? 0) < 20) return fail('Not enough food (need 20)');
+    if ((this.warehousePool.steel ?? 0) < 5) return fail('Not enough steel (need 5)');
+    if ((this.warehousePool.gold ?? 0) < 30) return fail('Not enough gold (need 30)');
 
-    // Validate role
-    if (msg.role !== 'warrior' && msg.role !== 'ranger' && msg.role !== 'mage') return fail('Invalid role');
+    // Pick a random role for the guard (guard house assigns randomly)
+    const roles = ['warrior', 'ranger', 'mage'] as const;
+    const role = roles[Math.floor(Math.random() * roles.length)];
 
     // Find an idle civilian
     let idleCivId: number | null = null;
@@ -2685,18 +2873,20 @@ export class GameSession {
     }
     if (idleCivId === null) return fail('No idle civilians');
 
-    // Consume 1 weapon
-    this.warehousePool.weapons -= 1;
+    // Consume resources from warehouse
+    this.warehousePool.food = (this.warehousePool.food ?? 0) - 20;
+    this.warehousePool.steel = (this.warehousePool.steel ?? 0) - 5;
+    this.warehousePool.gold = (this.warehousePool.gold ?? 0) - 30;
 
     // Remove the civilian
     this.civilians.civilianIds.delete(idleCivId);
     this.world.destroyEntity(idleCivId);
 
-    // Spawn the guard at the training center position
+    // Spawn the guard at the guard house position
     const tcPos = this.world.getComponent<PositionComponent>(msg.buildingId, C.Position);
     if (!tcPos) return fail('Building has no position');
 
-    const guardId = this.buildings.spawnTrainedGuard(tcPos.x, tcPos.y, msg.buildingId, msg.role);
+    const guardId = this.buildings.spawnTrainedGuard(tcPos.x, tcPos.y, msg.buildingId, role);
     if (guardId === null) return fail('Failed to spawn guard');
 
     tc.guardIds.push(guardId);
@@ -2830,7 +3020,7 @@ export class GameSession {
       }
     }
 
-    // Check for nearby tavern (F-key opens tavern overlay)
+    // Check for nearby tavern (E-key opens tavern overlay)
     for (const bid of this.world.query(C.Building, C.Position)) {
       const bldg = this.world.getComponent<BuildingComponent>(bid, C.Building);
       if (bldg?.buildingType !== 'tavern') continue;
@@ -2845,13 +3035,28 @@ export class GameSession {
       }
     }
 
+    // Check for nearby market (E-key opens market card shop)
+    if (this.marketEntityId > 0) {
+      const mpos = this.world.getComponent<PositionComponent>(this.marketEntityId, C.Position);
+      if (mpos) {
+        const half = buildingHalfExtent('market');
+        const marketRange = half + ITEM_DROP_INTERACT_RADIUS;
+        const mdx = mpos.x - playerPos.x;
+        const mdy = mpos.y - playerPos.y;
+        if (mdx * mdx + mdy * mdy <= marketRange * marketRange) {
+          this.handleMarketOpen(clientId, this.marketEntityId, send);
+          return;
+        }
+      }
+    }
+
     // Check for nearby warehouse (E-key deposits resources)
     if (this.buildings.depositPlayerToWarehouse(player.entityId, send)) {
       const res = this.world.getComponent<ResourcesComponent>(player.entityId, C.Resources);
       if (res) {
         send(player.client, {
           type: MessageType.RESOURCE_UPDATE,
-          wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold, food: res.food, weapons: res.weapons,
+          wood: res.wood, stone: res.stone, iron: res.iron, diamond: res.diamond, gold: res.gold, food: res.food, weapons: res.weapons, steel: res.steel,
         });
         this.buildings.broadcastWarehouseUpdate(send);
         send(player.client, { type: MessageType.NOTIFICATION, text: 'Resources stored!', level: 'info' });
