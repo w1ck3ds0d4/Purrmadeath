@@ -301,3 +301,7 @@ src/
     ui/                      HUD, overlays (build menu, skill tree, civilian panel)
     render/                  Camera, tile renderer, build ghost
 ```
+
+## License
+
+Proprietary - All rights reserved.
