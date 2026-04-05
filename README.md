@@ -302,6 +302,8 @@ src/
     render/                  Camera, tile renderer, build ghost
 ```
 
+---
+
 ## License
 
 This project is licensed under the [GNU General Public License v3.0](LICENSE).
