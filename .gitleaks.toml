@@ -1,0 +1,23 @@
+title = "Purrmadeath Secret Scanning"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Purrmadeath allowlist"
+paths = [
+  '''node_modules''',
+  '''dist''',
+  '''out''',
+  '''\.env\.example''',
+  '''\.env\.production''',
+  '''package-lock\.json''',
+  '''logs/''',
+  '''saves/''',
+]
+
+[[rules]]
+id = "purrmadeath-env-key"
+description = "Hardcoded server credentials in source code"
+regex = '''(?i)(VITE_SERVER_IP|EC2_SSH_KEY|EC2_HOST)\s*[=:]\s*['"][a-zA-Z0-9_\-\.]{8,}['"]'''
+tags = ["infra", "purrmadeath"]
