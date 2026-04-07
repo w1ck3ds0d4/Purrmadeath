@@ -31,3 +31,6 @@ metastats
 # Documentation 
 *.md
 !README.md
+!SECURITY.md
+!CONTRIBUTING.md
+!.github/**/*.md
