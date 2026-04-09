@@ -18,11 +18,11 @@ Thanks for your interest in contributing.
 
 Use parenthesized type prefixes:
 
-- `(feat) description` — new feature
-- `(fix) description` — bug fix
-- `(docs) description` — documentation only
-- `(chore) description` — maintenance, CI, deps
-- `(refactor) description` — code restructuring
+- `(feat) description` - new feature
+- `(fix) description` - bug fix
+- `(docs) description` - documentation only
+- `(chore) description` - maintenance, CI, deps
+- `(refactor) description` - code restructuring
 
 ---
 

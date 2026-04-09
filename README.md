@@ -19,14 +19,14 @@ Download the latest installer from the [Releases](https://github.com/WickedSoda/
 Choose from 3 base classes, each with 3 active subclasses and 2 placeholder subclasses (unlocked via achievements):
 
 - **Warrior** - Sword, 120 HP, 180 speed, 2 defense
-  - Berserker (lifesteal/rage), Guardian (tank/thorns/charge), Blood Knight (drain/arc)
-  - Templar, Slayer (achievement-locked placeholders)
+ - Berserker (lifesteal/rage), Guardian (tank/thorns/charge), Blood Knight (drain/arc)
+ - Templar, Slayer (achievement-locked placeholders)
 - **Ranger** - Bow, 80 HP, 220 speed
-  - Sharpshooter (poison/crit), Beastmaster (wolf companion), Trapper (multi-shot/explosives)
-  - Shadow Hunter, Windwalker (achievement-locked placeholders)
+ - Sharpshooter (poison/crit), Beastmaster (wolf companion), Trapper (multi-shot/explosives)
+ - Shadow Hunter, Windwalker (achievement-locked placeholders)
 - **Mage** - Staff, 70 HP, 200 speed
-  - Fire (burn/meteor), Frost (slow/blizzard), Electric (chain/thunderwave)
-  - Earth, Void (placeholders)
+ - Fire (burn/meteor), Frost (slow/blizzard), Electric (chain/thunderwave)
+ - Earth, Void (placeholders)
 
 Each subclass has a 10-tier skill tree with passive stats, combat modifiers, abilities, and ultimates.
 
@@ -164,10 +164,10 @@ git push && git push --tags
 ```
 
 3. The `release.yml` workflow will automatically:
-   - Build the Windows installer on GitHub Actions
-   - Create a GitHub Release with the installer and auto-updater files
-   - SSH into the EC2 server and deploy the updated code
-   - Restart the game server
+  - Build the Windows installer on GitHub Actions
+  - Create a GitHub Release with the installer and auto-updater files
+  - SSH into the EC2 server and deploy the updated code
+  - Restart the game server
 
 **Required GitHub Secrets:**
 
