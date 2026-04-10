@@ -130,7 +130,7 @@ export class PotionShopOverlay {
     if (!this.data) return;
     const { shopLevel, unlockedPotions, equippedPotion, charges, maxCharges, shopEntityId } = this.data;
 
-    this.titleEl.textContent = `POTION SHOP \u2014 Level ${shopLevel}`;
+    this.titleEl.textContent = `POTION SHOP - Level ${shopLevel}`;
 
     // Build potion panels
     this.gridEl.innerHTML = '';
