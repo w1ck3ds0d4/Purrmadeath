@@ -124,7 +124,7 @@ export interface StaminaComponent {
 export interface DefenseComponent {
   /** Flat damage subtracted before percent reduction. */
   flat: number;
-  /** 0–1 percent damage reduction applied after flat. 0 = no reduction. */
+  /** 0-1 percent damage reduction applied after flat. 0 = no reduction. */
   percent: number;
 }
 
@@ -134,7 +134,7 @@ export interface SpeedComponent {
   multiplier: number;
 }
 
-/** Slot index 0–3 - determines player color and spawn order. */
+/** Slot index 0-3 - determines player color and spawn order. */
 export interface PlayerIndexComponent {
   index: number;
 }
@@ -183,7 +183,7 @@ export interface AttackCooldownComponent {
 export interface KnockbackReceiverComponent {
   vx: number;
   vy: number;
-  /** Knockback resistance 0–1 (card buff). 0 = no resist, 1 = immune. */
+  /** Knockback resistance 0-1 (card buff). 0 = no resist, 1 = immune. */
   resist?: number;
 }
 
@@ -617,7 +617,7 @@ export interface CivilianComponent {
   state: CivilianState;
   /** Entity ID of the production building this civilian is assigned to, or null. */
   assignedBuildingId: number | null;
-  /** Hunger level 0–100. At 100, civilian takes starvation damage. */
+  /** Hunger level 0-100. At 100, civilian takes starvation damage. */
   hunger: number;
   /** Accumulator counting toward next hunger tick. */
   hungerTimer: number;

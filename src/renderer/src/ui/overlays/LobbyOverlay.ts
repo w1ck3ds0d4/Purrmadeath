@@ -14,7 +14,7 @@ const CLASS_BADGE_COLORS: Record<string, string> = {
  * The lobby shows:
  *   - Share row: session code + host IP, each with a Copy button
  *   - Class selector (Warrior / Ranger / Mage)
- *   - Player slots (1–4)
+ *   - Player slots (1-4)
  *   - A Start button (host only)
  *   - A Leave button
  *   - A small chat window

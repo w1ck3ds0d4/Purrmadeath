@@ -48,7 +48,7 @@ export const RESOURCE_SPAWN_TABLE: Partial<Record<number, ResourceSpawnEntry[]>>
 };
 
 /**
- * Per-tile-type chance (0–1) that a resource node spawns on any given tile.
+ * Per-tile-type chance (0-1) that a resource node spawns on any given tile.
  * Higher values = denser resource coverage in that biome.
  */
 export const TILE_SPAWN_CHANCE: Partial<Record<number, number>> = {

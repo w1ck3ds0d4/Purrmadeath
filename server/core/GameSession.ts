@@ -658,7 +658,7 @@ export class GameSession {
     return this.paused;
   }
 
-  /** Assign the next free slot (0–3) to a joining player. */
+  /** Assign the next free slot (0-3) to a joining player. */
   private nextFreeSlot(): number {
     const used = new Set([...this.players.values()].map((p) => p.slot));
     for (let i = 0; i < 4; i++) if (!used.has(i)) return i;

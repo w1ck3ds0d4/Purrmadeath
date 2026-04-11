@@ -6,7 +6,7 @@ export interface LootEntry {
   itemType: string;
   minQty: number;
   maxQty: number;
-  /** Drop probability 0–1. 1.0 = guaranteed. */
+  /** Drop probability 0-1. 1.0 = guaranteed. */
   chance: number;
   /** True = auto-pickup on overlap (resources). False = requires E-interact. */
   autoPickup: boolean;

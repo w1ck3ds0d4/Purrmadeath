@@ -50,7 +50,7 @@ export interface MeleeOverrides {
   knockback?: number;
   /** If true, attack hits all targets in range (360° AoE, ignores arc check). */
   aoe?: boolean;
-  /** Per-player crit chance from card buffs (0–1). */
+  /** Per-player crit chance from card buffs (0-1). */
   critChance?: number;
   /** Per-player crit multiplier from card buffs (additive on top of base). */
   critMultiplier?: number;
