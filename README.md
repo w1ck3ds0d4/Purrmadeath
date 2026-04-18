@@ -6,7 +6,7 @@
 
 ## Playing the Game
 
-Download the latest installer from the [Releases](https://github.com/WickedSoda/Purrmadeath/releases) page.
+Download the latest installer from the [Releases](https://github.com/w1ck3ds0d4/Purrmadeath/releases) page.
 
 ### Game Modes
 

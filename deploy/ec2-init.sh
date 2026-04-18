@@ -69,7 +69,7 @@ echo "=== Purrmadeath finish-setup (Phase 2) ==="
 
 # Clone repo as purrmadeath user
 if [ ! -d "$APP_DIR" ]; then
-  sudo -u purrmadeath git clone git@github.com:WickedSoda/Purrmadeath.git "$APP_DIR"
+  sudo -u purrmadeath git clone git@github.com:w1ck3ds0d4/Purrmadeath.git "$APP_DIR"
 else
   echo "Repo already cloned, pulling latest..."
   cd "$APP_DIR"
@@ -98,5 +98,5 @@ echo "=== Phase 1 complete - $(date) ==="
 echo ""
 echo "Next steps:"
 echo "  1. Copy the deploy key above"
-echo "  2. Add it at: https://github.com/WickedSoda/Purrmadeath/settings/keys"
+echo "  2. Add it at: https://github.com/w1ck3ds0d4/Purrmadeath/settings/keys"
 echo "  3. Run: sudo /opt/finish-setup.sh"

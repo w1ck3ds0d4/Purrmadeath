@@ -2,7 +2,7 @@
   "name": "purrmadeath",
   "version": "1.3.2",
   "description": "2D co-op roguelike - base building, procedural world, up to 4 players",
-  "author": "WickedSoda",
+  "author": "w1ck3ds0d4",
   "license": "GPL-3.0",
   "private": true,
   "type": "module",
@@ -80,7 +80,7 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "WickedSoda",
+      "owner": "w1ck3ds0d4",
       "repo": "Purrmadeath"
     }
   }
