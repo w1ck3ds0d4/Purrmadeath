@@ -10,5 +10,5 @@ permissions:
 
 jobs:
   scan:
-    uses: w1ck3ds0d4/security-workflows/.github/workflows/scan.yml@main
+    uses: w1ck3ds0d4/SecureCheck/.github/workflows/scan.yml@main
     secrets: inherit
