@@ -40,6 +40,7 @@ export class DiscoveryBeacon {
   }
 
   start(): void {
+    if (this.socket) return; // already broadcasting; ignore a second start
     const sock = dgram.createSocket('udp4');
     this.socket = sock;
 
