@@ -1,379 +1,85 @@
-# Purrmadeath - Architecture Guide
-
-This document maps every source file in the project, describing its purpose and key contents.
-Use `Ctrl+F` to find what you're looking for quickly.
-
----
-
-## Project Structure Overview
-
-```
-server/              Server-side game logic (Node.js + WebSocket)
-  core/              Core orchestration (session, networking, logging)
-  systems/           ECS systems (combat, movement, building, etc.)
-  abilities/         Ability execution logic
-shared/              Code shared between client and server
-  components/        ECS component definitions
-  definitions/       Data definitions (skills, enemies, cards, achievements)
-src/renderer/        Client-side code (Pixi.js + Electron)
-  src/game.ts        Main game loop and state management
-  src/input/         Input handling
-  src/net/           Networking (WebSocket client, reconciliation)
-  src/render/        Camera, build ghost rendering
-  src/systems/       Client-side systems (rendering, VFX, build mode)
-  src/ui/            UI overlays, HUD elements, theme
-```
-
----
-
-## Server Files
-
-### `server/server.ts` (~50 lines)
-Entry point for the game server. Creates HTTP server and WebSocket, initializes SessionManager.
-
-### `server/net/ServerSocket.ts` (~150 lines)
-WebSocket server wrapper. Handles connections, IP tracking, per-IP rate limits (500 msg/s remote, unlimited localhost), MAX_CONNECTIONS enforcement. Heartbeat timeout: 120s (disabled for localhost). Rate monitoring logged every 30s.
-
-### `server/core/SessionManager.ts` (~700 lines)
-Routes incoming WebSocket messages to the correct GameSession. Manages:
-- Session creation/joining with invite codes
-- Player identity (UUID-based, persisted to disk)
-- Meta stats storage (file-based in `metastats/` directory)
-- Reconnection grace period
-- Message type dispatch (routes to GameSession handlers)
-
-### `server/core/GameLogger.ts` (~120 lines)
-Persistent file-based session logger. Creates timestamped log files in `logs/` directory.
-- 11 categories: ability, damage, buff, wave, building, save, player, combat, error, debug, system
-- Auto-cleans old logs (keeps last 5 per save slot)
-- Convenience methods: `logger.ability(msg)`, `logger.damage(msg)`, etc.
-
-### `server/core/GameSession.ts` (~4000 lines)
-**The largest file.** Core game session that orchestrates all gameplay. Sections:
-
-| Line Range | Section | Description |
-|-----------|---------|-------------|
-| 1-139 | Imports | All system and type imports |
-| 143-163 | Types | SessionPlayer, SessionPhase, SendFn |
-| 183-310 | Fields | All private fields and system references |
-| 311-549 | Constructor | System initialization with dependency injection |
-| 553-695 | Player Management | addPlayer, removePlayer, suspendPlayer, rebindPlayer, lobby |
-| 696-860 | Game Start | start() - transitions lobby to playing |
-| 861-1180 | World Helpers | isWalkable, overlapsBuilding, findSafeSpawn, generateResources |
-| 1180-1348 | Player Stats | recalculatePlayerStats, applyBuffBonuses |
-| 1349-1550 | Entity Spawning | spawnBuilding, spawnResourceNode, spawnItemDrop, spawnLootDrops |
-| 1551-1762 | Resource/Item | creditResources, applyCardPickup, boss/enemy kill handlers |
-| 1763-1880 | Input/Building | applyInput, handleAttack, handleBuild* (place/demolish/upgrade/repair) |
-| 1881-2116 | Interaction | handleTrainGuard, handleHireHero, handleTeleporter, handleInteract |
-| 2117-2275 | Melee Combat | handleMeleeAttack - damage calc, on-hit effects, blood arc |
-| 2277-2424 | Ranged Combat | handleRangedAttack - projectile spawning, elemental colors |
-| 2425-2776 | Combat Helpers | countNearbyAllies, getPrimaryElement, applyOnHitEffects, applyThorns |
-| 2777-2965 | Run End/Save | fireRunEnd, flushRunStats, handleSkill/Potion/Civilian delegates |
-| 2966-3051 | Save/Load | saveNow, serializeSave, loadSave |
-| 3052-3208 | Debug Commands | /spawn, /wave, /give, /card, /sp, /kill, /pause, /god, /speed, /heal, /tp |
-| 3209-3330 | Pause/Sleep | handleSleepVote, handlePauseVote, recheckPauseVotes |
-| 3331-3458 | Active Buffs | tickActiveBuffs - blood drain, charge, regen, buff expiry |
-| 3459-3498 | Damage Reduction | Sync damageReductionMap, dodgeChance, shield before combat |
-| 3499-3825 | Main Tick | tick_() - all systems update, snapshot diff, broadcast delta |
-| 3826-4063 | Snapshots | buildFullSnapshot, buildDelta, gatherEntitySnapshots |
-
-### `server/systems/BuildingSystem.ts` (~1600 lines)
-Building placement, upgrades, demolition, and per-tick systems. Handles building exclusion zones (walls/bridges/moats/spike traps exempt). Sections:
-
-| Section | Description |
-|---------|-------------|
-| handlePlace | Validates placement, creates building entity, adds components |
-| handleUpgrade | Level-up logic, stat scaling per building type |
-| handleDemolish | Refund resources, destroy entity |
-| handleRepair | Restore HP, consume resources |
-| tickTurrets | Arrow/cannon turret targeting and firing |
-| tickLaserBeams | Laser tower continuous beam damage |
-| tickTeslaCoils | Tesla coil AOE zap + chain lightning |
-| tickFlameTowers | Flame cone damage + VFX broadcast |
-| tickRepairStations | Worker-based building repair |
-| tickMoats | Enemy slow effect on moat tiles |
-| tickProduction | Resource generation for lumbermill/quarry/mine/farm |
-| tickWarehouseDeposit | Civilian deposit resources to warehouse |
-| restoreBuildingComponents | Re-add components on save load |
-
-### `server/systems/CombatSystem.ts` (~300 lines)
-Melee attack resolution. `processMeleeAttack()` handles:
-- Attack cooldown, lag compensation, arc/range checks
-- Damage calculation with defense, crit, knockback
-- Dodge chance, damage reduction map, shield blocking
-- Raw damage tracking for Unbreakable Charge
-
-### `server/systems/ProjectileSystem.ts` (~550 lines)
-Projectile movement, collision, and special effects:
-- Homing, bouncing, piercing, splitting projectiles
-- Mortar arc for cannon turrets
-- AOE explosions (cannon, headshot, explosive barrage)
-- Crippling slow on hit (trapper combat mod)
-- Shield blocking (aegis), damage reduction (unbreakable charge)
-- Thorns reflection, blood arc heal on hit
-- Poison/burn DOT application via on-hit effects
-- Projectile color cycling based on elemental skills
-
-### `server/systems/EnemySystem.ts` (~400 lines)
-Enemy AI and guard behavior:
-- Enemy pathfinding toward campfire/buildings, melee/ranged attacks, taunt targeting
-- Guard AI: patrol around barracks or follow player (wolf companions)
-- Wolf companion lifetime management (temporary wolves from Pack Call expire)
-- Variant-specific behavior (ghost phasing, assassin dashes, titan ground slams)
-
-### `server/systems/MovementSystem.ts` (~200 lines)
-Entity movement: velocity integration, collision with buildings, bridge support.
-
-### `server/systems/CivilianSystem.ts` (~500 lines)
-Civilian NPC management:
-- Timer-based spawning (2 every 60s), wandering AI
-- Worker assignment to buildings (auto-assign idle civilians)
-- Hunger system, downed/revive state
-- Wave-cleared experience tracking
-- Two-column civilian management panel data
-
-### `server/systems/SkillSystem.ts` (~400 lines)
-Skill point allocation, buff computation, ability cooldown management.
-- `getSkillBuffs()` - computes aggregate stat bonuses from allocated nodes
-- `sendState()` - syncs skill state + cooldowns to client
-- Ability use validation and cooldown enforcement
-
-### `server/systems/CardDispenser.ts` (~200 lines)
-Card drop logic after wave clears. Manages the pick-one-of-three flow. 30 cards total (buffs, abilities, curses).
-
-### `server/systems/SaveManager.ts` (~200 lines)
-Save/load game state to JSON files. Serializes all entities, buildings, civilians, wave state.
-
-### `server/systems/RespawnManager.ts` (~300 lines)
-Death handling: player downed state, respawn timers, entity cleanup.
-- Tracks attacker map for resource/kill credit
-- Civilian downed state with revive window
-- Party wipe detection
-
-### `server/systems/WorldEventController.ts` (~200 lines)
-Day modifier (world event) system. Rolls random events at day start (W2+, 15% base chance) with roulette animation delay. Events: Meteor Shower (random AOE damage), Earthquake (building damage + stun), Resource Boom (3x production), Surprise Attack (extra portals), Solar Eclipse (vision reduction + undead spawns). Events have duration, tint color, and vision/production multipliers.
-
-### `server/systems/DayNightController.ts` (~200 lines)
-Day/night cycle: phase transitions, sleep voting, timer management.
-
-### `server/systems/WaveController.ts` (~370 lines)
-Wave spawning: portal placement, enemy count scaling, wave clear detection. Wave countdown and enemy wave preview banner. Portals spawn outside the campfire building range square (dynamic spawn distance based on range + 100px buffer). Applies wave milestone multipliers (HP, damage, portal count) from WaveMilestones.
-
-### `server/systems/BossSystem.ts` (~200 lines)
-Boss spawning and special attack patterns. 8 unique bosses (W5-W40), multi-phase mechanics, tick-based delayed actions.
-
-### `server/abilities/AbilityExecutor.ts` (~400 lines)
-Executes activated abilities: meteor shower, blizzard, thunderwave, blood drain, warcry, unbreakable charge, sniper shot, pack call, explosive barrage, arrow volley, etc.
-
----
-
-## Shared Files
-
-### `shared/constants.ts` (~1050 lines)
-All game balance constants organized by category:
-- Network (ports, tick rate, version, rate limits)
-- World (tile size, chunk size)
-- Player (HP, speed, stamina, melee range/damage)
-- Enemies (HP scaling, variants, sizes)
-- Buildings (costs, HP, sizes, exclusion zones, upgrade previews)
-- Civilians (spawn timer 60s, hunger, capacity)
-- Day/night (phase durations)
-
-### `shared/protocol.ts` (~1500 lines)
-All WebSocket message types and interfaces:
-- MessageType enum (60+ message types)
-- Handshake, session, lobby messages
-- Input, attack, building interaction messages
-- Entity snapshot and delta sync messages
-- Wave, card, skill, potion messages
-- Civilian, hero, world event messages
-- Boss intro, phase, and loot messages
-
-### `shared/components/index.ts` (~800 lines)
-ECS component interfaces and the C enum mapping component keys.
-Every game entity is composed of these components (Position, Health, Faction, Building, etc.)
-
-### `shared/definitions/SkillDefinitions.ts` (~315 lines)
-Skill system types, allocation logic, and buff computation. Branch data is imported from per-class files.
-- Types: PassiveStat, SpecialEffectType, AbilityParams, CombatModifierType
-- Interfaces: SkillNode, SkillBranch, SkillAllocation, SkillBuffs
-- Functions: canAllocate, computeSkillBuffs, getActiveAbilities
-
-### `shared/definitions/skills/WarriorSkills.ts` (~107 lines)
-Warrior branches: Berserker (lifesteal/rage), Guardian (tank/thorns/charge), Blood Knight (drain/arc). Plus Templar and Slayer placeholders.
-
-### `shared/definitions/skills/RangerSkills.ts` (~107 lines)
-Ranger branches: Sharpshooter (poison/crit), Beastmaster (wolf companion), Trapper (multi-shot/explosives). Plus Shadow Hunter and Windwalker placeholders.
-
-### `shared/definitions/skills/MageSkills.ts` (~104 lines)
-Mage branches: Fire (burn/meteor), Frost (slow/blizzard), Electric (chain/thunderwave). Plus Earth and Void placeholders.
-
-### `shared/definitions/EnemyDefinitions.ts` (~150 lines)
-Enemy variant definitions: melee, ranged, fast, tank, giant, titan. Wave-based faction system (bandits, undead, corrupted).
-
-### `shared/definitions/CardDefinitions.ts` (~110 lines)
-30 cards: 15 stat (damage/HP/speed/crit/defense/regen/stamina/dodge), 10 build-defining (vampiric bite, last stand, pack hunter, rapid strikes, explosive touch, etc.), 5 curses (dual buff+debuff mechanics).
-
-### `shared/definitions/ProgressionDefinitions.ts` (~110 lines)
-18 achievements: 10 stat buff (kill/gather/build/survive milestones), 4 building unlocks (Siege Workshop, Kennel, Arcane Tower, Watchtower), 4 class unlock milestones. Computed from MetaStats.
-
-### `shared/definitions/WaveMilestones.ts` (~92 lines)
-Wave milestone definitions for permanent cumulative scaling. Milestones at W25 (Corruption - random enemy buffs), W50 (Undying Horde - 15% resurrect), W75 (Final Stand - 3x portals, 2x HP), W100 (Apocalypse - 1.5x damage). Infinite scaling past W100: portal count, HP, and damage multipliers increase every 10 waves.
-
-### `shared/definitions/WaveModifiers.ts` (~50 lines)
-Per-wave random modifiers: Swarm (2x enemies, 50% HP), Ironhide (+50% HP, +25% dmg), Fog (0.5x vision), Frenzy (+30% speed, +20% dmg). 15% roll chance per wave, count scales with wave number (1 at W3-7, up to 3 at W15+).
-
-### `shared/definitions/WorldEvents.ts` (~50 lines)
-Day modifier (world event) definitions: Meteor Shower, Earthquake, Resource Boom, Surprise Attack, Solar Eclipse. Each defines min wave, duration, vision/production multipliers, tint color, and spawn rates.
-
-### `shared/definitions/MilestoneDefinitions.ts` (~30 lines)
-4 class unlock milestones: Templar, Slayer, Shadow Hunter, Windwalker. Computed from MetaStats.
-
-### `shared/definitions/MetaStats.ts` (~90 lines)
-Meta-progression stats interface and merge function. Tracks: damage dealt/taken, kills, resources, waves, time, buildings, crits, portals, wolves, abilities, walls.
-
-### `shared/definitions/ClassDefinitions.ts` (~50 lines)
-Base stats per player class (warrior, ranger, mage).
-
-### `shared/SaveFormat.ts` (~150 lines)
-SaveData interface for game persistence.
-
----
-
-## Client Files
-
-### `src/renderer/src/game.ts` (~1800 lines)
-**Main client entry point and game loop.** Sections:
-
-| Section | Description |
-|---------|-------------|
-| Imports & State | Module-level state variables (skills, inventory, buffs) |
-| joinSession() | Creates ECS world, registers all message handlers, starts game loop |
-| Game State Machine | Menu, Lobby, Playing, Paused, GameOver states |
-| Input Handling | Key bindings (Q=build, E=interact, R=repair, X=demolish, etc.) |
-| Build Mode | Build menu toggle, RMB select, placement ghost |
-| Ability System | Cooldown tracking, targeting mode, ability activation |
-| Render Loop | Camera follow, night overlay, VFX, minimap updates |
-| HUD Management | Inventory accordion (top-center, open by default), controls, hotbar, wave HUD |
-
-### `src/renderer/src/net/NetworkClient.ts` (~150 lines)
-WebSocket client with auto-reconnect. Handles connection lifecycle.
-
-### `src/renderer/src/net/NetworkHandler.ts` (~1100 lines)
-All incoming message handlers. Sections:
-
-| Section | Description |
-|---------|-------------|
-| Snapshot/Delta | Entity creation/update from server state |
-| Combat | Hit results, attack animations, damage numbers |
-| Building | Place/demolish/upgrade confirmations |
-| Projectiles | Spawn/remove/explosion VFX, elemental color cycling |
-| Wave | Wave start/clear, day/night sync, wave countdown, preview banner |
-| Cards | Card offers, picks, applied effects |
-| Skills | Skill state sync, ability effects |
-| Civilians | Panel data, assign responses, auto-assign idle |
-| UI | Chat, pause, notifications, resource gain popups, low HP vignette |
-
-### `src/renderer/src/net/Reconciler.ts` (~150 lines)
-Client-side prediction reconciliation. Replays unconfirmed inputs on server correction.
-
-### `src/renderer/src/systems/PlayerRendererSystem.ts` (~1500 lines)
-Renders all game entities using Pixi.js Graphics:
-- Players (circles with facing indicators, name tags)
-- Enemies (colored by variant, HP bars, status effects)
-- Buildings (colored squares with icons, exclusion zones)
-- Resource nodes (diamond shapes by type)
-- Item drops, card drops, portals
-- Civilians (orange circles, speech bubbles, spawn timers)
-- Campfire waypoint indicator
-
-### `src/renderer/src/systems/ProjectileRendererSystem.ts` (~400 lines)
-Renders projectiles: arrows, mage orbs, ballista bolts, blood arcs, mortars.
-Also renders AOE explosions, meteor impacts, and meteor warnings.
-Supports elemental color cycling based on equipped skills.
-
-### `src/renderer/src/systems/AbilityVFXSystem.ts` (~1070 lines)
-Visual effects for abilities and persistent auras:
-- Whirlwind, shield bubble, expanding rings
-- Rain of arrows, explosions, teleport flashes
-- Blizzard particles, meteor shower
-- Lightning bolts (jagged path generation)
-- Laser beams, flame cones
-- Persistent auras (warcry, aegis, charge, blood drain)
-- Unbreakable Charge progress bar and damage counter
-
-### `src/renderer/src/systems/BuildController.ts` (~350 lines)
-Build mode state machine: inactive -> picker -> placing -> select.
-Handles building placement validation, rotation, ghost preview.
-
-### `src/renderer/src/systems/DamageNumberSystem.ts` (~100 lines)
-Floating damage numbers that pop up and fade. Resource gain popups.
-
-### `src/renderer/src/render/Camera.ts` (~200 lines)
-Camera system: target tracking, smooth follow, ALT look-around, screen shake.
-
-### `src/renderer/src/render/BuildGhostRenderer.ts` (~200 lines)
-Renders the building placement ghost with valid/invalid coloring.
-
-### `src/renderer/src/input/InputManager.ts` (~150 lines)
-Maps keyboard/mouse input to game actions. Tracks pressed/released state.
-
----
-
-## UI Files
-
-### `src/renderer/src/ui/theme.ts` (~80 lines)
-Shared color tokens, fonts, and border radii for all UI. Laevatain-themed dark palette with crimson red accent and violet-purple borders.
-
-### `src/renderer/src/ui/overlays/`
-| File | Purpose |
-|------|---------|
-| `SkillTreeOverlay.ts` (~1100 lines) | Character/Skills/Cards tabbed panel (K key) |
-| `BuildMenuOverlay.ts` (~500 lines) | Building menu with categories, tooltips, achievement gating |
-| `CivilianPanelOverlay.ts` (~400 lines) | Civilian management (two-column layout, auto-assign) |
-| `MenuOverlay.ts` (~500 lines) | Main menu, settings, save slots |
-| `LobbyOverlay.ts` (~400 lines) | Multiplayer/singleplayer lobby, class selection |
-| `CardPickerOverlay.ts` (~300 lines) | Pick-one-of-three card selection |
-| `ChatOverlay.ts` (~300 lines) | In-game chat |
-| `StatsOverlay.ts` (~300 lines) | Meta stats and achievement display |
-| `GameOverOverlay.ts` (~200 lines) | Game over screen |
-| `DeathOverlay.ts` (~150 lines) | Death/respawn overlay |
-| `PotionShopOverlay.ts` (~200 lines) | Potion shop UI |
-| `TrainingCenterOverlay.ts` (~200 lines) | Guard training UI (Warrior/Ranger/Mage roles) |
-
-### `src/renderer/src/ui/hud/`
-| File | Purpose |
-|------|---------|
-| `HUD.ts` (~150 lines) | HP/stamina bars (Pixi.js), low HP vignette |
-| `WeaponHotbar.ts` (~200 lines) | Ability/potion/build hotbar |
-| `WaveHUD.ts` (~500 lines) | Day timer, wave info, sleep button, countdown, preview banner |
-| `Minimap.ts` (~250 lines) | Minimap with entity dots, campfire waypoint |
-| `ResourceHUD.ts` (~200 lines) | Inventory accordion (top-center, open by default), resource gain popups |
-| `NotificationToast.ts` (~150 lines) | Toast notifications |
-
-### `src/renderer/src/ui/debug/DebugOverlay.ts` (~300 lines)
-Developer console with 3-column stats display (Core, Server, Game) and command input. Commands: `/sp`, `/spawn`, `/give`, `/card`, `/wave`, `/kill`, `/pause`, `/god`, `/speed`, `/heal`, `/tp`, `/all`.
-
----
-
-## Electron Files
-
-### `src/main/index.ts` (~150 lines)
-Electron main process: window creation, embedded server (CJS-bundled `server.cjs` extracted from asar to userData), auto-updater (prod only). Client-side logging to `%AppData%/purrmadeath/logs/`.
-
-### `src/preload/index.ts` (~30 lines)
-Electron preload script for IPC bridge.
-
----
+# ARCHITECTURE - Purrmadeath
+
+Purrmadeath is a 2D top-down co-op roguelike with base building, served by a server-authoritative architecture and rendered in an Electron desktop client. This document covers the tech stack, the major components, and how data flows between them.
+
+## Tech Stack
+
+- **Language**: TypeScript (strict, ESM in source, CJS bundle for the embedded server).
+- **Client**: Electron (`src/main/index.ts`, `src/preload/index.ts`, `src/renderer/`) + Pixi.js 8 for canvas rendering.
+- **Server**: Node.js with the `ws` WebSocket library (`server/server.ts`, `server/net/ServerSocket.ts`).
+- **Build**: `electron-vite` for renderer/main, `esbuild` for the bundled CJS server (`resources/server/server.cjs`), `electron-builder` for the Windows NSIS installer.
+- **Tests**: Vitest, primarily on server-side systems (`server/systems/*.test.ts`).
+- **Auto-update**: `electron-updater` against GitHub Releases.
+- **CI/CD**: GitHub Actions builds the installer and SSH-deploys the server to EC2.
+- **World generation**: `simplex-noise` for elevation/moisture biome assignment.
+
+## High-Level Components
+
+### 1. Embedded / Hosted Game Server (`server/`)
+- `server/server.ts`: entry point. Wires `ServerSocket`, `DiscoveryBeacon`, `SessionManager`, and a fixed-rate `GameLoop`.
+- `server/net/ServerSocket.ts`: `ws`-based transport. Enforces `MAX_CONNECTIONS`, per-IP cap (4 in production), 64 KB payload limit, per-client rate limit (`MAX_MESSAGES_PER_SECOND`, bypassed for localhost), heartbeat sweep, and message-type validation before dispatch.
+- `server/discovery.ts`: UDP beacon broadcast for LAN session discovery on port 7778.
+- `server/core/SessionManager.ts`: routes messages to the right `GameSession`, manages invite codes, UUID-based player identity, meta stats persistence, and reconnection grace.
+- `server/core/GameSession.ts`: the heart. ~4000 lines orchestrating the tick loop, ECS systems, combat, waves, save/load, and snapshot/delta broadcast.
+- `server/core/GameLogger.ts`: timestamped per-session log files in `logs/` (categories: ability, damage, buff, wave, save, etc.).
+- `server/systems/`: the ECS systems (`CombatSystem`, `EnemySystem`, `MovementSystem`, `BuildingSystem`, `ProjectileSystem`, `CivilianSystem`, `SkillSystem`, `WaveController`, `BossSystem`, `WorldEventController`, `DayNightController`, `RespawnManager`, `SaveManager`, `CardDispenser`).
+- `server/abilities/AbilityExecutor.ts`: executes activated abilities (meteor, blizzard, blood drain, sniper shot, etc.).
+
+### 2. Shared Code (`shared/`)
+- `shared/protocol.ts`: 60+ typed `MessageType` values plus payload interfaces. The single source of truth for the wire protocol.
+- `shared/components/`: ECS component interfaces and the `C` enum used as component keys.
+- `shared/ecs/`: isomorphic World/Entity primitives.
+- `shared/constants.ts`: `GAME_VERSION`, network ports, tick rate, balance constants, building costs, rate limits.
+- `shared/definitions/`: data tables (skills per class, cards, achievements, enemy variants, wave milestones, world events).
+- `shared/world/`: tile registry, biome/world generation helpers.
+- `shared/SaveFormat.ts`: persisted save schema (`formatVersion`, seed, wave, players, etc.).
+
+### 3. Electron Main (`src/main/index.ts`)
+- Spawns the embedded server (`tsx` in dev, forked `server.cjs` in production after extracting from asar to `userData`).
+- Listens on UDP for LAN discovery beacons and exposes IPC handlers (`resolve-session-code`, `discover-sessions`).
+- Runs `electron-updater` on launch in packaged builds.
+- Mediates save IO via IPC handlers `get-save-slots`, `load-save`, `write-save` against `userData/saves/`.
+- Sets a Content Security Policy allowing only `self`, `data:`, `blob:`, and `ws:`/`wss:`.
+
+### 4. Renderer Client (`src/renderer/src/`)
+- `game.ts`: client entry point and game loop. Owns module-level state (skills, inventory, buffs).
+- `net/NetworkClient.ts`: WebSocket lifecycle and reconnection.
+- `net/NetworkHandler.ts`: handlers for every inbound `MessageType`.
+- `net/Reconciler.ts`: client-side prediction with replay on server correction.
+- `systems/PlayerRendererSystem.ts`, `ProjectileRendererSystem.ts`, `AbilityVFXSystem.ts`, `BuildController.ts`, `DamageNumberSystem.ts`: Pixi.js rendering and build mode.
+- `render/Camera.ts`, `render/BuildGhostRenderer.ts`: camera follow, screen shake, building ghost.
+- `ui/`: HTML overlays (skill tree, build menu, civilian panel, lobby, menu, card picker, chat, stats, death, game over) and HUD (health, hotbar, wave, minimap, inventory).
+
+## Data Flow
+
+1. **Boot**: Electron main starts the embedded server (`startEmbeddedServer`) and a UDP discovery listener. The renderer process loads, connects via `NetworkClient` to `localhost:7777`, and receives `HANDSHAKE_ACK` with a clientId, server version, and optional last display name.
+2. **Lobby**: the player picks Singleplayer / Host / Join. Host or Join sends `SESSION_CREATE` or `SESSION_JOIN`. `SessionManager` either spins up a new `GameSession` or attaches the player to an existing one and replies with session metadata.
+3. **Game start**: host triggers `SESSION_START`. `GameSession.start()` transitions from lobby to playing, generates the world (chunked simplex noise), spawns players, and begins the tick loop.
+4. **Tick (server-authoritative)**: every tick at `TICK_RATE` TPS, `GameSession.tick_()` runs all ECS systems in order (movement, combat, projectiles, enemies, buildings, civilians, world events, respawn, save), then builds a delta against the previous snapshot and broadcasts it to all connected clients.
+5. **Client prediction**: input messages (`MoveUp`, `Attack`, etc.) are applied locally for instant feel via `MovementSystem`, while sequence-numbered inputs queue in the `Reconciler`. On a `DELTA` from the server, the reconciler snaps to authoritative position if the error exceeds threshold and replays unacknowledged inputs.
+6. **Persistence**: saves are written to disk on each wave clear and on host exit (`server/systems/SaveManager.ts`). Local singleplayer saves go to `%AppData%/purrmadeath/saves/`; production server saves go to `/opt/purrmadeath/saves/`. Meta stats are merged into `metastats/` on run end.
+7. **Auto-update**: in packaged builds, `autoUpdater` polls GitHub Releases on launch. The renderer shows a banner and calls IPC `install-update` to apply.
 
 ## Key Patterns
 
-- **Factory pattern**: All server systems use `createXxx(deps) -> { publicAPI }`
-- **ECS**: World + Component keys (C enum) + system functions
-- **Server-authoritative**: All game logic runs on server, client predicts and reconciles
-- **Shared mutable state**: Objects passed by reference (playerState, inventory, etc.)
-- **Callback injection**: Systems receive callbacks for cross-system communication
-- **Message-based sync**: Server broadcasts delta snapshots at 30Hz
-- **Lazy getter pattern**: `getProjectileRuntime = () => projectileRuntime` avoids init ordering issues
-- **Transport/Session split**: WebSocket connection (auto on startup) vs session identity (on Host/Join action)
-- **Spatial hash optimization**: O(1) proximity queries for turrets, spike traps, laser beams
+- **Server is truth**: damage, building placement, pickups, and ability activations are validated server-side before applying.
+- **ECS**: every entity is a numeric id with components keyed by the `C` enum. Systems are stateless functions over the world.
+- **Factory pattern**: server systems use `createXxx(deps) -> publicAPI` with callback injection for cross-system communication.
+- **Delta sync**: full snapshots only on join; subsequent ticks send only changed entities.
+- **Spatial hash** (`shared/SpatialHash.ts`): O(1) proximity for turrets, traps, laser beams, ghost vision.
+- **Lazy getters**: `getProjectileRuntime = () => projectileRuntime` to break system init cycles.
+- **Transport / session split**: WebSocket connection is up at startup; session identity is taken on Host or Join.
+
+## Repo Layout
+
+```
+server/      Game server (Node.js + ws)
+shared/      Code shared between client and server (protocol, components, definitions, constants)
+src/main/    Electron main: window, embedded server, auto-updater, IPC, save IO
+src/preload/ Electron preload (IPC bridge)
+src/renderer/src/ Pixi.js client (game loop, net, UI, rendering)
+scripts/     check-version.cjs, aws.mjs (AWS CLI helpers)
+deploy/      EC2 deploy.sh, systemd unit, AWS setup scripts
+build/       Installer icons
+.github/workflows/release.yml CI/CD pipeline
+```
