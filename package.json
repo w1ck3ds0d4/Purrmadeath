@@ -29,7 +29,7 @@
     "electron-updater": "^6.8.3",
     "pixi.js": "^8.18.1",
     "simplex-noise": "^4.0.1",
-    "ws": "^8.20.0"
+    "ws": "^8.20.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
