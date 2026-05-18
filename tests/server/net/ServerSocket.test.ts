@@ -3,11 +3,6 @@ import { WebSocket } from 'ws';
 import { ServerSocket } from '../../../server/net/ServerSocket';
 import { MessageType } from '@shared/protocol';
 
-/** Pick a random high port to avoid collisions. */
-function randomPort(): number {
-  return 40_000 + Math.floor(Math.random() * 20_000);
-}
-
 /** Connect a ws client and wait for the HANDSHAKE_ACK. */
 function connectClient(port: number): Promise<{ ws: WebSocket; ack: Record<string, unknown> }> {
   return new Promise((resolve, reject) => {
@@ -36,10 +31,10 @@ afterEach(async () => {
 
 describe('ServerSocket', () => {
   it('accepts a connection and sends HANDSHAKE_ACK', async () => {
-    const port = randomPort();
-    const server = new ServerSocket(port);
+    const server = new ServerSocket(0);
     servers.push(server);
     await server.ready;
+    const port = server.port;
 
     const { ws, ack } = await connectClient(port);
     expect(ack.type).toBe(MessageType.HANDSHAKE_ACK);
@@ -50,10 +45,10 @@ describe('ServerSocket', () => {
   });
 
   it('assigns incrementing client IDs', async () => {
-    const port = randomPort();
-    const server = new ServerSocket(port);
+    const server = new ServerSocket(0);
     servers.push(server);
     await server.ready;
+    const port = server.port;
 
     const c1 = await connectClient(port);
     const c2 = await connectClient(port);
@@ -67,10 +62,10 @@ describe('ServerSocket', () => {
   });
 
   it('tracks client count', async () => {
-    const port = randomPort();
-    const server = new ServerSocket(port);
+    const server = new ServerSocket(0);
     servers.push(server);
     await server.ready;
+    const port = server.port;
 
     expect(server.clientCount).toBe(0);
 
@@ -93,10 +88,10 @@ describe('ServerSocket', () => {
   });
 
   it('dispatches messages to registered handlers', async () => {
-    const port = randomPort();
-    const server = new ServerSocket(port);
+    const server = new ServerSocket(0);
     servers.push(server);
     await server.ready;
+    const port = server.port;
 
     const received: { clientId: string; msg: Record<string, unknown> }[] = [];
     server.on(MessageType.HANDSHAKE, (client, msg) => {
@@ -117,10 +112,10 @@ describe('ServerSocket', () => {
   });
 
   it('responds to PING with PONG', async () => {
-    const port = randomPort();
-    const server = new ServerSocket(port);
+    const server = new ServerSocket(0);
     servers.push(server);
     await server.ready;
+    const port = server.port;
 
     const { ws } = await connectClient(port);
 
@@ -138,10 +133,10 @@ describe('ServerSocket', () => {
   });
 
   it('fires disconnect handler when a client disconnects', async () => {
-    const port = randomPort();
-    const server = new ServerSocket(port);
+    const server = new ServerSocket(0);
     servers.push(server);
     await server.ready;
+    const port = server.port;
 
     const disconnected: string[] = [];
     server.onDisconnect((client) => disconnected.push(client.id));
@@ -154,10 +149,10 @@ describe('ServerSocket', () => {
   });
 
   it('rejects invalid message types gracefully', async () => {
-    const port = randomPort();
-    const server = new ServerSocket(port);
+    const server = new ServerSocket(0);
     servers.push(server);
     await server.ready;
+    const port = server.port;
 
     const { ws } = await connectClient(port);
     // Empty type should be ignored, not crash the server
@@ -174,10 +169,15 @@ describe('ServerSocket', () => {
   });
 
   it('ready promise rejects when port is in use', async () => {
-    const port = randomPort();
-    const server1 = new ServerSocket(port);
+    // Bind to port 0 first, then try to grab the same port a second
+    // time. Using the OS-assigned port avoids Windows' excluded-port
+    // ranges (Hyper-V / Docker / WSL reserve random patches between
+    // 40-60k) that occasionally returned EACCES from the old
+    // `randomPort()` helper.
+    const server1 = new ServerSocket(0);
     servers.push(server1);
     await server1.ready;
+    const port = server1.port;
 
     const server2 = new ServerSocket(port);
     servers.push(server2);
@@ -186,10 +186,10 @@ describe('ServerSocket', () => {
   });
 
   it('send() is no-op for closed connections', async () => {
-    const port = randomPort();
-    const server = new ServerSocket(port);
+    const server = new ServerSocket(0);
     servers.push(server);
     await server.ready;
+    const port = server.port;
 
     const { ws, ack } = await connectClient(port);
     const clientId = ack.clientId as string;
@@ -203,10 +203,10 @@ describe('ServerSocket', () => {
   });
 
   it('broadcast() sends to all connected clients', async () => {
-    const port = randomPort();
-    const server = new ServerSocket(port);
+    const server = new ServerSocket(0);
     servers.push(server);
     await server.ready;
+    const port = server.port;
 
     const c1 = await connectClient(port);
     const c2 = await connectClient(port);
@@ -235,10 +235,10 @@ describe('ServerSocket', () => {
   });
 
   it('broadcast() excludes specified client', async () => {
-    const port = randomPort();
-    const server = new ServerSocket(port);
+    const server = new ServerSocket(0);
     servers.push(server);
     await server.ready;
+    const port = server.port;
 
     const c1 = await connectClient(port);
     const c2 = await connectClient(port);

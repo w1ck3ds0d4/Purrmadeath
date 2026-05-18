@@ -5,11 +5,6 @@ import { SessionManager } from '../../../server/core/SessionManager';
 import { MessageType } from '@shared/protocol';
 import { GAME_VERSION } from '@shared/constants';
 
-/** Pick a random high port to avoid collisions. */
-function randomPort(): number {
-  return 40_000 + Math.floor(Math.random() * 20_000);
-}
-
 /** Minimal mock DiscoveryBeacon. */
 function mockBeacon() {
   return {
@@ -78,9 +73,9 @@ afterEach(async () => {
 
 describe('SessionManager', () => {
   it('requires HANDSHAKE before SESSION_CREATE', async () => {
-    const port = randomPort();
-    server = new ServerSocket(port);
+    server = new ServerSocket(0);
     await server.ready;
+    const port = server.port;
     const _sm = new SessionManager(server, mockBeacon() as never);
 
     const c = await connectAndCollect(port);
@@ -97,9 +92,9 @@ describe('SessionManager', () => {
   });
 
   it('creates a session after HANDSHAKE', async () => {
-    const port = randomPort();
-    server = new ServerSocket(port);
+    server = new ServerSocket(0);
     await server.ready;
+    const port = server.port;
     const _sm = new SessionManager(server, mockBeacon() as never);
 
     const c = await connectAndCollect(port);
@@ -119,9 +114,9 @@ describe('SessionManager', () => {
   });
 
   it('rejects SESSION_CREATE when a session already exists', async () => {
-    const port = randomPort();
-    server = new ServerSocket(port);
+    server = new ServerSocket(0);
     await server.ready;
+    const port = server.port;
     const _sm = new SessionManager(server, mockBeacon() as never);
 
     // Host creates session
@@ -148,9 +143,9 @@ describe('SessionManager', () => {
   });
 
   it('allows a player to join an existing session', async () => {
-    const port = randomPort();
-    server = new ServerSocket(port);
+    server = new ServerSocket(0);
     await server.ready;
+    const port = server.port;
     const _sm = new SessionManager(server, mockBeacon() as never);
 
     // Host creates session
@@ -179,9 +174,9 @@ describe('SessionManager', () => {
   });
 
   it('rejects join with invalid invite code', async () => {
-    const port = randomPort();
-    server = new ServerSocket(port);
+    server = new ServerSocket(0);
     await server.ready;
+    const port = server.port;
     const _sm = new SessionManager(server, mockBeacon() as never);
 
     // Host creates session
@@ -206,9 +201,9 @@ describe('SessionManager', () => {
   });
 
   it('rejects join when no session exists', async () => {
-    const port = randomPort();
-    server = new ServerSocket(port);
+    server = new ServerSocket(0);
     await server.ready;
+    const port = server.port;
     const _sm = new SessionManager(server, mockBeacon() as never);
 
     const c = await connectAndCollect(port);
@@ -225,9 +220,9 @@ describe('SessionManager', () => {
   });
 
   it('class select updates player class in lobby', async () => {
-    const port = randomPort();
-    server = new ServerSocket(port);
+    server = new ServerSocket(0);
     await server.ready;
+    const port = server.port;
     const _sm = new SessionManager(server, mockBeacon() as never);
 
     const host = await connectAndCollect(port);
@@ -249,9 +244,9 @@ describe('SessionManager', () => {
   });
 
   it('defaults to warrior for invalid class', async () => {
-    const port = randomPort();
-    server = new ServerSocket(port);
+    server = new ServerSocket(0);
     await server.ready;
+    const port = server.port;
     const _sm = new SessionManager(server, mockBeacon() as never);
 
     const host = await connectAndCollect(port);
@@ -266,9 +261,9 @@ describe('SessionManager', () => {
   });
 
   it('rejects version mismatch in HANDSHAKE', async () => {
-    const port = randomPort();
-    server = new ServerSocket(port);
+    server = new ServerSocket(0);
     await server.ready;
+    const port = server.port;
     const _sm = new SessionManager(server, mockBeacon() as never);
 
     const c = await connectAndCollect(port);
@@ -288,9 +283,9 @@ describe('SessionManager', () => {
   });
 
   it('only host can start the game', async () => {
-    const port = randomPort();
-    server = new ServerSocket(port);
+    server = new ServerSocket(0);
     await server.ready;
+    const port = server.port;
     const _sm = new SessionManager(server, mockBeacon() as never);
 
     // Host creates session
@@ -319,9 +314,9 @@ describe('SessionManager', () => {
   });
 
   it('host leaving closes the session', async () => {
-    const port = randomPort();
-    server = new ServerSocket(port);
+    server = new ServerSocket(0);
     await server.ready;
+    const port = server.port;
     const _sm = new SessionManager(server, mockBeacon() as never);
 
     const host = await connectAndCollect(port);
@@ -344,9 +339,9 @@ describe('SessionManager', () => {
   });
 
   it('rate limits rapid session actions', async () => {
-    const port = randomPort();
-    server = new ServerSocket(port);
+    server = new ServerSocket(0);
     await server.ready;
+    const port = server.port;
     const _sm = new SessionManager(server, mockBeacon() as never);
 
     const host = await connectAndCollect(port);

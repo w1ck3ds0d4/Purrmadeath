@@ -9,15 +9,14 @@ import {
 import type { PlayerClass } from '../../../shared/definitions/ClassDefinitions';
 
 describe('ClassDefinitions', () => {
-  it('defines all 7 classes', () => {
-    expect(PLAYER_CLASSES).toHaveLength(7);
+  it('defines the 3 base classes', () => {
+    // Original 7-class roster was descoped to a 3-class MVP (assassin /
+    // paladin / necromancer / beastmaster removed). Once any of them
+    // ship again, add them back here.
+    expect(PLAYER_CLASSES).toHaveLength(3);
     expect(PLAYER_CLASSES).toContain('warrior');
     expect(PLAYER_CLASSES).toContain('ranger');
     expect(PLAYER_CLASSES).toContain('mage');
-    expect(PLAYER_CLASSES).toContain('assassin');
-    expect(PLAYER_CLASSES).toContain('paladin');
-    expect(PLAYER_CLASSES).toContain('necromancer');
-    expect(PLAYER_CLASSES).toContain('beastmaster');
   });
 
   it('DEFAULT_CLASS is a valid class', () => {

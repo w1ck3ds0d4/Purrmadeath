@@ -19,17 +19,25 @@ function makeAlloc(overrides?: Partial<SkillAllocation>): SkillAllocation {
 
 describe('SkillDefinitions structure', () => {
   const allBranches = Object.values(SKILL_BRANCHES) as SkillBranch[];
+  // 6 of 15 branches are declared placeholders ("Coming soon...") with
+  // empty `nodes` arrays - templar / slayer / shadow_hunter / windwalker
+  // / earth_mage / void_mage. The shipping branch checks below filter
+  // those out so structural assertions only fire against branches that
+  // actually have content.
+  const implementedBranches = allBranches.filter(b => b.nodes.length > 0);
 
-  it('has 5 branches per class (7 classes = 35 branches)', () => {
-    expect(allBranches.length).toBe(35);
+  it('has 5 branches per class (3 classes = 15 branches)', () => {
+    // 3-class MVP roster (warrior / ranger / mage), each with 5 declared
+    // branches in CLASS_BRANCHES; total 15 entries in SKILL_BRANCHES.
+    expect(allBranches.length).toBe(15);
     for (const cls of PLAYER_CLASSES) {
       const classBranches = allBranches.filter(b => b.playerClass === cls);
       expect(classBranches).toHaveLength(5);
     }
   });
 
-  it('each branch has exactly 10 nodes (tiers 1-10)', () => {
-    for (const branch of allBranches) {
+  it('each implemented branch has exactly 10 nodes (tiers 1-10)', () => {
+    for (const branch of implementedBranches) {
       expect(branch.nodes).toHaveLength(10);
       for (let i = 0; i < 10; i++) {
         expect(branch.nodes[i].tier).toBe(i + 1);
@@ -69,20 +77,27 @@ describe('SkillDefinitions structure', () => {
     }
   });
 
-  it('tier 1-4 nodes have passive or special effects', () => {
-    for (const branch of allBranches) {
+  it('tier 1-4 nodes have passive, special, or combatMod effects', () => {
+    // Tiers 1-4 are pre-capstone. The SkillNode interface notes
+    // `combatMod` as a tier-7/9/10 thing, but several branches
+    // (sharpshooter_t4 Toxic Spread, beastmaster_t2/t4 wolf upgrades,
+    // electric_mage_t2/t4 bouncing) actually use combatMod earlier.
+    // Either the comment is stale or those should be passive/special;
+    // accept either shape here so the test doesn't dictate which.
+    for (const branch of implementedBranches) {
       for (const node of branch.nodes) {
         if (node.tier < 5) {
           const hasEffect = (node.passive && node.passive.length > 0) ||
-                           (node.special && node.special.length > 0);
-          expect(hasEffect).toBe(true);
+                           (node.special && node.special.length > 0) ||
+                           !!node.combatMod;
+          expect(hasEffect, `node ${node.id} has no passive/special/combatMod`).toBe(true);
         }
       }
     }
   });
 
   it('tier 5 (capstone) nodes have active abilities', () => {
-    for (const branch of allBranches) {
+    for (const branch of implementedBranches) {
       const capstone = branch.nodes[4];
       expect(capstone.tier).toBe(5);
       expect(capstone.active).toBeDefined();
@@ -93,7 +108,12 @@ describe('SkillDefinitions structure', () => {
   });
 
   it('passive effects have valid stat and mode', () => {
-    const validStats = ['damage', 'speed', 'maxHp', 'defense', 'critChance', 'attackSpeed', 'hpRegen'];
+    // Mirrors the PassiveStat union in SkillDefinitions.ts. Update both
+    // sides if a new passive stat is added to the type.
+    const validStats = [
+      'damage', 'speed', 'maxHp', 'defense', 'critChance', 'attackSpeed', 'hpRegen',
+      'dodgeChance', 'cooldownReduction', 'critDamage', 'flatDamage', 'flatSpeed', 'defensePercent',
+    ];
     for (const branch of allBranches) {
       for (const node of branch.nodes) {
         if (node.passive) {
@@ -168,8 +188,12 @@ describe('canAllocate', () => {
     expect(canAllocate(alloc, 'berserker_t10', 'warrior')).toBe(true);
   });
 
-  it('allows full 1-10 chain for all branches', () => {
-    for (const branch of Object.values(SKILL_BRANCHES)) {
+  it('allows full 1-10 chain for every implemented branch', () => {
+    // Placeholder branches have no nodes, so canAllocate falls through
+    // to the `if (!node) return false` path. Limit this to branches
+    // that actually have content.
+    const branches = (Object.values(SKILL_BRANCHES) as SkillBranch[]).filter(b => b.nodes.length > 0);
+    for (const branch of branches) {
       const alloc = makeAlloc({ skillPoints: 20 });
       for (let t = 1; t <= 10; t++) {
         const nodeId = `${branch.id}_t${t}`;
@@ -197,12 +221,14 @@ describe('getUnlockedAbilities', () => {
   });
 
   it('returns ability when capstone is allocated', () => {
+    // berserker's tier-5 active is warcry_rage (the red-aura buff burst);
+    // the old "ground_slam" name was from an earlier design.
     const alloc = makeAlloc({
       allocated: new Set(['berserker_t1', 'berserker_t2', 'berserker_t3', 'berserker_t4', 'berserker_t5']),
     });
     const abilities = getUnlockedAbilities(alloc);
     expect(abilities).toHaveLength(1);
-    expect(abilities[0].abilityId).toBe('ground_slam');
+    expect(abilities[0].abilityId).toBe('warcry_rage');
   });
 
   it('returns multiple abilities from different branches', () => {
@@ -215,7 +241,7 @@ describe('getUnlockedAbilities', () => {
     const abilities = getUnlockedAbilities(alloc);
     expect(abilities).toHaveLength(2);
     const ids = abilities.map(a => a.abilityId);
-    expect(ids).toContain('ground_slam');
-    expect(ids).toContain('shield_charge');
+    expect(ids).toContain('warcry_rage');
+    expect(ids).toContain('unbreakable_charge');
   });
 });

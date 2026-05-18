@@ -58,6 +58,18 @@ export class ServerSocket {
   /** Resolves when the WSS is listening; rejects on bind error (e.g. EADDRINUSE). */
   readonly ready: Promise<void>;
 
+  /**
+   * The actual port the WSS is bound to. Equal to the constructor's
+   * `port` argument unless that was 0, in which case the OS picks any
+   * free port and this is set when `ready` resolves. Tests use the
+   * port=0 path to dodge Windows excluded port ranges.
+   */
+  get port(): number {
+    const addr = this.wss.address();
+    if (addr && typeof addr === 'object') return addr.port;
+    return 0;
+  }
+
   constructor(port: number) {
     this.wss = new WebSocketServer({
       port,
@@ -66,7 +78,7 @@ export class ServerSocket {
 
     this.ready = new Promise<void>((resolve, reject) => {
       this.wss.once('listening', resolve);
-      this.wss.once('error', (err: NodeJS.ErrnoException) => {
+      this.wss.once('error', (err: Error & { code?: string }) => {
         if (err.code === 'EADDRINUSE') {
           reject(new Error(`Port ${port} already in use - is another server running?`));
         } else {

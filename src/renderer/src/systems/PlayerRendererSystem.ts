@@ -517,7 +517,7 @@ export class PlayerRendererSystem {
       const prevRevProg = this.lastReviveProg.get(id) ?? -1;
 
       // Always-animated entities need per-frame redraw
-      const hasBurningRuins = buildingIds.has(id) && world.getComponent<RuinsComponent>(id, C.Ruins)?.burnTimer! > 0;
+      const hasBurningRuins = buildingIds.has(id) && (world.getComponent<RuinsComponent>(id, C.Ruins)?.burnTimer ?? 0) > 0;
       const hasClassSprite = this.classSprites.has(id);
       const alwaysAnimated = isPortal || isItem || civilianIds.has(id) || id === localEntityId || hasClassSprite || this.selectedBuildingId === id || hasBurningRuins;
 

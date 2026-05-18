@@ -151,21 +151,23 @@ describe('EnemySystem', () => {
     expect(dir.dy).toBe(0);
   });
 
-  it('cross-faction enemies target each other', () => {
+  it('cross-faction enemies ignore each other and pursue the campfire', () => {
+    // Enemies no longer target other enemies regardless of enemyFaction
+    // value (findNearestHostileEnemy now early-returns unless the
+    // attacker is a guard). The campfire is the only valid target here,
+    // so the bandit should head left toward it, not right toward the
+    // undead spawn.
     const world = createTestWorld();
     const system = createSystem();
 
     const bandit = spawnEnemy(world, 0, 0, { variant: 'melee', enemyFaction: 'bandits' });
     spawnEnemy(world, 60, 0, { variant: 'melee', enemyFaction: 'undead' });
-
-    // Campfire far behind - hostile enemy within distract range should override
     spawnCampfire(world, -200, 0);
 
     system.update(world, 1 / 30);
 
     const dir = getDir(world, bandit);
-    // Bandit should move toward the undead enemy (positive X), not backward to campfire
-    expect(dir.dx).toBeGreaterThan(0);
+    expect(dir.dx).toBeLessThan(0);
   });
 
   it('ghost uses direct beeline (ignores terrain)', () => {
