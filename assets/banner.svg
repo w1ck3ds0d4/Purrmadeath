@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="968" height="180" viewBox="0 0 968 180" role="img" aria-label="Purrmadeath">
+  <defs>
+    <clipPath id="clip"><rect width="968" height="180" rx="8"/></clipPath>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a0510"/>
+      <stop offset="50%" stop-color="#1a0a15"/>
+      <stop offset="100%" stop-color="#0a0510"/>
+    </linearGradient>
+  </defs>
+  <g clip-path="url(#clip)">
+    <rect width="968" height="180" fill="url(#bg)"/>
+    <rect width="968" height="180" fill="none" stroke="#2a1525" stroke-width="2" rx="8"/>
+    <text x="484" y="95" text-anchor="middle"
+          font-family="ui-monospace, 'JetBrains Mono', Consolas, monospace"
+          font-size="56" font-weight="700" letter-spacing="2"
+          fill="#d544aa">Purrmadeath</text>
+    <text x="484" y="132" text-anchor="middle"
+          font-family="ui-monospace, 'JetBrains Mono', Consolas, monospace"
+          font-size="14" letter-spacing="1.5"
+          fill="#888888">2D co-op roguelike survival, up to 4 players</text>
+    <rect y="175" width="968" height="5" fill="#d544aa" opacity="0.7"/>
+  </g>
+</svg>
