@@ -1,7 +1,14 @@
-import { describe, it, expect } from 'vitest';
-import { tileKey, findPath } from '../../../server/systems/Pathfinding';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { tileKey, findPath, clearWalkabilityCache } from '../../../server/systems/Pathfinding';
 import { TILE_SIZE } from '@shared/constants';
 import { mockGenerator } from './__testutil';
+
+// The walkability cache is module-scoped, so tests that hand in
+// different mock generators have to reset it or they all see the same
+// answer for any given tile coordinate.
+beforeEach(() => {
+  clearWalkabilityCache();
+});
 
 describe('tileKey', () => {
   it('produces unique keys for different coordinates', () => {

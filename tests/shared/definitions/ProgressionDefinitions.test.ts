@@ -25,9 +25,10 @@ describe('ProgressionDefinitions', () => {
     }
   });
 
-  it('has achievements in all 3 categories', () => {
+  it('has achievements in the shipping categories', () => {
+    // `class` is reserved in the AchievementCategory type for future
+    // class-unlock achievements, but no achievement uses it today.
     const cats = new Set(ACHIEVEMENTS.map(a => a.category));
-    expect(cats).toContain('class');
     expect(cats).toContain('buff');
     expect(cats).toContain('building');
   });
@@ -46,15 +47,6 @@ describe('ProgressionDefinitions', () => {
     }
   });
 
-  it('class unlock achievements include expected classes', () => {
-    const classAch = ACHIEVEMENTS.filter(a => a.category === 'class');
-    const names = classAch.map(a => a.displayName);
-    expect(names).toContain('Assassin');
-    expect(names).toContain('Paladin');
-    expect(names).toContain('Necromancer');
-    expect(names).toContain('Beastmaster');
-  });
-
   it('buff achievements grant stat rewards', () => {
     const buffs = ACHIEVEMENTS.filter(a => a.category === 'buff');
     expect(buffs.length).toBeGreaterThanOrEqual(5);
@@ -65,6 +57,9 @@ describe('ProgressionDefinitions', () => {
   });
 
   it('progress functions respond to stat changes', () => {
+    // Set every stat that any current progress() reads, including the
+    // optional ones (`?? 0` fallback inside the lambdas, so they need
+    // explicit values here to exercise the not-zero path).
     const stats = emptyMetaStats();
     stats.totalEnemiesKilled = 999;
     stats.totalBuildingsBuilt = 999;
@@ -74,10 +69,14 @@ describe('ProgressionDefinitions', () => {
     stats.totalTimePlayed = 99999;
     stats.totalDamageDealt = 99999;
     stats.resourcesGathered = { wood: 9999, stone: 9999, iron: 9999, diamond: 9999 };
+    stats.totalDamageTaken = 99999;
+    stats.totalCriticalHits = 999;
+    stats.totalTurretKills = 999;
+    stats.totalCiviliansSpawned = 999;
 
     for (const ach of ACHIEVEMENTS) {
       const progress = ach.progress(stats);
-      expect(progress).toBeGreaterThan(0);
+      expect(progress, `progress for ${ach.id}`).toBeGreaterThan(0);
     }
   });
 });

@@ -51,12 +51,17 @@ describe('CombatSystem', () => {
     expect(hits).toHaveLength(0);
   });
 
-  it('different enemyFaction enemies DO damage each other', () => {
+  it('different enemyFaction enemies do NOT damage each other', () => {
+    // Cross-faction enemy combat was removed: processMeleeAttack now
+    // skips any pair where srcFaction.type === tgtFaction.type, so
+    // enemies of any faction combo can stand in a brawl without harm.
+    // Player and guard projectiles still hit enemies because of the
+    // type difference.
     const world = createTestWorld();
     const src = spawnCombatant(world, 0, 0, { type: 'enemy', enemyFaction: 'bandits' });
     spawnCombatant(world, 10, 0, { type: 'enemy', enemyFaction: 'undead' });
     const { hits } = combat.processMeleeAttack(world, src, 0);
-    expect(hits.length).toBeGreaterThan(0);
+    expect(hits).toHaveLength(0);
   });
 
   it('guard hits enemy', () => {

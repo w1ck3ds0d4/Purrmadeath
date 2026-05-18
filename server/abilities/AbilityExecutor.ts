@@ -495,18 +495,16 @@ export function executeAbility(
         const dx = ep.x - tx, dy = ep.y - ty;
         if (dx * dx + dy * dy > r2) continue;
         // Apply freeze
-        let freeze = world.getComponent<FreezeComponent>(eid, C.Freeze);
+        const freeze = world.getComponent<FreezeComponent>(eid, C.Freeze);
         if (!freeze) {
           world.addComponent(eid, C.Freeze, { remaining: params.freezeDuration, breaksOnDamage: false });
-          freeze = world.getComponent<FreezeComponent>(eid, C.Freeze)!;
         } else {
           freeze.remaining = Math.max(freeze.remaining, params.freezeDuration);
         }
         // Apply damage amplification via SoulMark component (reuse for damage amp)
-        let mark = world.getComponent<SoulMarkComponent>(eid, C.SoulMark);
+        const mark = world.getComponent<SoulMarkComponent>(eid, C.SoulMark);
         if (!mark) {
           world.addComponent(eid, C.SoulMark, { damageAmp: params.damageAmp, remaining: params.freezeDuration, sourceId: entityId });
-          mark = world.getComponent<SoulMarkComponent>(eid, C.SoulMark)!;
         } else {
           mark.damageAmp = Math.max(mark.damageAmp, params.damageAmp);
           mark.remaining = Math.max(mark.remaining, params.freezeDuration);

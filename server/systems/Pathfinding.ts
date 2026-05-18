@@ -43,6 +43,19 @@ export function tickWalkabilityCache(dt: number): void {
   }
 }
 
+/**
+ * Drop every cached walkability result. Tests use this to isolate
+ * runs that swap in different mock generators - without it the
+ * module-level cache stores results from the first generator and
+ * every later test sees the same answer regardless of what its
+ * generator returns. Not needed in production: the 60-second TTL
+ * tick handles world-level invalidation.
+ */
+export function clearWalkabilityCache(): void {
+  walkabilityCache.clear();
+  walkabilityCacheAge = 0;
+}
+
 /** Get cached walkability for a tile, computing from generator if not cached. */
 function getCachedWalkable(generator: WorldGenerator, tx: number, ty: number): boolean {
   const key = tileKey(tx, ty);

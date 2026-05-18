@@ -8,13 +8,14 @@ import {
 describe('WORLD_EVENTS', () => {
   const allIds = Object.keys(WORLD_EVENTS) as WorldEventId[];
 
-  it('has 6 event types', () => {
-    expect(allIds).toHaveLength(6);
+  it('has the 5 shipping event types', () => {
+    // Roster trimmed from the original 6 - blood_moon and portal_surge
+    // were folded into solar_eclipse / surprise_attack respectively.
+    expect(allIds).toHaveLength(5);
     expect(allIds).toContain('meteor_shower');
-    expect(allIds).toContain('blood_moon');
     expect(allIds).toContain('earthquake');
     expect(allIds).toContain('resource_boom');
-    expect(allIds).toContain('portal_surge');
+    expect(allIds).toContain('surprise_attack');
     expect(allIds).toContain('solar_eclipse');
   });
 
@@ -24,7 +25,9 @@ describe('WORLD_EVENTS', () => {
       expect(ev.id).toBe(id);
       expect(ev.name.length).toBeGreaterThan(0);
       expect(ev.description.length).toBeGreaterThan(0);
-      expect(ev.duration).toBeGreaterThan(0);
+      // Duration 0 is documented as "instant / lasts the whole day"
+      // (see WorldEventDef in WorldEvents.ts), e.g. resource_boom.
+      expect(ev.duration).toBeGreaterThanOrEqual(0);
       expect(ev.minWave).toBeGreaterThanOrEqual(1);
       expect(ev.weight).toBeGreaterThan(0);
       expect(ev.banner.length).toBeGreaterThan(0);
@@ -67,7 +70,7 @@ describe('pickWorldEvent', () => {
       const ev = pickWorldEvent(30);
       if (ev) seen.add(ev);
     }
-    // With 500 attempts, all 6 events should appear
-    expect(seen.size).toBe(6);
+    // With 500 attempts, all 5 shipping events should appear
+    expect(seen.size).toBe(5);
   });
 });
