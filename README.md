@@ -2,8 +2,6 @@
   <img src="assets/banner.svg" alt="Purrmadeath" />
 </p>
 
-# Purrmadeath
-
 2D co-op roguelike survival - base building, procedural world, up to 4 players. Version 1.3.2.
 
 ---
