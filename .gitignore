@@ -28,9 +28,10 @@ Thumbs.db
 saves/
 metastats
 
-# Documentation 
+# Documentation
 *.md
 !README.md
+!CHANGELOG.md
 !SECURITY.md
 !CONTRIBUTING.md
 !ROADMAP.md
