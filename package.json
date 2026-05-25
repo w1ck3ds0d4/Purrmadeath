@@ -3,7 +3,7 @@
   "version": "1.4.0",
   "description": "2D co-op roguelike - base building, procedural world, up to 4 players",
   "author": "w1ck3ds0d4",
-  "license": "GPL-3.0",
+  "license": "AGPL-3.0-or-later",
   "private": true,
   "type": "module",
   "main": "out/main/index.js",
