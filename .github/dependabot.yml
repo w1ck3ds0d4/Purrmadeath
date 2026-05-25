@@ -7,6 +7,21 @@ updates:
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
+    groups:
+      eslint:
+        patterns:
+          - "eslint"
+          - "eslint-*"
+          - "@typescript-eslint/*"
+      vite:
+        patterns:
+          - "vite"
+          - "vitest"
+          - "@vitejs/*"
+          - "electron-vite"
+      types:
+        patterns:
+          - "@types/*"
     ignore:
       # @typescript-eslint does not yet support TS 6.x - revisit when eslint v9 supports it
       - dependency-name: "typescript"
