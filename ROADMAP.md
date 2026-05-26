@@ -34,7 +34,7 @@ tests. Distribution is Windows-only.
 - [ ] Audio layer beyond ambient meows (combat SFX + music layers per biome/wave)
 - [ ] Client-side render tests (snapshot or visual regression at minimum)
 - [ ] Documented manual smoke checklist for each release
-- [ ] v1.0.0 retroactive marker — v1.4.0 is the de facto v1, but a `v1.0.0` ROADMAP-acceptance moment helps future planning
+- [ ] v1.0.0 retroactive marker - v1.4.0 is the de facto v1, but a `v1.0.0` ROADMAP-acceptance moment helps future planning
 
 ## Milestones to v1 (retro-cut + remaining polish)
 
