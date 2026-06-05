@@ -46,7 +46,7 @@
     "nodemon": "^3.1.4",
     "tsx": "^4.22.3",
     "typescript": "^5.5.0",
-    "vitest": "^4.1.7"
+    "vitest": "^4.1.8"
   },
   "build": {
     "appId": "com.purrmadeath.app",
