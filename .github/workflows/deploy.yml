@@ -1,0 +1,50 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Ref or tag to deploy"
+        required: true
+        default: "main"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-server:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check the ref is a plain branch or tag name
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          [[ "$REF" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "::error::'$REF' is not a plain branch or tag name"; exit 1; }
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.2.5
+        env:
+          REF: ${{ inputs.ref }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: REF
+          script: |
+            cd /opt/purrmadeath
+            sudo -u purrmadeath git fetch origin --tags --prune
+            # A branch deploys what origin has (the server's own copy of the branch is stale);
+            # a tag deploys the tag.
+            if sudo -u purrmadeath git rev-parse -q --verify "refs/remotes/origin/$REF" > /dev/null; then
+              target="origin/$REF"
+            else
+              target="$REF"
+            fi
+            echo "=== Deploying $target ==="
+            sudo -u purrmadeath git reset --hard "$target"
+            sudo -u purrmadeath npm install --include=dev
+            sudo systemctl restart purrmadeath-server
+            echo "=== Server updated ==="
+            sudo systemctl status purrmadeath-server --no-pager -l
