@@ -30,6 +30,7 @@ metastats
 
 # Documentation
 *.md
+!CLAUDE.md
 !README.md
 !CHANGELOG.md
 !SECURITY.md
