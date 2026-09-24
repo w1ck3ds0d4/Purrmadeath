@@ -34,23 +34,3 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run publish
-
-  deploy-server:
-    needs: build-and-release
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Deploy to EC2
-        uses: appleboy/ssh-action@v1.2.5
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
-            cd /opt/purrmadeath
-            sudo -u purrmadeath git fetch origin
-            sudo -u purrmadeath git reset --hard origin/main
-            sudo -u purrmadeath npm install --include=dev
-            sudo systemctl restart purrmadeath-server
-            echo "=== Server updated ==="
-            sudo systemctl status purrmadeath-server --no-pager -l
