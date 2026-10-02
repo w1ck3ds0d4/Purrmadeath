@@ -61,19 +61,17 @@ Each subclass has a 10-tier skill tree with passive stats, combat modifiers, abi
 
 Buildings are organized by category in the build menu (Q):
 
-**Defense**: Wall, Gate, Arrow Turret, Cannon Turret, Ballista, Laser Tower, Tesla Coil, Flame Tower, Catapult, Flak Cannon, Moat, Spike Trap
+**Defense**: Wall, Gate, Arrow Turret, Cannon Turret, Ballista, Laser Tower, Tesla Coil, Flame Tower, Catapult, Flak Cannon (achievement-locked: Artillery Expert), Moat, Spike Trap, Watchtower
 
-**Production**: Lumbermill, Quarry, Mine, Farm, Workshop, Smeltery (produces steel from wood + iron)
+**Production**: Lumbermill, Quarry, Mine, Farm, Workshop, Smeltery (produces steel from wood + iron), Market (daily card shop - 3 random cards per wave, buy 1 with gold, 1 max per game)
 
-**Military**: Guard House (trains random-role guards - costs civilian + food + steel + gold)
+**Military**: Guard House (trains random-role guards - costs civilian + food + steel + gold), Dragon Roost (coming soon, achievement-locked: Dragon Tamer)
 
 **Housing**: Cat House (provides housing for additional civilians)
 
 **Utility**: Warehouse, Bridge, Light Tower, Healing Shrine, Repair Station, Teleporter Pad
 
-**Shops**: Potion Shop, Tavern (hire hero NPCs), Market (daily card shop - 3 random cards per wave, buy 1 with gold, 1 max per game)
-
-**Coming Soon**: Dragon Roost
+**Shops**: Potion Shop, Tavern (hire hero NPCs)
 
 ### Points of Interest
 
@@ -127,20 +125,20 @@ The dev build connects to `localhost` automatically. To test the production serv
 
 ### Testing
 
-Tests use [Vitest](https://vitest.dev/) and cover server-side systems (pathfinding, combat, enemy AI).
+Tests use [Vitest](https://vitest.dev/) and cover server-side systems and shared definitions (pathfinding, combat, enemy AI, session manager, loot tables, boss/card/class/skill definitions, wave modifiers, world events).
 
 ```bash
 npm run test          # Run all tests once
 npm run test:watch    # Run tests in watch mode
 ```
 
-Test files live alongside their source in `server/systems/` (e.g. `Pathfinding.test.ts`, `CombatSystem.test.ts`, `EnemySystem.test.ts`). Shared test helpers are in `server/systems/__testutil.ts`.
+Test files live in `tests/` (`tests/server/{core,net,systems}` and `tests/shared/{data,definitions}`), matched by `vitest.config.ts`. Shared test helpers are in `tests/server/systems/__testutil.ts`.
 
 ### Debug Tools
 
 - **F4** - Debug console with 3-column stats view: Core (FPS, entities, position), Server (wave, enemies, tick profile), Game (class, HP, kills)
 - **F12** / **Ctrl+Shift+I** - Electron DevTools (dev mode only)
-- **Debug commands** (type in debug console): `/sp`, `/spawn`, `/give`, `/card`, `/wave`, `/kill`, `/pause`, `/god`, `/speed`, `/heal`, `/tp`, `/all`
+- **Debug commands** (type in debug console): `/spawn`, `/skipwave`, `/pausewave`, `/skipnight`, `/skipday`, `/settime`, `/give`, `/card`, `/sp`, `/modifier`, `/event`, `/ability`, `/pause`, `/killenemies`, `/destroyportals`
 - **Session logs** - Server writes timestamped logs to `logs/` directory (ability activations, damage, buffs, wave events, saves)
 - **Client logs** - Production builds write startup/connection logs to `%AppData%/purrmadeath/logs/`
 - **Rate monitor** - Localhost connections log average/peak message rates every 30 seconds
@@ -155,7 +153,7 @@ The CI/CD pipeline handles building, publishing, and server deployment automatic
 
 **Steps:**
 
-1. Bump the version in both `package.json` and `GAME_VERSION` in `shared/constants.ts` (must match)
+1. Bump the version in both `package.json` and `GAME_VERSION` in `shared/constants/core.ts` (must match)
 2. Commit and tag:
 
 ```bash
@@ -282,7 +280,7 @@ server/                    Game server (Node.js + ws)
   abilities/               Ability execution (AbilityExecutor.ts)
 shared/                    Shared between client and server
   components/              ECS component definitions
-  constants.ts             Game balance, version, building costs
+  constants/               Game balance, version, building costs (core.ts holds the version)
   protocol.ts              WebSocket message types
   definitions/             Data definitions
     skills/                Per-class skill trees (WarriorSkills, RangerSkills, MageSkills)
@@ -302,6 +300,9 @@ src/
     systems/                 Rendering systems (players, projectiles, VFX)
     ui/                      HUD, overlays (build menu, skill tree, civilian panel)
     render/                  Camera, tile renderer, build ghost
+tests/                     Vitest tests (server/, shared/)
+deploy/                    EC2 setup and deploy scripts
+scripts/                   Build helpers (version check, AWS)
 ```
 
 ---
