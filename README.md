@@ -4,13 +4,20 @@
 
 2D co-op roguelike survival - base building, procedural world, up to 4 players. Version 1.4.0. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
----
+## Contents
 
-## Playing the Game
+- [Playing the game](#playing-the-game)
+- [Development](#development)
+- [Releasing a new version](#releasing-a-new-version)
+- [AWS instance management](#aws-instance-management)
+- [Project structure](#project-structure)
+- [License](#license)
+
+## Playing the game
 
 Download the latest installer from the [Releases](https://github.com/w1ck3ds0d4/Purrmadeath/releases) page.
 
-### Game Modes
+### Game modes
 
 - **Singleplayer** - Play offline with a local embedded server. Saves are stored locally. Works without internet.
 - **Host Game** - Create an online session. Other players join with the invite code.
@@ -75,7 +82,7 @@ Buildings are organized by category in the build menu (Q):
 
 **Coming Soon**: Dragon Roost
 
-### Points of Interest
+### Points of interest
 
 The procedural world contains discoverable POIs:
 - **Abandoned Camp** - Loot resources (press E to interact)
@@ -85,22 +92,20 @@ The procedural world contains discoverable POIs:
 
 POIs appear as diamond shapes with "?" markers. Active shrine blessings are shown in the top-right HUD with countdown timers.
 
-### Campfire & Building Range
+### Campfire and building range
 
 Campfire is player-placed at the start (free cost) and serves as respawn point + initial housing. 80-tile (2560px) square building range from campfire center. Watchtowers extend range by 20 tiles per level. Portals spawn outside the building range. Campfire destruction = game over. Death before campfire placement = permanent death. Building exclusion zones prevent placement too close to certain structures (walls, bridges, moats, and spike traps are exempt). Buildings can be relocated within the building range.
 
-### Cards & Achievements
+### Cards and achievements
 
 - **30 cards**: 15 stat buffs (common-legendary), 10 build-defining abilities, 5 curses (dual buff+debuff)
 - **18 achievements**: 10 stat buff achievements, 4 building unlock achievements, 4 class unlock milestones
 - Cards are offered every 3 waves (pick 1 of 3) and granted on boss kills
 - Achievement buffs persist permanently across runs
 
-### Boss Encounters
+### Boss encounters
 
 8 unique bosses every 5 waves (W5 through W40) with multi-phase mechanics, HP thresholds, and boss-specific loot tables. Double bosses from W30+.
-
----
 
 ## Development
 
@@ -136,7 +141,7 @@ npm run test:watch    # Run tests in watch mode
 
 Test files live alongside their source in `server/systems/` (e.g. `Pathfinding.test.ts`, `CombatSystem.test.ts`, `EnemySystem.test.ts`). Shared test helpers are in `server/systems/__testutil.ts`.
 
-### Debug Tools
+### Debug tools
 
 - **F4** - Debug console with 3-column stats view: Core (FPS, entities, position), Server (wave, enemies, tick profile), Game (class, HP, kills)
 - **F12** / **Ctrl+Shift+I** - Electron DevTools (dev mode only)
@@ -145,9 +150,7 @@ Test files live alongside their source in `server/systems/` (e.g. `Pathfinding.t
 - **Client logs** - Production builds write startup/connection logs to `%AppData%/purrmadeath/logs/`
 - **Rate monitor** - Localhost connections log average/peak message rates every 30 seconds
 
----
-
-## Releasing a New Version
+## Releasing a new version
 
 ### Automated (GitHub Actions - recommended)
 
@@ -199,7 +202,7 @@ npm run build:win
 
 The installer is output to `dist/Purrmadeath Setup <version>.exe`.
 
-#### 2. Create a GitHub Release
+#### 2. Create a GitHub release
 
 ```bash
 gh release create vX.X.X "dist/Purrmadeath Setup X.X.X.exe" "dist/Purrmadeath Setup X.X.X.exe.blockmap" dist/latest.yml --title "Purrmadeath vX.X.X"
@@ -226,15 +229,13 @@ Or use the deploy script (requires `purrmadeath-key.pem` in the project root):
 bash deploy/deploy.sh YOUR_ELASTIC_IP
 ```
 
----
-
-## AWS Instance Management
+## AWS instance management
 
 The game server runs on an EC2 `t3.micro` instance in `eu-west-2` with an Elastic IP.
 
 **The Elastic IP is free only while the instance is running.** Stop the instance when not in use to save costs.
 
-### Start / Stop
+### Start / stop
 
 ```bash
 # Start
@@ -248,7 +249,7 @@ aws ec2 describe-instances --instance-ids YOUR_INSTANCE_ID --region eu-west-2 \
   --query "Reservations[0].Instances[0].State.Name"
 ```
 
-### Server Management
+### Server management
 
 ```bash
 ssh -i purrmadeath-key.pem ec2-user@YOUR_ELASTIC_IP
@@ -264,13 +265,11 @@ sudo journalctl -u purrmadeath-server -f
 sudo journalctl -u purrmadeath-server -n 100
 ```
 
-### Save Data
+### Save data
 
 Player saves are stored on the server at `/opt/purrmadeath/saves/` as JSON files. They persist across server restarts and redeployments. Back up this directory before wiping the instance.
 
----
-
-## Project Structure
+## Project structure
 
 ```
 server/                    Game server (Node.js + ws)
@@ -303,8 +302,6 @@ src/
     ui/                      HUD, overlays (build menu, skill tree, civilian panel)
     render/                  Camera, tile renderer, build ghost
 ```
-
----
 
 ## License
 
