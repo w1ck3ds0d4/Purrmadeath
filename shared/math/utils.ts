@@ -20,6 +20,11 @@ export function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
+/** Inverse of lerp: the factor t such that lerp(a, b, t) === v. Returns 0 when a === b. */
+export function inverseLerp(a: number, b: number, v: number): number {
+  return a === b ? 0 : (v - a) / (b - a);
+}
+
 /** Clamp a value between min and max. */
 export function clamp(value: number, min: number, max: number): number {
   return value < min ? min : value > max ? max : value;
