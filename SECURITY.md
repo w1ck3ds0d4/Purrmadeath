@@ -4,7 +4,7 @@ This document covers the threat model, current hardening, known limitations, and
 
 ## Reporting a Vulnerability
 
-Email **daniel.svs@outlook.com** with a description, reproduction steps, potential impact, and (optionally) a suggested fix. Do **not** open a public GitHub issue for security reports.
+Email **support@wickitlab.com** with a description, reproduction steps, potential impact, and (optionally) a suggested fix. Do **not** open a public GitHub issue for security reports.
 
 Response targets:
 - Acknowledgment within 48 hours.
