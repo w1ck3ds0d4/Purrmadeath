@@ -181,9 +181,11 @@ Tests use [Vitest](https://vitest.dev/) and cover server-side systems such as pa
 ```bash
 npm run test          # run all tests once
 npm run test:watch    # run tests in watch mode
+npm run lint          # eslint src server shared
+npm run typecheck     # tsc --noEmit
 ```
 
-Test files live under `tests/` (`tests/server`, `tests/shared`).
+CI runs lint, typecheck and tests together, so run all three before opening a pull request. Test files live under `tests/` (`tests/server`, `tests/shared`).
 
 ## Releasing a new version
 
