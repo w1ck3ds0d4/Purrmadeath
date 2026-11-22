@@ -1,273 +1,269 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="Purrmadeath" />
+  <img src="assets/banner.png" alt="Purrmadeath banner" />
 </p>
 
-2D co-op roguelike survival - base building, procedural world, up to 4 players. Version 1.4.0. See [CHANGELOG.md](CHANGELOG.md) for release notes.
+**2D co-op roguelike survival with base building, a procedural world and up to 4 players**
+
+Purrmadeath is a top-down survival game: you build a base around a campfire, hold it against waves of enemies and bosses, and level one of three classes through skill trees, cards and achievements. It plays offline in singleplayer, or online with friends through an invite code or a server IP. The current version is 1.4.0; see [CHANGELOG.md](CHANGELOG.md) for release notes.
+
+Built with Electron, Pixi.js and a Node.js WebSocket game server written in TypeScript. The desktop client ships as a Windows installer with an embedded local server for singleplayer, and the same server code runs hosted on an AWS EC2 instance for online play. Download the installer from the [Releases](https://github.com/w1ck3ds0d4/Purrmadeath/releases) page; installed copies update themselves in the background.
 
 ## Contents
 
-- [Playing the game](#playing-the-game)
-- [Development](#development)
+- [Tech stack](#tech-stack)
+- [Prerequisites](#prerequisites)
+- [Getting started](#getting-started)
+- [Environment variables](#environment-variables)
+- [Features (built)](#features-built)
+- [Controls](#controls)
+- [Debug tools](#debug-tools)
+- [Testing](#testing)
 - [Releasing a new version](#releasing-a-new-version)
 - [AWS instance management](#aws-instance-management)
 - [Project structure](#project-structure)
+- [Security](#security)
+- [What's not yet built](#whats-not-yet-built)
 - [License](#license)
 
-## Playing the game
+## Tech stack
 
-Download the latest installer from the [Releases](https://github.com/w1ck3ds0d4/Purrmadeath/releases) page.
+| Layer | Technology |
+| --- | --- |
+| Language | TypeScript (strict) |
+| Desktop client | Electron, with a preload IPC bridge |
+| Rendering | Pixi.js 8 (canvas) |
+| Game server | Node.js with the `ws` WebSocket library, server-authoritative ECS systems |
+| World generation | `simplex-noise` |
+| Build | `electron-vite`, `esbuild` (bundled server), `electron-builder` (Windows NSIS installer) |
+| Auto-update | `electron-updater` against GitHub Releases |
+| Tests | Vitest |
+| CI/CD | GitHub Actions: lint, typecheck, tests, installer build, and a manual EC2 deploy workflow |
+
+## Prerequisites
+
+- Node.js 20 or newer and npm
+- Developer Mode enabled on Windows (needed for the `electron-builder` symlink extraction)
+- To only play: nothing, use the installer from the [Releases](https://github.com/w1ck3ds0d4/Purrmadeath/releases) page
+
+## Getting started
+
+1. Clone the repo and install dependencies:
+
+   ```bash
+   git clone https://github.com/w1ck3ds0d4/Purrmadeath.git
+   cd Purrmadeath
+   npm install
+   ```
+
+2. Start the Electron app with its embedded local server:
+
+   ```bash
+   npm run dev
+   ```
+
+3. Optionally run only the game server, with auto-reload (it listens on port 7777 unless `PORT` is set):
+
+   ```bash
+   npm run server:dev
+   ```
+
+The dev build connects to `localhost` automatically. To test a production server, type its IP in the invite code field and click Join.
+
+Other scripts: `npm run build` (electron-vite build), `npm run build:win` (Windows installer), `npm run lint`, `npm run typecheck`, `npm run check-version`.
+
+## Environment variables
+
+| Variable | Used by | Default | Purpose |
+| --- | --- | --- | --- |
+| `PORT` | Game server | `7777` | Port the server listens on, for cloud deployments |
+| `LOG_DIR` | Game server | `./logs` | Where timestamped session logs are written |
+| `SAVES_DIR` | Game server | `./saves` | Where player saves are stored |
+| `METASTATS_DIR` | Game server | `./metastats` | Where achievement and meta stats are stored |
+| `NODE_ENV` | Game server | unset | `production` enables the per-IP connection cap |
+| `VITE_SERVER_IP` | Client build | unset | Online server address baked into the client at build time; unset means a dev build that targets `localhost`. Put it in `.env.production` for `npm run build:win` |
+
+## Features (built)
 
 ### Game modes
 
-- **Singleplayer** - Play offline with a local embedded server. Saves are stored locally. Works without internet.
-- **Host Game** - Create an online session. Other players join with the invite code.
-- **Join** - Enter an invite code or server IP to join an existing session.
+- **Singleplayer**: play offline against a local embedded server. Saves are stored locally and it works without internet.
+- **Host game**: create an online session; other players join with the invite code.
+- **Join**: enter an invite code or a server IP to join an existing session.
 
 ### Classes
 
-Choose from 3 base classes, each with 3 active subclasses and 2 placeholder subclasses (unlocked via achievements):
+Three base classes, each with three active subclasses and two placeholder subclasses that unlock through achievements:
 
-- **Warrior** - Sword, 120 HP, 180 speed, 2 defense
- - Berserker (lifesteal/rage), Guardian (tank/thorns/charge), Blood Knight (drain/arc)
- - Templar, Slayer (achievement-locked placeholders)
-- **Ranger** - Bow, 80 HP, 220 speed
- - Sharpshooter (poison/crit), Beastmaster (wolf companion), Trapper (multi-shot/explosives)
- - Shadow Hunter, Windwalker (achievement-locked placeholders)
-- **Mage** - Staff, 70 HP, 200 speed
- - Fire (burn/meteor), Frost (slow/blizzard), Electric (chain/thunderwave)
- - Earth, Void (placeholders)
+- **Warrior**: sword, 120 HP, 180 speed, 2 defense
+  - Berserker (lifesteal, rage), Guardian (tank, thorns, charge), Blood Knight (drain, arc)
+  - Templar and Slayer (achievement-locked placeholders)
+- **Ranger**: bow, 80 HP, 220 speed
+  - Sharpshooter (poison, crit), Beastmaster (wolf companion), Trapper (multi-shot, explosives)
+  - Shadow Hunter and Windwalker (achievement-locked placeholders)
+- **Mage**: staff, 70 HP, 200 speed
+  - Fire (burn, meteor), Frost (slow, blizzard), Electric (chain, thunderwave)
+  - Earth and Void (placeholders)
 
-Each subclass has a 10-tier skill tree with passive stats, combat modifiers, abilities, and ultimates.
-
-### Controls
-
-| Action | Key |
-|---|---|
-| Move | W A S D |
-| Attack | Left Mouse Button |
-| Interact / Upgrade | E |
-| Sprint | Shift (hold) |
-| Dodge Roll | Space |
-| Ability 1 / 2 / 3 | 1 / 2 / 3 |
-| Use Potion | 4 |
-| Build Mode | Q |
-| Rotate building | Scroll wheel (in build mode) |
-| Place building | Left Mouse Button (in build mode) |
-| Select building | Right Mouse Button |
-| Repair building | R |
-| Demolish building | X |
-| Move Building | F (with building selected) |
-| Civilian Panel | C |
-| Skill Tree | K |
-| Chat | Enter |
-| Pause / Close | Escape |
-| Toggle Controls | F1 |
-| Debug console | F4 |
+Each subclass has a 10-tier skill tree with passive stats, combat modifiers, abilities and ultimates.
 
 ### Buildings
 
-Buildings are organized by category in the build menu (Q):
+Buildings are organised by category in the build menu (Q):
 
-**Defense**: Wall, Gate, Arrow Turret, Cannon Turret, Ballista, Laser Tower, Tesla Coil, Flame Tower, Catapult, Flak Cannon, Moat, Spike Trap
-
-**Production**: Lumbermill, Quarry, Mine, Farm, Workshop, Smeltery (produces steel from wood + iron)
-
-**Military**: Guard House (trains random-role guards - costs civilian + food + steel + gold)
-
-**Housing**: Cat House (provides housing for additional civilians)
-
-**Utility**: Warehouse, Bridge, Light Tower, Healing Shrine, Repair Station, Teleporter Pad
-
-**Shops**: Potion Shop, Tavern (hire hero NPCs), Market (daily card shop - 3 random cards per wave, buy 1 with gold, 1 max per game)
-
-**Coming Soon**: Dragon Roost
+- **Defense**: Wall, Gate, Arrow Turret, Cannon Turret, Ballista, Laser Tower, Tesla Coil, Flame Tower, Catapult, Flak Cannon, Moat, Spike Trap
+- **Production**: Lumbermill, Quarry, Mine, Farm, Workshop, Smeltery (produces steel from wood and iron)
+- **Military**: Guard House (trains random-role guards; costs a civilian, food, steel and gold)
+- **Housing**: Cat House (housing for additional civilians)
+- **Utility**: Warehouse, Bridge, Light Tower, Healing Shrine, Repair Station, Teleporter Pad
+- **Shops**: Potion Shop, Tavern (hire hero NPCs), Market (daily card shop: 3 random cards per wave, buy 1 with gold, 1 max per game)
 
 ### Points of interest
 
-The procedural world contains discoverable POIs:
-- **Abandoned Camp** - Loot resources (press E to interact)
-- **Shrine** - Grants a temporary blessing (speed, damage, regen, or defense) for 120 seconds
-- **Enemy Nest** - Triggers a mini-wave when approached (150px proximity)
-- **Treasure Chest** - Contains rare resources (press E to open)
+The procedural world contains discoverable POIs, drawn as diamond shapes with "?" markers:
 
-POIs appear as diamond shapes with "?" markers. Active shrine blessings are shown in the top-right HUD with countdown timers.
+- **Abandoned Camp**: loot resources (press E to interact)
+- **Shrine**: grants a temporary blessing (speed, damage, regen or defense) for 120 seconds; active blessings show in the top-right HUD with countdown timers
+- **Enemy Nest**: triggers a mini-wave when approached (150 px proximity)
+- **Treasure Chest**: contains rare resources (press E to open)
 
 ### Campfire and building range
 
-Campfire is player-placed at the start (free cost) and serves as respawn point + initial housing. 80-tile (2560px) square building range from campfire center. Watchtowers extend range by 20 tiles per level. Portals spawn outside the building range. Campfire destruction = game over. Death before campfire placement = permanent death. Building exclusion zones prevent placement too close to certain structures (walls, bridges, moats, and spike traps are exempt). Buildings can be relocated within the building range.
+The campfire is placed by the player at the start (free) and serves as the respawn point and initial housing. Building is limited to an 80-tile (2560 px) square around the campfire; Watchtowers extend the range by 20 tiles per level, and portals spawn outside it. Destroying the campfire ends the game, and dying before it is placed is permanent death. Exclusion zones stop placement too close to certain structures (walls, bridges, moats and spike traps are exempt). Buildings can be relocated within the range.
 
 ### Cards and achievements
 
-- **30 cards**: 15 stat buffs (common-legendary), 10 build-defining abilities, 5 curses (dual buff+debuff)
-- **18 achievements**: 10 stat buff achievements, 4 building unlock achievements, 4 class unlock milestones
-- Cards are offered every 3 waves (pick 1 of 3) and granted on boss kills
-- Achievement buffs persist permanently across runs
+- **30 cards**: 15 stat buffs (common to legendary), 10 build-defining abilities and 5 curses (a buff and a debuff in one).
+- **18 achievements**: 10 stat buffs, 4 building unlocks and 4 class unlock milestones.
+- Cards are offered every 3 waves (pick 1 of 3) and granted on boss kills. Achievement buffs persist across runs.
 
 ### Boss encounters
 
-8 unique bosses every 5 waves (W5 through W40) with multi-phase mechanics, HP thresholds, and boss-specific loot tables. Double bosses from W30+.
+Eight unique bosses, one every 5 waves (W5 through W40), with multi-phase mechanics, HP thresholds and boss-specific loot tables. Double bosses appear from W30.
 
-## Development
+## Controls
 
-### Prerequisites
+| Action | Key |
+| --- | --- |
+| Move | W A S D |
+| Attack | Left mouse button |
+| Interact / upgrade | E |
+| Sprint | Shift (hold) |
+| Dodge roll | Space |
+| Ability 1 / 2 / 3 | 1 / 2 / 3 |
+| Use potion | 4 |
+| Build mode | Q |
+| Rotate building | Scroll wheel (in build mode) |
+| Place building | Left mouse button (in build mode) |
+| Select building | Right mouse button |
+| Repair building | R |
+| Demolish building | X |
+| Move building | F (with a building selected) |
+| Civilian panel | C |
+| Skill tree | K |
+| Chat | Enter |
+| Pause / close | Escape |
+| Toggle controls | F1 |
+| Debug console | F4 |
 
-- Node.js 20+
-- npm
-- Developer Mode enabled on Windows (required for electron-builder symlink extraction)
+## Debug tools
 
-### Setup
+- **F4**: debug console with a 3-column stats view: Core (FPS, entities, position), Server (wave, enemies, tick profile) and Game (class, HP, kills).
+- **F12** or **Ctrl+Shift+I**: Electron DevTools (dev mode only).
+- **Debug commands** (typed in the debug console): `/sp`, `/spawn`, `/give`, `/card`, `/wave`, `/kill`, `/pause`, `/god`, `/speed`, `/heal`, `/tp`, `/all`.
+- **Session logs**: the server writes timestamped logs to `logs/` (ability activations, damage, buffs, wave events, saves).
+- **Client logs**: production builds write startup and connection logs to `%AppData%/purrmadeath/logs/`.
+- **Rate monitor**: localhost connections log average and peak message rates every 30 seconds.
+
+## Testing
+
+Tests use [Vitest](https://vitest.dev/) and cover server-side systems such as pathfinding, combat and enemy AI, plus shared definitions and the protocol.
 
 ```bash
-npm install
+npm run test          # run all tests once
+npm run test:watch    # run tests in watch mode
 ```
 
-### Running
-
-```bash
-npm run dev          # Start Electron app + embedded local server
-npm run server:dev   # Start only the game server (with auto-reload)
-```
-
-The dev build connects to `localhost` automatically. To test the production server, type the server IP in the invite code field and click Join.
-
-### Testing
-
-Tests use [Vitest](https://vitest.dev/) and cover server-side systems (pathfinding, combat, enemy AI).
-
-```bash
-npm run test          # Run all tests once
-npm run test:watch    # Run tests in watch mode
-```
-
-Test files live alongside their source in `server/systems/` (e.g. `Pathfinding.test.ts`, `CombatSystem.test.ts`, `EnemySystem.test.ts`). Shared test helpers are in `server/systems/__testutil.ts`.
-
-### Debug tools
-
-- **F4** - Debug console with 3-column stats view: Core (FPS, entities, position), Server (wave, enemies, tick profile), Game (class, HP, kills)
-- **F12** / **Ctrl+Shift+I** - Electron DevTools (dev mode only)
-- **Debug commands** (type in debug console): `/sp`, `/spawn`, `/give`, `/card`, `/wave`, `/kill`, `/pause`, `/god`, `/speed`, `/heal`, `/tp`, `/all`
-- **Session logs** - Server writes timestamped logs to `logs/` directory (ability activations, damage, buffs, wave events, saves)
-- **Client logs** - Production builds write startup/connection logs to `%AppData%/purrmadeath/logs/`
-- **Rate monitor** - Localhost connections log average/peak message rates every 30 seconds
+Test files live under `tests/` (`tests/server`, `tests/shared`).
 
 ## Releasing a new version
 
-### Automated (GitHub Actions - recommended)
+### Automated (recommended)
 
-The CI/CD pipeline handles building, publishing, and server deployment automatically.
-
-**Steps:**
-
-1. Bump the version in both `package.json` and `GAME_VERSION` in `shared/constants.ts` (must match)
+1. Bump the version in both `package.json` and `GAME_VERSION` in `shared/constants/core.ts`. They must match; `npm run check-version` verifies it.
 2. Commit and tag:
 
-```bash
-git add -A
-git commit -m "(release) vX.X.X"
-git tag vX.X.X
-git push && git push --tags
-```
+   ```bash
+   git add -A
+   git commit -m "(release) vX.X.X"
+   git tag vX.X.X
+   git push && git push --tags
+   ```
 
-3. The `release.yml` workflow will automatically:
-  - Build the Windows installer on GitHub Actions
-  - Create a GitHub Release with the installer and auto-updater files
-  - SSH into the EC2 server and deploy the updated code
-  - Restart the game server
+3. The `release.yml` GitHub Actions workflow then builds the Windows installer, creates a GitHub Release with the installer and auto-updater files. Existing installs update on their next launch. The server is deployed separately by the manually run `deploy.yml` workflow (input: `ref`, a branch or tag), which updates the code on the EC2 server over SSH and restarts the game server.
 
-**Required GitHub Secrets:**
+Required GitHub secrets (`VITE_SERVER_IP` is used by `release.yml`; `EC2_HOST` and `EC2_SSH_KEY` by `deploy.yml`):
 
 | Secret | Description |
-|---|---|
+| --- | --- |
 | `VITE_SERVER_IP` | Elastic IP of the EC2 instance |
-| `EC2_HOST` | Same as VITE_SERVER_IP (SSH host) |
+| `EC2_HOST` | Same as `VITE_SERVER_IP` (SSH host) |
 | `EC2_SSH_KEY` | Private SSH key for the `ec2-user` account |
-
-Existing installs will auto-update in the background on next launch.
 
 ### Manual
 
-If you need to release manually (e.g. CI is down):
+For when CI is down.
 
-#### 1. Build the installer
+1. Make sure `.env.production` exists in the project root (`VITE_SERVER_IP=xx.xx.xx.xx`), then build the installer. It is written to `dist/Purrmadeath Setup <version>.exe`:
 
-Ensure `.env.production` exists in the project root:
+   ```bash
+   npm run build:win
+   ```
 
-```
-VITE_SERVER_IP=xx.xx.xx.xx
-```
+2. Create the GitHub release. `latest.yml` and the `.blockmap` must be included or the auto-updater will not work:
 
-```bash
-npm run build:win
-```
+   ```bash
+   gh release create vX.X.X "dist/Purrmadeath Setup X.X.X.exe" "dist/Purrmadeath Setup X.X.X.exe.blockmap" dist/latest.yml --title "Purrmadeath vX.X.X"
+   ```
 
-The installer is output to `dist/Purrmadeath Setup <version>.exe`.
+3. Deploy the server code, either with the deploy script (needs `purrmadeath-key.pem` in the project root):
 
-#### 2. Create a GitHub release
+   ```bash
+   bash deploy/deploy.sh YOUR_ELASTIC_IP
+   ```
 
-```bash
-gh release create vX.X.X "dist/Purrmadeath Setup X.X.X.exe" "dist/Purrmadeath Setup X.X.X.exe.blockmap" dist/latest.yml --title "Purrmadeath vX.X.X"
-```
+   or by hand on the instance:
 
-> `latest.yml` and `.blockmap` must be included for the auto-updater to work.
-
-#### 3. Deploy updated server code
-
-SSH into the EC2 instance:
-
-```bash
-ssh -i purrmadeath-key.pem ec2-user@YOUR_ELASTIC_IP
-cd /opt/purrmadeath
-sudo -u purrmadeath git fetch origin && sudo -u purrmadeath git reset --hard origin/main
-sudo -u purrmadeath npm install --include=dev
-sudo systemctl restart purrmadeath-server
-sudo systemctl status purrmadeath-server
-```
-
-Or use the deploy script (requires `purrmadeath-key.pem` in the project root):
-
-```bash
-bash deploy/deploy.sh YOUR_ELASTIC_IP
-```
+   ```bash
+   ssh -i purrmadeath-key.pem ec2-user@YOUR_ELASTIC_IP
+   cd /opt/purrmadeath
+   sudo -u purrmadeath git fetch origin && sudo -u purrmadeath git reset --hard origin/main
+   sudo -u purrmadeath npm install --include=dev
+   sudo systemctl restart purrmadeath-server
+   sudo systemctl status purrmadeath-server
+   ```
 
 ## AWS instance management
 
-The game server runs on an EC2 `t3.micro` instance in `eu-west-2` with an Elastic IP.
-
-**The Elastic IP is free only while the instance is running.** Stop the instance when not in use to save costs.
-
-### Start / stop
+The game server runs on an EC2 `t3.micro` instance in `eu-west-2` with an Elastic IP. The Elastic IP is free only while the instance is running, so stop the instance when it is not in use.
 
 ```bash
-# Start
+# start, stop, check state
 aws ec2 start-instances --instance-ids YOUR_INSTANCE_ID --region eu-west-2
-
-# Stop
 aws ec2 stop-instances --instance-ids YOUR_INSTANCE_ID --region eu-west-2
-
-# Check state
 aws ec2 describe-instances --instance-ids YOUR_INSTANCE_ID --region eu-west-2 \
   --query "Reservations[0].Instances[0].State.Name"
 ```
 
-### Server management
+On the instance:
 
 ```bash
-ssh -i purrmadeath-key.pem ec2-user@YOUR_ELASTIC_IP
-
-# Service control
-sudo systemctl status purrmadeath-server
-sudo systemctl restart purrmadeath-server
-
-# View logs (live)
-sudo journalctl -u purrmadeath-server -f
-
-# View last 100 lines
-sudo journalctl -u purrmadeath-server -n 100
+sudo systemctl status purrmadeath-server     # service state
+sudo systemctl restart purrmadeath-server    # restart
+sudo journalctl -u purrmadeath-server -f     # live logs
+sudo journalctl -u purrmadeath-server -n 100 # last 100 lines
 ```
 
-### Save data
-
-Player saves are stored on the server at `/opt/purrmadeath/saves/` as JSON files. They persist across server restarts and redeployments. Back up this directory before wiping the instance.
+Player saves live on the server in `/opt/purrmadeath/saves/` as JSON files. They persist across restarts and redeployments, so back the directory up before wiping the instance. The `deploy/` folder holds the provisioning and teardown scripts, and `npm run aws:start`, `aws:stop` and `aws:status` wrap the instance controls.
 
 ## Project structure
 
@@ -281,7 +277,7 @@ server/                    Game server (Node.js + ws)
   abilities/               Ability execution (AbilityExecutor.ts)
 shared/                    Shared between client and server
   components/              ECS component definitions
-  constants.ts             Game balance, version, building costs
+  constants/               Game balance, version, building costs
   protocol.ts              WebSocket message types
   definitions/             Data definitions
     skills/                Per-class skill trees (WarriorSkills, RangerSkills, MageSkills)
@@ -301,11 +297,32 @@ src/
     systems/                 Rendering systems (players, projectiles, VFX)
     ui/                      HUD, overlays (build menu, skill tree, civilian panel)
     render/                  Camera, tile renderer, build ghost
+tests/                     Vitest suites for server and shared code
+deploy/                    EC2 provisioning, deploy and teardown scripts
+scripts/                   Version check and AWS helper scripts
 ```
+
+More detail is in [ARCHITECTURE.md](ARCHITECTURE.md) and [HOW_IT_WORKS.md](HOW_IT_WORKS.md).
+
+## Security
+
+The server is server-authoritative with connection caps, a 64 KB payload limit, per-client rate limiting and message validation. The Electron client runs with `contextIsolation` on, `nodeIntegration` off, a Content Security Policy and a restricted preload bridge. See [SECURITY.md](SECURITY.md) for the threat model, known limitations and the hardening roadmap.
+
+To report a vulnerability, email support@wickitlab.com and do not open a public issue. Installers are currently unsigned, so Windows SmartScreen warns on first run, and local save files are plain JSON without an integrity check.
+
+## What's not yet built
+
+- Achievement-locked placeholder subclasses: Templar, Slayer, Shadow Hunter, Windwalker, Earth and Void.
+- Dragon Roost building (listed as coming soon).
+- Audio: combat SFX and per-biome or per-wave music (parked in the [roadmap](ROADMAP.md)).
+- Client render tests for the HUD, building placement and combat UI (parked).
+- Windows code signing and tamper detection for save files.
+
+The project is in maintenance mode: new features wait until the maintainer reopens it. See [ROADMAP.md](ROADMAP.md).
 
 ## License
 
 This project is dual-licensed:
 
 - [AGPL v3](LICENSE) - free for open-source use. Derivatives and SaaS deployments must release their source under AGPL.
-- [Commercial license](COMMERCIAL.md) - for proprietary / closed-source use or hosted services that do not want to comply with AGPL source-disclosure requirements. Contact for terms.
+- [Commercial license](COMMERCIAL.md) - for proprietary or closed-source use, or hosted services that do not want to comply with the AGPL source-disclosure requirements. Contact support@wickitlab.com for terms.
